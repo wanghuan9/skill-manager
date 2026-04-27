@@ -1072,7 +1072,7 @@ fn build_tool_configs() -> Vec<ToolConfig> {
         (
             "windsurf",
             "Windsurf",
-            home_path.join(".windsurf/skills"),
+            home_path.join(".codeium/windsurf/skills"),
             true,
             "editor",
             vec!["editor"],
@@ -1159,12 +1159,12 @@ fn build_tool_configs() -> Vec<ToolConfig> {
         (
             "cline",
             "Cline",
-            home_path.join(".agents/skills"),
+            home_path.join(".cline/skills"),
             true,
             "editor",
             vec!["editor", "cli"],
             false,
-            vec![home_path.join(".agents")],
+            vec![home_path.join(".cline")],
         ),
         (
             "commandcode",
