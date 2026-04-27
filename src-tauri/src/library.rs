@@ -50,6 +50,8 @@ pub fn install_market_skill_from_source(skill: &SkillSummary, skill_path: Option
 
         // 如果 skill 在子目录中，需要更新 local_path 指向子目录
         if skill_subdir != repo_dir {
+            // 忽略非必要文件
+            ignore_unnecessary_files(&skill_subdir)?;
             return Ok(skill_subdir.to_string_lossy().to_string());
         }
     } else {
@@ -60,6 +62,8 @@ pub fn install_market_skill_from_source(skill: &SkillSummary, skill_path: Option
         )?;
     }
 
+    // 忽略非必要文件
+    ignore_unnecessary_files(&repo_dir)?;
     Ok(repo_dir.to_string_lossy().to_string())
 }
 
@@ -144,8 +148,12 @@ pub fn clone_repo_skill(repo_url: &str, skill_name: &str) -> Result<String, Stri
         // 找到 skill 子目录，不移动文件
         let skill_subdir = resolve_market_skill_source_dir(&skill_dir, Some(relative_path), skill_name)?;
         if skill_subdir != skill_dir {
+            // 忽略非必要文件
+            ignore_unnecessary_files(&skill_subdir)?;
             Ok(skill_subdir.to_string_lossy().to_string())
         } else {
+            // 忽略非必要文件
+            ignore_unnecessary_files(&skill_dir)?;
             Ok(skill_dir.to_string_lossy().to_string())
         }
     } else {
@@ -179,9 +187,13 @@ pub fn clone_repo_skill(repo_url: &str, skill_name: &str) -> Result<String, Stri
 
             // 重新查找 skill 子目录并返回
             let new_skill_subdir = resolve_market_skill_source_dir(&skill_dir, Some(relative_path), skill_name)?;
+            // 忽略非必要文件
+            ignore_unnecessary_files(&new_skill_subdir)?;
             Ok(new_skill_subdir.to_string_lossy().to_string())
         } else {
             // skill 在根目录，返回根目录
+            // 忽略非必要文件
+            ignore_unnecessary_files(&skill_dir)?;
             Ok(skill_dir.to_string_lossy().to_string())
         }
     }
@@ -219,6 +231,8 @@ pub fn ensure_repo_skill_with_sparse_paths(
             if !sparse_paths.is_empty() {
                 configure_sparse_checkout(&skill_dir, sparse_paths, true)?;
             }
+            // 忽略非必要文件
+            ignore_unnecessary_files(&skill_dir)?;
             return Ok(skill_dir.to_string_lossy().to_string());
         }
         fs::remove_dir_all(&skill_dir).map_err(|error| format!("清理旧 skill 目录失败: {error}"))?;
@@ -236,6 +250,8 @@ pub fn ensure_repo_skill_with_sparse_paths(
         let path_bufs = sparse_paths.iter().map(PathBuf::from).collect::<Vec<_>>();
         clone_repo_with_sparse_paths(repo_url, None, &skill_dir, &path_bufs)?;
     }
+    // 忽略非必要文件
+    ignore_unnecessary_files(&skill_dir)?;
     Ok(skill_dir.to_string_lossy().to_string())
 }
 
@@ -673,14 +689,65 @@ pub fn remove_skill_symlinks_from_all_tools(skill_name: &str) -> Result<(), Stri
         "junie", "kilo-code", "kiro", "qoder", "qwen-code", "roo-code",
         "zencoder", "trae-cn", "hermes", "github-copilot",
     ];
-    
+
     for tool_id in tool_ids {
         if let Ok(tool_skills_path) = get_tool_skills_path(tool_id) {
             // 忽略错误，因为某些工具可能没有安装或目录不存在
             let _ = remove_skill_symlink(&tool_skills_path, skill_name);
         }
     }
-    
+
     Ok(())
 }
 
+fn ignore_unnecessary_files(skill_dir: &Path) -> Result<(), String> {
+    // 定义需要忽略的文件模式
+    let ignore_patterns = [
+        ".DS_Store",
+        "Thumbs.db",
+        "settings.json",
+        "*.swp",
+        "*.swo",
+        ".vscode/",
+        ".idea/",
+        "*.log",
+    ];
+
+    // 如果不是 git 仓库，直接返回
+    if !skill_dir.join(".git").is_dir() {
+        return Ok(());
+    }
+
+    let exclude_path = skill_dir.join(".git/info/exclude");
+    let mut existing_content = String::new();
+
+    // 读取现有的 exclude 内容
+    if exclude_path.exists() {
+        existing_content = fs::read_to_string(&exclude_path)
+            .map_err(|error| format!("读取 .git/info/exclude 失败: {error}"))?;
+    }
+
+    // 添加新的忽略模式
+    let mut new_content = existing_content.clone();
+    for pattern in &ignore_patterns {
+        if !existing_content.contains(pattern) {
+            if !new_content.is_empty() && !new_content.ends_with('\n') {
+                new_content.push('\n');
+            }
+            new_content.push_str(pattern);
+            new_content.push('\n');
+        }
+    }
+
+    // 写入 .git/info/exclude
+    fs::write(&exclude_path, new_content)
+        .map_err(|error| format!("写入 .git/info/exclude 失败: {error}"))?;
+
+    // 从 git 索引中移除匹配的文件
+    for pattern in &ignore_patterns {
+        let pattern_without_slash = pattern.trim_start_matches('/');
+        let _ = run_git_in_dir(skill_dir, &["rm", "--cached", "-r", pattern_without_slash]);
+    }
+
+    Ok(())
+}
