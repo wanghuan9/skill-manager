@@ -1303,15 +1303,94 @@ const ORIGIN_REMOTE: &str = "origin";
 const REMOTE_PREFIX: &str = "origin/";
 const WORKSPACE_DIR: &str = ".skillm";
 const RESERVED_WORKSPACE_NAMES: [&str; 4] = ["state.json", "skills", "repo-cache", "imports"];
-const TRAE_EDITOR_APP_NAMES: [&str; 2] = ["Trae", "TRAE"];
-const KIRO_EDITOR_APP_NAMES: [&str; 1] = ["Kiro"];
-const CURSOR_EDITOR_APP_NAMES: [&str; 1] = ["Cursor"];
-const WINDSURF_EDITOR_APP_NAMES: [&str; 1] = ["Windsurf"];
-const INTELLIJ_EDITOR_APP_NAMES: [&str; 3] = [
-    "IntelliJ IDEA",
-    "IntelliJ IDEA CE",
-    "IntelliJ IDEA Ultimate",
-];
+/// Resolved info for opening a directory with an editor.
+/// Dynamically detected from the installed .app bundle on the user's system.
+struct EditorOpenInfo {
+    /// CLI binary path found inside the .app bundle (e.g. .../Cursor.app/Contents/Resources/app/bin/cursor).
+    cli_path: Option<String>,
+    /// Display name extracted from the .app bundle filename (e.g. "Cursor").
+    app_display_name: Option<String>,
+}
+
+/// Scan /Applications for .app bundles whose name (case-insensitive) matches one of the given candidates.
+fn find_app_bundle(app_name_candidates: &[&str]) -> Option<String> {
+    let apps_dir = PathBuf::from("/Applications");
+    if let Ok(entries) = std::fs::read_dir(&apps_dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+            if !name_str.ends_with(".app") {
+                continue;
+            }
+            let stem = name_str.trim_end_matches(".app");
+            for candidate in app_name_candidates {
+                if stem.eq_ignore_ascii_case(candidate) {
+                    return Some(entry.path().to_string_lossy().to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Discover a CLI binary inside an .app bundle.
+/// Checks Contents/Resources/app/bin/ for executables matching the app name.
+fn discover_cli_in_bundle(app_bundle_path: &str) -> Option<String> {
+    let bundle = PathBuf::from(app_bundle_path);
+    let stem = bundle.file_stem()?.to_str()?.to_string();
+    // Common CLI locations in Electron / JetBrains apps
+    let candidate_paths = [
+        bundle.join("Contents/Resources/app/bin").join(&stem),
+        bundle.join("Contents/Resources/app/bin").join(&stem.to_lowercase()),
+        bundle.join("Contents/MacOS").join(&stem),
+    ];
+    for path in &candidate_paths {
+        if path.exists() {
+            return Some(path.to_string_lossy().to_string());
+        }
+    }
+    None
+}
+
+/// Map editor_id to possible .app display names for scanning /Applications.
+fn editor_app_name_candidates(editor_id: &str) -> &[&str] {
+    match editor_id {
+        "cursor" => &["Cursor"],
+        "windsurf" => &["Windsurf"],
+        "kiro" => &["Kiro", "Kiro CLI"],
+        "trae" => &["Trae", "TRAE"],
+        "intellij" => &["IntelliJ IDEA", "IntelliJ IDEA CE", "IntelliJ IDEA Ultimate"],
+        _ => &[],
+    }
+}
+
+/// Dynamically resolve editor launch info by scanning the user's installed apps.
+fn resolve_editor_open_info(editor_id: &str) -> Result<EditorOpenInfo, String> {
+    let candidates = editor_app_name_candidates(editor_id);
+    if candidates.is_empty() {
+        return Err("暂不支持该编辑器。".into());
+    }
+
+    let app_bundle_path = find_app_bundle(candidates);
+    let cli_path = app_bundle_path.as_ref().and_then(|p| discover_cli_in_bundle(p));
+    let app_display_name = app_bundle_path.as_ref().and_then(|p| {
+        PathBuf::from(p)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .map(|s| s.to_string())
+    });
+
+    if cli_path.is_none() && app_display_name.is_none() {
+        return Err(format!(
+            "未找到编辑器，请确认已安装对应应用。"
+        ));
+    }
+
+    Ok(EditorOpenInfo {
+        cli_path,
+        app_display_name,
+    })
+}
 
 struct RepoInstallSpec {
     clone_url: String,
@@ -1740,17 +1819,6 @@ fn repository_root_path(skill_path: &str) -> Result<String, String> {
     Ok(root)
 }
 
-fn editor_app_names(editor_id: &str) -> Result<&'static [&'static str], String> {
-    match editor_id {
-        "cursor" => Ok(&CURSOR_EDITOR_APP_NAMES),
-        "windsurf" => Ok(&WINDSURF_EDITOR_APP_NAMES),
-        "kiro" => Ok(&KIRO_EDITOR_APP_NAMES),
-        "trae" => Ok(&TRAE_EDITOR_APP_NAMES),
-        "intellij" => Ok(&INTELLIJ_EDITOR_APP_NAMES),
-        _ => Err("暂不支持该编辑器。".into()),
-    }
-}
-
 fn open_path_with_finder(path: &str) -> Result<(), String> {
     let output = Command::new("open")
         .arg(path)
@@ -1765,24 +1833,48 @@ fn open_path_with_finder(path: &str) -> Result<(), String> {
     Err(format!("打开 Finder 失败: {stderr}"))
 }
 
-fn open_path_with_app(path: &str, app_names: &[&str]) -> Result<(), String> {
-    let mut last_error = String::new();
-    for app_name in app_names {
-        let output = Command::new("open")
-            .args(["-a", *app_name, path])
-            .output()
-            .map_err(|error| format!("打开编辑器失败: {error}"))?;
+/// Open a directory path using the editor's CLI binary.
+/// This is the most reliable way to launch an editor and open a directory,
+/// especially for Electron-based apps like Cursor that fail with `open -a`.
+fn open_path_with_cli(cli_path: &str, path: &str) -> Result<(), String> {
+    Command::new(cli_path)
+        .arg(path)
+        .spawn()
+        .map_err(|error| format!("启动编辑器 CLI 失败: {error}"))?;
+    Ok(())
+}
 
-        if output.status.success() {
-            return Ok(());
-        }
+/// Fallback: open a directory using `open -a AppName path`.
+fn open_path_with_open_a(app_name: &str, path: &str) -> Result<(), String> {
+    let output = Command::new("open")
+        .args(["-a", app_name, path])
+        .output()
+        .map_err(|error| format!("打开编辑器失败: {error}"))?;
 
-        last_error = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    if output.status.success() {
+        return Ok(());
     }
 
-    Err(format!(
-        "打开编辑器失败，请确认已安装对应应用。{last_error}"
-    ))
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    Err(format!("打开编辑器失败: {stderr}"))
+}
+
+/// Open a directory with an editor, using dynamically resolved info.
+/// Prefers CLI (most reliable), falls back to `open -a`.
+fn open_path_with_editor(path: &str, editor_id: &str) -> Result<(), String> {
+    let info = resolve_editor_open_info(editor_id)?;
+
+    // Prefer CLI: it reliably launches the app and opens the directory in one step.
+    if let Some(ref cli_path) = info.cli_path {
+        return open_path_with_cli(cli_path, path);
+    }
+
+    // Fallback to `open -a` using the display name
+    if let Some(ref app_name) = info.app_display_name {
+        return open_path_with_open_a(app_name, path);
+    }
+
+    Err("打开编辑器失败，请确认已安装对应应用。".into())
 }
 
 fn update_skill_repo(skill: &SkillSummary) -> Result<(), String> {
@@ -2468,8 +2560,7 @@ pub fn open_skill_in_editor(skill_name: &str, editor_id: &str) -> Result<(), Str
         return open_path_with_finder(&skill.local_path);
     }
 
-    let app_names = editor_app_names(editor_id)?;
-    open_path_with_app(&skill.local_path, app_names)
+    open_path_with_editor(&skill.local_path, editor_id)
 }
 
 #[tauri::command]
