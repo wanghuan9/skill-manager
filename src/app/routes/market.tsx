@@ -85,6 +85,7 @@ export function MarketRoute(props: MarketRouteProps) {
   const latestSourceRef = useRef(activeSourceSite);
   const loadingMoreRef = useRef(false);
   const loadInitialRef = useRef(loadInitialMarketplaceSkills);
+  const searchMarketplaceRef = useRef(searchMarketplaceSkills);
   const lastTabSkillsRef = useRef<MarketplaceSkill[]>([]);
   const normalizedSearchQuery = debouncedSearchQuery.trim();
   const isSearching = normalizedSearchQuery.length > 0;
@@ -92,7 +93,8 @@ export function MarketRoute(props: MarketRouteProps) {
     () => marketplaceSkills.filter((skill) => skill.sourceSite === activeSourceSite),
     [activeSourceSite, marketplaceSkills],
   );
-  if (tabSkills.length > 0) {
+  // 只在非搜索状态下才更新缓存，避免搜索结果污染
+  if (tabSkills.length > 0 && !isSearching) {
     lastTabSkillsRef.current = tabSkills;
   }
   const stableTabSkills = tabSkills.length > 0 ? tabSkills : lastTabSkillsRef.current;
@@ -108,6 +110,7 @@ export function MarketRoute(props: MarketRouteProps) {
 
   useEffect(() => {
     loadInitialRef.current = loadInitialMarketplaceSkills;
+    searchMarketplaceRef.current = searchMarketplaceSkills;
   });
 
   useEffect(() => {
@@ -120,16 +123,25 @@ export function MarketRoute(props: MarketRouteProps) {
   }, [searchQuery]);
 
   useEffect(() => {
-    if (activeInstallTab !== "market" || !isSearching) {
+    if (activeInstallTab !== "market") {
+      setSearchResults([]);
+      setSearchDone(false);
+      return;
+    }
+    if (!isSearching) {
       setSearchResults([]);
       setSearchDone(false);
       return;
     }
     let cancelled = false;
-    void searchMarketplaceSkills(normalizedSearchQuery)
+    void searchMarketplaceRef.current(normalizedSearchQuery)
       .then((skills) => {
         if (cancelled) return;
-        setSearchResults(skills);
+        // 按 id 去重，避免重复结果
+        const dedupedSkills = Array.from(
+          new Map(skills.map((skill) => [skill.id, skill])).values()
+        );
+        setSearchResults(dedupedSkills);
         setSearchDone(true);
       })
       .catch(() => {
@@ -147,7 +159,7 @@ export function MarketRoute(props: MarketRouteProps) {
       return;
     }
     void loadInitialRef.current(activeSourceSite);
-  }, [activeInstallTab, activeSourceSite, isSearching]);
+  }, [activeInstallTab, activeSourceSite, isSearching, loadInitialRef]);
 
   useEffect(() => {
     if (activeInstallTab !== "market" || isSearching) {
