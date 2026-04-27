@@ -1,0 +1,76 @@
+import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { SkillCard } from "@/features/skills/components/SkillCard";
+import { installedSkillFixtures } from "@/features/skills/state/skill-fixtures";
+import { SkillWorkspaceProvider } from "@/features/skills/state/skill-workspace";
+
+test("shows update action when skill has remote update", async () => {
+  const updateSkill = installedSkillFixtures.find((skill) => skill.name === "excalidraw-diagram");
+  if (!updateSkill) {
+    throw new Error("missing excalidraw-diagram fixture");
+  }
+
+  render(
+    <SkillWorkspaceProvider>
+      <SkillCard skill={updateSkill} />
+    </SkillWorkspaceProvider>,
+  );
+  expect(screen.getByText("excalidraw-diagram")).toBeInTheDocument();
+  expect(screen.getAllByRole("button", { name: "更新" }).length).toBeGreaterThan(0);
+  await userEvent.click(screen.getAllByRole("button", { name: "更新" })[0]);
+  expect(await screen.findByRole("dialog", { name: "更新 skill" })).toBeInTheDocument();
+  expect(screen.getByText("将拉取提交")).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "取消" }));
+  await userEvent.click(screen.getByRole("button", { name: /展开 excalidraw-diagram/ }));
+  expect(screen.getAllByRole("button", { name: "更新" }).length).toBeGreaterThan(1);
+});
+
+test("opens skill file dialog from fixed action button", async () => {
+  const skill = installedSkillFixtures.find((item) => item.name === "drawio-diagram");
+  if (!skill) {
+    throw new Error("missing drawio-diagram fixture");
+  }
+
+  render(
+    <SkillWorkspaceProvider>
+      <SkillCard skill={skill} />
+    </SkillWorkspaceProvider>,
+  );
+
+  await userEvent.click(screen.getByRole("button", { name: /查看 drawio-diagram 文件/ }));
+
+  expect(screen.getByRole("dialog", { name: "drawio-diagram" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "保存" })).toBeInTheDocument();
+});
+
+test("shows fixed open action button on skill card", () => {
+  const skill = installedSkillFixtures.find((item) => item.name === "drawio-diagram");
+  if (!skill) {
+    throw new Error("missing drawio-diagram fixture");
+  }
+
+  render(
+    <SkillWorkspaceProvider>
+      <SkillCard skill={skill} />
+    </SkillWorkspaceProvider>,
+  );
+
+  expect(screen.getByRole("button", { name: /打开 drawio-diagram 目录/ })).toBeInTheDocument();
+});
+
+test("renders enabled tool with checkmark in tool sync panel", async () => {
+  const skill = installedSkillFixtures.find((item) => item.name === "drawio-diagram");
+  if (!skill) {
+    throw new Error("missing drawio-diagram fixture");
+  }
+
+  render(
+    <SkillWorkspaceProvider>
+      <SkillCard skill={skill} />
+    </SkillWorkspaceProvider>,
+  );
+
+  await userEvent.click(screen.getByRole("button", { name: /展开 drawio-diagram/ }));
+
+  expect(screen.getAllByRole("button", { name: /取消启用/ }).length).toBeGreaterThan(0);
+});
