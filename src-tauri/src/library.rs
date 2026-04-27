@@ -701,15 +701,15 @@ pub fn remove_skill_symlinks_from_all_tools(skill_name: &str) -> Result<(), Stri
 }
 
 fn ignore_unnecessary_files(skill_dir: &Path) -> Result<(), String> {
-    // 定义需要忽略的文件模式
+    // 定义需要忽略的文件和目录
     let ignore_patterns = [
         ".DS_Store",
         "Thumbs.db",
         "settings.json",
         "*.swp",
         "*.swo",
-        ".vscode/",
-        ".idea/",
+        ".vscode",
+        ".idea",
         "*.log",
     ];
 
@@ -743,10 +743,27 @@ fn ignore_unnecessary_files(skill_dir: &Path) -> Result<(), String> {
     fs::write(&exclude_path, new_content)
         .map_err(|error| format!("写入 .git/info/exclude 失败: {error}"))?;
 
-    // 从 git 索引中移除匹配的文件
+    // 从 git 索引中移除匹配的已跟踪文件
+    // 对于目录模式，需要递归查找并移除
     for pattern in &ignore_patterns {
         let pattern_without_slash = pattern.trim_start_matches('/');
-        let _ = run_git_in_dir(skill_dir, &["rm", "--cached", "-r", pattern_without_slash]);
+        
+        if pattern.ends_with('/') || *pattern == ".vscode" || *pattern == ".idea" {
+            // 处理目录
+            let dir_path = skill_dir.join(pattern_without_slash);
+            if dir_path.is_dir() {
+                let _ = run_git_in_dir(skill_dir, &["rm", "--cached", "-r", pattern_without_slash]);
+            }
+        } else if pattern.contains('*') {
+            // 处理通配符模式
+            let _ = run_git_in_dir(skill_dir, &["rm", "--cached", pattern_without_slash]);
+        } else {
+            // 处理具体文件
+            let file_path = skill_dir.join(pattern_without_slash);
+            if file_path.exists() {
+                let _ = run_git_in_dir(skill_dir, &["rm", "--cached", pattern_without_slash]);
+            }
+        }
     }
 
     Ok(())
