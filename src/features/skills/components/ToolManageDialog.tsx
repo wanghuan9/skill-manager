@@ -46,6 +46,27 @@ export function ToolManageDialog({ isOpen, onClose, tool }: ToolManageDialogProp
     [installedSkills, tool.name],
   );
 
+  const disabledVisibleCount = skillRows.filter((item) => !item.isEnabled).length;
+  const enabledVisibleCount = skillRows.filter((item) => item.isEnabled).length;
+
+  async function handleToggleAllOn() {
+    const disabledSkillNames = skillRows
+      .filter((item) => !item.isEnabled)
+      .map((item) => item.skillName);
+    if (disabledSkillNames.length === 0) {
+      return;
+    }
+
+    setIsUpdatingAll(true);
+    try {
+      await Promise.all(
+        disabledSkillNames.map((skillName) => toggleSkillTool({ skillName, toolName: tool.name })),
+      );
+    } finally {
+      setIsUpdatingAll(false);
+    }
+  }
+
   async function handleToggleAllOff() {
     const enabledSkillNames = skillRows
       .filter((item) => item.isEnabled)
@@ -113,14 +134,24 @@ export function ToolManageDialog({ isOpen, onClose, tool }: ToolManageDialogProp
             </button>
             <span>只看已启用</span>
           </label>
-          <button
-            className="secondary-button secondary-button--compact"
-            type="button"
-            onClick={() => void handleToggleAllOff()}
-            disabled={isUpdatingAll || enabledCount === 0}
-          >
-            {isUpdatingAll ? "处理中..." : "全部关闭"}
-          </button>
+          <div className="tool-manage-dialog__bulk-actions">
+            <button
+              className="secondary-button secondary-button--compact"
+              type="button"
+              onClick={() => void handleToggleAllOn()}
+              disabled={isUpdatingAll || disabledVisibleCount === 0}
+            >
+              {isUpdatingAll ? "处理中..." : "全部开启"}
+            </button>
+            <button
+              className="secondary-button secondary-button--compact"
+              type="button"
+              onClick={() => void handleToggleAllOff()}
+              disabled={isUpdatingAll || enabledVisibleCount === 0}
+            >
+              {isUpdatingAll ? "处理中..." : "全部关闭"}
+            </button>
+          </div>
         </div>
         <div className="tool-manage-dialog__list">
           {skillRows.map((item) => (
