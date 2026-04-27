@@ -88,6 +88,10 @@ export async function fetchInstalledSkills(): Promise<SkillSummary[]> {
   return invokeOrFallback("list_installed_skills", {}, installedSkillFixtures);
 }
 
+export async function fetchGitStates(): Promise<SkillSummary[]> {
+  return invokeOrFallback("refresh_git_states", {}, installedSkillFixtures);
+}
+
 export async function fetchMarketplaceSkills(): Promise<MarketplaceSkill[]> {
   return invokeOrFallback("list_marketplace_skills", {}, marketplaceSkillFixtures);
 }

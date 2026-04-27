@@ -144,7 +144,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
   const [gitAccount, setGitAccount] = useState<GitAccountSummary | null>(
     usesFixtureData ? workspaceSnapshotFixture.gitAccount : null,
   );
-  const [isLoading, setIsLoading] = useState(!usesFixtureData);
+  const [isLoading, setIsLoading] = useState(false);
   const [isMarketplaceLoading, setIsMarketplaceLoading] = useState(false);
   const [isSearchLoading, setIsSearchLoading] = useState(false);
   const [marketplacePageBySource, setMarketplacePageBySource] = useState<
@@ -210,35 +210,15 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
     let active = true;
 
     async function loadWorkspace() {
-      setIsLoading(true);
-      try {
-        const [workspace, initialMarketplaceSkills] = await Promise.all([
-          loadWorkspaceCore(),
-          fetchMarketplaceSkillsByPage({
-            sourceSite: "skills.sh",
-            page: 1,
-            limit: MARKETPLACE_PAGE_SIZE,
-          }),
-        ]);
-        if (!active) {
-          return;
-        }
-
-        setInstalledSkills(workspace.skills);
-        setLocalCandidates(workspace.candidates);
-        setToolConfigs(workspace.tools);
-        setGitAccount(workspace.account);
-        setMarketplaceSkills(initialMarketplaceSkills);
-        setMarketplacePageBySource({
-          "skills.sh": 1,
-          skillsmp: 0,
-        });
-        setHasMoreMarketplaceSkills(initialMarketplaceSkills.length >= MARKETPLACE_PAGE_SIZE);
-      } finally {
-        if (active) {
-          setIsLoading(false);
-        }
+      const workspace = await loadWorkspaceCore();
+      if (!active) {
+        return;
       }
+
+      setInstalledSkills(workspace.skills);
+      setLocalCandidates(workspace.candidates);
+      setToolConfigs(workspace.tools);
+      setGitAccount(workspace.account);
     }
 
     void loadWorkspace();
@@ -246,6 +226,24 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
     return () => {
       active = false;
     };
+  }, [usesFixtureData]);
+
+  // 延迟异步刷新 Git 状态
+  useEffect(() => {
+    if (usesFixtureData) {
+      return;
+    }
+
+    const timer = setTimeout(async () => {
+      try {
+        const skillsWithGitState = await fetchGitStates();
+        setInstalledSkills(skillsWithGitState);
+      } catch (error) {
+        console.error("Failed to refresh git states:", error);
+      }
+    }, 2000); // 延迟 2 秒后执行
+
+    return () => clearTimeout(timer);
   }, [usesFixtureData]);
 
   async function handleInstallFromMarket(skill: MarketplaceSkill) {

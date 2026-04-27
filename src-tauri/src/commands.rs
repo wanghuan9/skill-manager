@@ -830,6 +830,67 @@ async fn fetch_skillsmp_marketplace(
         .collect())
 }
 
+fn marketplace_cache_file() -> Option<PathBuf> {
+    let home_dir = env::var("HOME").ok()?;
+    Some(
+        PathBuf::from(home_dir)
+            .join(".skillm")
+            .join("cache")
+            .join("marketplace.json"),
+    )
+}
+
+fn load_marketplace_cache() -> Option<Vec<MarketplaceSkill>> {
+    let cache_path = marketplace_cache_file()?;
+    let content = fs::read_to_string(cache_path).ok()?;
+    let cached: serde_json::Value = serde_json::from_str(&content).ok()?;
+    let skills_array = cached.get("skills").and_then(|v| v.as_array())?;
+    let timestamp = cached.get("timestamp").and_then(|v| v.as_u64()).unwrap_or(0);
+    
+    // 缓存有效期 1 小时
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_secs();
+    
+    if now - timestamp > 3600 {
+        return None;
+    }
+    
+    Some(
+        skills_array
+            .iter()
+            .filter_map(|skill| serde_json::from_value(skill.clone()).ok())
+            .collect(),
+    )
+}
+
+fn save_marketplace_cache(skills: &[MarketplaceSkill]) {
+    let cache_path = match marketplace_cache_file() {
+        Some(path) => path,
+        None => return,
+    };
+    
+    let parent_dir = match cache_path.parent() {
+        Some(dir) => dir,
+        None => return,
+    };
+    
+    let _ = fs::create_dir_all(parent_dir);
+    
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    
+    let cache_data = serde_json::json!({
+        "timestamp": timestamp,
+        "skills": skills
+    });
+    
+    let _ = fs::write(cache_path, serde_json::to_string_pretty(&cache_data).unwrap_or_default());
+}
+
 async fn build_marketplace_skills(
     source_site: Option<&str>,
     page: usize,
@@ -837,14 +898,31 @@ async fn build_marketplace_skills(
     query: Option<&str>,
     with_descriptions: bool,
 ) -> Vec<MarketplaceSkill> {
+    let source = source_site.unwrap_or_default();
+    let is_searching = query.is_some() && !query.unwrap_or_default().trim().is_empty();
+    
+    // 如果是第一页且不是搜索，尝试从缓存读取
+    if page == 1 && !is_searching {
+        if let Some(cached_skills) = load_marketplace_cache() {
+            let filtered: Vec<MarketplaceSkill> = cached_skills
+                .into_iter()
+                .filter(|skill| matches_marketplace_query(skill, query))
+                .filter(|skill| source.is_empty() || skill.source_site == source)
+                .take(limit)
+                .collect();
+            
+            if !filtered.is_empty() {
+                return filtered;
+            }
+        }
+    }
+    
     let client = match marketplace_http_client() {
         Ok(client) => client,
         Err(_) => return default_marketplace_skills(),
     };
 
     let mut skills = Vec::new();
-    let source = source_site.unwrap_or_default();
-    let is_searching = query.is_some() && !query.unwrap_or_default().trim().is_empty();
 
     if source.is_empty() || source == "skills.sh" {
         let normalized_query = normalize_marketplace_query(query);
@@ -878,7 +956,7 @@ async fn build_marketplace_skills(
         skills.retain(|skill| skill.source_site == source);
     }
 
-    if skills.is_empty() {
+    let result = if skills.is_empty() {
         default_marketplace_skills()
             .into_iter()
             .filter(|skill| source.is_empty() || skill.source_site == source)
@@ -887,7 +965,14 @@ async fn build_marketplace_skills(
             .collect()
     } else {
         skills
+    };
+    
+    // 如果是第一页且不是搜索，保存到缓存
+    if page == 1 && !is_searching && !result.is_empty() {
+        save_marketplace_cache(&result);
     }
+    
+    result
 }
 
 fn build_local_candidates(installed_skills: &[SkillSummary]) -> Vec<LocalSkillCandidate> {
@@ -1290,6 +1375,15 @@ fn normalize_skill_tools(skill: &SkillSummary) -> SkillSummary {
 }
 
 fn resolve_installed_skills() -> Vec<SkillSummary> {
+    let skills = load_installed_skills(&default_installed_skills());
+    skills
+        .iter()
+        .map(normalize_skill_tools)
+        .collect()
+}
+
+#[tauri::command]
+pub async fn refresh_git_states() -> Vec<SkillSummary> {
     let skills = load_installed_skills(&default_installed_skills());
     skills
         .iter()
