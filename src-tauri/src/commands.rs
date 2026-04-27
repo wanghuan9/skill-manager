@@ -1859,12 +1859,31 @@ fn open_path_with_open_a(app_name: &str, path: &str) -> Result<(), String> {
     Err(format!("打开编辑器失败: {stderr}"))
 }
 
+/// Check whether an editor app is currently running by looking for its process.
+fn is_editor_running(app_display_name: &str) -> bool {
+    Command::new("pgrep")
+        .args(["-x", app_display_name])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
 /// Open a directory with an editor, using dynamically resolved info.
-/// Prefers CLI (most reliable), falls back to `open -a`.
+/// Strategy:
+/// - If editor is already running: use `open -a` to open in existing instance (no flicker)
+/// - If editor is not running: use CLI to launch and open directory (reliable cold start)
 fn open_path_with_editor(path: &str, editor_id: &str) -> Result<(), String> {
     let info = resolve_editor_open_info(editor_id)?;
 
-    // Prefer CLI: it reliably launches the app and opens the directory in one step.
+    // If we have a display name, check if the app is already running
+    if let Some(ref app_name) = info.app_display_name {
+        if is_editor_running(app_name) {
+            // App is running: use `open -a` to open in existing instance (no flicker)
+            return open_path_with_open_a(app_name, path);
+        }
+    }
+
+    // App is not running: use CLI to launch and open directory (reliable cold start)
     if let Some(ref cli_path) = info.cli_path {
         return open_path_with_cli(cli_path, path);
     }
