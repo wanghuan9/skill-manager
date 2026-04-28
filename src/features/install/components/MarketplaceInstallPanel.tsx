@@ -38,13 +38,11 @@ export function MarketplaceInstallPanel(props: MarketplaceInstallPanelProps) {
     installedMarketplaceSkillIds,
     onLoadMore,
   } = props;
-  const { installFromMarket } = useSkillWorkspace();
+  const { installingMarketplaceSkillIds, installFromMarket } = useSkillWorkspace();
   const { notify } = useNotifications();
   const [selectedSkill, setSelectedSkill] = useState<MarketplaceSkill | null>(null);
-  const [installingSkillIds, setInstallingSkillIds] = useState<Set<string>>(new Set());
 
   async function handleInstallSkill(skill: MarketplaceSkill) {
-    setInstallingSkillIds((current) => new Set(current).add(skill.id));
     try {
       await installFromMarket(skill);
       notify({ message: `技能 "${skill.name}" 已安装`, tone: "success" });
@@ -52,12 +50,6 @@ export function MarketplaceInstallPanel(props: MarketplaceInstallPanelProps) {
       notify({
         message: error instanceof Error ? error.message : "安装失败，请稍后重试。",
         tone: "error",
-      });
-    } finally {
-      setInstallingSkillIds((current) => {
-        const next = new Set(current);
-        next.delete(skill.id);
-        return next;
       });
     }
   }
@@ -125,7 +117,7 @@ export function MarketplaceInstallPanel(props: MarketplaceInstallPanelProps) {
           <>
             {marketplaceSkills.map((skill) => {
               const isInstalled = installedMarketplaceSkillIds.has(skill.id);
-              const isInstalling = installingSkillIds.has(skill.id);
+              const isInstalling = installingMarketplaceSkillIds.has(skill.id);
               return (
               <article key={skill.id} className="placeholder-card install-card">
                 <div

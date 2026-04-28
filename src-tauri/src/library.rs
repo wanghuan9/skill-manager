@@ -2,6 +2,7 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
+use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -13,6 +14,7 @@ const SKILL_LIBRARY_DIR: &str = ".skillm/skills";
 const REPO_CACHE_DIR: &str = ".skillm/repo-cache";
 const RESERVED_WORKSPACE_LINK_NAMES: [&str; 5] =
     ["state.json", "skills", "repo-cache", "cache", "imports"];
+const GIT_CLONE_HISTORY_DEPTH: &str = "20";
 const GIT_NETWORK_TIMEOUT: Duration = Duration::from_secs(120);
 const GIT_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -49,6 +51,31 @@ fn install_market_skill_into_repo_dir(
     let relative_path = skill_path
         .map(|path| PathBuf::from(path.trim_matches('/')))
         .or(source_spec.relative_path.clone());
+
+    if let Some(path) = relative_path.as_ref() {
+        let clone_branch = if skill_path.is_some() {
+            None
+        } else {
+            source_spec.branch.as_deref()
+        };
+        if let Ok(local_path) = install_sparse_market_skill_dir(
+            skill,
+            &source_spec.clone_url,
+            clone_branch,
+            repo_dir,
+            path,
+        ) {
+            return Ok(local_path);
+        }
+        let _ = fs::remove_dir_all(repo_dir);
+        fs::create_dir_all(
+            repo_dir
+                .parent()
+                .ok_or_else(|| "无法确定 skill 目录的父目录".to_string())?,
+        )
+        .map_err(|error| format!("创建 skill 目录失败: {error}"))?;
+    }
+
     let remote_skill_path =
         resolve_remote_skill_path(&source_spec, relative_path.as_deref(), &skill.name);
     let resolved_relative_path = remote_skill_path
@@ -58,46 +85,13 @@ fn install_market_skill_into_repo_dir(
     let clone_branch = clone_branch_for_resolved_path(remote_skill_path.as_ref(), &source_spec);
 
     if let Some(path) = resolved_relative_path.as_ref() {
-        // 使用 sparse checkout 只拉取 skill 目录；避免大仓库安装时回退为全量克隆。
-        let sparse_paths = skill_path_variants(path);
-        clone_repo_with_sparse_paths(
+        return install_sparse_market_skill_dir(
+            skill,
             &source_spec.clone_url,
             clone_branch,
-            &repo_dir,
-            &sparse_paths,
-        )?;
-
-        // 找到 skill 子目录，但不移动文件，直接使用子目录作为 skill 目录
-        let skill_subdir = match resolve_market_skill_source_dir(
-            &repo_dir,
-            resolved_relative_path.as_deref(),
-            &skill.name,
-        ) {
-            Ok(path) => path,
-            Err(original_error) => {
-                let fallback_path = resolve_skill_path_from_git_tree(
-                    &repo_dir,
-                    resolved_relative_path.as_deref(),
-                    &skill.name,
-                )
-                .ok_or(original_error)?;
-                let sparse_paths = skill_path_variants(&fallback_path);
-                let sparse_args = sparse_paths
-                    .iter()
-                    .map(|path| path.to_string_lossy().to_string())
-                    .collect::<Vec<_>>();
-                configure_sparse_checkout(&repo_dir, &sparse_args, false)?;
-                run_git_in_dir(&repo_dir, &["checkout", "--quiet"])?;
-                resolve_market_skill_source_dir(&repo_dir, Some(&fallback_path), &skill.name)?
-            }
-        };
-
-        // 如果 skill 在子目录中，需要更新 local_path 指向子目录
-        if skill_subdir != repo_dir {
-            // 忽略非必要文件
-            ignore_unnecessary_files(&skill_subdir)?;
-            return Ok(skill_subdir.to_string_lossy().to_string());
-        }
+            repo_dir,
+            path,
+        );
     } else {
         clone_repo_with_optional_branch(
             &source_spec.clone_url,
@@ -108,6 +102,46 @@ fn install_market_skill_into_repo_dir(
 
     // 忽略非必要文件
     ignore_unnecessary_files(&repo_dir)?;
+    Ok(repo_dir.to_string_lossy().to_string())
+}
+
+fn install_sparse_market_skill_dir(
+    skill: &SkillSummary,
+    clone_url: &str,
+    clone_branch: Option<&str>,
+    repo_dir: &Path,
+    relative_path: &Path,
+) -> Result<String, String> {
+    // 使用 sparse checkout 只拉取 skill 目录；避免大仓库安装时回退为全量克隆。
+    let sparse_paths = skill_path_variants(relative_path);
+    clone_repo_with_sparse_paths(clone_url, clone_branch, repo_dir, &sparse_paths)?;
+
+    // 找到 skill 子目录，但不移动文件，直接使用子目录作为 skill 目录
+    let skill_subdir =
+        match resolve_market_skill_source_dir(repo_dir, Some(relative_path), &skill.name) {
+            Ok(path) => path,
+            Err(original_error) => {
+                let fallback_path =
+                    resolve_skill_path_from_git_tree(repo_dir, Some(relative_path), &skill.name)
+                        .ok_or(original_error)?;
+                let sparse_paths = skill_path_variants(&fallback_path);
+                let sparse_args = sparse_paths
+                    .iter()
+                    .map(|path| path.to_string_lossy().to_string())
+                    .collect::<Vec<_>>();
+                configure_sparse_checkout(repo_dir, &sparse_args, false)?;
+                run_git_in_dir(repo_dir, &["checkout", "--quiet"])?;
+                resolve_market_skill_source_dir(repo_dir, Some(&fallback_path), &skill.name)?
+            }
+        };
+
+    // 如果 skill 在子目录中，需要更新 local_path 指向子目录
+    if skill_subdir != repo_dir {
+        schedule_ignore_unnecessary_files(skill_subdir.clone());
+        return Ok(skill_subdir.to_string_lossy().to_string());
+    }
+
+    schedule_ignore_unnecessary_files(repo_dir.to_path_buf());
     Ok(repo_dir.to_string_lossy().to_string())
 }
 
@@ -178,15 +212,13 @@ fn resolve_remote_skill_path(
         .unwrap_or_default();
 
     if !hinted_paths.is_empty() {
-        for branch in &branch_candidates {
-            for path in &hinted_paths {
-                if remote_skill_file_exists(&owner_repo, branch, path) {
-                    return Some(ResolvedRemoteSkillPath {
-                        path: path.clone(),
-                        branch: branch_for_clone(branch),
-                    });
-                }
-            }
+        if let Some((branch, path)) =
+            first_existing_remote_skill_file(&owner_repo, &branch_candidates, &hinted_paths)
+        {
+            return Some(ResolvedRemoteSkillPath {
+                path,
+                branch: branch_for_clone(&branch),
+            });
         }
     }
 
@@ -236,6 +268,53 @@ fn resolve_remote_skill_path(
         }
     }
 
+    None
+}
+
+fn first_existing_remote_skill_file(
+    owner_repo: &str,
+    branch_candidates: &[String],
+    hinted_paths: &[PathBuf],
+) -> Option<(String, PathBuf)> {
+    let (tx, rx) = mpsc::channel();
+    let mut task_count = 0;
+    let path_count = hinted_paths.len();
+
+    for (branch_index, branch) in branch_candidates.iter().enumerate() {
+        for (path_index, path) in hinted_paths.iter().enumerate() {
+            let tx = tx.clone();
+            let owner_repo = owner_repo.to_string();
+            let branch = branch.clone();
+            let path = path.clone();
+            task_count += 1;
+            thread::spawn(move || {
+                let exists = remote_skill_file_exists(&owner_repo, &branch, &path);
+                let _ = tx.send((branch_index, path_index, exists, branch, path));
+            });
+        }
+    }
+    drop(tx);
+
+    let mut completed = vec![false; task_count];
+    let mut matches = vec![None; task_count];
+    for _ in 0..task_count {
+        let Ok((branch_index, path_index, exists, branch, path)) = rx.recv() else {
+            continue;
+        };
+        let ordered_index = branch_index * path_count + path_index;
+        completed[ordered_index] = true;
+        if exists {
+            matches[ordered_index] = Some((branch, path));
+        }
+        for (index, is_completed) in completed.iter().enumerate() {
+            if let Some(result) = matches[index].clone() {
+                return Some(result);
+            }
+            if !is_completed {
+                break;
+            }
+        }
+    }
     None
 }
 
@@ -292,17 +371,14 @@ fn best_remote_skill_dir_match(
     child_dirs: Vec<PathBuf>,
     wanted_slugs: &[String],
 ) -> Option<PathBuf> {
-    let mut matches = child_dirs
+    let scored_matches = child_dirs
         .into_iter()
         .filter_map(|path| {
             let score = skill_dir_match_score(&path, wanted_slugs)?;
-            if remote_skill_file_exists(owner_repo, branch, &path) {
-                Some((score, path))
-            } else {
-                None
-            }
+            Some((score, path))
         })
         .collect::<Vec<_>>();
+    let mut matches = existing_remote_skill_dirs(owner_repo, branch, scored_matches);
     matches.sort_by(|(left_score, left_path), (right_score, right_path)| {
         right_score
             .cmp(left_score)
@@ -314,6 +390,36 @@ fn best_remote_skill_dir_match(
         return None;
     }
     Some(best_path.clone())
+}
+
+fn existing_remote_skill_dirs(
+    owner_repo: &str,
+    branch: &str,
+    scored_paths: Vec<(u8, PathBuf)>,
+) -> Vec<(u8, PathBuf)> {
+    let (tx, rx) = mpsc::channel();
+    let task_count = scored_paths.len();
+    for (score, path) in scored_paths {
+        let tx = tx.clone();
+        let owner_repo = owner_repo.to_string();
+        let branch = branch.to_string();
+        thread::spawn(move || {
+            let exists = remote_skill_file_exists(&owner_repo, &branch, &path);
+            let _ = tx.send((score, path, exists));
+        });
+    }
+    drop(tx);
+
+    let mut existing = Vec::new();
+    for _ in 0..task_count {
+        let Ok((score, path, exists)) = rx.recv() else {
+            continue;
+        };
+        if exists {
+            existing.push((score, path));
+        }
+    }
+    existing
 }
 
 fn skill_dir_match_score(path: &Path, wanted_slugs: &[String]) -> Option<u8> {
@@ -736,7 +842,9 @@ fn clone_repo_into(source: &str, target_dir: &Path) -> Result<(), String> {
     command.args([
         "clone",
         "--depth",
-        "1",
+        GIT_CLONE_HISTORY_DEPTH,
+        "--single-branch",
+        "--no-tags",
         source,
         target_dir.to_string_lossy().as_ref(),
     ]);
@@ -759,6 +867,9 @@ fn clone_repo_with_optional_branch(
 ) -> Result<(), String> {
     let mut command = Command::new("git");
     command.arg("clone");
+    command.arg("--depth").arg(GIT_CLONE_HISTORY_DEPTH);
+    command.arg("--single-branch");
+    command.arg("--no-tags");
     if let Some(branch_name) = branch.filter(|value| !value.trim().is_empty()) {
         command.arg("--branch").arg(branch_name);
     }
@@ -787,7 +898,10 @@ fn clone_repo_with_sparse_paths(
     clone_command
         .arg("clone")
         .arg("--filter=blob:none")
-        .arg("--depth=1")
+        .arg("--depth")
+        .arg(GIT_CLONE_HISTORY_DEPTH)
+        .arg("--single-branch")
+        .arg("--no-tags")
         .arg("--sparse")
         .arg("--no-checkout");
     if let Some(branch_name) = branch.filter(|value| !value.trim().is_empty()) {
@@ -1416,31 +1530,24 @@ fn ignore_unnecessary_files(skill_dir: &Path) -> Result<(), String> {
     fs::write(&exclude_path, new_content)
         .map_err(|error| format!("写入 .git/info/exclude 失败: {error}"))?;
 
-    // 从 git 索引中移除匹配的已跟踪文件
-    // 对于目录模式，需要递归查找并移除
-    for pattern in &ignore_patterns {
-        let pattern_without_slash = pattern.trim_start_matches('/');
-
-        if pattern.ends_with('/') || *pattern == ".vscode" || *pattern == ".idea" {
-            // 处理目录
-            let dir_path = repo_root.join(pattern_without_slash);
-            if dir_path.is_dir() {
-                let _ =
-                    run_git_in_dir(&repo_root, &["rm", "--cached", "-r", pattern_without_slash]);
-            }
-        } else if pattern.contains('*') {
-            // 处理通配符模式
-            let _ = run_git_in_dir(&repo_root, &["rm", "--cached", pattern_without_slash]);
-        } else {
-            // 处理具体文件
-            let file_path = repo_root.join(pattern_without_slash);
-            if file_path.exists() {
-                let _ = run_git_in_dir(&repo_root, &["rm", "--cached", pattern_without_slash]);
-            }
-        }
+    let ignored_paths = ignore_patterns
+        .iter()
+        .map(|pattern| pattern.trim_start_matches('/'))
+        .filter(|pattern| !pattern.is_empty())
+        .collect::<Vec<_>>();
+    if !ignored_paths.is_empty() {
+        let mut args = vec!["rm", "--cached", "-r", "--ignore-unmatch"];
+        args.extend(ignored_paths);
+        let _ = run_git_in_dir(&repo_root, &args);
     }
 
     Ok(())
+}
+
+fn schedule_ignore_unnecessary_files(skill_dir: PathBuf) {
+    thread::spawn(move || {
+        let _ = ignore_unnecessary_files(&skill_dir);
+    });
 }
 
 fn git_worktree_root(path: &Path) -> Option<PathBuf> {

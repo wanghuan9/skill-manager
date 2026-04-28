@@ -4,13 +4,15 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Mutex, OnceLock};
+use std::thread;
 use std::time::Duration;
 
 use reqwest::Client;
 use serde::Deserialize;
 
 use crate::git_state::{
-    clear_skill_update_cache, enrich_skill_with_cached_update_state, enrich_skill_with_git_state,
+    clear_skill_update_cache, enrich_newly_installed_skill_with_git_state,
+    enrich_skill_with_cached_update_state, enrich_skill_with_git_state,
 };
 use crate::library::{
     clone_repo_for_discovery, clone_repo_for_discovery_with_sparse_paths, clone_repo_skill,
@@ -2450,11 +2452,23 @@ fn install_skill_from_market_blocking(skill: MarketplaceSkill) -> Result<SkillSu
         },
     )?;
     let skill_description_path = Path::new(&installed_skill.local_path).join("SKILL.md");
-    if skill_description_path.is_file() {
-        installed_skill.description = read_skill_description(&skill_description_path);
+    let normalized_skill = normalize_skill_tools(&installed_skill);
+    let git_skill = normalized_skill.clone();
+    let git_state_handle =
+        thread::spawn(move || enrich_newly_installed_skill_with_git_state(&git_skill));
+    let description_handle = thread::spawn(move || {
+        if skill_description_path.is_file() {
+            Some(read_skill_description(&skill_description_path))
+        } else {
+            None
+        }
+    });
+    let mut installed_skill = git_state_handle
+        .join()
+        .unwrap_or_else(|_| enrich_newly_installed_skill_with_git_state(&normalized_skill));
+    if let Ok(Some(description)) = description_handle.join() {
+        installed_skill.description = description;
     }
-
-    let installed_skill = enrich_skill_with_git_state(&normalize_skill_tools(&installed_skill));
     installed_skills.retain(|skill| skill.name != installed_skill.name);
     installed_skills.insert(0, installed_skill.clone());
     save_installed_skills(&installed_skills)?;
@@ -2637,7 +2651,9 @@ pub async fn install_selected_repo_skills(
                 git_linked: true,
                 tools: vec![],
             };
-            let enriched = enrich_skill_with_git_state(&normalize_skill_tools(&installed_skill));
+            let enriched = enrich_newly_installed_skill_with_git_state(&normalize_skill_tools(
+                &installed_skill,
+            ));
             persist_skill_timestamps(&enriched);
             installed_skills.retain(|skill| skill.name != enriched.name);
             installed_skills.insert(0, enriched.clone());

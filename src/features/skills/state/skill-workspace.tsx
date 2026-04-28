@@ -3,6 +3,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -60,6 +61,7 @@ type SkillWorkspaceContextValue = {
   isLoading: boolean;
   isMarketplaceLoading: boolean;
   isSearchLoading: boolean;
+  installingMarketplaceSkillIds: Set<string>;
   hasMoreMarketplaceSkills: boolean;
   installFromMarket: (skill: MarketplaceSkill) => Promise<void>;
   loadInitialMarketplaceSkills: (sourceSite: MarketplaceSourceSite) => Promise<void>;
@@ -148,6 +150,8 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
   const [isLoading, setIsLoading] = useState(false);
   const [isMarketplaceLoading, setIsMarketplaceLoading] = useState(false);
   const [isSearchLoading, setIsSearchLoading] = useState(false);
+  const [installingMarketplaceSkillIds, setInstallingMarketplaceSkillIds] = useState<Set<string>>(new Set());
+  const installingMarketplaceSkillIdsRef = useRef(new Set<string>());
   const [marketplacePageBySource, setMarketplacePageBySource] = useState<
     Record<MarketplaceSourceSite, number>
   >({
@@ -244,8 +248,19 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
   }, [usesFixtureData]);
 
   async function handleInstallFromMarket(skill: MarketplaceSkill) {
-    const installedSkill = await installSkillFromMarket(skill);
-    setInstalledSkills((current) => [installedSkill, ...current.filter((item) => item.name !== installedSkill.name)]);
+    if (installingMarketplaceSkillIdsRef.current.has(skill.id)) {
+      return;
+    }
+
+    installingMarketplaceSkillIdsRef.current.add(skill.id);
+    setInstallingMarketplaceSkillIds(new Set(installingMarketplaceSkillIdsRef.current));
+    try {
+      const installedSkill = await installSkillFromMarket(skill);
+      setInstalledSkills((current) => [installedSkill, ...current.filter((item) => item.name !== installedSkill.name)]);
+    } finally {
+      installingMarketplaceSkillIdsRef.current.delete(skill.id);
+      setInstallingMarketplaceSkillIds(new Set(installingMarketplaceSkillIdsRef.current));
+    }
   }
 
   async function loadMarketplacePage(sourceSite: MarketplaceSourceSite, page: number, append: boolean) {
@@ -378,6 +393,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       isLoading,
       isMarketplaceLoading,
       isSearchLoading,
+      installingMarketplaceSkillIds,
       hasMoreMarketplaceSkills,
       installFromMarket: handleInstallFromMarket,
       loadInitialMarketplaceSkills: handleLoadInitialMarketplaceSkills,
@@ -408,6 +424,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       gitAccount,
       hasMoreMarketplaceSkills,
       installedSkills,
+      installingMarketplaceSkillIds,
       isLoading,
       isMarketplaceLoading,
       isSearchLoading,

@@ -75,6 +75,40 @@ pub fn enrich_skill_with_git_state(skill: &SkillSummary) -> SkillSummary {
     enriched
 }
 
+pub fn enrich_newly_installed_skill_with_git_state(skill: &SkillSummary) -> SkillSummary {
+    let skill_path = Path::new(&skill.local_path);
+    if !skill_path.exists() || repo_root(skill_path).is_none() {
+        let mut unlinked = skill.clone();
+        if let Some(updated_at) = latest_local_content_modified_at(skill_path) {
+            unlinked.last_synced_at = updated_at;
+        }
+        unlinked.git_linked = false;
+        return unlinked;
+    }
+
+    let branch = run_git(skill_path, &["rev-parse", "--abbrev-ref", "HEAD"])
+        .unwrap_or_else(|| skill.branch.clone());
+    let commit_label = run_git(skill_path, &["rev-parse", "--short", "HEAD"])
+        .unwrap_or_else(|| skill.commit_label.clone());
+    let working_tree_dirty = run_git(skill_path, &["status", "--porcelain", "--", "."])
+        .map(|output| !output.trim().is_empty())
+        .unwrap_or(false);
+    let (collab_status, status_text) = derive_collab_status(working_tree_dirty, Some((0, 0)));
+
+    let mut enriched = skill.clone();
+    enriched.branch = branch;
+    enriched.commit_label = commit_label;
+    enriched.collab_status = collab_status.to_string();
+    enriched.status_text = status_text;
+    enriched.last_synced_at = latest_commit_time(skill_path)
+        .or_else(|| latest_local_content_modified_at(skill_path))
+        .unwrap_or_else(|| skill.last_synced_at.clone());
+    enriched.last_checked_at = "刚刚检查".into();
+    enriched.last_editor = latest_commit_author(skill_path).unwrap_or_default();
+    enriched.git_linked = true;
+    enriched
+}
+
 pub fn enrich_skill_with_cached_update_state(skill: &SkillSummary) -> SkillSummary {
     let skill_path = Path::new(&skill.local_path);
     if !skill_path.exists() || repo_root(skill_path).is_none() {
