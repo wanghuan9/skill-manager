@@ -103,10 +103,14 @@ export function SkillListPage(props: SkillListPageProps) {
   );
   const groupedSkills = useMemo(() => groupSkillsBySource(skills), [skills]);
 
+  function isGroupCollapsed(groupId: string) {
+    return collapsedGroups[groupId] ?? true;
+  }
+
   function toggleGroup(groupId: string) {
     setCollapsedGroups((current) => ({
       ...current,
-      [groupId]: !current[groupId],
+      [groupId]: !(current[groupId] ?? true),
     }));
   }
 
@@ -123,7 +127,7 @@ export function SkillListPage(props: SkillListPageProps) {
           groupedSkills.map((group) => {
             const updateCount = group.skills.filter((skill) => skill.collabStatus === "update-available").length;
             const pendingPushCount = group.skills.filter((skill) => skill.collabStatus === "pending-push").length;
-            const isCollapsed = collapsedGroups[group.id] ?? false;
+            const isCollapsed = isGroupCollapsed(group.id);
 
             return (
               <section key={group.id} className="skill-group-section">
