@@ -56,6 +56,138 @@ code {
   min-height: 100vh;
 }
 
+.app-notification-stack {
+  position: fixed;
+  top: 24px;
+  right: 24px;
+  z-index: 1000;
+  display: grid;
+  gap: 10px;
+  width: min(360px, calc(100vw - 32px));
+  pointer-events: none;
+}
+
+.app-notification {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) 24px;
+  align-items: center;
+  gap: 10px;
+  min-height: 50px;
+  padding: 11px 10px 11px 14px;
+  border: 1px solid rgba(59, 130, 246, 0.32);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow:
+    0 18px 42px rgba(15, 23, 42, 0.16),
+    0 1px 0 rgba(255, 255, 255, 0.72) inset;
+  color: var(--heading);
+  pointer-events: auto;
+  animation: notification-enter 180ms cubic-bezier(0.2, 0.82, 0.2, 1);
+  backdrop-filter: blur(14px) saturate(1.08);
+  transition:
+    opacity 160ms ease,
+    transform 160ms ease,
+    box-shadow 160ms ease;
+}
+
+.app-notification:hover {
+  box-shadow:
+    0 22px 48px rgba(15, 23, 42, 0.18),
+    0 1px 0 rgba(255, 255, 255, 0.8) inset;
+  transform: translateY(-1px);
+}
+
+.app-notification.is-exiting {
+  opacity: 0;
+  transform: translateY(-6px) scale(0.98);
+  pointer-events: none;
+}
+
+.app-notification--success {
+  border-color: rgba(39, 179, 106, 0.38);
+}
+
+.app-notification--error {
+  border-color: rgba(210, 90, 90, 0.42);
+}
+
+.app-notification--info {
+  border-color: rgba(59, 130, 246, 0.38);
+}
+
+.app-notification__icon {
+  width: 20px;
+  height: 20px;
+  animation: notification-icon-pop 240ms cubic-bezier(0.2, 0.82, 0.2, 1) 40ms both;
+}
+
+.app-notification--success .app-notification__icon {
+  color: var(--success);
+}
+
+.app-notification--error .app-notification__icon {
+  color: var(--danger);
+}
+
+.app-notification--info .app-notification__icon {
+  color: var(--accent);
+}
+
+.app-notification__message {
+  min-width: 0;
+  color: var(--heading);
+  font-size: 0.9rem;
+  font-weight: 700;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.app-notification__close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.app-notification__close:hover {
+  background: rgba(15, 23, 42, 0.06);
+  color: var(--heading);
+}
+
+.app-notification__close svg {
+  width: 16px;
+  height: 16px;
+}
+
+@keyframes notification-enter {
+  from {
+    opacity: 0;
+    transform: translateY(-8px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes notification-icon-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.72);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
 .sr-only {
   position: absolute;
   width: 1px;
@@ -1668,6 +1800,12 @@ code {
   cursor: pointer;
 }
 
+.install-card__surface:focus-visible {
+  outline: 2px solid rgba(59, 130, 246, 0.48);
+  outline-offset: 4px;
+  border-radius: 6px;
+}
+
 .install-card:hover,
 .install-card:focus-within {
   border-color: #b9ccff;
@@ -2050,14 +2188,9 @@ code {
   animation: spin 0.8s linear infinite;
 }
 
-.repo-install__error,
 .repo-install__notice {
   margin: 0;
   font-size: 0.84rem;
-}
-
-.repo-install__error {
-  color: #d05a20;
 }
 
 .repo-install__notice {

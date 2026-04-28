@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { useNotifications } from "@/app/notifications";
 import { fetchMarketplaceSkillDescription, openExternalLink } from "@/features/skills/api/skill-client";
 import type { MarketplaceSkill, MarketplaceSourceSite } from "@/features/skills/state/skill-store";
 import { useSkillWorkspace } from "@/features/skills/state/skill-workspace";
@@ -38,17 +39,20 @@ export function MarketplaceInstallPanel(props: MarketplaceInstallPanelProps) {
     onLoadMore,
   } = props;
   const { installFromMarket } = useSkillWorkspace();
+  const { notify } = useNotifications();
   const [selectedSkill, setSelectedSkill] = useState<MarketplaceSkill | null>(null);
   const [installingSkillIds, setInstallingSkillIds] = useState<Set<string>>(new Set());
-  const [errorMessage, setErrorMessage] = useState("");
 
   async function handleInstallSkill(skill: MarketplaceSkill) {
-    setErrorMessage("");
     setInstallingSkillIds((current) => new Set(current).add(skill.id));
     try {
       await installFromMarket(skill);
+      notify({ message: `技能 "${skill.name}" 已安装`, tone: "success" });
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : "安装失败，请稍后重试。");
+      notify({
+        message: error instanceof Error ? error.message : "安装失败，请稍后重试。",
+        tone: "error",
+      });
     } finally {
       setInstallingSkillIds((current) => {
         const next = new Set(current);
@@ -56,6 +60,15 @@ export function MarketplaceInstallPanel(props: MarketplaceInstallPanelProps) {
         return next;
       });
     }
+  }
+
+  function handleSkillSurfaceKeyDown(event: ReactKeyboardEvent<HTMLDivElement>, skill: MarketplaceSkill) {
+    if (event.key !== "Enter" && event.key !== " ") {
+      return;
+    }
+
+    event.preventDefault();
+    setSelectedSkill(skill);
   }
 
   return (
@@ -99,7 +112,6 @@ export function MarketplaceInstallPanel(props: MarketplaceInstallPanelProps) {
         </div>
       </div>
       <div className="install-grid">
-        {errorMessage ? <p className="repo-install__error">{errorMessage}</p> : null}
         {isInitialLoading ? (
           <section className="placeholder-card">
             <h3>正在搜索可安装技能</h3>
@@ -116,10 +128,12 @@ export function MarketplaceInstallPanel(props: MarketplaceInstallPanelProps) {
               const isInstalling = installingSkillIds.has(skill.id);
               return (
               <article key={skill.id} className="placeholder-card install-card">
-                <button
+                <div
                   className="install-card__surface"
-                  type="button"
+                  role="button"
+                  tabIndex={0}
                   onClick={() => setSelectedSkill(skill)}
+                  onKeyDown={(event) => handleSkillSurfaceKeyDown(event, skill)}
                 >
                   <div className="install-card__header">
                   <div className="install-card__lead">
@@ -169,7 +183,7 @@ export function MarketplaceInstallPanel(props: MarketplaceInstallPanelProps) {
                       {skill.popularityLabel}
                     </span>
                   </div>
-                </button>
+                </div>
               </article>
               );
             })}

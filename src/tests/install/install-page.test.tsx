@@ -29,6 +29,17 @@ test("discovers repo skills and allows multi-select install", async () => {
   expect(screen.getByText("release-scribe")).toBeInTheDocument();
 });
 
+test("shows install errors in the global notification stack", async () => {
+  render(<App />);
+  await userEvent.click(screen.getByRole("button", { name: /安装/ }));
+  await userEvent.click(screen.getByRole("tab", { name: "Git 安装" }));
+
+  await userEvent.type(screen.getByRole("textbox", { name: "Git 仓库地址" }), "https://example.com/team/repo");
+  await userEvent.click(screen.getByRole("button", { name: "识别仓库技能" }));
+
+  expect(screen.getByRole("alert")).toHaveTextContent("当前只支持 GitHub、GitLab、Gitee 仓库地址。");
+});
+
 test("marks already installed repo skills as unavailable", async () => {
   render(<App />);
   await userEvent.click(screen.getByRole("button", { name: /安装/ }));

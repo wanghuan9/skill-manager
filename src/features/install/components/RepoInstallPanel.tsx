@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { flushSync } from "react-dom";
+import { useNotifications } from "@/app/notifications";
 import { useSkillWorkspace } from "@/features/skills/state/skill-workspace";
 import type { RepoSkillCandidate } from "@/features/skills/state/skill-store";
 import { formatSkillDescription } from "@/features/skills/utils/skill-description";
@@ -50,12 +51,12 @@ function toggleSelection(current: string[], value: string) {
 
 export function RepoInstallPanel() {
   const { discoverRepoSkills, installFromRepo, installedSkills } = useSkillWorkspace();
+  const { notify } = useNotifications();
   const [repoInput, setRepoInput] = useState("");
   const [candidates, setCandidates] = useState<RepoSkillCandidate[]>([]);
   const [selectedPaths, setSelectedPaths] = useState<string[]>([]);
   const [isDiscovering, setIsDiscovering] = useState(false);
   const [isInstalling, setIsInstalling] = useState(false);
-  const [errorMessage, setErrorMessage] = useState("");
   const normalizedRepoUrl = useMemo(() => normalizeRepoInput(repoInput), [repoInput]);
   const isValid = isValidRepoUrl(normalizedRepoUrl);
   const installedSkillNames = useMemo(
@@ -70,13 +71,12 @@ export function RepoInstallPanel() {
   async function handleDiscover(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!isValid) {
-      setErrorMessage("当前只支持 GitHub、GitLab、Gitee 仓库地址。");
+      notify({ message: "当前只支持 GitHub、GitLab、Gitee 仓库地址。", tone: "error" });
       return;
     }
 
     flushSync(() => {
       setIsDiscovering(true);
-      setErrorMessage("");
     });
 
     await waitForNextPaint();
@@ -91,7 +91,10 @@ export function RepoInstallPanel() {
     } catch (error) {
       setCandidates([]);
       setSelectedPaths([]);
-      setErrorMessage(error instanceof Error ? error.message : "读取仓库技能失败，请稍后重试。");
+      notify({
+        message: error instanceof Error ? error.message : "读取仓库技能失败，请稍后重试。",
+        tone: "error",
+      });
     } finally {
       setIsDiscovering(false);
     }
@@ -103,14 +106,17 @@ export function RepoInstallPanel() {
     }
 
     setIsInstalling(true);
-    setErrorMessage("");
     try {
       await installFromRepo(normalizedRepoUrl, selectedPaths);
+      notify({ message: "选中技能已安装", tone: "success" });
       setRepoInput("");
       setCandidates([]);
       setSelectedPaths([]);
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : "安装选中技能失败，请稍后重试。");
+      notify({
+        message: error instanceof Error ? error.message : "安装选中技能失败，请稍后重试。",
+        tone: "error",
+      });
     } finally {
       setIsInstalling(false);
     }
@@ -150,7 +156,6 @@ export function RepoInstallPanel() {
           </div>
         </form>
       ) : null}
-      {errorMessage ? <p className="repo-install__error">{errorMessage}</p> : null}
       {candidates.length > 0 ? (
         <div className="repo-install__selection">
           <p className="repo-install__notice">发现 {candidates.length} 个技能，请选择要安装的技能</p>
@@ -191,7 +196,6 @@ export function RepoInstallPanel() {
               onClick={() => {
                 setCandidates([]);
                 setSelectedPaths([]);
-                setErrorMessage("");
               }}
             >
               返回

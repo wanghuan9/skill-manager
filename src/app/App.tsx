@@ -4,6 +4,7 @@ import { ToolsRoute } from "@/app/routes/tools";
 import { InstallTabSwitcher, MarketRoute, type InstallTab } from "@/app/routes/market";
 import { SettingsRoute } from "@/app/routes/settings";
 import { FeedbackRoute } from "@/app/routes/feedback";
+import { NotificationProvider } from "@/app/notifications";
 import { SkillWorkspaceProvider, useSkillWorkspace } from "@/features/skills/state/skill-workspace";
 import { SkillListToolbar } from "@/features/skills/components/SkillListPage";
 
@@ -289,7 +290,9 @@ function AppContent() {
 export function App() {
   return (
     <SkillWorkspaceProvider>
-      <AppContent />
+      <NotificationProvider>
+        <AppContent />
+      </NotificationProvider>
     </SkillWorkspaceProvider>
   );
 }
