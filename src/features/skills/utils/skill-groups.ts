@@ -127,9 +127,11 @@ export function groupSkillsBySource(skills: SkillSummary[]): SkillSourceGroup[] 
     groupMap.set(groupLabel, currentSkills);
   });
 
-  return [...groupMap.entries()].map(([label, groupedSkills]) => ({
-    id: label,
-    label,
-    skills: groupedSkills,
-  }));
+  return [...groupMap.entries()]
+    .sort(([leftLabel], [rightLabel]) => leftLabel.localeCompare(rightLabel))
+    .map(([label, groupedSkills]) => ({
+      id: label,
+      label,
+      skills: groupedSkills,
+    }));
 }

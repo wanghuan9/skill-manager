@@ -52,6 +52,21 @@ describe("groupSkillsBySource", () => {
     expect(groups.map((group) => group.label)).toEqual(["anthropics", "larksuite"]);
   });
 
+  it("sorts groups by label", () => {
+    const groups = groupSkillsBySource([
+      createSkill({
+        name: "zeta-skill",
+        sourceUrl: "https://github.com/team/zeta-skills",
+      }),
+      createSkill({
+        name: "alpha-skill",
+        sourceUrl: "https://github.com/team/alpha-skills",
+      }),
+    ]);
+
+    expect(groups.map((group) => group.label)).toEqual(["alpha-skills", "zeta-skills"]);
+  });
+
   it("falls back to owner-repo when preferred labels collide", () => {
     const groups = groupSkillsBySource([
       createSkill({

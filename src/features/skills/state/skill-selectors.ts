@@ -1,4 +1,5 @@
 import type { SkillSummary } from "@/features/skills/state/skill-store";
+import { isToolEnabledStatus } from "@/features/skills/utils/tool-status";
 
 type FilterOptions = {
   query: string;
@@ -11,6 +12,10 @@ const statusPriority: Record<SkillSummary["collabStatus"], number> = {
   diverged: 2,
   clean: 3,
 };
+
+function hasEnabledTool(skill: SkillSummary) {
+  return skill.tools.some((tool) => isToolEnabledStatus(tool.statusLabel));
+}
 
 export function filterSkills(skills: SkillSummary[], options: FilterOptions) {
   const normalizedQuery = options.query.trim().toLowerCase();
@@ -28,6 +33,11 @@ export function filterSkills(skills: SkillSummary[], options: FilterOptions) {
   });
 
   return [...filteredSkills].sort((left, right) => {
+    const enabledToolDiff = Number(hasEnabledTool(left)) - Number(hasEnabledTool(right));
+    if (enabledToolDiff !== 0) {
+      return enabledToolDiff;
+    }
+
     const priorityDiff = statusPriority[left.collabStatus] - statusPriority[right.collabStatus];
     if (priorityDiff !== 0) {
       return priorityDiff;
