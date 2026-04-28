@@ -3314,6 +3314,8 @@ code {
     flex-direction: column;
   }
 
+}
+
 /* Notification System */
 .notification-container {
   position: fixed;
