@@ -9,7 +9,7 @@ use std::time::Duration;
 use reqwest::Client;
 use serde::Deserialize;
 
-use crate::git_state::enrich_skill_with_git_state;
+use crate::git_state::{clear_skill_update_cache, enrich_skill_with_git_state};
 use crate::library::{
     clone_repo_for_discovery, clone_repo_for_discovery_with_sparse_paths, clone_repo_skill,
     create_skill_symlink, ensure_repo_skill_with_sparse_paths, get_tool_skills_path,
@@ -200,7 +200,6 @@ fn format_compact_number(value: u64) -> String {
     }
 }
 
-
 fn source_type_for_url(source_url: &str) -> &'static str {
     if source_url.contains("gitlab.com") {
         "gitlab"
@@ -265,7 +264,10 @@ fn resolve_skills_sh_skill_path(source: &str, skill_id: &str, skill_name: &str) 
     if normalized_skill_id.contains('/')
         && cache.iter().any(|item| {
             item.source.eq_ignore_ascii_case(&normalized_source)
-                && item.skill_id.trim_matches('/').eq_ignore_ascii_case(&normalized_skill_id)
+                && item
+                    .skill_id
+                    .trim_matches('/')
+                    .eq_ignore_ascii_case(&normalized_skill_id)
         })
     {
         return normalized_skill_id;
@@ -347,7 +349,8 @@ async fn fetch_skills_sh_marketplace(
 
     let mut skills = Vec::with_capacity(paged_items.len());
     for item in paged_items {
-        let resolved_skill_id = resolve_skills_sh_skill_path(&item.source, &item.skill_id, &item.name);
+        let resolved_skill_id =
+            resolve_skills_sh_skill_path(&item.source, &item.skill_id, &item.name);
         let source_url = skills_sh_source_url(&item.source, &resolved_skill_id);
         let item_for_lookup = SkillsShSkill {
             source: item.source.clone(),
@@ -356,8 +359,13 @@ async fn fetch_skills_sh_marketplace(
             installs: item.installs,
             description: item.description.clone(),
         };
-        let cached_description = lookup_skills_sh_cached_description(&item_for_lookup)
-            .or_else(|| item_for_lookup.description.clone().filter(|value| !value.trim().is_empty()));
+        let cached_description =
+            lookup_skills_sh_cached_description(&item_for_lookup).or_else(|| {
+                item_for_lookup
+                    .description
+                    .clone()
+                    .filter(|value| !value.trim().is_empty())
+            });
         let description = if let Some(description) = cached_description {
             description
         } else {
@@ -417,7 +425,10 @@ async fn load_skills_sh_search_items(
                 source: item.get("source")?.as_str()?.to_string(),
                 skill_id: item.get("skillId")?.as_str()?.to_string(),
                 name: item.get("name")?.as_str()?.to_string(),
-                installs: item.get("installs").and_then(|value| value.as_u64()).unwrap_or_default(),
+                installs: item
+                    .get("installs")
+                    .and_then(|value| value.as_u64())
+                    .unwrap_or_default(),
                 description: None,
             })
         })
@@ -492,7 +503,8 @@ fn load_skills_manager_cached_items() -> Vec<SkillsManagerCachedSkill> {
     let mut items = Vec::new();
     for (_, skills) in page_entries {
         for skill in skills {
-            let Some(source_name) = skill.get("source_name").and_then(|value| value.as_str()) else {
+            let Some(source_name) = skill.get("source_name").and_then(|value| value.as_str())
+            else {
                 continue;
             };
             if source_name != "skills.sh" {
@@ -567,7 +579,11 @@ async fn load_skills_sh_paged_items(
     }
 
     let local_start = start_index % SKILLS_SH_REMOTE_PAGE_SIZE;
-    Ok(merged.into_iter().skip(local_start).take(safe_limit).collect())
+    Ok(merged
+        .into_iter()
+        .skip(local_start)
+        .take(safe_limit)
+        .collect())
 }
 
 async fn load_skills_sh_remote_page(
@@ -701,7 +717,8 @@ fn load_skills_sh_description_cache() -> HashMap<String, String> {
             continue;
         };
         for skill in skills {
-            let Some(source_name) = skill.get("source_name").and_then(|value| value.as_str()) else {
+            let Some(source_name) = skill.get("source_name").and_then(|value| value.as_str())
+            else {
                 continue;
             };
             if source_name != "skills.sh" {
@@ -710,7 +727,8 @@ fn load_skills_sh_description_cache() -> HashMap<String, String> {
             let Some(repo_url) = skill.get("repo_url").and_then(|value| value.as_str()) else {
                 continue;
             };
-            let Some(description) = skill.get("description").and_then(|value| value.as_str()) else {
+            let Some(description) = skill.get("description").and_then(|value| value.as_str())
+            else {
                 continue;
             };
             let normalized_description = description.trim();
@@ -736,7 +754,8 @@ fn load_skills_sh_description_cache() -> HashMap<String, String> {
                     .filter(|value| !value.is_empty())
                     .collect::<Vec<_>>();
                 if parts.len() >= 3 {
-                    let source_key = format!("{}/{}", parts[0].to_lowercase(), parts[1].to_lowercase());
+                    let source_key =
+                        format!("{}/{}", parts[0].to_lowercase(), parts[1].to_lowercase());
                     let slug_path = parts[2..].join("/").to_lowercase();
                     if !slug_path.is_empty() {
                         result.insert(
@@ -775,7 +794,6 @@ fn persist_skill_timestamps(_skill: &SkillSummary) {
     // 预留钩子：后续可把安装/更新时间落盘到独立缓存文件。
 }
 
-
 async fn fetch_skillsmp_marketplace(
     client: &Client,
     page: usize,
@@ -808,7 +826,9 @@ async fn fetch_skillsmp_marketplace(
         .map(|item| {
             // 尝试从 github_url 解析 skill 路径
             let skill_path = if let Ok(spec) = parse_market_source_url(&item.github_url) {
-                spec.relative_path.map(|p| p.to_string_lossy().to_string()).unwrap_or_default()
+                spec.relative_path
+                    .map(|p| p.to_string_lossy().to_string())
+                    .unwrap_or_default()
             } else {
                 String::new()
             };
@@ -845,18 +865,21 @@ fn load_marketplace_cache() -> Option<Vec<MarketplaceSkill>> {
     let content = fs::read_to_string(cache_path).ok()?;
     let cached: serde_json::Value = serde_json::from_str(&content).ok()?;
     let skills_array = cached.get("skills").and_then(|v| v.as_array())?;
-    let timestamp = cached.get("timestamp").and_then(|v| v.as_u64()).unwrap_or(0);
-    
+    let timestamp = cached
+        .get("timestamp")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+
     // 缓存有效期 1 小时
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .ok()?
         .as_secs();
-    
+
     if now - timestamp > 3600 {
         return None;
     }
-    
+
     Some(
         skills_array
             .iter()
@@ -870,25 +893,28 @@ fn save_marketplace_cache(skills: &[MarketplaceSkill]) {
         Some(path) => path,
         None => return,
     };
-    
+
     let parent_dir = match cache_path.parent() {
         Some(dir) => dir,
         None => return,
     };
-    
+
     let _ = fs::create_dir_all(parent_dir);
-    
+
     let timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    
+
     let cache_data = serde_json::json!({
         "timestamp": timestamp,
         "skills": skills
     });
-    
-    let _ = fs::write(cache_path, serde_json::to_string_pretty(&cache_data).unwrap_or_default());
+
+    let _ = fs::write(
+        cache_path,
+        serde_json::to_string_pretty(&cache_data).unwrap_or_default(),
+    );
 }
 
 async fn build_marketplace_skills(
@@ -900,7 +926,7 @@ async fn build_marketplace_skills(
 ) -> Vec<MarketplaceSkill> {
     let source = source_site.unwrap_or_default();
     let is_searching = query.is_some() && !query.unwrap_or_default().trim().is_empty();
-    
+
     // 如果是第一页且不是搜索，尝试从缓存读取
     if page == 1 && !is_searching {
         if let Some(cached_skills) = load_marketplace_cache() {
@@ -910,13 +936,13 @@ async fn build_marketplace_skills(
                 .filter(|skill| source.is_empty() || skill.source_site == source)
                 .take(limit)
                 .collect();
-            
+
             if !filtered.is_empty() {
                 return filtered;
             }
         }
     }
-    
+
     let client = match marketplace_http_client() {
         Ok(client) => client,
         Err(_) => return default_marketplace_skills(),
@@ -926,16 +952,15 @@ async fn build_marketplace_skills(
 
     if source.is_empty() || source == "skills.sh" {
         let normalized_query = normalize_marketplace_query(query);
-        if let Ok(mut skills_sh) =
-            fetch_skills_sh_marketplace(
-                &client,
-                page,
-                limit,
-                with_descriptions,
-                is_searching,
-                normalized_query.as_deref(),
-            )
-            .await
+        if let Ok(mut skills_sh) = fetch_skills_sh_marketplace(
+            &client,
+            page,
+            limit,
+            with_descriptions,
+            is_searching,
+            normalized_query.as_deref(),
+        )
+        .await
         {
             skills.append(&mut skills_sh);
         }
@@ -943,9 +968,13 @@ async fn build_marketplace_skills(
 
     if source.is_empty() || source == "skillsmp" {
         let normalized_query = normalize_marketplace_query(query);
-        if let Ok(mut skills_mp) = fetch_skillsmp_marketplace(&client, page, limit, normalized_query.as_deref()).await {
+        if let Ok(mut skills_mp) =
+            fetch_skillsmp_marketplace(&client, page, limit, normalized_query.as_deref()).await
+        {
             skills.append(&mut skills_mp);
-        } else if let Ok(mut skills_mp) = fetch_skillsmp_marketplace(&client, page, limit, None).await {
+        } else if let Ok(mut skills_mp) =
+            fetch_skillsmp_marketplace(&client, page, limit, None).await
+        {
             skills_mp.retain(|skill| matches_marketplace_query(skill, normalized_query.as_deref()));
             skills.append(&mut skills_mp);
         }
@@ -966,12 +995,12 @@ async fn build_marketplace_skills(
     } else {
         skills
     };
-    
+
     // 如果是第一页且不是搜索，保存到缓存
     if page == 1 && !is_searching && !result.is_empty() {
         save_marketplace_cache(&result);
     }
-    
+
     result
 }
 
@@ -1364,7 +1393,12 @@ fn normalize_skill_tools(skill: &SkillSummary) -> SkillSummary {
         .collect::<Vec<_>>();
     let synced_tool_count = merged_tools
         .iter()
-        .filter(|tool| matches!(tool.status_label.as_str(), "已同步" | "已启用" | "需要重同步"))
+        .filter(|tool| {
+            matches!(
+                tool.status_label.as_str(),
+                "已同步" | "已启用" | "需要重同步"
+            )
+        })
         .count();
 
     SkillSummary {
@@ -1376,10 +1410,7 @@ fn normalize_skill_tools(skill: &SkillSummary) -> SkillSummary {
 
 fn resolve_installed_skills() -> Vec<SkillSummary> {
     let skills = load_installed_skills(&default_installed_skills());
-    skills
-        .iter()
-        .map(normalize_skill_tools)
-        .collect()
+    skills.iter().map(normalize_skill_tools).collect()
 }
 
 #[tauri::command]
@@ -1436,7 +1467,9 @@ fn discover_cli_in_bundle(app_bundle_path: &str) -> Option<String> {
     // Common CLI locations in Electron / JetBrains apps
     let candidate_paths = [
         bundle.join("Contents/Resources/app/bin").join(&stem),
-        bundle.join("Contents/Resources/app/bin").join(&stem.to_lowercase()),
+        bundle
+            .join("Contents/Resources/app/bin")
+            .join(&stem.to_lowercase()),
         bundle.join("Contents/MacOS").join(&stem),
     ];
     for path in &candidate_paths {
@@ -1454,7 +1487,11 @@ fn editor_app_name_candidates(editor_id: &str) -> &[&str] {
         "windsurf" => &["Windsurf"],
         "kiro" => &["Kiro", "Kiro CLI"],
         "trae" => &["Trae", "TRAE"],
-        "intellij" => &["IntelliJ IDEA", "IntelliJ IDEA CE", "IntelliJ IDEA Ultimate"],
+        "intellij" => &[
+            "IntelliJ IDEA",
+            "IntelliJ IDEA CE",
+            "IntelliJ IDEA Ultimate",
+        ],
         _ => &[],
     }
 }
@@ -1467,7 +1504,9 @@ fn resolve_editor_open_info(editor_id: &str) -> Result<EditorOpenInfo, String> {
     }
 
     let app_bundle_path = find_app_bundle(candidates);
-    let cli_path = app_bundle_path.as_ref().and_then(|p| discover_cli_in_bundle(p));
+    let cli_path = app_bundle_path
+        .as_ref()
+        .and_then(|p| discover_cli_in_bundle(p));
     let app_display_name = app_bundle_path.as_ref().and_then(|p| {
         PathBuf::from(p)
             .file_stem()
@@ -1476,9 +1515,7 @@ fn resolve_editor_open_info(editor_id: &str) -> Result<EditorOpenInfo, String> {
     });
 
     if cli_path.is_none() && app_display_name.is_none() {
-        return Err(format!(
-            "未找到编辑器，请确认已安装对应应用。"
-        ));
+        return Err(format!("未找到编辑器，请确认已安装对应应用。"));
     }
 
     Ok(EditorOpenInfo {
@@ -1639,6 +1676,8 @@ fn branch_divergence_counts(
             "--left-right",
             "--count",
             &format!("{remote_branch}...HEAD"),
+            "--",
+            ".",
         ],
     )?;
     let mut parts = output.split_whitespace();
@@ -2207,14 +2246,12 @@ fn parse_skill_description_from_content(content: &str) -> Option<String> {
 
     for line in lines {
         let trimmed = line.trim();
-        let looks_like_frontmatter_field = trimmed
-            .split_once(':')
-            .is_some_and(|(key, _)| {
-                !key.is_empty()
-                    && key
-                        .chars()
-                        .all(|character| character.is_ascii_alphanumeric() || character == '-' || character == '_')
-            });
+        let looks_like_frontmatter_field = trimmed.split_once(':').is_some_and(|(key, _)| {
+            !key.is_empty()
+                && key.chars().all(|character| {
+                    character.is_ascii_alphanumeric() || character == '-' || character == '_'
+                })
+        });
         if trimmed.is_empty()
             || trimmed.starts_with('#')
             || trimmed == "---"
@@ -2289,7 +2326,8 @@ pub async fn get_marketplace_skill_description(
         return fallback;
     }
 
-    let resolved_skill_id = resolve_skills_sh_skill_path(&normalized_source, &normalized_skill_id, &skill_name);
+    let resolved_skill_id =
+        resolve_skills_sh_skill_path(&normalized_source, &normalized_skill_id, &skill_name);
 
     let item = SkillsShSkill {
         source: normalized_source,
@@ -2332,6 +2370,12 @@ pub fn get_git_account_summary() -> GitAccountSummary {
 
 #[tauri::command]
 pub async fn install_skill_from_market(skill: MarketplaceSkill) -> Result<SkillSummary, String> {
+    tauri::async_runtime::spawn_blocking(move || install_skill_from_market_blocking(skill))
+        .await
+        .map_err(|error| format!("后台安装 marketplace skill 失败: {error}"))?
+}
+
+fn install_skill_from_market_blocking(skill: MarketplaceSkill) -> Result<SkillSummary, String> {
     if skill.name.trim().is_empty() {
         return Err("未找到目标安装技能".to_string());
     }
@@ -2361,7 +2405,14 @@ pub async fn install_skill_from_market(skill: MarketplaceSkill) -> Result<SkillS
             status_label: "待同步".into(),
         }],
     };
-    installed_skill.local_path = install_market_skill_from_source(&installed_skill, if skill.skill_path.is_empty() { None } else { Some(skill.skill_path.as_str()) })?;
+    installed_skill.local_path = install_market_skill_from_source(
+        &installed_skill,
+        if skill.skill_path.is_empty() {
+            None
+        } else {
+            Some(skill.skill_path.as_str())
+        },
+    )?;
     let skill_description_path = Path::new(&installed_skill.local_path).join("SKILL.md");
     if skill_description_path.is_file() {
         installed_skill.description = read_skill_description(&skill_description_path);
@@ -2729,6 +2780,7 @@ pub fn update_skill(skill_name: &str) -> Result<SkillSummary, String> {
     let (installed_skills, skill_index) = find_skill_by_name(skill_name)?;
     let skill = &installed_skills[skill_index];
     update_skill_repo(skill)?;
+    clear_skill_update_cache(skill);
     refresh_and_persist_skill(skill_name)
 }
 

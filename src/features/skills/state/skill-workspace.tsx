@@ -198,8 +198,21 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       setLocalCandidates(workspace.candidates);
       setToolConfigs(workspace.tools);
       setGitAccount(workspace.account);
+      void refreshGitStatesInBackground();
     } finally {
       setIsLoading(false);
+    }
+  }
+
+  async function refreshGitStatesInBackground(shouldApply: () => boolean = () => true) {
+    try {
+      const skillsWithGitState = await fetchGitStates();
+      if (!shouldApply()) {
+        return;
+      }
+      setInstalledSkills(skillsWithGitState);
+    } catch (error) {
+      console.error("Failed to refresh git states:", error);
     }
   }
 
@@ -220,6 +233,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       setLocalCandidates(workspace.candidates);
       setToolConfigs(workspace.tools);
       setGitAccount(workspace.account);
+      void refreshGitStatesInBackground(() => active);
     }
 
     void loadWorkspace();
@@ -227,24 +241,6 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
     return () => {
       active = false;
     };
-  }, [usesFixtureData]);
-
-  // 延迟异步刷新 Git 状态
-  useEffect(() => {
-    if (usesFixtureData) {
-      return;
-    }
-
-    const timer = setTimeout(async () => {
-      try {
-        const skillsWithGitState = await fetchGitStates();
-        setInstalledSkills(skillsWithGitState);
-      } catch (error) {
-        console.error("Failed to refresh git states:", error);
-      }
-    }, 2000); // 延迟 2 秒后执行
-
-    return () => clearTimeout(timer);
   }, [usesFixtureData]);
 
   async function handleInstallFromMarket(skill: MarketplaceSkill) {
