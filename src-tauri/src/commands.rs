@@ -9,7 +9,9 @@ use std::time::Duration;
 use reqwest::Client;
 use serde::Deserialize;
 
-use crate::git_state::{clear_skill_update_cache, enrich_skill_with_git_state};
+use crate::git_state::{
+    clear_skill_update_cache, enrich_skill_with_cached_update_state, enrich_skill_with_git_state,
+};
 use crate::library::{
     clone_repo_for_discovery, clone_repo_for_discovery_with_sparse_paths, clone_repo_skill,
     create_skill_symlink, ensure_repo_skill_with_sparse_paths, get_tool_skills_path,
@@ -1410,7 +1412,11 @@ fn normalize_skill_tools(skill: &SkillSummary) -> SkillSummary {
 
 fn resolve_installed_skills() -> Vec<SkillSummary> {
     let skills = load_installed_skills(&default_installed_skills());
-    skills.iter().map(normalize_skill_tools).collect()
+    skills
+        .iter()
+        .map(normalize_skill_tools)
+        .map(|skill| enrich_skill_with_cached_update_state(&skill))
+        .collect()
 }
 
 #[tauri::command]

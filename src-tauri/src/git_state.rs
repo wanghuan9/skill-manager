@@ -75,6 +75,31 @@ pub fn enrich_skill_with_git_state(skill: &SkillSummary) -> SkillSummary {
     enriched
 }
 
+pub fn enrich_skill_with_cached_update_state(skill: &SkillSummary) -> SkillSummary {
+    let skill_path = Path::new(&skill.local_path);
+    if !skill_path.exists() || repo_root(skill_path).is_none() {
+        return skill.clone();
+    }
+
+    let branch = run_git(skill_path, &["rev-parse", "--abbrev-ref", "HEAD"])
+        .unwrap_or_else(|| skill.branch.clone());
+    let commit_label = run_git(skill_path, &["rev-parse", "--short", "HEAD"])
+        .unwrap_or_else(|| skill.commit_label.clone());
+    let head = run_git(skill_path, &["rev-parse", "HEAD"]).unwrap_or_else(|| commit_label.clone());
+    if cached_update_counts(skill, &branch, &head).is_none() {
+        return skill.clone();
+    }
+
+    let mut enriched = skill.clone();
+    enriched.branch = branch;
+    enriched.commit_label = commit_label;
+    enriched.collab_status = STATUS_UPDATE_AVAILABLE.into();
+    enriched.status_text = "远端存在更新，已使用上次检测结果。".into();
+    enriched.last_checked_at = "已缓存".into();
+    enriched.git_linked = true;
+    enriched
+}
+
 pub fn clear_skill_update_cache(skill: &SkillSummary) {
     remove_update_cache_entry(skill);
 }
