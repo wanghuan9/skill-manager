@@ -886,8 +886,38 @@ fn load_marketplace_cache() -> Option<Vec<MarketplaceSkill>> {
         skills_array
             .iter()
             .filter_map(|skill| serde_json::from_value(skill.clone()).ok())
+            .map(normalize_cached_marketplace_skill)
             .collect(),
     )
+}
+
+fn normalize_cached_marketplace_skill(mut skill: MarketplaceSkill) -> MarketplaceSkill {
+    if skill.source_site != "skills.sh" {
+        return skill;
+    }
+
+    let (source_from_id, path_from_id) = parse_skills_sh_marketplace_id(&skill.id);
+    let source =
+        source_from_id.unwrap_or_else(|| normalize_repo_key_from_source(&skill.source_url));
+    if source.is_empty() {
+        return skill;
+    }
+
+    let path_hint = if skill.skill_path.trim().is_empty() {
+        path_from_id
+    } else {
+        skill.skill_path.clone()
+    };
+    let resolved_skill_path = resolve_skills_sh_skill_path(&source, &path_hint, &skill.name);
+    if resolved_skill_path.trim().is_empty() {
+        return skill;
+    }
+
+    skill.id = skills_sh_marketplace_id(&source, &resolved_skill_path);
+    skill.source_url = skills_sh_source_url(&source, &resolved_skill_path);
+    skill.source_type = source_type_for_url(&skill.source_url).into();
+    skill.skill_path = resolved_skill_path;
+    skill
 }
 
 fn save_marketplace_cache(skills: &[MarketplaceSkill]) {

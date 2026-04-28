@@ -1,7 +1,9 @@
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Output, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use crate::models::SkillSummary;
 use serde::de::DeserializeOwned;
@@ -11,6 +13,8 @@ const SKILL_LIBRARY_DIR: &str = ".skillm/skills";
 const REPO_CACHE_DIR: &str = ".skillm/repo-cache";
 const RESERVED_WORKSPACE_LINK_NAMES: [&str; 5] =
     ["state.json", "skills", "repo-cache", "cache", "imports"];
+const GIT_NETWORK_TIMEOUT: Duration = Duration::from_secs(120);
+const GIT_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub fn install_market_skill_from_source(
     skill: &SkillSummary,
@@ -27,6 +31,20 @@ pub fn install_market_skill_from_source(
         .ok_or_else(|| "无法确定 skill 目录的父目录".to_string())?;
     fs::create_dir_all(parent_dir).map_err(|error| format!("创建 skill 目录失败: {error}"))?;
 
+    let install_result =
+        install_market_skill_into_repo_dir(skill, skill_path, &source_spec, &repo_dir);
+    if install_result.is_err() {
+        let _ = fs::remove_dir_all(&repo_dir);
+    }
+    install_result
+}
+
+fn install_market_skill_into_repo_dir(
+    skill: &SkillSummary,
+    skill_path: Option<&str>,
+    source_spec: &MarketSourceSpec,
+    repo_dir: &Path,
+) -> Result<String, String> {
     // 优先使用传入的 skill_path，其次使用从 source_url 解析的 relative_path
     let relative_path = skill_path
         .map(|path| PathBuf::from(path.trim_matches('/')))
@@ -37,10 +55,7 @@ pub fn install_market_skill_from_source(
         .as_ref()
         .map(|resolved| resolved.path.clone())
         .or(relative_path);
-    let clone_branch = remote_skill_path
-        .as_ref()
-        .and_then(|resolved| resolved.branch.as_deref())
-        .or(source_spec.branch.as_deref());
+    let clone_branch = clone_branch_for_resolved_path(remote_skill_path.as_ref(), &source_spec);
 
     if let Some(path) = resolved_relative_path.as_ref() {
         // 使用 sparse checkout 只拉取 skill 目录；避免大仓库安装时回退为全量克隆。
@@ -53,11 +68,29 @@ pub fn install_market_skill_from_source(
         )?;
 
         // 找到 skill 子目录，但不移动文件，直接使用子目录作为 skill 目录
-        let skill_subdir = resolve_market_skill_source_dir(
+        let skill_subdir = match resolve_market_skill_source_dir(
             &repo_dir,
             resolved_relative_path.as_deref(),
             &skill.name,
-        )?;
+        ) {
+            Ok(path) => path,
+            Err(original_error) => {
+                let fallback_path = resolve_skill_path_from_git_tree(
+                    &repo_dir,
+                    resolved_relative_path.as_deref(),
+                    &skill.name,
+                )
+                .ok_or(original_error)?;
+                let sparse_paths = skill_path_variants(&fallback_path);
+                let sparse_args = sparse_paths
+                    .iter()
+                    .map(|path| path.to_string_lossy().to_string())
+                    .collect::<Vec<_>>();
+                configure_sparse_checkout(&repo_dir, &sparse_args, false)?;
+                run_git_in_dir(&repo_dir, &["checkout", "--quiet"])?;
+                resolve_market_skill_source_dir(&repo_dir, Some(&fallback_path), &skill.name)?
+            }
+        };
 
         // 如果 skill 在子目录中，需要更新 local_path 指向子目录
         if skill_subdir != repo_dir {
@@ -90,9 +123,26 @@ struct GitHubTreeResponse {
     tree: Vec<GitHubTreeEntry>,
 }
 
+#[derive(Debug, Deserialize)]
+struct GitHubContentsEntry {
+    path: String,
+    #[serde(rename = "type")]
+    entry_type: String,
+}
+
 struct ResolvedRemoteSkillPath {
     path: PathBuf,
     branch: Option<String>,
+}
+
+fn clone_branch_for_resolved_path<'a>(
+    remote_skill_path: Option<&'a ResolvedRemoteSkillPath>,
+    source_spec: &'a MarketSourceSpec,
+) -> Option<&'a str> {
+    match remote_skill_path {
+        Some(resolved) => resolved.branch.as_deref(),
+        None => source_spec.branch.as_deref(),
+    }
 }
 
 fn owner_repo_from_clone_url(clone_url: &str) -> Option<String> {
@@ -140,6 +190,17 @@ fn resolve_remote_skill_path(
         }
     }
 
+    for branch in &branch_candidates {
+        if let Some(found) =
+            resolve_remote_skill_path_from_contents(&owner_repo, branch, &hinted_paths, skill_name)
+        {
+            return Some(ResolvedRemoteSkillPath {
+                path: found,
+                branch: branch_for_clone(branch),
+            });
+        }
+    }
+
     for branch in branch_candidates {
         let Ok(skill_dirs) = fetch_remote_skill_dirs(&owner_repo, &branch) else {
             continue;
@@ -176,6 +237,128 @@ fn resolve_remote_skill_path(
     }
 
     None
+}
+
+fn resolve_remote_skill_path_from_contents(
+    owner_repo: &str,
+    branch: &str,
+    hinted_paths: &[PathBuf],
+    skill_name: &str,
+) -> Option<PathBuf> {
+    let mut parent_dirs = vec![PathBuf::from("skills")];
+    parent_dirs.extend(
+        hinted_paths
+            .iter()
+            .filter_map(|path| path.parent().map(Path::to_path_buf))
+            .filter(|path| !path.as_os_str().is_empty()),
+    );
+    parent_dirs.sort();
+    parent_dirs.dedup();
+
+    let wanted_slugs = remote_skill_match_slugs(hinted_paths, skill_name);
+    for parent_dir in parent_dirs {
+        let Ok(child_dirs) = fetch_remote_child_dirs(owner_repo, branch, &parent_dir) else {
+            continue;
+        };
+        if let Some(found) =
+            best_remote_skill_dir_match(owner_repo, branch, child_dirs, &wanted_slugs)
+        {
+            return Some(found);
+        }
+    }
+
+    None
+}
+
+fn remote_skill_match_slugs(hinted_paths: &[PathBuf], skill_name: &str) -> Vec<String> {
+    let mut slugs = Vec::new();
+    let normalized_skill_name = normalize_slug(skill_name);
+    if !normalized_skill_name.is_empty() {
+        slugs.push(normalized_skill_name);
+    }
+    slugs.extend(hinted_paths.iter().filter_map(|path| {
+        path.file_name()
+            .and_then(|value| value.to_str())
+            .map(normalize_slug)
+    }));
+    slugs.sort();
+    slugs.dedup();
+    slugs
+}
+
+fn best_remote_skill_dir_match(
+    owner_repo: &str,
+    branch: &str,
+    child_dirs: Vec<PathBuf>,
+    wanted_slugs: &[String],
+) -> Option<PathBuf> {
+    let mut matches = child_dirs
+        .into_iter()
+        .filter_map(|path| {
+            let score = skill_dir_match_score(&path, wanted_slugs)?;
+            if remote_skill_file_exists(owner_repo, branch, &path) {
+                Some((score, path))
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
+    matches.sort_by(|(left_score, left_path), (right_score, right_path)| {
+        right_score
+            .cmp(left_score)
+            .then_with(|| left_path.cmp(right_path))
+    });
+
+    let (best_score, best_path) = matches.first()?;
+    if matches.get(1).is_some_and(|(score, _)| score == best_score) {
+        return None;
+    }
+    Some(best_path.clone())
+}
+
+fn skill_dir_match_score(path: &Path, wanted_slugs: &[String]) -> Option<u8> {
+    let Some(path_slug) = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .map(normalize_slug)
+    else {
+        return None;
+    };
+    wanted_slugs.iter().find_map(|wanted| {
+        if wanted == &path_slug {
+            Some(100)
+        } else if wanted.ends_with(&format!("-{path_slug}")) {
+            Some(80)
+        } else {
+            None
+        }
+    })
+}
+
+fn fetch_remote_child_dirs(
+    owner_repo: &str,
+    branch: &str,
+    parent_dir: &Path,
+) -> Result<Vec<PathBuf>, String> {
+    let encoded_path = parent_dir
+        .to_string_lossy()
+        .split('/')
+        .map(percent_encode_path_segment)
+        .collect::<Vec<_>>()
+        .join("/");
+    let url = format!(
+        "https://api.github.com/repos/{owner_repo}/contents/{encoded_path}?ref={}",
+        branch.replace('/', "%2F")
+    );
+    let entries = fetch_json_with_curl::<Vec<GitHubContentsEntry>>(&url, 12)?;
+    let mut child_dirs = entries
+        .into_iter()
+        .filter(|entry| entry.entry_type == "dir")
+        .map(|entry| PathBuf::from(entry.path))
+        .collect::<Vec<_>>();
+    child_dirs.sort();
+    child_dirs.dedup();
+    Ok(child_dirs)
 }
 
 fn fetch_remote_skill_dirs(owner_repo: &str, branch: &str) -> Result<Vec<PathBuf>, String> {
@@ -549,16 +732,15 @@ pub fn sanitize_storage_name(name: &str) -> String {
 }
 
 fn clone_repo_into(source: &str, target_dir: &Path) -> Result<(), String> {
-    let output = Command::new("git")
-        .args([
-            "clone",
-            "--depth",
-            "1",
-            source,
-            target_dir.to_string_lossy().as_ref(),
-        ])
-        .output()
-        .map_err(|error| format!("执行 git clone 失败: {error}"))?;
+    let mut command = Command::new("git");
+    command.args([
+        "clone",
+        "--depth",
+        "1",
+        source,
+        target_dir.to_string_lossy().as_ref(),
+    ]);
+    let output = output_with_timeout(command, GIT_NETWORK_TIMEOUT, "git clone")?;
 
     if !output.status.success() {
         return Err(format!(
@@ -580,11 +762,10 @@ fn clone_repo_with_optional_branch(
     if let Some(branch_name) = branch.filter(|value| !value.trim().is_empty()) {
         command.arg("--branch").arg(branch_name);
     }
-    let output = command
+    command
         .arg(source)
-        .arg(target_dir.to_string_lossy().as_ref())
-        .output()
-        .map_err(|error| format!("执行 git clone 失败: {error}"))?;
+        .arg(target_dir.to_string_lossy().as_ref());
+    let output = output_with_timeout(command, GIT_NETWORK_TIMEOUT, "git clone")?;
 
     if !output.status.success() {
         return Err(format!(
@@ -612,11 +793,10 @@ fn clone_repo_with_sparse_paths(
     if let Some(branch_name) = branch.filter(|value| !value.trim().is_empty()) {
         clone_command.arg("--branch").arg(branch_name);
     }
-    let clone_output = clone_command
+    clone_command
         .arg(source)
-        .arg(target_dir.to_string_lossy().as_ref())
-        .output()
-        .map_err(|error| format!("执行 git sparse clone 失败: {error}"))?;
+        .arg(target_dir.to_string_lossy().as_ref());
+    let clone_output = output_with_timeout(clone_command, GIT_NETWORK_TIMEOUT, "git sparse clone")?;
     if !clone_output.status.success() {
         return Err(format!(
             "仓库克隆失败: {}",
@@ -666,12 +846,12 @@ fn configure_sparse_checkout(
 }
 
 fn run_git_in_dir(target_dir: &Path, args: &[&str]) -> Result<(), String> {
-    let output = Command::new("git")
+    let mut command = Command::new("git");
+    command
         .arg("-C")
         .arg(target_dir.to_string_lossy().as_ref())
-        .args(args)
-        .output()
-        .map_err(|error| format!("执行 git 命令失败: {error}"))?;
+        .args(args);
+    let output = output_with_timeout(command, GIT_COMMAND_TIMEOUT, "git 命令")?;
     if !output.status.success() {
         return Err(format!(
             "执行 git 命令失败: {}",
@@ -682,12 +862,12 @@ fn run_git_in_dir(target_dir: &Path, args: &[&str]) -> Result<(), String> {
 }
 
 fn run_git_in_dir_owned(target_dir: &Path, args: &[String]) -> Result<(), String> {
-    let output = Command::new("git")
+    let mut command = Command::new("git");
+    command
         .arg("-C")
         .arg(target_dir.to_string_lossy().as_ref())
-        .args(args)
-        .output()
-        .map_err(|error| format!("执行 git 命令失败: {error}"))?;
+        .args(args);
+    let output = output_with_timeout(command, GIT_COMMAND_TIMEOUT, "git 命令")?;
     if !output.status.success() {
         return Err(format!(
             "执行 git 命令失败: {}",
@@ -695,6 +875,57 @@ fn run_git_in_dir_owned(target_dir: &Path, args: &[String]) -> Result<(), String
         ));
     }
     Ok(())
+}
+
+fn run_git_output(target_dir: &Path, args: &[&str]) -> Result<String, String> {
+    let mut command = Command::new("git");
+    command
+        .arg("-C")
+        .arg(target_dir.to_string_lossy().as_ref())
+        .args(args);
+    let output = output_with_timeout(command, GIT_COMMAND_TIMEOUT, "git 命令")?;
+    if !output.status.success() {
+        return Err(format!(
+            "执行 git 命令失败: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+fn output_with_timeout(
+    mut command: Command,
+    timeout: Duration,
+    label: &str,
+) -> Result<Output, String> {
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("执行 {label} 失败: {error}"))?;
+    let started_at = Instant::now();
+
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => {
+                return child
+                    .wait_with_output()
+                    .map_err(|error| format!("读取 {label} 输出失败: {error}"));
+            }
+            Ok(None) => {
+                if started_at.elapsed() >= timeout {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(format!("{label} 超时，请检查网络后重试"));
+                }
+                thread::sleep(Duration::from_millis(100));
+            }
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!("等待 {label} 失败: {error}"));
+            }
+        }
+    }
 }
 
 fn resolve_market_skill_source_dir(
@@ -787,6 +1018,62 @@ fn resolve_market_skill_source_dir(
         "安装失败：仓库中未找到 skills 目录。指定的 skill '{}' 不存在",
         skill_name
     ))
+}
+
+fn resolve_skill_path_from_git_tree(
+    repo_root: &Path,
+    hinted_relative_path: Option<&Path>,
+    skill_name: &str,
+) -> Option<PathBuf> {
+    let tree_output = run_git_output(repo_root, &["ls-tree", "-r", "--name-only", "HEAD"]).ok()?;
+    let mut skill_dirs = tree_output
+        .lines()
+        .filter(|line| line.ends_with("SKILL.md"))
+        .filter_map(|line| PathBuf::from(line).parent().map(Path::to_path_buf))
+        .collect::<Vec<_>>();
+    skill_dirs.sort();
+    skill_dirs.dedup();
+    if skill_dirs.is_empty() {
+        return None;
+    }
+
+    let hinted_paths = hinted_relative_path
+        .map(skill_path_variants)
+        .unwrap_or_default();
+    for hint in &hinted_paths {
+        if skill_dirs.iter().any(|path| path == hint) {
+            return Some(hint.clone());
+        }
+    }
+
+    let normalized_skill_name = normalize_slug(skill_name);
+    if let Some(found) = find_skill_dir_by_slug(&skill_dirs, &normalized_skill_name) {
+        return Some(found.clone());
+    }
+
+    let wanted_slugs = remote_skill_match_slugs(&hinted_paths, skill_name);
+    best_local_skill_dir_match(skill_dirs, &wanted_slugs)
+}
+
+fn best_local_skill_dir_match(
+    skill_dirs: Vec<PathBuf>,
+    wanted_slugs: &[String],
+) -> Option<PathBuf> {
+    let mut matches = skill_dirs
+        .into_iter()
+        .filter_map(|path| skill_dir_match_score(&path, wanted_slugs).map(|score| (score, path)))
+        .collect::<Vec<_>>();
+    matches.sort_by(|(left_score, left_path), (right_score, right_path)| {
+        right_score
+            .cmp(left_score)
+            .then_with(|| left_path.cmp(right_path))
+    });
+
+    let (best_score, best_path) = matches.first()?;
+    if matches.get(1).is_some_and(|(score, _)| score == best_score) {
+        return None;
+    }
+    Some(best_path.clone())
 }
 
 fn skill_path_variants(path: &Path) -> Vec<PathBuf> {
@@ -1171,5 +1458,54 @@ fn git_worktree_root(path: &Path) -> Option<PathBuf> {
         None
     } else {
         Some(PathBuf::from(root))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        clone_branch_for_resolved_path, skill_dir_match_score, MarketSourceSpec,
+        ResolvedRemoteSkillPath,
+    };
+    use std::path::PathBuf;
+
+    #[test]
+    fn resolved_default_branch_does_not_fall_back_to_source_branch_hint() {
+        let source_spec = MarketSourceSpec {
+            clone_url: "https://github.com/aaaaqwq/claude-code-skills.git".into(),
+            branch: Some("main".into()),
+            relative_path: Some(PathBuf::from("multi-search-engine")),
+        };
+        let remote_skill_path = ResolvedRemoteSkillPath {
+            path: PathBuf::from("skills/multi-search-engine"),
+            branch: None,
+        };
+
+        assert_eq!(
+            clone_branch_for_resolved_path(Some(&remote_skill_path), &source_spec),
+            None
+        );
+    }
+
+    #[test]
+    fn skill_slug_can_match_repository_specific_prefix() {
+        assert_eq!(
+            skill_dir_match_score(
+                &PathBuf::from("skills/react-best-practices"),
+                &["vercel-react-best-practices".into()]
+            ),
+            Some(80)
+        );
+    }
+
+    #[test]
+    fn shorter_ambiguous_market_slug_does_not_match_longer_directory() {
+        assert_eq!(
+            skill_dir_match_score(
+                &PathBuf::from("skills/react-best-practices"),
+                &["best-practices".into()]
+            ),
+            None
+        );
     }
 }
