@@ -9,6 +9,9 @@ use serde::Deserialize;
 
 const SKILL_LIBRARY_DIR: &str = ".skillm/skills";
 const REPO_CACHE_DIR: &str = ".skillm/repo-cache";
+const RESERVED_WORKSPACE_LINK_NAMES: [&str; 5] =
+    ["state.json", "skills", "repo-cache", "cache", "imports"];
+
 pub fn install_market_skill_from_source(
     skill: &SkillSummary,
     skill_path: Option<&str>,
@@ -897,63 +900,104 @@ pub fn parse_market_source_url(source_url: &str) -> Result<MarketSourceSpec, Str
     })
 }
 
-pub fn create_skill_symlink(skill_local_path: &str, tool_skills_path: &str) -> Result<(), String> {
+pub fn create_skill_symlink(
+    skill_local_path: &str,
+    skill_name: &str,
+    tool_skills_path: &str,
+) -> Result<(), String> {
     let skill_path = PathBuf::from(skill_local_path);
     let tool_path = PathBuf::from(tool_skills_path);
-    
+    let normalized_skill_name = skill_name.trim();
+    if normalized_skill_name.is_empty() {
+        return Err("无法获取 skill 名称".to_string());
+    }
+    if !skill_path.is_dir() || !skill_path.join("SKILL.md").is_file() {
+        return Err(format!(
+            "同步失败：{} 不是有效的 skill 目录",
+            skill_path.to_string_lossy()
+        ));
+    }
+    if is_reserved_workspace_dir(&skill_path) {
+        return Err(format!(
+            "同步失败：不能把内部工作区目录 {} 当作 skill 链接",
+            skill_path.to_string_lossy()
+        ));
+    }
+
     // 确保工具的 skills 目录存在
     if !tool_path.exists() {
         fs::create_dir_all(&tool_path)
             .map_err(|error| format!("创建工具 skills 目录失败: {error}"))?;
     }
-    
-    // 获取 skill 目录名
-    let skill_name = skill_path
+
+    // 旧版本曾用 local_path 的最后一级目录名作为链接名。安装自仓库子目录或缓存路径时，
+    // 这可能留下 repo-cache 等错误链接；创建正确链接前先清掉旧链接。
+    let legacy_skill_name = skill_path
         .file_name()
         .and_then(|name| name.to_str())
-        .ok_or_else(|| "无法获取 skill 目录名".to_string())?;
-    
-    let symlink_path = tool_path.join(skill_name);
-    
+        .unwrap_or(normalized_skill_name);
+    if legacy_skill_name != normalized_skill_name {
+        let _ = remove_skill_symlink(tool_skills_path, legacy_skill_name);
+    }
+
+    let symlink_path = tool_path.join(normalized_skill_name);
+
     // 如果符号链接已存在，先删除
     if symlink_path.exists() || symlink_path.is_symlink() {
-        fs::remove_file(&symlink_path)
-            .map_err(|error| format!("删除现有符号链接失败: {error}"))?;
+        fs::remove_file(&symlink_path).map_err(|error| format!("删除现有符号链接失败: {error}"))?;
     }
-    
+
     // 创建符号链接
     #[cfg(unix)]
     {
         std::os::unix::fs::symlink(&skill_path, &symlink_path)
             .map_err(|error| format!("创建符号链接失败: {error}"))?;
     }
-    
+
     #[cfg(windows)]
     {
         std::os::windows::fs::symlink_dir(&skill_path, &symlink_path)
             .map_err(|error| format!("创建符号链接失败: {error}"))?;
     }
-    
+
     Ok(())
+}
+
+fn is_reserved_workspace_dir(path: &Path) -> bool {
+    matches!(
+        path.file_name().and_then(|value| value.to_str()),
+        Some(name) if RESERVED_WORKSPACE_LINK_NAMES.contains(&name)
+    )
 }
 
 pub fn remove_skill_symlink(tool_skills_path: &str, skill_name: &str) -> Result<(), String> {
     let tool_path = PathBuf::from(tool_skills_path);
     let symlink_path = tool_path.join(skill_name);
-    
+
     // 如果符号链接存在，删除它
     if symlink_path.exists() || symlink_path.is_symlink() {
-        fs::remove_file(&symlink_path)
-            .map_err(|error| format!("删除符号链接失败: {error}"))?;
+        fs::remove_file(&symlink_path).map_err(|error| format!("删除符号链接失败: {error}"))?;
     }
-    
+
+    Ok(())
+}
+
+fn remove_reserved_workspace_symlinks(tool_skills_path: &str) -> Result<(), String> {
+    let tool_path = PathBuf::from(tool_skills_path);
+    for name in RESERVED_WORKSPACE_LINK_NAMES {
+        let symlink_path = tool_path.join(name);
+        if symlink_path.is_symlink() {
+            fs::remove_file(&symlink_path)
+                .map_err(|error| format!("删除内部工作区错误链接失败: {error}"))?;
+        }
+    }
     Ok(())
 }
 
 pub fn get_tool_skills_path(tool_id: &str) -> Result<String, String> {
     let home_dir = env::var("HOME").map_err(|_| "无法读取 HOME 环境变量".to_string())?;
     let home_path = PathBuf::from(&home_dir);
-    
+
     let skills_path = match tool_id {
         "claude-code" => home_path.join(".claude/skills"),
         "codex" => home_path.join(".codex/skills"),
@@ -985,23 +1029,58 @@ pub fn get_tool_skills_path(tool_id: &str) -> Result<String, String> {
         "github-copilot" => home_path.join(".copilot/skills"),
         _ => return Err(format!("未知的工具 ID: {tool_id}")),
     };
-    
+
     Ok(skills_path.to_string_lossy().to_string())
 }
 
-pub fn remove_skill_symlinks_from_all_tools(skill_name: &str) -> Result<(), String> {
-    let tool_ids = vec![
-        "claude-code", "codex", "opencode", "cursor", "gemini", "antigravity",
-        "windsurf", "openclaw", "continue", "iflow", "codebuddy", "trae",
-        "droid", "augment", "cline", "commandcode", "crush", "goose",
-        "junie", "kilo-code", "kiro", "qoder", "qwen-code", "roo-code",
-        "zencoder", "trae-cn", "hermes", "github-copilot",
-    ];
+fn tool_ids() -> [&'static str; 28] {
+    [
+        "claude-code",
+        "codex",
+        "opencode",
+        "cursor",
+        "gemini",
+        "antigravity",
+        "windsurf",
+        "openclaw",
+        "continue",
+        "iflow",
+        "codebuddy",
+        "trae",
+        "droid",
+        "augment",
+        "cline",
+        "commandcode",
+        "crush",
+        "goose",
+        "junie",
+        "kilo-code",
+        "kiro",
+        "qoder",
+        "qwen-code",
+        "roo-code",
+        "zencoder",
+        "trae-cn",
+        "hermes",
+        "github-copilot",
+    ]
+}
 
-    for tool_id in tool_ids {
+pub fn remove_skill_symlinks_from_all_tools(skill_name: &str) -> Result<(), String> {
+    for tool_id in tool_ids() {
         if let Ok(tool_skills_path) = get_tool_skills_path(tool_id) {
             // 忽略错误，因为某些工具可能没有安装或目录不存在
             let _ = remove_skill_symlink(&tool_skills_path, skill_name);
+        }
+    }
+
+    Ok(())
+}
+
+pub fn remove_reserved_workspace_symlinks_from_all_tools() -> Result<(), String> {
+    for tool_id in tool_ids() {
+        if let Ok(tool_skills_path) = get_tool_skills_path(tool_id) {
+            let _ = remove_reserved_workspace_symlinks(&tool_skills_path);
         }
     }
 

@@ -115,6 +115,9 @@ pub fn scan_local_skill_candidates(installed_skills: &[SkillSummary]) -> Vec<(St
             if is_reserved_skillm_path(&home_dir, &path) {
                 continue;
             }
+            if !path.join("SKILL.md").is_file() {
+                continue;
+            }
 
             let local_path = path.to_string_lossy().to_string();
             if installed_paths
@@ -145,7 +148,7 @@ fn is_reserved_skillm_path(home_dir: &Path, path: &Path) -> bool {
 
     matches!(
         path.file_name().and_then(|value| value.to_str()),
-        Some("repo-cache" | "imports")
+        Some("repo-cache" | "cache" | "imports")
     )
 }
 
@@ -250,7 +253,10 @@ mod tests {
     use crate::models::ToolSyncStatus;
     use crate::models::WorkspacePersistence;
 
-    use super::{hydrate_skill_description, load_installed_skills, save_installed_skills};
+    use super::{
+        hydrate_skill_description, load_installed_skills, save_installed_skills,
+        scan_local_skill_candidates,
+    };
 
     static HOME_ENV_LOCK: Mutex<()> = Mutex::new(());
 
@@ -430,6 +436,28 @@ mod tests {
             .expect("deserialize rewritten state");
             assert_eq!(rewritten.installed_skills.len(), 1);
             assert_eq!(rewritten.installed_skills[0].name, "kept-skill");
+        });
+    }
+
+    #[test]
+    fn local_candidate_scan_only_returns_skill_directories() {
+        with_temp_home(|temp_home| {
+            let codex_skills_root = temp_home.join(".codex/skills");
+            let valid_skill_dir = codex_skills_root.join("real-skill");
+            let cache_link_dir = codex_skills_root.join("cache");
+            fs::create_dir_all(&valid_skill_dir).expect("create valid skill dir");
+            fs::create_dir_all(&cache_link_dir).expect("create cache-like dir");
+            fs::write(valid_skill_dir.join("SKILL.md"), "# real-skill").expect("write skill file");
+
+            let candidates = scan_local_skill_candidates(&[]);
+
+            assert_eq!(
+                candidates,
+                vec![(
+                    "real-skill".to_string(),
+                    codex_skills_root.to_string_lossy().to_string()
+                )]
+            );
         });
     }
 }

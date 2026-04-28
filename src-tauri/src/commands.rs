@@ -11,10 +11,10 @@ use serde::Deserialize;
 
 use crate::git_state::enrich_skill_with_git_state;
 use crate::library::{
-    clone_repo_for_discovery, clone_repo_skill, create_skill_symlink,
-    ensure_repo_skill_with_sparse_paths, get_tool_skills_path,
-    install_market_skill_from_source, lift_dir_contents,
-    parse_market_source_url, remove_skill_symlink,
+    clone_repo_for_discovery, clone_repo_for_discovery_with_sparse_paths, clone_repo_skill,
+    create_skill_symlink, ensure_repo_skill_with_sparse_paths, get_tool_skills_path,
+    install_market_skill_from_source, parse_market_source_url,
+    remove_reserved_workspace_symlinks_from_all_tools, remove_skill_symlink,
     remove_skill_symlinks_from_all_tools, sanitize_storage_name, skill_directory,
 };
 use crate::models::{
@@ -1396,7 +1396,8 @@ const GIT_BINARY: &str = "git";
 const ORIGIN_REMOTE: &str = "origin";
 const REMOTE_PREFIX: &str = "origin/";
 const WORKSPACE_DIR: &str = ".skillm";
-const RESERVED_WORKSPACE_NAMES: [&str; 4] = ["state.json", "skills", "repo-cache", "imports"];
+const RESERVED_WORKSPACE_NAMES: [&str; 5] =
+    ["state.json", "skills", "repo-cache", "cache", "imports"];
 /// Resolved info for opening a directory with an editor.
 /// Dynamically detected from the installed .app bundle on the user's system.
 struct EditorOpenInfo {
@@ -2230,6 +2231,7 @@ fn parse_skill_description_from_content(content: &str) -> Option<String> {
 
 #[tauri::command]
 pub async fn get_workspace_snapshot() -> WorkspaceSnapshot {
+    let _ = remove_reserved_workspace_symlinks_from_all_tools();
     let installed_skills = resolve_installed_skills();
 
     WorkspaceSnapshot {
@@ -2244,6 +2246,7 @@ pub async fn get_workspace_snapshot() -> WorkspaceSnapshot {
 
 #[tauri::command]
 pub fn list_installed_skills() -> Vec<SkillSummary> {
+    let _ = remove_reserved_workspace_symlinks_from_all_tools();
     resolve_installed_skills()
 }
 
@@ -2312,6 +2315,7 @@ pub async fn get_marketplace_skill_description(
 
 #[tauri::command]
 pub fn list_local_skill_candidates() -> Vec<LocalSkillCandidate> {
+    let _ = remove_reserved_workspace_symlinks_from_all_tools();
     let installed_skills = load_installed_skills(&default_installed_skills());
     build_local_candidates(&installed_skills)
 }
@@ -2412,8 +2416,23 @@ pub fn install_skill_from_repo(repo_url: &str) -> Result<SkillSummary, String> {
 pub async fn discover_repo_skills(repo_url: String) -> Result<Vec<RepoSkillCandidate>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let spec = parse_repo_install_spec(&repo_url)?;
-        let repo_root = clone_repo_for_discovery(&spec.clone_url, &spec.repo_key)?;
-        let candidates = scan_repo_skill_candidates(&repo_root, spec.path_hint.as_deref())?;
+        let sparse_paths = spec
+            .path_hint
+            .as_ref()
+            .map(|path| vec![path.clone()])
+            .unwrap_or_default();
+        let candidates = if sparse_paths.is_empty() {
+            discover_repo_skills_without_path_hint(&spec)?
+        } else {
+            let repo_root = clone_repo_for_discovery_with_sparse_paths(
+                &spec.clone_url,
+                &spec.repo_key,
+                &sparse_paths,
+            )?;
+            let candidates = scan_repo_skill_candidates(&repo_root, spec.path_hint.as_deref());
+            cleanup_discovery_repo(&repo_root);
+            candidates?
+        };
         if candidates.is_empty() {
             return Err("未在仓库中识别到任何包含 SKILL.md 的技能目录。".into());
         }
@@ -2421,6 +2440,31 @@ pub async fn discover_repo_skills(repo_url: String) -> Result<Vec<RepoSkillCandi
     })
     .await
     .map_err(|error| format!("后台识别仓库技能失败: {error}"))?
+}
+
+fn discover_repo_skills_without_path_hint(
+    spec: &RepoInstallSpec,
+) -> Result<Vec<RepoSkillCandidate>, String> {
+    if let Ok(repo_root) = clone_repo_for_discovery_with_sparse_paths(
+        &spec.clone_url,
+        &spec.repo_key,
+        &["skills".to_string()],
+    ) {
+        let candidates = scan_repo_skill_candidates(&repo_root, None).unwrap_or_default();
+        cleanup_discovery_repo(&repo_root);
+        if !candidates.is_empty() {
+            return Ok(candidates);
+        }
+    }
+
+    let repo_root = clone_repo_for_discovery(&spec.clone_url, &spec.repo_key)?;
+    let candidates = scan_repo_skill_candidates(&repo_root, None);
+    cleanup_discovery_repo(&repo_root);
+    candidates
+}
+
+fn cleanup_discovery_repo(repo_root: &Path) {
+    let _ = fs::remove_dir_all(repo_root);
 }
 
 #[tauri::command]
@@ -2434,29 +2478,32 @@ pub async fn install_selected_repo_skills(
         }
 
         let spec = parse_repo_install_spec(&repo_url)?;
-        let repo_root = clone_repo_for_discovery(&spec.clone_url, &spec.repo_key)?;
-        let candidates = scan_repo_skill_candidates(&repo_root, spec.path_hint.as_deref())?;
-        let candidate_map = candidates
-            .into_iter()
-            .map(|candidate| (candidate.relative_path.clone(), candidate))
-            .collect::<std::collections::BTreeMap<_, _>>();
         let mut installed_skills = load_installed_skills(&default_installed_skills());
         let mut installed_results = Vec::new();
 
         for selected_path in &selected_paths {
             let normalized_path = selected_path.trim_matches('/').to_string();
-            let candidate = candidate_map
-                .get(selected_path.as_str())
-                .ok_or_else(|| format!("未找到待安装技能路径: {selected_path}"))?;
+            let skill_name = Path::new(&normalized_path)
+                .file_name()
+                .and_then(|value| value.to_str())
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or_else(|| {
+                    spec.source_url
+                        .trim_end_matches('/')
+                        .split('/')
+                        .last()
+                        .unwrap_or("custom-skill")
+                })
+                .to_string();
             if let Some(existing_skill) = installed_skills
                 .iter()
-                .find(|skill| skill.name == candidate.name)
+                .find(|skill| skill.name == skill_name)
             {
                 installed_results.push(existing_skill.clone());
                 continue;
             }
 
-            let skill_dir = skill_directory(&candidate.name)
+            let skill_dir = skill_directory(&skill_name)
                 .map_err(|error| format!("无法确定 skill 目录: {error}"))?;
             if skill_dir.exists() {
                 std::fs::remove_dir_all(&skill_dir)
@@ -2468,28 +2515,29 @@ pub async fn install_selected_repo_skills(
             }
 
             let local_path = if normalized_path.is_empty() {
-                clone_repo_skill(&spec.clone_url, &candidate.name)?
+                clone_repo_skill(&spec.clone_url, &skill_name)?
             } else {
                 let sparse_paths = vec![normalized_path.clone()];
-                ensure_repo_skill_with_sparse_paths(
-                    &spec.clone_url,
-                    &candidate.name,
-                    &sparse_paths,
-                )?;
+                ensure_repo_skill_with_sparse_paths(&spec.clone_url, &skill_name, &sparse_paths)?;
                 // 不移动文件，直接返回子目录路径，保持 git 索引正确
                 let subdir = skill_dir.join(&normalized_path);
-                if subdir.is_dir() && subdir != skill_dir {
-                    subdir.to_string_lossy().to_string()
-                } else {
-                    skill_dir.to_string_lossy().to_string()
+                if !subdir.is_dir() || !subdir.join("SKILL.md").is_file() {
+                    return Err(format!("未找到待安装技能路径: {selected_path}"));
                 }
+                subdir.to_string_lossy().to_string()
+            };
+            let skill_file = Path::new(&local_path).join("SKILL.md");
+            let description = if skill_file.is_file() {
+                read_skill_description(&skill_file)
+            } else {
+                "从仓库导入的 skill，后续可继续同步和检查更新。".into()
             };
             let installed_skill = SkillSummary {
-                name: candidate.name.clone(),
+                name: skill_name,
                 source_label: "自定义仓库".into(),
                 source_type: spec.source_type.clone(),
                 source_url: build_repo_skill_source_url(&spec, selected_path),
-                description: candidate.description.clone(),
+                description,
                 local_path,
                 branch: "main".into(),
                 collab_status: "clean".into(),
@@ -2752,11 +2800,12 @@ pub fn delete_skill(skill_name: &str) -> Result<(), String> {
 
     // 删除所有工具中的符号链接
     let skill_path = PathBuf::from(&skill.local_path);
-    let skill_dir_name = skill_path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .ok_or_else(|| "无法获取 skill 目录名".to_string())?;
-    remove_skill_symlinks_from_all_tools(skill_dir_name)?;
+    remove_skill_symlinks_from_all_tools(&skill.name)?;
+    if let Some(legacy_skill_dir_name) = skill_path.file_name().and_then(|name| name.to_str()) {
+        if legacy_skill_dir_name != skill.name {
+            remove_skill_symlinks_from_all_tools(legacy_skill_dir_name)?;
+        }
+    }
 
     let local_path = PathBuf::from(&skill.local_path);
     let delete_target = managed_delete_target(&local_path)?;
@@ -2774,10 +2823,11 @@ pub fn delete_skill(skill_name: &str) -> Result<(), String> {
 
 #[tauri::command]
 pub fn toggle_skill_tool_status(skill_name: &str, tool_name: &str) -> Result<SkillSummary, String> {
+    let _ = remove_reserved_workspace_symlinks_from_all_tools();
     let (mut installed_skills, skill_index) = find_skill_by_name(skill_name)?;
     let skill_local_path = installed_skills[skill_index].local_path.clone();
     let tool_id = tool_name_to_id(tool_name)?;
-    
+
     {
         let normalized_skill = normalize_skill_tools(&installed_skills[skill_index]);
         installed_skills[skill_index] = normalized_skill;
@@ -2796,17 +2846,20 @@ pub fn toggle_skill_tool_status(skill_name: &str, tool_name: &str) -> Result<Ski
         if is_enabling {
             // 启用：创建符号链接
             let tool_skills_path = get_tool_skills_path(&tool_id)?;
-            create_skill_symlink(&skill_local_path, &tool_skills_path)?;
+            create_skill_symlink(&skill_local_path, skill_name, &tool_skills_path)?;
             tool.status_label = "已启用".into();
         } else {
             // 停用：删除符号链接
             let tool_skills_path = get_tool_skills_path(&tool_id)?;
+            remove_skill_symlink(&tool_skills_path, skill_name)?;
             let skill_path = PathBuf::from(&skill_local_path);
-            let skill_dir_name = skill_path
-                .file_name()
-                .and_then(|name| name.to_str())
-                .ok_or_else(|| "无法获取 skill 目录名".to_string())?;
-            remove_skill_symlink(&tool_skills_path, skill_dir_name)?;
+            if let Some(legacy_skill_dir_name) =
+                skill_path.file_name().and_then(|name| name.to_str())
+            {
+                if legacy_skill_dir_name != skill_name {
+                    remove_skill_symlink(&tool_skills_path, legacy_skill_dir_name)?;
+                }
+            }
             tool.status_label = "未启用".into();
         }
     }
