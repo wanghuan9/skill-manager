@@ -5,7 +5,6 @@ import { useSkillWorkspace } from "@/features/skills/state/skill-workspace";
 import type { RepoSkillCandidate } from "@/features/skills/state/skill-store";
 import { formatSkillDescription } from "@/features/skills/utils/skill-description";
 
-const supportedHosts = ["github.com", "gitlab.com", "gitee.com"];
 const DISCOVERING_MIN_DURATION_MS = 450;
 
 function wait(duration: number) {
@@ -28,18 +27,13 @@ function normalizeRepoInput(repoInput: string) {
     return trimmed;
   }
 
-  const segments = trimmed.split("/").filter(Boolean);
-  if (segments.length === 2) {
-    return `https://github.com/${segments.join("/")}`;
-  }
-
   return trimmed;
 }
 
 function isValidRepoUrl(repoUrl: string) {
   try {
-    const url = new URL(repoUrl);
-    return supportedHosts.includes(url.hostname);
+    new URL(repoUrl);
+    return true;
   } catch {
     return false;
   }
@@ -71,7 +65,7 @@ export function RepoInstallPanel() {
   async function handleDiscover(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!isValid) {
-      notify({ message: "当前只支持 GitHub、GitLab、Gitee 仓库地址。", tone: "error" });
+      notify({ message: "请输入有效的 Git 仓库地址。", tone: "error" });
       return;
     }
 
@@ -131,7 +125,7 @@ export function RepoInstallPanel() {
               <span className="repo-form__label">Git 仓库地址</span>
               <input
                 type="text"
-                placeholder="https://github.com/user/repo 或 user/repo"
+                placeholder="https://git.example.com/user/repo"
                 value={repoInput}
                 onChange={(event) => setRepoInput(event.target.value)}
               />
@@ -139,9 +133,8 @@ export function RepoInstallPanel() {
             <div className="repo-form__hint-block">
               <p className="repo-form__hint-title">支持格式：</p>
               <ul className="repo-form__hint-list">
-                <li>https://github.com/user/repo</li>
-                <li>user/repo（默认按 GitHub 解析）</li>
-                <li>https://github.com/user/repo/tree/main/skills/my-skill</li>
+                <li>https://git.example.com/user/repo</li>
+                <li>https://git.example.com/user/repo/tree/main/skills/my-skill</li>
               </ul>
             </div>
           </div>

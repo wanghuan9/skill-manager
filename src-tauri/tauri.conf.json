@@ -34,6 +34,12 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "macOS": {
+      "signingIdentity": null,
+      "entitlements": null,
+      "providerShortName": null,
+      "minimumSystemVersion": "10.13"
+    }
   }
 }
