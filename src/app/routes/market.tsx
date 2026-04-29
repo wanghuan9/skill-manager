@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { MarketplaceInstallPanel } from "@/features/install/components/MarketplaceInstallPanel";
 import { RepoInstallPanel } from "@/features/install/components/RepoInstallPanel";
 import { LocalSkillImportList } from "@/features/local-skills/components/LocalSkillImportList";
@@ -161,6 +161,40 @@ export function MarketRoute(props: MarketRouteProps) {
     void loadInitialRef.current(activeSourceSite);
   }, [activeInstallTab, activeSourceSite, isSearching, loadInitialRef]);
 
+  const isMarketplaceLoadingRef = useRef(isMarketplaceLoading);
+  const hasMoreMarketplaceSkillsRef = useRef(hasMoreMarketplaceSkills);
+  const loadMoreMarketplaceSkillsRef = useRef(loadMoreMarketplaceSkills);
+
+  useEffect(() => {
+    isMarketplaceLoadingRef.current = isMarketplaceLoading;
+  }, [isMarketplaceLoading]);
+
+  useEffect(() => {
+    hasMoreMarketplaceSkillsRef.current = hasMoreMarketplaceSkills;
+  }, [hasMoreMarketplaceSkills]);
+
+  useEffect(() => {
+    loadMoreMarketplaceSkillsRef.current = loadMoreMarketplaceSkills;
+  }, [loadMoreMarketplaceSkills]);
+
+  const handleScroll = useCallback(() => {
+    if (loadingMoreRef.current || isMarketplaceLoadingRef.current || !hasMoreMarketplaceSkillsRef.current) {
+      return;
+    }
+    const scrollContainer = document.querySelector(".page-content");
+    if (!(scrollContainer instanceof HTMLElement)) {
+      return;
+    }
+    const remain = scrollContainer.scrollHeight - scrollContainer.scrollTop - scrollContainer.clientHeight;
+    if (remain > 140) {
+      return;
+    }
+    loadingMoreRef.current = true;
+    void loadMoreMarketplaceSkillsRef.current?.(latestSourceRef.current).finally(() => {
+      loadingMoreRef.current = false;
+    });
+  }, []);
+
   useEffect(() => {
     if (activeInstallTab !== "market" || isSearching) {
       return;
@@ -170,30 +204,11 @@ export function MarketRoute(props: MarketRouteProps) {
       return;
     }
 
-    const onScroll = () => {
-      if (loadingMoreRef.current || isMarketplaceLoading || !hasMoreMarketplaceSkills) {
-        return;
-      }
-      const remain = scrollContainer.scrollHeight - scrollContainer.scrollTop - scrollContainer.clientHeight;
-      if (remain > 140) {
-        return;
-      }
-      loadingMoreRef.current = true;
-      void loadMoreMarketplaceSkills(latestSourceRef.current).finally(() => {
-        loadingMoreRef.current = false;
-      });
-    };
-
-    scrollContainer.addEventListener("scroll", onScroll, { passive: true });
+    scrollContainer.addEventListener("scroll", handleScroll, { passive: true });
     return () => {
-      scrollContainer.removeEventListener("scroll", onScroll);
+      scrollContainer.removeEventListener("scroll", handleScroll);
     };
-  }, [
-    activeInstallTab,
-    isSearching,
-    hasMoreMarketplaceSkills,
-    isMarketplaceLoading,
-  ]);
+  }, [activeInstallTab, isSearching, handleScroll]);
 
   return (
     <div className="market-route">
@@ -209,7 +224,7 @@ export function MarketRoute(props: MarketRouteProps) {
             isSearching={isSearching}
             isSearchLoading={isSearchLoading}
             isInitialLoading={false}
-            isLoadingMore={isSearching ? false : isMarketplaceLoading && tabSkills.length > 0}
+            isLoadingMore={isSearching ? false : isMarketplaceLoading}
             hasMore={isSearching ? false : hasMoreMarketplaceSkills}
             installedMarketplaceSkillIds={installedMarketplaceSkillIds}
             onLoadMore={() => {

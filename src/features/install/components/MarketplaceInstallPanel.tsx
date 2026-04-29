@@ -181,14 +181,6 @@ export function MarketplaceInstallPanel(props: MarketplaceInstallPanelProps) {
             })}
             {isLoadingMore ? (
               <p className="install-loading-text">加载中...</p>
-            ) : hasMore ? (
-              <button
-                className="secondary-button"
-                type="button"
-                onClick={onLoadMore}
-              >
-                加载更多
-              </button>
             ) : null}
             {!hasMore ? (
               <p className="install-loading-text">已加载全部技能</p>
@@ -330,6 +322,9 @@ function SkillDetailModal(props: SkillDetailModalProps) {
 }
 
 function buildListDescription(skill: MarketplaceSkill) {
+  if (skill.sourceSite === "skillsmp" && skill.description && skill.description.trim()) {
+    return skill.description;
+  }
   const repositoryLabel = extractRepositoryLabel(skill.sourceUrl);
   return `来自 ${repositoryLabel || skill.maintainer} 的公开 skill（${skill.name}）`;
 }
