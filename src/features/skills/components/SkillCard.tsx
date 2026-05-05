@@ -197,37 +197,39 @@ export function SkillCard({ skill }: SkillCardProps) {
             aria-expanded={expanded}
             aria-label={`${expanded ? "收起" : "展开"} ${skill.name}`}
           >
-            <div className="skill-card__identity">
-              <div className={`link-badge link-badge--${sourceIconKind}`} aria-hidden="true">
-                <SourceIcon iconKind={sourceIconKind} />
-              </div>
-              <div className="skill-card__summary-main">
-                <div className="skill-card__title-row">
-                  <h3>{skill.name}</h3>
+            <div className="skill-card__summary-content">
+              <div className="skill-card__summary-top">
+                <div className="skill-card__identity">
+                  <div className={`link-badge link-badge--${sourceIconKind}`} aria-hidden="true">
+                    <SourceIcon iconKind={sourceIconKind} />
+                  </div>
+                  <div className="skill-card__title-row">
+                    <h3>{skill.name}</h3>
+                  </div>
                 </div>
-                <div className="skill-card__list-meta">
-                  <span className="skill-card__meta-label-inline">来源：</span>
-                  <span className="skill-card__meta-value">{sourceLabel}</span>
-                  <span className="skill-card__meta-label-inline">更新时间：</span>
-                  <span className="skill-card__meta-value">{updatedAt}</span>
+                <div className="skill-card__summary-tools" aria-label="已启用工具">
+                  {visibleTools.length > 0 ? (
+                    <>
+                      {visibleTools.map((tool) => (
+                        <span key={tool.name} className="skill-card__tool-tag">
+                          {tool.name}
+                        </span>
+                      ))}
+                      {hiddenToolCount > 0 ? (
+                        <span className="skill-card__tool-tag skill-card__tool-tag--extra">+{hiddenToolCount}</span>
+                      ) : null}
+                    </>
+                  ) : (
+                    <span className="skill-card__tool-empty">未启用到工具</span>
+                  )}
                 </div>
               </div>
-            </div>
-            <div className="skill-card__summary-tools" aria-label="已启用工具">
-              {visibleTools.length > 0 ? (
-                <>
-                  {visibleTools.map((tool) => (
-                    <span key={tool.name} className="skill-card__tool-tag">
-                      {tool.name}
-                    </span>
-                  ))}
-                  {hiddenToolCount > 0 ? (
-                    <span className="skill-card__tool-tag skill-card__tool-tag--extra">+{hiddenToolCount}</span>
-                  ) : null}
-                </>
-              ) : (
-                <span className="skill-card__tool-empty">未启用到工具</span>
-              )}
+              <div className="skill-card__list-meta">
+                <span className="skill-card__meta-label-inline">来源：</span>
+                <span className="skill-card__meta-value">{sourceLabel}</span>
+                <span className="skill-card__meta-label-inline">更新时间：</span>
+                <span className="skill-card__meta-value">{updatedAt}</span>
+              </div>
             </div>
           </button>
           <div className="skill-card__list-actions">
