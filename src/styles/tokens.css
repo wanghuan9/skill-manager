@@ -1281,25 +1281,6 @@ code {
   padding-right: 0;
 }
 
-.skill-card__git-status {
-  display: inline-flex;
-  align-items: center;
-  padding: 2px 8px;
-  border-radius: 999px;
-  font-size: 0.7rem;
-  line-height: 1.2;
-}
-
-.skill-card__git-status.is-linked {
-  color: #1f8f4f;
-  background: rgba(31, 143, 79, 0.12);
-}
-
-.skill-card__git-status.is-unlinked {
-  color: #b96a00;
-  background: rgba(185, 106, 0, 0.12);
-}
-
 .skill-card__meta-value,
 .skill-card__meta-label-inline {
   white-space: nowrap;
@@ -1453,6 +1434,42 @@ code {
 .detail-grid dd {
   margin: 0;
   font-size: 0.84rem;
+}
+
+.detail-grid__source-value {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  min-width: 0;
+}
+
+.detail-grid__source-value > span:first-child {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.detail-git-badge {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  margin-left: auto;
+  padding: 2px 9px;
+  border-radius: 6px;
+  font-size: 0.74rem;
+  font-weight: 650;
+  line-height: 1.35;
+  letter-spacing: 0;
+}
+
+.detail-git-badge.is-linked {
+  color: #4f7dff;
+  background: rgba(79, 125, 255, 0.14);
+}
+
+.detail-git-badge.is-unlinked {
+  color: #8b95aa;
+  background: rgba(117, 128, 147, 0.12);
 }
 
 .tool-grid {

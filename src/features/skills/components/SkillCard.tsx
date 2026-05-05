@@ -210,10 +210,6 @@ export function SkillCard({ skill }: SkillCardProps) {
                   <span className="skill-card__meta-value">{sourceLabel}</span>
                   <span className="skill-card__meta-label-inline">更新时间：</span>
                   <span className="skill-card__meta-value">{updatedAt}</span>
-                  <span className="skill-card__meta-label-inline">Git：</span>
-                  <span className={`skill-card__meta-value skill-card__git-status${skill.gitLinked ? " is-linked" : " is-unlinked"}`}>
-                    {skill.gitLinked ? "已关联" : "未关联"}
-                  </span>
                 </div>
               </div>
             </div>
@@ -301,7 +297,12 @@ export function SkillCard({ skill }: SkillCardProps) {
                 </div>
                 <div>
                   <dt>来源</dt>
-                  <dd>{skill.sourceUrl}</dd>
+                  <dd className="detail-grid__source-value">
+                    <span>{skill.sourceUrl}</span>
+                    <span className={`detail-git-badge${skill.gitLinked ? " is-linked" : " is-unlinked"}`}>
+                      git
+                    </span>
+                  </dd>
                 </div>
                 <div>
                   <dt>更新时间</dt>
@@ -310,10 +311,6 @@ export function SkillCard({ skill }: SkillCardProps) {
                 <div>
                   <dt>更新人</dt>
                   <dd>{skill.lastEditor || "未获取"}</dd>
-                </div>
-                <div>
-                  <dt>Git 关联</dt>
-                  <dd>{skill.gitLinked ? "已关联" : "未关联"}</dd>
                 </div>
               </dl>
             </section>
