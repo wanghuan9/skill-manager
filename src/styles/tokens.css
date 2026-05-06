@@ -1034,6 +1034,7 @@ code {
 .skill-card__title-row h3 {
   margin: 0;
   min-width: 0;
+  font-size: 1rem;
   overflow: hidden;
   line-height: 1.15;
   text-overflow: ellipsis;
