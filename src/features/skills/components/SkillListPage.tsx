@@ -1,4 +1,5 @@
 import { useDeferredValue, useMemo, useState } from "react";
+import { waitForNextPaint } from "@/app/utils/wait-for-next-paint";
 import { filterSkills } from "@/features/skills/state/skill-selectors";
 import { SkillCard } from "@/features/skills/components/SkillCard";
 import { useSkillWorkspace } from "@/features/skills/state/skill-workspace";
@@ -65,6 +66,7 @@ export function SkillListToolbar(props: SkillToolbarProps) {
     }
 
     setIsRefreshing(true);
+    await waitForNextPaint();
     try {
       await refreshWorkspace();
     } catch (error) {
@@ -81,6 +83,7 @@ export function SkillListToolbar(props: SkillToolbarProps) {
     }
 
     setIsUpdatingAll(true);
+    await waitForNextPaint();
     try {
       await updateAllSkills();
     } catch (error) {

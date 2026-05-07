@@ -5,6 +5,7 @@ import { InstallTabSwitcher, MarketRoute, type InstallTab } from "@/app/routes/m
 import { SettingsRoute } from "@/app/routes/settings";
 import { FeedbackRoute } from "@/app/routes/feedback";
 import { NotificationProvider } from "@/app/notifications";
+import { waitForNextPaint } from "@/app/utils/wait-for-next-paint";
 import { SkillWorkspaceProvider, useSkillWorkspace } from "@/features/skills/state/skill-workspace";
 import { SkillListToolbar } from "@/features/skills/components/SkillListPage";
 
@@ -144,6 +145,7 @@ function AppContent() {
     }
 
     setIsToolsRefreshing(true);
+    await waitForNextPaint();
     try {
       await refreshWorkspace();
     } catch (error) {
