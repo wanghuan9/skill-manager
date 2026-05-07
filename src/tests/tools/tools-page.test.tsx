@@ -9,7 +9,9 @@ test("renders installed tools only with manage action", async () => {
   expect(screen.getByText("Claude Code")).toBeInTheDocument();
   expect(screen.queryByText("Amp")).not.toBeInTheDocument();
   expect(screen.queryByText("Finder")).not.toBeInTheDocument();
-  expect(screen.getAllByRole("button", { name: "管理" }).length).toBeGreaterThan(0);
+  const manageButtons = screen.getAllByRole("button", { name: "管理" });
+  expect(manageButtons.length).toBeGreaterThan(0);
+  expect(manageButtons[0]).toHaveClass("tool-card__manage-button");
 });
 
 test("can enable all visible skills from tool manage dialog", async () => {

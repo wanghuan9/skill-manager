@@ -72,7 +72,7 @@ export function ToolsRoute() {
                     </div>
                   </div>
                   <button
-                    className="primary-button primary-button--compact"
+                    className="primary-button primary-button--compact tool-card__manage-button"
                     type="button"
                     onClick={() => setManagingToolId(tool.id)}
                   >

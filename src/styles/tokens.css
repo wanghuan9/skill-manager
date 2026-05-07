@@ -2945,6 +2945,26 @@ code {
   background: var(--line);
 }
 
+.tool-card__manage-button {
+  min-height: 32px;
+  padding: 0 11px;
+  border-radius: 11px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  box-shadow: 0 2px 8px rgba(47, 120, 255, 0.14);
+}
+
+.tool-card__manage-button:hover:not(:disabled) {
+  background: var(--accent);
+  box-shadow: 0 6px 14px rgba(47, 120, 255, 0.18);
+  transform: translateY(-1px);
+}
+
+.tool-card__manage-button:active:not(:disabled) {
+  box-shadow: 0 3px 8px rgba(47, 120, 255, 0.16);
+  transform: translateY(0);
+}
+
 .primary-button--compact {
   min-height: 36px;
   padding: 0 10px;

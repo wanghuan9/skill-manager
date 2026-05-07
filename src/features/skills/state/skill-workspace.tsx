@@ -144,7 +144,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
   const [gitAccount, setGitAccount] = useState<GitAccountSummary | null>(
     usesFixtureData ? workspaceSnapshotFixture.gitAccount : null,
   );
-  const [isLoading, setIsLoading] = useState(false);
+  const [isLoading, setIsLoading] = useState(!usesFixtureData);
   const [isMarketplaceLoading, setIsMarketplaceLoading] = useState(false);
   const [isSearchLoading, setIsSearchLoading] = useState(false);
   const [installingMarketplaceSkillIds, setInstallingMarketplaceSkillIds] = useState<Set<string>>(new Set());
@@ -225,16 +225,23 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
     let active = true;
 
     async function loadWorkspace() {
-      const workspace = await loadWorkspaceCore();
-      if (!active) {
-        return;
-      }
+      setIsLoading(true);
+      try {
+        const workspace = await loadWorkspaceCore();
+        if (!active) {
+          return;
+        }
 
-      setInstalledSkills(workspace.skills);
-      setLocalCandidates(workspace.candidates);
-      setToolConfigs(workspace.tools);
-      setGitAccount(workspace.account);
-      void refreshGitStatesInBackground(() => active);
+        setInstalledSkills(workspace.skills);
+        setLocalCandidates(workspace.candidates);
+        setToolConfigs(workspace.tools);
+        setGitAccount(workspace.account);
+        void refreshGitStatesInBackground(() => active);
+      } finally {
+        if (active) {
+          setIsLoading(false);
+        }
+      }
     }
 
     void loadWorkspace();

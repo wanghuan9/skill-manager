@@ -1453,16 +1453,6 @@ fn resolve_installed_skills() -> Vec<SkillSummary> {
         .collect()
 }
 
-#[tauri::command]
-pub async fn refresh_git_states() -> Vec<SkillSummary> {
-    let skills = load_installed_skills(&default_installed_skills());
-    skills
-        .iter()
-        .map(normalize_skill_tools)
-        .map(|skill| enrich_skill_with_git_state(&skill))
-        .collect()
-}
-
 const GIT_BINARY: &str = "git";
 const ORIGIN_REMOTE: &str = "origin";
 const REMOTE_PREFIX: &str = "origin/";
@@ -2429,6 +2419,16 @@ pub fn list_tool_configs() -> Vec<ToolConfig> {
 #[tauri::command]
 pub fn get_git_account_summary() -> GitAccountSummary {
     build_git_account()
+}
+
+#[tauri::command]
+pub async fn refresh_git_states() -> Vec<SkillSummary> {
+    let skills = load_installed_skills(&default_installed_skills());
+    skills
+        .iter()
+        .map(normalize_skill_tools)
+        .map(|skill| enrich_skill_with_git_state(&skill))
+        .collect()
 }
 
 #[tauri::command]
