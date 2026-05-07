@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { SkillsRoute } from "@/app/routes/skills";
 import { ToolsRoute } from "@/app/routes/tools";
 import { InstallTabSwitcher, MarketRoute, type InstallTab } from "@/app/routes/market";
@@ -8,6 +8,11 @@ import { NotificationProvider } from "@/app/notifications";
 import { waitForNextPaint } from "@/app/utils/wait-for-next-paint";
 import { SkillWorkspaceProvider, useSkillWorkspace } from "@/features/skills/state/skill-workspace";
 import { SkillListToolbar } from "@/features/skills/components/SkillListPage";
+import {
+  readSkillViewModePreference,
+  resolveSkillViewModePreference,
+  writeSkillViewModePreference,
+} from "@/features/skills/utils/skill-view-preference";
 
 type RouteKey = "skills" | "tools" | "install" | "settings" | "feedback";
 
@@ -122,9 +127,13 @@ function renderRoute(
 
 function AppContent() {
   const { installedSkills, refreshWorkspace, toolConfigs } = useSkillWorkspace();
+  const initialSkillViewMode = readSkillViewModePreference();
   const [activeRoute, setActiveRoute] = useState<RouteKey>("skills");
   const [skillQuery, setSkillQuery] = useState("");
-  const [showGroupView, setShowGroupView] = useState(true);
+  const [showGroupView, setShowGroupView] = useState(
+    () => resolveSkillViewModePreference(initialSkillViewMode, installedSkills.length) === "grouped",
+  );
+  const [hasSavedSkillViewPreference, setHasSavedSkillViewPreference] = useState(initialSkillViewMode !== null);
   const [activeInstallTab, setActiveInstallTab] = useState<InstallTab>("market");
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [isToolsRefreshing, setIsToolsRefreshing] = useState(false);
@@ -138,6 +147,15 @@ function AppContent() {
       : activeRoute === "tools"
         ? `已安装 ${installedToolCount} 个工具`
       : activeDefinition.description;
+
+  useEffect(() => {
+    if (hasSavedSkillViewPreference) {
+      return;
+    }
+
+    const defaultSkillViewMode = resolveSkillViewModePreference(null, installedSkills.length);
+    setShowGroupView(defaultSkillViewMode === "grouped");
+  }, [hasSavedSkillViewPreference, installedSkills.length]);
 
   async function handleToolsRefresh() {
     if (isToolsRefreshing) {
@@ -154,6 +172,12 @@ function AppContent() {
     } finally {
       setIsToolsRefreshing(false);
     }
+  }
+
+  function handleShowGroupViewChange(nextShowGroupView: boolean) {
+    setShowGroupView(nextShowGroupView);
+    setHasSavedSkillViewPreference(true);
+    writeSkillViewModePreference(nextShowGroupView ? "grouped" : "flat");
   }
 
   return (
@@ -232,7 +256,7 @@ function AppContent() {
                   query={skillQuery}
                   onQueryChange={setSkillQuery}
                   showGroupView={showGroupView}
-                  onShowGroupViewChange={setShowGroupView}
+                  onShowGroupViewChange={handleShowGroupViewChange}
                 />
               </div>
               <p>{activeDescription}</p>

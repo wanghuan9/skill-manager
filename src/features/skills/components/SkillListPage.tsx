@@ -4,6 +4,10 @@ import { filterSkills } from "@/features/skills/state/skill-selectors";
 import { SkillCard } from "@/features/skills/components/SkillCard";
 import { useSkillWorkspace } from "@/features/skills/state/skill-workspace";
 import { groupSkillsBySource } from "@/features/skills/utils/skill-groups";
+import {
+  readSkillGroupCollapsedState,
+  writeSkillGroupCollapsedState,
+} from "@/features/skills/utils/skill-view-preference";
 
 type SkillToolbarProps = {
   query: string;
@@ -151,7 +155,7 @@ export function SkillListPage(props: SkillListPageProps) {
   const { query, showGroupView } = props;
   const { installedSkills, isLoading } = useSkillWorkspace();
   const deferredQuery = useDeferredValue(query);
-  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
+  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>(readSkillGroupCollapsedState);
   const skills = useMemo(
     () => filterSkills(installedSkills, { query: deferredQuery, status: "all" }),
     [deferredQuery, installedSkills],
@@ -163,10 +167,14 @@ export function SkillListPage(props: SkillListPageProps) {
   }
 
   function toggleGroup(groupId: string) {
-    setCollapsedGroups((current) => ({
-      ...current,
-      [groupId]: !(current[groupId] ?? true),
-    }));
+    setCollapsedGroups((current) => {
+      const nextState = {
+        ...current,
+        [groupId]: !(current[groupId] ?? true),
+      };
+      writeSkillGroupCollapsedState(nextState);
+      return nextState;
+    });
   }
 
   return (
