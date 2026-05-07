@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { SkillStatusBadge } from "@/features/skills/components/SkillStatusBadge";
 import { SkillFileDialog } from "@/features/skills/components/SkillFileDialog";
 import { ToolSyncPanel } from "@/features/skills/components/ToolSyncPanel";
@@ -160,8 +160,10 @@ export function SkillCard({ skill }: SkillCardProps) {
   const { deleteSkill, openSkillWithDefaultTool, toolConfigs, updateSkill } = useSkillWorkspace();
   const [expanded, setExpanded] = useState(false);
   const [showFileDialog, setShowFileDialog] = useState(false);
-  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+  const [isDeleteConfirming, setIsDeleteConfirming] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
+  const deleteActionRef = useRef<HTMLButtonElement | null>(null);
   const skillTools = mergeSkillToolsWithInstalledTools(skill.tools, toolConfigs);
   const sourceLabel = formatSkillSourceLabel(skill.sourceLabel);
   const skillDescription = formatSkillDescription(skill.description);
@@ -171,6 +173,32 @@ export function SkillCard({ skill }: SkillCardProps) {
   const visibleTools = enabledTools.slice(0, 2);
   const hiddenToolCount = Math.max(enabledTools.length - visibleTools.length, 0);
   const showDetailAction = skill.collabStatus === "update-available";
+
+  useEffect(() => {
+    if (!isDeleteConfirming) {
+      return;
+    }
+
+    function handlePointerDown(event: PointerEvent) {
+      if (deleteActionRef.current?.contains(event.target as Node)) {
+        return;
+      }
+      setIsDeleteConfirming(false);
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setIsDeleteConfirming(false);
+      }
+    }
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isDeleteConfirming]);
 
   async function handlePrimaryAction() {
     if (isUpdating) {
@@ -195,13 +223,25 @@ export function SkillCard({ skill }: SkillCardProps) {
     }
   }
 
-  async function handleConfirmDelete() {
-    setShowDeleteDialog(false);
+  async function handleDeleteAction() {
+    if (isDeleting) {
+      return;
+    }
+
+    if (!isDeleteConfirming) {
+      setIsDeleteConfirming(true);
+      return;
+    }
+
+    setIsDeleteConfirming(false);
+    setIsDeleting(true);
     try {
       await deleteSkill(skill.name);
     } catch (error) {
       const message = error instanceof Error ? error.message : "删除 skill 失败";
       window.alert(message);
+    } finally {
+      setIsDeleting(false);
     }
   }
 
@@ -292,15 +332,30 @@ export function SkillCard({ skill }: SkillCardProps) {
             >
               <OpenFolderIcon />
             </button>
-            <button
-              className="skill-card__icon-button skill-card__icon-button--delete"
-              type="button"
-              onClick={() => setShowDeleteDialog(true)}
-              aria-label={`删除 ${skill.name}`}
-              title="删除 skill"
-            >
-              <DeleteIcon />
-            </button>
+            {isDeleteConfirming || isDeleting ? (
+              <button
+                ref={deleteActionRef}
+                className="skill-card__delete-confirm-button"
+                type="button"
+                onClick={() => void handleDeleteAction()}
+                aria-label={`${isDeleting ? "正在删除" : "确认删除"} ${skill.name}`}
+                title={isDeleting ? "正在删除" : "再次点击删除"}
+                disabled={isDeleting}
+              >
+                {isDeleting ? "删除中" : "确认"}
+              </button>
+            ) : (
+              <button
+                ref={deleteActionRef}
+                className="skill-card__icon-button skill-card__icon-button--delete"
+                type="button"
+                onClick={() => void handleDeleteAction()}
+                aria-label={`删除 ${skill.name}`}
+                title="删除 skill"
+              >
+                <DeleteIcon />
+              </button>
+            )}
             <span className="skill-card__chevron" aria-hidden="true">
               {expanded ? "⌄" : "›"}
             </span>
@@ -348,24 +403,6 @@ export function SkillCard({ skill }: SkillCardProps) {
       </article>
       {showFileDialog ? (
         <SkillFileDialog skill={skill} isOpen={showFileDialog} onClose={() => setShowFileDialog(false)} />
-      ) : null}
-      {showDeleteDialog ? (
-        <div className="dialog-backdrop" onClick={() => setShowDeleteDialog(false)}>
-          <div className="dialog-card" onClick={(e) => e.stopPropagation()} style={{ width: "min(320px, 100%)", borderRadius: "14px" }}>
-            <div style={{ padding: "20px 20px 16px", display: "grid", gap: "8px" }}>
-              <p style={{ margin: 0, fontWeight: 600, fontSize: "0.95rem" }}>删除 {skill.name}？</p>
-              <p style={{ margin: 0, color: "var(--muted)", fontSize: "0.82rem", lineHeight: 1.5 }}>将同时移除所有工具中的符号链接，本地文件也将被删除。</p>
-            </div>
-            <div style={{ display: "flex", gap: "8px", justifyContent: "flex-end", padding: "12px 20px", borderTop: "1px solid var(--line)" }}>
-              <button className="secondary-button" type="button" style={{ padding: "5px 14px", fontSize: "0.85rem" }} onClick={() => setShowDeleteDialog(false)}>
-                取消
-              </button>
-              <button className="solid-button" type="button" style={{ padding: "5px 14px", fontSize: "0.85rem", background: "#e53e3e", borderColor: "#e53e3e", color: "#fff" }} onClick={() => void handleConfirmDelete()}>
-                删除
-              </button>
-            </div>
-          </div>
-        </div>
       ) : null}
     </>
   );

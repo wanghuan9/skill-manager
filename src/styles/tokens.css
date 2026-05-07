@@ -1165,6 +1165,41 @@ code {
   height: 18px;
 }
 
+.skill-card__delete-confirm-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  height: 24px;
+  padding: 0 10px;
+  border: 1px solid rgba(229, 62, 62, 0.2);
+  border-radius: 999px;
+  background: rgba(229, 62, 62, 0.1);
+  color: #c53030;
+  cursor: pointer;
+  font-size: 0.72rem;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease,
+    color 120ms ease,
+    opacity 120ms ease;
+}
+
+.skill-card__delete-confirm-button:hover:not(:disabled) {
+  border-color: rgba(229, 62, 62, 0.32);
+  background: rgba(229, 62, 62, 0.16);
+  color: #9b2c2c;
+}
+
+.skill-card__delete-confirm-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 .skill-card__refresh-icon.is-spinning {
   animation: spin 0.8s linear infinite;
 }

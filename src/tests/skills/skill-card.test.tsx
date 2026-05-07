@@ -57,6 +57,25 @@ test("shows fixed open action button on skill card", () => {
   expect(screen.getByRole("button", { name: /打开 drawio-diagram 目录/ })).toBeInTheDocument();
 });
 
+test("uses inline confirmation before deleting a skill", async () => {
+  const skill = installedSkillFixtures.find((item) => item.name === "drawio-diagram");
+  if (!skill) {
+    throw new Error("missing drawio-diagram fixture");
+  }
+
+  render(
+    <SkillWorkspaceProvider>
+      <SkillCard skill={skill} />
+    </SkillWorkspaceProvider>,
+  );
+
+  await userEvent.click(screen.getByRole("button", { name: /删除 drawio-diagram/ }));
+
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /确认删除 drawio-diagram/ })).toHaveTextContent("确认");
+  expect(screen.getByText("drawio-diagram")).toBeInTheDocument();
+});
+
 test("renders enabled tool with checkmark in tool sync panel", async () => {
   const skill = installedSkillFixtures.find((item) => item.name === "drawio-diagram");
   if (!skill) {
