@@ -10,7 +10,6 @@ import {
   skillFileBrowserFixtures,
   skillFileDocumentFixtures,
   toolConfigFixtures,
-  updatePreviewFixtures,
   workspaceSnapshotFixture,
 } from "@/features/skills/state/skill-fixtures";
 import type {
@@ -25,7 +24,6 @@ import type {
   SkillFileDocument,
   SkillSummary,
   ToolConfig,
-  UpdatePreviewSnapshot,
   WorkspaceSnapshot,
 } from "@/features/skills/state/skill-store";
 import { mergeSkillToolsWithInstalledTools } from "@/features/skills/utils/skill-tools";
@@ -249,19 +247,6 @@ export async function openExternalLink(url: string): Promise<void> {
 
 export async function openSkillInEditor(input: OpenSkillInEditorInput): Promise<void> {
   return invokeOrFallback("open_skill_in_editor", input, undefined);
-}
-
-export async function fetchUpdatePreviewSnapshot(skillName: string): Promise<UpdatePreviewSnapshot> {
-  const fallback =
-    updatePreviewFixtures[skillName] ?? {
-      currentBranch: "main",
-      remoteBranch: "origin/main",
-      commitsToPull: 0,
-      changedFiles: [],
-      hasLocalChanges: false,
-    };
-
-  return invokeOrFallback("get_update_preview_snapshot", { skillName }, fallback);
 }
 
 export async function updateSkill(

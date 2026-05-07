@@ -51,14 +51,6 @@ export type PushPreviewSnapshot = {
   unpushedCommitCount: number;
 };
 
-export type UpdatePreviewSnapshot = {
-  currentBranch: string;
-  remoteBranch: string;
-  commitsToPull: number;
-  changedFiles: GitChangeFile[];
-  hasLocalChanges: boolean;
-};
-
 export type SkillFileEntry = {
   path: string;
   name: string;

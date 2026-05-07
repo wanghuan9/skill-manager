@@ -19,7 +19,6 @@ import {
   fetchPushPreviewSnapshot,
   fetchPushTargetSnapshot,
   fetchToolConfigs,
-  fetchUpdatePreviewSnapshot,
   importLocalSkill,
   installSkillFromMarket,
   installSkillFromRepo,
@@ -44,7 +43,6 @@ import type {
   SkillFileDocument,
   SkillSummary,
   ToolConfig,
-  UpdatePreviewSnapshot,
 } from "@/features/skills/state/skill-store";
 import { buildOpenToolOptions } from "@/features/skills/utils/open-tools";
 
@@ -91,7 +89,6 @@ type SkillWorkspaceContextValue = {
     createBranchName?: string;
   }) => Promise<PushPreviewSnapshot>;
   loadPushTargets: (skillName: string) => Promise<PushTargetSnapshot>;
-  loadUpdatePreview: (skillName: string) => Promise<UpdatePreviewSnapshot>;
   openSkillRepository: (skillName: string) => Promise<void>;
   openSkillInEditor: (input: { skillName: string; editorId: string }) => Promise<void>;
   defaultOpenToolId: string;
@@ -357,13 +354,25 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       return;
     }
 
-    const updatedSkills = await Promise.all(
+    const updateResults = await Promise.allSettled(
       updatableSkills.map((skill) => updateSkill({ skillName: skill.name })),
     );
+    const updatedSkills = updateResults.flatMap((result) => (result.status === "fulfilled" ? [result.value] : []));
     const updatedSkillMap = new Map(updatedSkills.map((skill) => [skill.name, skill]));
     setInstalledSkills((current) =>
       current.map((skill) => updatedSkillMap.get(skill.name) ?? skill),
     );
+
+    const failedUpdates = updateResults
+      .map((result, index) => ({
+        result,
+        skillName: updatableSkills[index].name,
+      }))
+      .filter((item) => item.result.status === "rejected");
+    if (failedUpdates.length > 0) {
+      const failedSkillNames = failedUpdates.map((item) => item.skillName).join("、");
+      throw new Error(`已更新 ${updatedSkills.length} 个 skill，${failedUpdates.length} 个更新失败：${failedSkillNames}`);
+    }
   }
 
   async function handleDeleteSkill(skillName: string) {
@@ -412,7 +421,6 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       toggleSkillTool: handleToggleSkillTool,
       loadPushPreview: fetchPushPreviewSnapshot,
       loadPushTargets: fetchPushTargetSnapshot,
-      loadUpdatePreview: fetchUpdatePreviewSnapshot,
       openSkillRepository,
       openSkillInEditor,
       defaultOpenToolId,

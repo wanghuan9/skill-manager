@@ -126,6 +126,7 @@ function AppContent() {
   const [showGroupView, setShowGroupView] = useState(true);
   const [activeInstallTab, setActiveInstallTab] = useState<InstallTab>("market");
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const [isToolsRefreshing, setIsToolsRefreshing] = useState(false);
   const activeDefinition = routes.find((route) => route.key === activeRoute) ?? routes[0];
   const updatableSkillCount = installedSkills.filter((skill) => skill.collabStatus === "update-available").length;
   const pendingPushSkillCount = installedSkills.filter((skill) => skill.collabStatus === "pending-push").length;
@@ -136,6 +137,22 @@ function AppContent() {
       : activeRoute === "tools"
         ? `已安装 ${installedToolCount} 个工具`
       : activeDefinition.description;
+
+  async function handleToolsRefresh() {
+    if (isToolsRefreshing) {
+      return;
+    }
+
+    setIsToolsRefreshing(true);
+    try {
+      await refreshWorkspace();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "刷新失败";
+      window.alert(message);
+    } finally {
+      setIsToolsRefreshing(false);
+    }
+  }
 
   return (
     <div className={`app-shell${isSidebarCollapsed ? " is-sidebar-collapsed" : ""}`}>
@@ -222,9 +239,14 @@ function AppContent() {
             <div className="page-header--split">
               <div className="page-header__row">
                 <h1>{activeDefinition.label}</h1>
-                <button className="ghost-button tools-refresh-button" type="button" onClick={() => void refreshWorkspace()}>
+                <button
+                  className={`ghost-button tools-refresh-button${isToolsRefreshing ? " is-loading" : ""}`}
+                  type="button"
+                  onClick={() => void handleToolsRefresh()}
+                  disabled={isToolsRefreshing}
+                >
                   <span aria-hidden="true" className="skills-toolbar-button__icon">
-                    <svg viewBox="0 0 20 20" fill="none">
+                    <svg className={isToolsRefreshing ? "skills-toolbar-button__svg is-spinning" : "skills-toolbar-button__svg"} viewBox="0 0 20 20" fill="none">
                       <path
                         d="M16.2 9.1a6.2 6.2 0 0 0-10.7-3.6"
                         stroke="currentColor"

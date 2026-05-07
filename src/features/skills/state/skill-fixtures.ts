@@ -8,7 +8,6 @@ import type {
   SkillFileBrowserSnapshot,
   SkillFileDocument,
   ToolConfig,
-  UpdatePreviewSnapshot,
   WorkspaceSnapshot,
 } from "@/features/skills/state/skill-store";
 import type { SkillSummary } from "@/features/skills/state/skill-store";
@@ -320,27 +319,6 @@ export const pushPreviewFixtures: Record<string, PushPreviewSnapshot> = {
         path: "SKILL.md",
         status: "M",
         diff: "-生成图表\n+生成可编辑图表\n",
-      },
-    ],
-  },
-};
-
-export const updatePreviewFixtures: Record<string, UpdatePreviewSnapshot> = {
-  "excalidraw-diagram": {
-    currentBranch: "main",
-    remoteBranch: "origin/main",
-    commitsToPull: 2,
-    hasLocalChanges: false,
-    changedFiles: [
-      {
-        path: "SKILL.md",
-        status: "M",
-        diff: "-旧版 Excalidraw 说明\n+新版 Excalidraw 说明\n",
-      },
-      {
-        path: "examples/basic.excalidraw",
-        status: "A",
-        diff: "+新增基础示例\n",
       },
     ],
   },

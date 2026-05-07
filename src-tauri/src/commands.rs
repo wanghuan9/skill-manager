@@ -2,10 +2,10 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::{Mutex, OnceLock};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use reqwest::Client;
 use serde::Deserialize;
@@ -32,6 +32,8 @@ use crate::state::{load_installed_skills, save_installed_skills, scan_local_skil
 fn default_installed_skills() -> Vec<SkillSummary> {
     Vec::new()
 }
+
+const GIT_COMMAND_TIMEOUT_SECS: u64 = 45;
 
 async fn fetch_skills_sh_live_description(client: &Client, item: &SkillsShSkill) -> Option<String> {
     let source = normalize_repo_key_from_source(&item.source);
@@ -1619,11 +1621,34 @@ fn run_git_command_with_allowed_codes(
     args: &[&str],
     allowed_codes: &[i32],
 ) -> Result<String, String> {
-    let output = Command::new(GIT_BINARY)
+    let mut child = Command::new(GIT_BINARY)
         .args(["-C", skill_path])
         .args(args)
-        .output()
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
         .map_err(|error| format!("执行 git 命令失败: {error}"))?;
+    let timeout = Duration::from_secs(GIT_COMMAND_TIMEOUT_SECS);
+    let started_at = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) if started_at.elapsed() >= timeout => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!(
+                    "git {} 超时，请检查网络或远端认证后重试。",
+                    args.join(" ")
+                ));
+            }
+            Ok(None) => thread::sleep(Duration::from_millis(50)),
+            Err(error) => return Err(format!("等待 git 命令失败: {error}")),
+        }
+    }
+
+    let output = child
+        .wait_with_output()
+        .map_err(|error| format!("读取 git 命令输出失败: {error}"))?;
 
     let status_code = output.status.code().unwrap_or(-1);
     if !allowed_codes.contains(&status_code) {
@@ -2828,7 +2853,13 @@ pub fn open_skill_in_editor(skill_name: &str, editor_id: &str) -> Result<(), Str
 }
 
 #[tauri::command]
-pub fn update_skill(skill_name: &str) -> Result<SkillSummary, String> {
+pub async fn update_skill(skill_name: String) -> Result<SkillSummary, String> {
+    tauri::async_runtime::spawn_blocking(move || update_skill_blocking(&skill_name))
+        .await
+        .map_err(|error| format!("更新任务执行失败: {error}"))?
+}
+
+fn update_skill_blocking(skill_name: &str) -> Result<SkillSummary, String> {
     let (installed_skills, skill_index) = find_skill_by_name(skill_name)?;
     let skill = &installed_skills[skill_index];
     update_skill_repo(skill)?;

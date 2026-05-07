@@ -11,13 +11,85 @@ type SkillToolbarProps = {
   onShowGroupViewChange: (value: boolean) => void;
 };
 
+function GridIcon() {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+      <path d="M4 4.25h4.5v4.5H4v-4.5ZM11.5 4.25H16v4.5h-4.5v-4.5ZM4 11.25h4.5v4.5H4v-4.5ZM11.5 11.25H16v4.5h-4.5v-4.5Z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function GroupIcon() {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+      <path d="M4 5.5h12M4 10h12M4 14.5h12" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+      <path d="M4 5.5h2M4 10h2M4 14.5h2" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function RefreshIcon({ isSpinning = false }: { isSpinning?: boolean }) {
+  return (
+    <svg className={isSpinning ? "skills-toolbar-button__svg is-spinning" : "skills-toolbar-button__svg"} viewBox="0 0 20 20" fill="none" aria-hidden="true">
+      <path d="M16.2 9.1a6.2 6.2 0 0 0-10.7-3.6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M3.7 3.9v3.7h3.7" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M3.8 10.9a6.2 6.2 0 0 0 10.7 3.6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M16.3 16.1v-3.7h-3.7" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function UpdateAllIcon({ isSpinning = false }: { isSpinning?: boolean }) {
+  return (
+    <svg className={isSpinning ? "skills-toolbar-button__svg is-spinning" : "skills-toolbar-button__svg"} viewBox="0 0 20 20" fill="none" aria-hidden="true">
+      <path d="M15.2 6.6A6.25 6.25 0 1 0 16 10" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M15.3 4.2v2.8h-2.8" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
 export function SkillListToolbar(props: SkillToolbarProps) {
   const { query, onQueryChange, showGroupView, onShowGroupViewChange } = props;
   const { installedSkills, isLoading, refreshWorkspace, updateAllSkills } = useSkillWorkspace();
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isUpdatingAll, setIsUpdatingAll] = useState(false);
   const updatableSkillCount = useMemo(
     () => installedSkills.filter((skill) => skill.collabStatus === "update-available").length,
     [installedSkills],
   );
+  const updateAllButtonLabel = updatableSkillCount > 0 ? `全部更新 (${updatableSkillCount})` : "全部更新";
+
+  async function handleRefreshWorkspace() {
+    if (isRefreshing) {
+      return;
+    }
+
+    setIsRefreshing(true);
+    try {
+      await refreshWorkspace();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "刷新失败";
+      window.alert(message);
+    } finally {
+      setIsRefreshing(false);
+    }
+  }
+
+  async function handleUpdateAllSkills() {
+    if (updatableSkillCount === 0 || isUpdatingAll) {
+      return;
+    }
+
+    setIsUpdatingAll(true);
+    try {
+      await updateAllSkills();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "批量更新失败";
+      window.alert(message);
+    } finally {
+      setIsUpdatingAll(false);
+    }
+  }
 
   return (
     <div className="skills-header-bar__tools">
@@ -36,52 +108,32 @@ export function SkillListToolbar(props: SkillToolbarProps) {
         aria-pressed={showGroupView}
         onClick={() => onShowGroupViewChange(!showGroupView)}
       >
-        <span aria-hidden="true">{showGroupView ? "☰" : "≣"}</span>
+        <span aria-hidden="true" className="skills-toolbar-button__icon">
+          {showGroupView ? <GroupIcon /> : <GridIcon />}
+        </span>
         <span>{showGroupView ? "分组" : "平铺"}</span>
       </button>
-      <button className="secondary-button secondary-button--compact skills-toolbar-button skills-toolbar-button--refresh" type="button" onClick={() => void refreshWorkspace()}>
+      <button
+        className={`secondary-button secondary-button--compact skills-toolbar-button skills-toolbar-button--refresh${isRefreshing ? " is-loading" : ""}`}
+        type="button"
+        onClick={() => void handleRefreshWorkspace()}
+        disabled={isRefreshing}
+      >
         <span aria-hidden="true" className="skills-toolbar-button__icon">
-          <svg viewBox="0 0 20 20" fill="none">
-            <path
-              d="M16.2 9.1a6.2 6.2 0 0 0-10.7-3.6"
-              stroke="currentColor"
-              strokeWidth="1.8"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-            <path
-              d="M3.7 3.9v3.7h3.7"
-              stroke="currentColor"
-              strokeWidth="1.8"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-            <path
-              d="M3.8 10.9a6.2 6.2 0 0 0 10.7 3.6"
-              stroke="currentColor"
-              strokeWidth="1.8"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-            <path
-              d="M16.3 16.1v-3.7h-3.7"
-              stroke="currentColor"
-              strokeWidth="1.8"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          </svg>
+          <RefreshIcon isSpinning={isRefreshing} />
         </span>
         <span>刷新</span>
       </button>
       <button
-        className="secondary-button secondary-button--compact skills-toolbar-button"
+        className={`secondary-button secondary-button--compact skills-toolbar-button skills-toolbar-button--update-all${isUpdatingAll ? " is-loading" : ""}`}
         type="button"
-        onClick={() => void updateAllSkills()}
-        disabled={isLoading || updatableSkillCount === 0}
+        onClick={() => void handleUpdateAllSkills()}
+        disabled={isLoading || isUpdatingAll || updatableSkillCount === 0}
       >
-        <span aria-hidden="true">↑</span>
-        <span>全部更新</span>
+        <span aria-hidden="true" className="skills-toolbar-button__icon">
+          <UpdateAllIcon isSpinning={isUpdatingAll} />
+        </span>
+        <span>{isUpdatingAll ? "更新中..." : updateAllButtonLabel}</span>
       </button>
     </div>
   );

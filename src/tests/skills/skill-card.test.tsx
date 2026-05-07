@@ -4,7 +4,7 @@ import { SkillCard } from "@/features/skills/components/SkillCard";
 import { installedSkillFixtures } from "@/features/skills/state/skill-fixtures";
 import { SkillWorkspaceProvider } from "@/features/skills/state/skill-workspace";
 
-test("shows update action when skill has remote update", async () => {
+test("updates directly from list action when skill has remote update", async () => {
   const updateSkill = installedSkillFixtures.find((skill) => skill.name === "excalidraw-diagram");
   if (!updateSkill) {
     throw new Error("missing excalidraw-diagram fixture");
@@ -16,13 +16,12 @@ test("shows update action when skill has remote update", async () => {
     </SkillWorkspaceProvider>,
   );
   expect(screen.getByText("excalidraw-diagram")).toBeInTheDocument();
-  expect(screen.getAllByRole("button", { name: "更新" }).length).toBeGreaterThan(0);
-  await userEvent.click(screen.getAllByRole("button", { name: "更新" })[0]);
-  expect(await screen.findByRole("dialog", { name: "更新 skill" })).toBeInTheDocument();
-  expect(screen.getByText("将拉取提交")).toBeInTheDocument();
-  await userEvent.click(screen.getByRole("button", { name: "取消" }));
-  await userEvent.click(screen.getByRole("button", { name: /展开 excalidraw-diagram/ }));
-  expect(screen.getAllByRole("button", { name: "更新" }).length).toBeGreaterThan(1);
+  expect(screen.queryByRole("button", { name: "更新" })).not.toBeInTheDocument();
+  const updateButton = screen.getByRole("button", { name: /更新 excalidraw-diagram/ });
+  expect(updateButton).toBeInTheDocument();
+  await userEvent.click(updateButton);
+  expect(screen.queryByRole("dialog", { name: "更新 skill" })).not.toBeInTheDocument();
+  expect(screen.queryByText("将拉取提交")).not.toBeInTheDocument();
 });
 
 test("opens skill file dialog from fixed action button", async () => {

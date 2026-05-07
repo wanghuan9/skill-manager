@@ -7,7 +7,7 @@ test("renders installed skill page header and search input", () => {
   expect(screen.getByRole("button", { name: /Skills/ })).toBeInTheDocument();
   expect(screen.getByRole("heading", { name: "Skills", level: 1 })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "刷新" })).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "全部更新" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "全部更新 (1)" })).toBeInTheDocument();
   expect(screen.getByPlaceholderText("搜索技能名称、来源...")).toBeInTheDocument();
 });
 

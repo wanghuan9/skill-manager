@@ -17,7 +17,10 @@ const UPDATE_CACHE_FILE_NAME: &str = "git-update-cache.json";
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 struct GitUpdateCache {
+    #[serde(default)]
     entries: Vec<GitUpdateCacheEntry>,
+    #[serde(default)]
+    pending_push_entries: Vec<GitPendingPushCacheEntry>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -27,6 +30,16 @@ struct GitUpdateCacheEntry {
     branch: String,
     head: String,
     behind: usize,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct GitPendingPushCacheEntry {
+    skill_name: String,
+    local_path: String,
+    branch: String,
+    head: String,
+    working_tree_signature: String,
+    ahead: usize,
 }
 
 pub fn enrich_skill_with_git_state(skill: &SkillSummary) -> SkillSummary {
@@ -45,14 +58,22 @@ pub fn enrich_skill_with_git_state(skill: &SkillSummary) -> SkillSummary {
     let commit_label = run_git(skill_path, &["rev-parse", "--short", "HEAD"])
         .unwrap_or_else(|| skill.commit_label.clone());
     let head = run_git(skill_path, &["rev-parse", "HEAD"]).unwrap_or_else(|| commit_label.clone());
-    let working_tree_dirty = run_git(skill_path, &["status", "--porcelain", "--", "."])
-        .map(|output| !output.trim().is_empty())
-        .unwrap_or(false);
+    let working_tree_signature =
+        run_git(skill_path, &["status", "--porcelain", "--", "."]).unwrap_or_default();
+    let working_tree_dirty = !working_tree_signature.trim().is_empty();
 
     let remote_counts = cached_update_counts(skill, &branch, &head)
         .or_else(|| branch_divergence(skill_path, &branch));
     sync_update_cache(skill, &branch, &head, remote_counts);
     let (collab_status, status_text) = derive_collab_status(working_tree_dirty, remote_counts);
+    sync_pending_push_cache(
+        skill,
+        &branch,
+        &head,
+        &working_tree_signature,
+        remote_counts,
+        collab_status,
+    );
     let last_synced_at = if working_tree_dirty {
         latest_local_content_modified_at(skill_path)
             .or_else(|| latest_commit_time(skill_path))
@@ -120,6 +141,20 @@ pub fn enrich_skill_with_cached_update_state(skill: &SkillSummary) -> SkillSumma
     let commit_label = run_git(skill_path, &["rev-parse", "--short", "HEAD"])
         .unwrap_or_else(|| skill.commit_label.clone());
     let head = run_git(skill_path, &["rev-parse", "HEAD"]).unwrap_or_else(|| commit_label.clone());
+    let working_tree_signature =
+        run_git(skill_path, &["status", "--porcelain", "--", "."]).unwrap_or_default();
+
+    if cached_pending_push_entry(skill, &branch, &head, &working_tree_signature).is_some() {
+        let mut enriched = skill.clone();
+        enriched.branch = branch;
+        enriched.commit_label = commit_label;
+        enriched.collab_status = STATUS_PENDING_PUSH.into();
+        enriched.status_text = "本地存在待推送内容，已使用上次检测结果。".into();
+        enriched.last_checked_at = "已缓存".into();
+        enriched.git_linked = true;
+        return enriched;
+    }
+
     if cached_update_counts(skill, &branch, &head).is_none() {
         return skill.clone();
     }
@@ -136,6 +171,7 @@ pub fn enrich_skill_with_cached_update_state(skill: &SkillSummary) -> SkillSumma
 
 pub fn clear_skill_update_cache(skill: &SkillSummary) {
     remove_update_cache_entry(skill);
+    remove_pending_push_cache_entry(skill);
 }
 
 fn repo_root(skill_path: &Path) -> Option<String> {
@@ -193,6 +229,18 @@ fn cached_update_counts(skill: &SkillSummary, branch: &str, head: &str) -> Optio
         .map(|entry| (entry.behind, 0))
 }
 
+fn cached_pending_push_entry(
+    skill: &SkillSummary,
+    branch: &str,
+    head: &str,
+    working_tree_signature: &str,
+) -> Option<GitPendingPushCacheEntry> {
+    let cache = load_update_cache();
+    cache.pending_push_entries.into_iter().find(|entry| {
+        pending_push_cache_entry_matches(entry, skill, branch, head, working_tree_signature)
+    })
+}
+
 fn sync_update_cache(
     skill: &SkillSummary,
     branch: &str,
@@ -210,6 +258,22 @@ fn sync_update_cache(
     }
 }
 
+fn sync_pending_push_cache(
+    skill: &SkillSummary,
+    branch: &str,
+    head: &str,
+    working_tree_signature: &str,
+    remote_counts: Option<(usize, usize)>,
+    collab_status: &str,
+) {
+    if collab_status == STATUS_PENDING_PUSH {
+        let ahead = remote_counts.map(|(_, ahead)| ahead).unwrap_or(0);
+        save_pending_push_cache_entry(skill, branch, head, working_tree_signature, ahead);
+    } else {
+        remove_pending_push_cache_entry(skill);
+    }
+}
+
 fn update_cache_entry_matches(
     entry: &GitUpdateCacheEntry,
     skill: &SkillSummary,
@@ -221,6 +285,21 @@ fn update_cache_entry_matches(
         && entry.branch == branch
         && entry.head == head
         && entry.behind > 0
+}
+
+fn pending_push_cache_entry_matches(
+    entry: &GitPendingPushCacheEntry,
+    skill: &SkillSummary,
+    branch: &str,
+    head: &str,
+    working_tree_signature: &str,
+) -> bool {
+    entry.skill_name == skill.name
+        && entry.local_path == skill.local_path
+        && entry.branch == branch
+        && entry.head == head
+        && entry.working_tree_signature == working_tree_signature
+        && (entry.ahead > 0 || !entry.working_tree_signature.trim().is_empty())
 }
 
 fn save_update_cache_entry(skill: &SkillSummary, branch: &str, head: &str, behind: usize) {
@@ -238,6 +317,28 @@ fn save_update_cache_entry(skill: &SkillSummary, branch: &str, head: &str, behin
     let _ = save_update_cache(&cache);
 }
 
+fn save_pending_push_cache_entry(
+    skill: &SkillSummary,
+    branch: &str,
+    head: &str,
+    working_tree_signature: &str,
+    ahead: usize,
+) {
+    let mut cache = load_update_cache();
+    cache
+        .pending_push_entries
+        .retain(|entry| entry.skill_name != skill.name || entry.local_path != skill.local_path);
+    cache.pending_push_entries.push(GitPendingPushCacheEntry {
+        skill_name: skill.name.clone(),
+        local_path: skill.local_path.clone(),
+        branch: branch.to_string(),
+        head: head.to_string(),
+        working_tree_signature: working_tree_signature.to_string(),
+        ahead,
+    });
+    let _ = save_update_cache(&cache);
+}
+
 fn remove_update_cache_entry(skill: &SkillSummary) {
     let mut cache = load_update_cache();
     let original_len = cache.entries.len();
@@ -245,6 +346,17 @@ fn remove_update_cache_entry(skill: &SkillSummary) {
         .entries
         .retain(|entry| entry.skill_name != skill.name || entry.local_path != skill.local_path);
     if cache.entries.len() != original_len {
+        let _ = save_update_cache(&cache);
+    }
+}
+
+fn remove_pending_push_cache_entry(skill: &SkillSummary) {
+    let mut cache = load_update_cache();
+    let original_len = cache.pending_push_entries.len();
+    cache
+        .pending_push_entries
+        .retain(|entry| entry.skill_name != skill.name || entry.local_path != skill.local_path);
+    if cache.pending_push_entries.len() != original_len {
         let _ = save_update_cache(&cache);
     }
 }
@@ -635,5 +747,81 @@ mod tests {
             &entry, &skill, "main", "def456"
         ));
         assert!(!update_cache_entry_matches(&entry, &skill, "dev", "abc123"));
+    }
+
+    #[test]
+    fn pending_push_cache_entry_matches_only_same_fingerprint() {
+        let skill_path = PathBuf::from("/tmp/skill-a");
+        let skill = skill_summary("skill-a", &skill_path);
+        let entry = GitPendingPushCacheEntry {
+            skill_name: "skill-a".into(),
+            local_path: skill.local_path.clone(),
+            branch: "main".into(),
+            head: "abc123".into(),
+            working_tree_signature: " M SKILL.md".into(),
+            ahead: 0,
+        };
+
+        assert!(pending_push_cache_entry_matches(
+            &entry,
+            &skill,
+            "main",
+            "abc123",
+            " M SKILL.md",
+        ));
+        assert!(!pending_push_cache_entry_matches(
+            &entry,
+            &skill,
+            "main",
+            "def456",
+            " M SKILL.md",
+        ));
+        assert!(!pending_push_cache_entry_matches(
+            &entry,
+            &skill,
+            "main",
+            "abc123",
+            " M README.md",
+        ));
+        assert!(!pending_push_cache_entry_matches(
+            &entry,
+            &skill,
+            "dev",
+            "abc123",
+            " M SKILL.md",
+        ));
+    }
+
+    #[test]
+    fn pending_push_cache_entry_requires_ahead_or_dirty_signature() {
+        let skill_path = PathBuf::from("/tmp/skill-a");
+        let skill = skill_summary("skill-a", &skill_path);
+        let clean_without_ahead = GitPendingPushCacheEntry {
+            skill_name: "skill-a".into(),
+            local_path: skill.local_path.clone(),
+            branch: "main".into(),
+            head: "abc123".into(),
+            working_tree_signature: "".into(),
+            ahead: 0,
+        };
+        let clean_with_ahead = GitPendingPushCacheEntry {
+            ahead: 1,
+            ..clean_without_ahead.clone()
+        };
+
+        assert!(!pending_push_cache_entry_matches(
+            &clean_without_ahead,
+            &skill,
+            "main",
+            "abc123",
+            "",
+        ));
+        assert!(pending_push_cache_entry_matches(
+            &clean_with_ahead,
+            &skill,
+            "main",
+            "abc123",
+            "",
+        ));
     }
 }

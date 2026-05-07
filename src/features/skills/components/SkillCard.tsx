@@ -1,9 +1,7 @@
 import { useState } from "react";
 import { SkillStatusBadge } from "@/features/skills/components/SkillStatusBadge";
-import { SkillActionButton } from "@/features/skills/components/SkillActionButton";
 import { SkillFileDialog } from "@/features/skills/components/SkillFileDialog";
 import { ToolSyncPanel } from "@/features/skills/components/ToolSyncPanel";
-import { UpdateSkillDialog } from "@/features/skills/components/UpdateSkillDialog";
 import { useSkillWorkspace } from "@/features/skills/state/skill-workspace";
 import type { SkillSummary } from "@/features/skills/state/skill-store";
 import { formatSkillDescription } from "@/features/skills/utils/skill-description";
@@ -123,6 +121,27 @@ function OpenFolderIcon() {
   );
 }
 
+function RefreshIcon({ isSpinning = false }: { isSpinning?: boolean }) {
+  return (
+    <svg className={isSpinning ? "skill-card__refresh-icon is-spinning" : "skill-card__refresh-icon"} viewBox="0 0 20 20" fill="none" aria-hidden="true">
+      <path
+        d="M15.2 6.6A6.25 6.25 0 1 0 16 10"
+        stroke="currentColor"
+        strokeWidth="1.7"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M15.3 4.2v2.8h-2.8"
+        stroke="currentColor"
+        strokeWidth="1.7"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 function DeleteIcon() {
   return (
     <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
@@ -138,11 +157,11 @@ function DeleteIcon() {
 }
 
 export function SkillCard({ skill }: SkillCardProps) {
-  const { deleteSkill, openSkillWithDefaultTool, toolConfigs } = useSkillWorkspace();
+  const { deleteSkill, openSkillWithDefaultTool, toolConfigs, updateSkill } = useSkillWorkspace();
   const [expanded, setExpanded] = useState(false);
-  const [showUpdateDialog, setShowUpdateDialog] = useState(false);
   const [showFileDialog, setShowFileDialog] = useState(false);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+  const [isUpdating, setIsUpdating] = useState(false);
   const skillTools = mergeSkillToolsWithInstalledTools(skill.tools, toolConfigs);
   const sourceLabel = formatSkillSourceLabel(skill.sourceLabel);
   const skillDescription = formatSkillDescription(skill.description);
@@ -153,14 +172,26 @@ export function SkillCard({ skill }: SkillCardProps) {
   const hiddenToolCount = Math.max(enabledTools.length - visibleTools.length, 0);
   const showDetailAction = skill.collabStatus === "update-available";
 
-  function handlePrimaryAction() {
+  async function handlePrimaryAction() {
+    if (isUpdating) {
+      return;
+    }
+
     if (skill.collabStatus === "pending-push") {
-      void handleOpenSkill();
+      await handleOpenSkill();
       return;
     }
 
     if (skill.collabStatus === "update-available") {
-      setShowUpdateDialog(true);
+      setIsUpdating(true);
+      try {
+        await updateSkill(skill.name);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "更新失败，请稍后重试。";
+        window.alert(message);
+      } finally {
+        setIsUpdating(false);
+      }
     }
   }
 
@@ -182,9 +213,6 @@ export function SkillCard({ skill }: SkillCardProps) {
       window.alert(message);
     }
   }
-
-  const showQuickAction = skill.collabStatus === "update-available";
-  const quickActionLabel = "更新";
 
   return (
     <>
@@ -234,13 +262,16 @@ export function SkillCard({ skill }: SkillCardProps) {
           </button>
           <div className="skill-card__list-actions">
             <SkillStatusBadge status={skill.collabStatus} />
-            {showQuickAction ? (
+            {showDetailAction ? (
               <button
-                className="secondary-button skill-card__quick-action"
+                className="skill-card__icon-button skill-card__icon-button--update"
                 type="button"
                 onClick={() => void handlePrimaryAction()}
+                aria-label={`更新 ${skill.name}`}
+                title={isUpdating ? "正在更新" : "更新 skill"}
+                disabled={isUpdating}
               >
-                {quickActionLabel}
+                <RefreshIcon isSpinning={isUpdating} />
               </button>
             ) : null}
             <button
@@ -280,11 +311,6 @@ export function SkillCard({ skill }: SkillCardProps) {
             <section>
               <div className="skill-card__section-header">
                 <h4>基本信息</h4>
-                {showDetailAction ? (
-                  <div className="skill-card__section-action">
-                    <SkillActionButton status={skill.collabStatus} onClick={handlePrimaryAction} />
-                  </div>
-                ) : null}
               </div>
               <dl className="detail-grid detail-grid--single">
                 <div>
@@ -320,9 +346,6 @@ export function SkillCard({ skill }: SkillCardProps) {
           </div>
         ) : null}
       </article>
-      {showUpdateDialog ? (
-        <UpdateSkillDialog skill={skill} isOpen={showUpdateDialog} onClose={() => setShowUpdateDialog(false)} />
-      ) : null}
       {showFileDialog ? (
         <SkillFileDialog skill={skill} isOpen={showFileDialog} onClose={() => setShowFileDialog(false)} />
       ) : null}

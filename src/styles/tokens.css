@@ -611,7 +611,7 @@ code {
 
 .skills-header-bar__tools {
   justify-content: flex-end;
-  gap: 12px;
+  gap: 10px;
   flex-wrap: nowrap;
   width: auto;
   flex: 0 0 auto;
@@ -634,21 +634,47 @@ code {
   flex: 0 0 auto;
 }
 
-.skills-toolbar-button {
-  height: 42px;
-  min-height: 42px;
-  padding: 0 12px;
-  border-radius: 16px;
-  font-size: 0.86rem;
+.skills-toolbar-button,
+.tools-refresh-button {
+  height: 36px;
+  min-height: 36px;
+  padding: 0 10px;
+  border-radius: 12px;
+  font-size: 0.82rem;
+  font-weight: 400;
   line-height: 1;
   white-space: nowrap;
   flex: 0 0 auto;
   box-sizing: border-box;
+  transform: translateY(0);
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease,
+    box-shadow 120ms ease,
+    color 120ms ease,
+    transform 120ms ease;
+}
+
+.skills-toolbar-button--refresh:hover:not(:disabled),
+.skills-toolbar-button--update-all:hover:not(:disabled),
+.tools-refresh-button:hover:not(:disabled) {
+  box-shadow: 0 8px 18px rgba(47, 120, 255, 0.12);
+  transform: translateY(-1px);
+}
+
+.skills-toolbar-button--refresh:active:not(:disabled),
+.skills-toolbar-button--update-all:active:not(:disabled),
+.skills-toolbar-button--refresh.is-loading,
+.skills-toolbar-button--update-all.is-loading,
+.tools-refresh-button:active:not(:disabled),
+.tools-refresh-button.is-loading {
+  box-shadow: 0 4px 10px rgba(47, 120, 255, 0.12);
+  transform: translateY(1px);
 }
 
 .skills-toolbar-button--refresh {
   min-width: 0;
-  gap: 4px;
+  gap: 5px;
 }
 
 .skills-toolbar-button__icon {
@@ -664,15 +690,33 @@ code {
   height: 16px;
 }
 
+.skills-toolbar-button__svg.is-spinning {
+  animation: spin 0.8s linear infinite;
+}
+
 .tools-refresh-button {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
+  flex: 0 0 auto;
+}
+
+.ghost-button.tools-refresh-button {
+  height: 36px;
+  min-height: 36px;
+  padding: 0 10px;
+  border-radius: 12px;
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease,
+    box-shadow 120ms ease,
+    color 120ms ease,
+    transform 120ms ease;
 }
 
 .skills-toolbar-button--toggle {
-  min-width: 86px;
-  gap: 6px;
+  min-width: 76px;
+  gap: 5px;
 }
 
 .skills-toolbar-button--toggle.is-active {
@@ -692,11 +736,11 @@ code {
   flex: 0 0 300px;
   display: flex;
   align-items: center;
-  height: 42px;
-  min-height: 42px;
+  height: 36px;
+  min-height: 36px;
   border: 1px solid var(--line);
-  border-radius: 16px;
-  padding: 0 13px;
+  border-radius: 14px;
+  padding: 0 12px;
   background: var(--surface);
   overflow: hidden;
   box-sizing: border-box;
@@ -710,7 +754,7 @@ code {
   border-radius: 0 !important;
   padding: 0;
   background: transparent !important;
-  font-size: 0.88rem;
+  font-size: 0.84rem;
   line-height: 1;
   min-width: 0;
   appearance: none;
@@ -1077,24 +1121,33 @@ code {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 20px;
-  height: 20px;
+  width: 24px;
+  height: 24px;
   padding: 0;
-  border: 0;
-  background: transparent;
+  border: 1px solid rgba(15, 23, 42, 0.06);
+  border-radius: 7px;
+  background: rgba(246, 249, 253, 0.88);
   color: var(--muted);
   cursor: pointer;
-  opacity: 0.72;
+  opacity: 0.88;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease,
+    color 120ms ease,
+    opacity 120ms ease;
 }
 
-.skill-card__icon-button:hover {
-  color: var(--heading);
+.skill-card__icon-button:hover:not(:disabled) {
+  border-color: rgba(47, 120, 255, 0.18);
+  background: rgba(47, 120, 255, 0.08);
+  color: var(--accent);
   opacity: 1;
 }
 
-.skill-card__icon-button:first-child {
-  color: #2bdc64;
-  opacity: 0.9;
+.skill-card__icon-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
 }
 
 .skill-card__icon-button svg {
@@ -1103,9 +1156,17 @@ code {
   display: block;
 }
 
+.skill-card__icon-button--update {
+  color: var(--accent);
+}
+
 .skill-card__icon-button--delete svg {
   width: 18px;
   height: 18px;
+}
+
+.skill-card__refresh-icon.is-spinning {
+  animation: spin 0.8s linear infinite;
 }
 
 .primary-button,
@@ -2844,18 +2905,32 @@ code {
 }
 
 .primary-button--compact {
-  min-height: 28px;
-  padding: 0 12px;
-  border-radius: 999px;
+  min-height: 36px;
+  padding: 0 10px;
+  border-radius: 12px;
   flex-shrink: 0;
-  font-size: 0.76rem;
-  font-weight: 600;
-  letter-spacing: 0.01em;
+  font-size: 0.82rem;
+  font-weight: 400;
+  letter-spacing: 0;
   box-shadow: 0 4px 12px rgba(25, 27, 31, 0.12);
+  transform: translateY(0);
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease,
+    box-shadow 120ms ease,
+    color 120ms ease,
+    transform 120ms ease;
 }
 
 .primary-button--compact:hover {
   background: #111317;
+  box-shadow: 0 8px 18px rgba(25, 27, 31, 0.14);
+  transform: translateY(-1px);
+}
+
+.primary-button--compact:active:not(:disabled) {
+  box-shadow: 0 4px 10px rgba(25, 27, 31, 0.14);
+  transform: translateY(1px);
 }
 
 .tool-path-row {
@@ -3248,6 +3323,31 @@ code {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+}
+
+.tool-manage-dialog .secondary-button--compact {
+  min-height: 36px;
+  padding: 0 10px;
+  border-radius: 12px;
+  font-size: 0.82rem;
+  font-weight: 400;
+  transform: translateY(0);
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease,
+    box-shadow 120ms ease,
+    color 120ms ease,
+    transform 120ms ease;
+}
+
+.tool-manage-dialog .secondary-button--compact:hover:not(:disabled) {
+  box-shadow: 0 8px 18px rgba(47, 120, 255, 0.12);
+  transform: translateY(-1px);
+}
+
+.tool-manage-dialog .secondary-button--compact:active:not(:disabled) {
+  box-shadow: 0 4px 10px rgba(47, 120, 255, 0.12);
+  transform: translateY(1px);
 }
 
 .tool-manage-dialog__list {
