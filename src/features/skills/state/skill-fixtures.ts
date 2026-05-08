@@ -139,7 +139,7 @@ export const marketplaceSkillFixtures: MarketplaceSkill[] = [
     updatedAt: "昨天 16:10",
     installLabel: "适合团队使用",
     sourceUrl: "https://gitlab.com/release-team/release-guardian",
-    popularityLabel: "181.0K",
+    popularityLabel: "531.0K",
     avatarUrl: null,
   },
   {

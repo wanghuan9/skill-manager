@@ -6,6 +6,7 @@ import { LocalSkillImportList } from "@/features/local-skills/components/LocalSk
 import { useSkillWorkspace } from "@/features/skills/state/skill-workspace";
 import type { MarketplaceSkill, MarketplaceSourceSite } from "@/features/skills/state/skill-store";
 import { buildInstalledMarketplaceSkillIds } from "@/features/skills/utils/skill-install-identity";
+import { dedupeMarketplaceSkills } from "@/features/skills/utils/marketplace-skills";
 
 export type InstallTab = "market" | "git" | "local";
 
@@ -142,9 +143,7 @@ export function MarketRoute(props: MarketRouteProps) {
       .then((skills) => {
         if (cancelled) return;
         // 按 id 去重，避免重复结果
-        const dedupedSkills = Array.from(
-          new Map(skills.map((skill) => [skill.id, skill])).values()
-        );
+        const dedupedSkills = dedupeMarketplaceSkills(skills);
         setSearchResults(dedupedSkills);
         setSearchDone(true);
       })

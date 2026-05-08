@@ -34,6 +34,10 @@ import {
 } from "@/features/skills/api/skill-client";
 import { waitForNextPaint } from "@/app/utils/wait-for-next-paint";
 import { workspaceSnapshotFixture } from "@/features/skills/state/skill-fixtures";
+import {
+  dedupeMarketplaceSkills,
+  sortMarketplaceSkillsByPopularity,
+} from "@/features/skills/utils/marketplace-skills";
 import type {
   GitAccountSummary,
   LocalSkillCandidate,
@@ -53,6 +57,7 @@ const DEFAULT_OPEN_TOOL_STORAGE_KEY = "skillm.defaultOpenToolId";
 const STARTUP_WORKSPACE_CACHE_KEY = "skillm.startupWorkspaceCache";
 const FALLBACK_OPEN_TOOL_ID = "finder";
 const MARKETPLACE_PAGE_SIZE = 18;
+const MARKETPLACE_SOURCE_SITES: MarketplaceSourceSite[] = ["skills.sh", "skillsmp"];
 const STARTUP_LOAD_DELAY_MS = 0;
 const STARTUP_CACHED_COLLAB_STATUSES = new Set<SkillSummary["collabStatus"]>([
   "update-available",
@@ -530,11 +535,25 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
 
     setIsSearchLoading(true);
     try {
-      return await fetchMarketplaceSkillsByPage({
-        page: 1,
-        limit: MARKETPLACE_PAGE_SIZE * 6,
-        query: normalizedQuery,
-      });
+      const searchResults = await Promise.allSettled(
+        MARKETPLACE_SOURCE_SITES.map((sourceSite) =>
+          fetchMarketplaceSkillsByPage({
+            sourceSite,
+            page: 1,
+            limit: MARKETPLACE_PAGE_SIZE * 3,
+            query: normalizedQuery,
+          })
+        ),
+      );
+      const fulfilledResults = searchResults.flatMap((result) =>
+        result.status === "fulfilled" ? result.value : []
+      );
+      if (fulfilledResults.length === 0 && searchResults.some((result) => result.status === "rejected")) {
+        throw new Error("搜索安装源失败");
+      }
+
+      const mergedSkills = dedupeMarketplaceSkills(fulfilledResults);
+      return sortMarketplaceSkillsByPopularity(mergedSkills);
     } finally {
       setIsSearchLoading(false);
     }

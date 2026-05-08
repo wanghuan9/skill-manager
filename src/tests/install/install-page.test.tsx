@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { App } from "@/app/App";
 
@@ -78,6 +78,22 @@ test("searches marketplace skills across all supported sources", async () => {
 
   expect(await screen.findByText("release-guardian")).toBeInTheDocument();
   expect(screen.getByText("repo-guardian")).toBeInTheDocument();
+});
+
+test("sorts marketplace search results by popularity across sources", async () => {
+  render(<App />);
+  await userEvent.click(screen.getByRole("button", { name: /安装/ }));
+
+  await userEvent.type(screen.getByRole("searchbox", { name: "搜索 skill" }), "skills");
+
+  await waitFor(() => {
+    expect(screen.getAllByRole("heading", { level: 3 }).map((item) => item.textContent)).toEqual([
+      "workflow-critic",
+      "release-guardian",
+      "design-system-reviewer",
+      "repo-guardian",
+    ]);
+  });
 });
 
 test("keeps source results isolated and preserves the skills.sh display order", async () => {
