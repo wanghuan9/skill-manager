@@ -30,3 +30,19 @@ test("allows selecting default open tool in settings", async () => {
   await userEvent.click(screen.getByRole("button", { name: "工具状态" }));
   expect(screen.queryByText("CodeBuddy")).not.toBeInTheDocument();
 });
+
+test("expands tool status when clicking the hint copy", async () => {
+  window.localStorage.clear();
+  render(<App />);
+
+  await userEvent.click(screen.getByRole("button", { name: /设置/ }));
+
+  const toolStatusPanel = screen.getByText("展示当前支持的软件列表以及各软件的安装状态。").closest("section");
+  if (!toolStatusPanel) {
+    throw new Error("missing tool status panel");
+  }
+
+  await userEvent.click(toolStatusPanel);
+
+  expect(screen.getByText("CodeBuddy")).toBeInTheDocument();
+});

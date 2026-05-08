@@ -3226,6 +3226,10 @@ code {
   padding-bottom: 10px;
 }
 
+.settings-panel--tool-status.is-clickable {
+  cursor: pointer;
+}
+
 .settings-tool-card {
   display: grid;
   gap: 4px;
@@ -3285,10 +3289,10 @@ code {
 
 .settings-section-toggle {
   display: flex;
-  align-items: center;
+  align-items: stretch;
   justify-content: space-between;
   width: 100%;
-  padding: 4px 20px 4px;
+  padding: 8px 20px 8px;
   border: 0;
   background: transparent;
   color: var(--heading);
@@ -3296,19 +3300,25 @@ code {
   cursor: pointer;
 }
 
-.settings-section-toggle span:first-child {
+.settings-section-toggle__copy {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.settings-section-toggle__title {
   font-size: 1rem;
   font-weight: 700;
 }
 
 .settings-section-toggle__chevron {
+  align-self: flex-start;
   color: var(--muted);
   font-size: 0.92rem;
 }
 
 .settings-section-hint {
   margin: 0;
-  padding: 0 20px 4px;
   color: var(--muted);
   font-size: 0.82rem;
   line-height: 1.35;

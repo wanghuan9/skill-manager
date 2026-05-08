@@ -23,6 +23,9 @@ export function SettingsRoute() {
     ? defaultOpenToolId
     : "";
   const [isToolStatusExpanded, setIsToolStatusExpanded] = useState(false);
+  const toolStatusPanelClassName = `panel-card placeholder-panel settings-panel settings-panel--tool-status${
+    isToolStatusExpanded ? "" : " is-clickable"
+  }`;
 
   return (
     <div className="placeholder-grid settings-page">
@@ -54,19 +57,29 @@ export function SettingsRoute() {
         </div>
       </section>
 
-      <section className="panel-card placeholder-panel settings-panel settings-panel--tool-status">
+      <section
+        className={toolStatusPanelClassName}
+        onClick={() => {
+          if (!isToolStatusExpanded) {
+            setIsToolStatusExpanded(true);
+          }
+        }}
+      >
         <button
           className="settings-section-toggle"
           type="button"
           onClick={() => setIsToolStatusExpanded((current) => !current)}
           aria-expanded={isToolStatusExpanded}
+          aria-label="工具状态"
         >
-          <span>工具状态</span>
+          <span className="settings-section-toggle__copy">
+            <span className="settings-section-toggle__title">工具状态</span>
+            <span className="settings-section-hint">展示当前支持的软件列表以及各软件的安装状态。</span>
+          </span>
           <span className="settings-section-toggle__chevron" aria-hidden="true">
             {isToolStatusExpanded ? "⌄" : "›"}
           </span>
         </button>
-        <p className="settings-section-hint">展示当前支持的软件列表以及各软件的安装状态。</p>
         {isToolStatusExpanded ? (
           <div className="settings-tool-grid">
             {supportedToolCards.map((tool) => (
