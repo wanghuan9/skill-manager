@@ -8,6 +8,7 @@ import {
   readSkillGroupCollapsedState,
   writeSkillGroupCollapsedState,
 } from "@/features/skills/utils/skill-view-preference";
+import type { SkillSummary } from "@/features/skills/state/skill-store";
 
 type SkillToolbarProps = {
   query: string;
@@ -51,6 +52,44 @@ function UpdateAllIcon({ isSpinning = false }: { isSpinning?: boolean }) {
       <path d="M15.3 4.2v2.8h-2.8" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
+}
+
+function resolveSkillGroupTone(sourceType?: SkillSummary["sourceType"]) {
+  if (sourceType === "local") {
+    return "local";
+  }
+  if (sourceType === "gitlab") {
+    return "gitlab";
+  }
+  if (sourceType === "github" || sourceType === "gitee") {
+    return "github";
+  }
+
+  return "default";
+}
+
+function formatGroupSourceUrl(sourceUrl: string) {
+  try {
+    const parsedUrl = new URL(sourceUrl);
+    if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") {
+      return sourceUrl;
+    }
+
+    const pathSegments = parsedUrl.pathname.split("/").filter(Boolean);
+    const repositoryPathEndIndex = pathSegments.findIndex((segment, index) => (
+      segment === "tree"
+      || segment === "blob"
+      || (segment === "-" && (pathSegments[index + 1] === "tree" || pathSegments[index + 1] === "blob"))
+    ));
+    const repositoryPathSegments = repositoryPathEndIndex >= 0
+      ? pathSegments.slice(0, repositoryPathEndIndex)
+      : pathSegments;
+    const repositoryPath = repositoryPathSegments.join("/").replace(/\.git$/i, "");
+
+    return repositoryPath ? `${parsedUrl.origin}/${repositoryPath}` : parsedUrl.origin;
+  } catch {
+    return sourceUrl;
+  }
 }
 
 export function SkillListToolbar(props: SkillToolbarProps) {
@@ -191,9 +230,11 @@ export function SkillListPage(props: SkillListPageProps) {
             const updateCount = group.skills.filter((skill) => skill.collabStatus === "update-available").length;
             const pendingPushCount = group.skills.filter((skill) => skill.collabStatus === "pending-push").length;
             const isCollapsed = isGroupCollapsed(group.id);
+            const groupTone = resolveSkillGroupTone(group.skills[0]?.sourceType);
+            const groupSourceUrl = formatGroupSourceUrl(group.skills[0]?.sourceUrl ?? group.label);
 
             return (
-              <section key={group.id} className="skill-group-section">
+              <section key={group.id} className={`skill-group-section skill-group-section--${groupTone}`}>
                 <div
                   className="skill-group-section__header"
                   role="button"
@@ -209,13 +250,22 @@ export function SkillListPage(props: SkillListPageProps) {
                   aria-label={`${isCollapsed ? "展开" : "收起"}来源分组 ${group.label}`}
                 >
                   <div className="skill-group-section__title">
-                    <span className="skill-group-section__badge">分组</span>
-                    <h3>{group.label}</h3>
-                    <span className="skill-group-section__count">{group.skills.length} 个技能</span>
+                      <div className="skill-group-section__copy">
+                        <div className="skill-group-section__name-row">
+                          <h3>{group.label}</h3>
+                          <span className="skill-group-section__badge" aria-hidden="true">
+                            分组
+                          </span>
+                          <span className="skill-group-section__count">{group.skills.length} 个技能</span>
+                        </div>
+                        <p className="skill-group-section__source">
+                          <span>来源于：{groupSourceUrl}</span>
+                        </p>
+                      </div>
                   </div>
                   <div className="skill-group-section__meta">
-                    {updateCount > 0 ? <span>可更新 {updateCount}</span> : null}
-                    {pendingPushCount > 0 ? <span>待推送 {pendingPushCount}</span> : null}
+                    {updateCount > 0 ? <span className="skill-group-section__state skill-group-section__state--update">可更新 {updateCount}</span> : null}
+                    {pendingPushCount > 0 ? <span className="skill-group-section__state skill-group-section__state--pending">待推送 {pendingPushCount}</span> : null}
                     <button
                       className="skill-group-section__toggle"
                       type="button"

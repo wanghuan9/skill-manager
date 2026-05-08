@@ -1,5 +1,5 @@
 import { beforeEach, test } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { App } from "@/app/App";
 
@@ -25,6 +25,15 @@ test("uses grouped view but keeps groups collapsed by default when installed ski
   expect(screen.queryByRole("heading", { name: "excalidraw-diagram" })).not.toBeInTheDocument();
   expect(screen.getByRole("button", { name: "展开来源分组 team-skills" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "展开来源分组 best-skills" })).toBeInTheDocument();
+});
+
+test("shows the grouped skill count beside the group title", () => {
+  render(<App />);
+
+  const teamGroupHeader = screen.getByRole("button", { name: "展开来源分组 team-skills" });
+  const count = within(teamGroupHeader).getByText("2 个技能");
+
+  expect(count.closest(".skill-group-section__name-row")).toBeTruthy();
 });
 
 test("remembers expanded groups across app reopen", async () => {
