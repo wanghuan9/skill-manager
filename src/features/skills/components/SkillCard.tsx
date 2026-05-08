@@ -254,6 +254,9 @@ export function SkillCard({ skill }: SkillCardProps) {
     }
   }
 
+  const updateTooltipLabel = isUpdating ? "正在更新" : "更新 skill";
+  const deleteConfirmTooltipLabel = isDeleting ? "正在删除" : "再次点击删除";
+
   return (
     <>
       <article className={`skill-card skill-card--list${expanded ? " is-expanded" : ""}`}>
@@ -308,7 +311,7 @@ export function SkillCard({ skill }: SkillCardProps) {
                 type="button"
                 onClick={() => void handlePrimaryAction()}
                 aria-label={`更新 ${skill.name}`}
-                title={isUpdating ? "正在更新" : "更新 skill"}
+                data-tooltip={updateTooltipLabel}
                 disabled={isUpdating}
               >
                 <RefreshIcon isSpinning={isUpdating} />
@@ -319,7 +322,7 @@ export function SkillCard({ skill }: SkillCardProps) {
               type="button"
               onClick={() => setShowFileDialog(true)}
               aria-label={`查看 ${skill.name} 文件`}
-              title="查看 skill 文件"
+              data-tooltip="查看 skill 文件"
             >
               <ViewFileIcon />
             </button>
@@ -328,7 +331,7 @@ export function SkillCard({ skill }: SkillCardProps) {
               type="button"
               onClick={() => void handleOpenSkill()}
               aria-label={`打开 ${skill.name} 目录`}
-              title="用默认工具打开 skill 目录"
+              data-tooltip="用默认工具打开 skill 目录"
             >
               <OpenFolderIcon />
             </button>
@@ -339,7 +342,7 @@ export function SkillCard({ skill }: SkillCardProps) {
                 type="button"
                 onClick={() => void handleDeleteAction()}
                 aria-label={`${isDeleting ? "正在删除" : "确认删除"} ${skill.name}`}
-                title={isDeleting ? "正在删除" : "再次点击删除"}
+                data-tooltip={deleteConfirmTooltipLabel}
                 disabled={isDeleting}
               >
                 {isDeleting ? "删除中" : "确认"}
@@ -351,7 +354,7 @@ export function SkillCard({ skill }: SkillCardProps) {
                 type="button"
                 onClick={() => void handleDeleteAction()}
                 aria-label={`删除 ${skill.name}`}
-                title="删除 skill"
+                data-tooltip="删除 skill"
               >
                 <DeleteIcon />
               </button>

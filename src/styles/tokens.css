@@ -128,6 +128,38 @@ code {
   transform: translate(-50%, 0) rotate(45deg);
 }
 
+.skill-card__list-actions [data-tooltip]::before {
+  top: calc(100% + 8px);
+  bottom: auto;
+  left: 50%;
+  right: auto;
+  max-width: min(180px, calc(100vw - 48px));
+  text-align: center;
+  white-space: normal;
+  transform: translate(-50%, -2px);
+}
+
+.skill-card__list-actions [data-tooltip]::after {
+  top: calc(100% + 3px);
+  bottom: auto;
+  left: 50%;
+  right: auto;
+  border: 0;
+  border-top: 1px solid var(--tooltip-border);
+  border-left: 1px solid var(--tooltip-border);
+  transform: translate(-50%, -2px) rotate(45deg);
+}
+
+.skill-card__list-actions [data-tooltip]:hover::before,
+.skill-card__list-actions [data-tooltip]:focus-visible::before {
+  transform: translate(-50%, 0);
+}
+
+.skill-card__list-actions [data-tooltip]:hover::after,
+.skill-card__list-actions [data-tooltip]:focus-visible::after {
+  transform: translate(-50%, 0) rotate(45deg);
+}
+
 #root {
   min-height: 100vh;
 }

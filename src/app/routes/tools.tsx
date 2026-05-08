@@ -130,7 +130,7 @@ export function ToolsRoute() {
                       type="button"
                       onClick={() => void handleOpenSkillsFolder(tool.id)}
                       aria-label={`打开 ${tool.name} Skills 文件夹`}
-                      title="在访达中打开"
+                      data-tooltip="在访达中打开"
                       disabled={Boolean(openingToolId)}
                     >
                       <FolderOpenIcon />
