@@ -112,8 +112,9 @@ export async function fetchMarketplaceSkillsByPage(input: {
   page: number;
   limit: number;
   query?: string;
+  refresh?: boolean;
 }): Promise<MarketplaceSkill[]> {
-  const { sourceSite, page, limit, query } = input;
+  const { sourceSite, page, limit, query, refresh } = input;
   const normalizedQuery = query?.trim().toLowerCase() ?? "";
   const filteredBySource = sourceSite
     ? marketplaceSkillFixtures.filter((item) => item.sourceSite === sourceSite)
@@ -128,7 +129,7 @@ export async function fetchMarketplaceSkillsByPage(input: {
   const fallback = filtered.slice(start, start + limit);
   return invokeOrFallback(
     "list_marketplace_skills",
-    { sourceSite, page, limit, query },
+    { sourceSite, page, limit, query, refresh },
     fallback,
   );
 }

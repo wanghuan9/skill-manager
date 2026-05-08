@@ -7,6 +7,7 @@ use std::sync::{Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use regex::{Regex, RegexBuilder};
 use reqwest::Client;
 use serde::Deserialize;
 use zip::ZipArchive;
@@ -136,6 +137,7 @@ fn source_label_for_type(source_type: &str) -> &'static str {
 const MARKETPLACE_FETCH_LIMIT: usize = 36;
 static SKILLS_SH_DESCRIPTION_CACHE: OnceLock<HashMap<String, String>> = OnceLock::new();
 static SKILLS_SH_LIVE_DESCRIPTION_CACHE: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
+static SKILLS_SH_HOMEPAGE_CACHE: OnceLock<Mutex<Option<Vec<SkillsShSkill>>>> = OnceLock::new();
 static SKILLS_SH_PAGE_CACHE: OnceLock<Mutex<HashMap<usize, SkillsShPagePayload>>> = OnceLock::new();
 static SKILLS_MANAGER_SKILLS_CACHE: OnceLock<Vec<SkillsManagerCachedSkill>> = OnceLock::new();
 
@@ -347,13 +349,22 @@ async fn fetch_skills_sh_marketplace(
         load_skills_sh_search_items(client, query, limit * 10).await?
     } else {
         let fetch_limit = limit;
-        if let Some(items) = load_skills_manager_cached_items_page(page, fetch_limit) {
-            items
-        } else {
-            load_skills_sh_paged_items(client, page, fetch_limit).await?
+        match load_skills_sh_paged_items(client, page, fetch_limit).await {
+            Ok(items) => items,
+            Err(remote_error) => {
+                if let Some(items) = load_skills_manager_cached_items_page(page, fetch_limit) {
+                    items
+                } else {
+                    return Err(remote_error);
+                }
+            }
         }
     };
 
+    Ok(map_skills_sh_items_to_marketplace(paged_items))
+}
+
+fn map_skills_sh_items_to_marketplace(paged_items: Vec<SkillsShSkill>) -> Vec<MarketplaceSkill> {
     let mut skills = Vec::with_capacity(paged_items.len());
     for item in paged_items {
         let resolved_skill_id =
@@ -394,7 +405,23 @@ async fn fetch_skills_sh_marketplace(
         });
     }
 
-    Ok(skills)
+    skills
+}
+
+fn paginate_marketplace_skills(
+    skills: &[MarketplaceSkill],
+    page: usize,
+    limit: usize,
+) -> Vec<MarketplaceSkill> {
+    let safe_page = page.max(1);
+    let safe_limit = limit.max(1);
+    let start = (safe_page - 1) * safe_limit;
+    if start >= skills.len() {
+        return Vec::new();
+    }
+
+    let end = (start + safe_limit).min(skills.len());
+    skills[start..end].to_vec()
 }
 
 async fn load_skills_sh_search_items(
@@ -493,6 +520,145 @@ fn load_skills_manager_cached_items() -> Vec<SkillsManagerCachedSkill> {
     collect_skills_manager_cached_items(&payload)
 }
 
+async fn load_skills_sh_homepage_items(client: &Client) -> Result<Vec<SkillsShSkill>, String> {
+    let homepage_cache = SKILLS_SH_HOMEPAGE_CACHE.get_or_init(|| Mutex::new(None));
+    if let Ok(guard) = homepage_cache.lock() {
+        if let Some(items) = guard.as_ref() {
+            return Ok(items.clone());
+        }
+    }
+
+    let html = client
+        .get("https://skills.sh")
+        .send()
+        .await
+        .map_err(|error| format!("请求 skills.sh 首页榜单失败: {error}"))?
+        .error_for_status()
+        .map_err(|error| format!("skills.sh 首页榜单返回异常状态: {error}"))?
+        .text()
+        .await
+        .map_err(|error| format!("读取 skills.sh 首页榜单内容失败: {error}"))?;
+
+    let items = parse_skills_sh_homepage_items(&html);
+    if items.is_empty() {
+        return Err("解析 skills.sh 首页榜单失败".into());
+    }
+
+    if let Ok(mut guard) = homepage_cache.lock() {
+        *guard = Some(items.clone());
+    }
+
+    Ok(items)
+}
+
+fn parse_skills_sh_homepage_items(html: &str) -> Vec<SkillsShSkill> {
+    static LEADERBOARD_ROW_REGEX: OnceLock<Regex> = OnceLock::new();
+
+    let Some(start) = html.find("Skills Leaderboard") else {
+        return Vec::new();
+    };
+    let end = html[start..]
+        .find("</main>")
+        .map(|offset| start + offset)
+        .unwrap_or(html.len());
+    let section = &html[start..end];
+    let row_regex = LEADERBOARD_ROW_REGEX.get_or_init(|| {
+        RegexBuilder::new(
+            r##"href="/(?P<href>[^"#?]+)"[^>]*>\s*<div class="lg:col-span-1 text-left">\s*<span[^>]*>(?P<rank>\d+)</span>\s*</div>\s*<div class="lg:col-span-13[^>]*>\s*<h3[^>]*>(?P<name>[^<]+)</h3>\s*<p[^>]*>(?P<source>[^<]+)</p>\s*</div>\s*<div class="lg:col-span-2[^>]*>.*?<span class="font-mono text-sm text-foreground">(?P<installs>[^<]+)</span>"##,
+        )
+        .dot_matches_new_line(true)
+        .build()
+        .expect("skills.sh 首页榜单正则应当有效")
+    });
+
+    row_regex
+        .captures_iter(section)
+        .filter_map(|captures| {
+            let href = decode_skills_sh_html_text(captures.name("href")?.as_str());
+            let path_segments = href
+                .trim_matches('/')
+                .split('/')
+                .map(str::trim)
+                .filter(|segment| !segment.is_empty())
+                .collect::<Vec<_>>();
+            if path_segments.len() < 3 {
+                return None;
+            }
+
+            let source_text = decode_skills_sh_html_text(captures.name("source")?.as_str());
+            let source = {
+                let normalized = normalize_repo_key_from_source(&source_text);
+                if normalized.is_empty() {
+                    format!(
+                        "{}/{}",
+                        path_segments[0].to_lowercase(),
+                        path_segments[1].trim_end_matches(".git").to_lowercase()
+                    )
+                } else {
+                    normalized
+                }
+            };
+            let name = decode_skills_sh_html_text(captures.name("name")?.as_str());
+            let skill_id = path_segments[2..]
+                .join("/")
+                .trim_matches('/')
+                .to_lowercase();
+            let installs_label = decode_skills_sh_html_text(captures.name("installs")?.as_str());
+            let installs = parse_skills_sh_compact_number(&installs_label).unwrap_or_default();
+            if source.is_empty() || skill_id.is_empty() || name.trim().is_empty() {
+                return None;
+            }
+
+            Some(SkillsShSkill {
+                source,
+                skill_id,
+                name,
+                installs,
+                description: None,
+            })
+        })
+        .collect()
+}
+
+fn decode_skills_sh_html_text(value: &str) -> String {
+    value
+        .replace("&amp;", "&")
+        .replace("&quot;", "\"")
+        .replace("&#x27;", "'")
+        .replace("&#39;", "'")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+}
+
+fn parse_skills_sh_compact_number(value: &str) -> Option<u64> {
+    let normalized = value.trim().replace(',', "");
+    if normalized.is_empty() {
+        return None;
+    }
+
+    let (number_part, multiplier) = if let Some(number) = normalized.strip_suffix('M') {
+        (number, 1_000_000_f64)
+    } else if let Some(number) = normalized.strip_suffix('K') {
+        (number, 1_000_f64)
+    } else if let Some(number) = normalized.strip_suffix('B') {
+        (number, 1_000_000_000_f64)
+    } else {
+        return normalized.parse::<u64>().ok();
+    };
+
+    number_part
+        .trim()
+        .parse::<f64>()
+        .ok()
+        .map(|number| (number * multiplier).round() as u64)
+}
+
+fn should_use_skills_sh_homepage_page(page: usize, page_len: usize, limit: usize) -> bool {
+    let safe_page = page.max(1);
+    let safe_limit = limit.max(1);
+    safe_page == 1 || page_len >= safe_limit
+}
+
 fn collect_skills_manager_cached_items(
     payload: &serde_json::Value,
 ) -> Vec<SkillsManagerCachedSkill> {
@@ -576,6 +742,19 @@ async fn load_skills_sh_paged_items(
     page: usize,
     limit: usize,
 ) -> Result<Vec<SkillsShSkill>, String> {
+    if let Ok(items) = load_skills_sh_homepage_items(client).await {
+        let safe_page = page.max(1);
+        let safe_limit = limit.max(1);
+        let start = (safe_page - 1) * safe_limit;
+        if start < items.len() {
+            let end = (start + safe_limit).min(items.len());
+            let homepage_page = items[start..end].to_vec();
+            if should_use_skills_sh_homepage_page(safe_page, homepage_page.len(), safe_limit) {
+                return Ok(homepage_page);
+            }
+        }
+    }
+
     const SKILLS_SH_REMOTE_PAGE_SIZE: usize = 200;
     let safe_page = page.max(1);
     let safe_limit = limit.max(1);
@@ -921,6 +1100,20 @@ fn load_marketplace_cache(source: &str) -> Option<Vec<MarketplaceSkill>> {
     )
 }
 
+fn load_marketplace_cache_page(
+    source: &str,
+    page: usize,
+    limit: usize,
+) -> Option<Vec<MarketplaceSkill>> {
+    let cached_skills = load_marketplace_cache(source)?;
+    let page_skills = paginate_marketplace_skills(&cached_skills, page, limit);
+    if page_skills.is_empty() {
+        return None;
+    }
+
+    Some(page_skills)
+}
+
 fn normalize_cached_marketplace_skill(mut skill: MarketplaceSkill) -> MarketplaceSkill {
     if skill.source_site != "skills.sh" {
         return skill;
@@ -1004,12 +1197,21 @@ async fn build_marketplace_skills(
     limit: usize,
     query: Option<&str>,
     with_descriptions: bool,
+    refresh: bool,
 ) -> Vec<MarketplaceSkill> {
     let source = source_site.unwrap_or_default();
     let is_searching = query.is_some() && !query.unwrap_or_default().trim().is_empty();
 
+    if !refresh && !is_searching && source == "skills.sh" {
+        if let Some(cached_page) = load_marketplace_cache_page(source, page, limit) {
+            if page == 1 || cached_page.len() >= limit {
+                return cached_page;
+            }
+        }
+    }
+
     // 如果是第一页且不是搜索，尝试从缓存读取
-    if page == 1 && !is_searching {
+    if !refresh && page == 1 && !is_searching && source != "skills.sh" {
         if let Some(cached_skills) = load_marketplace_cache(source) {
             let filtered: Vec<MarketplaceSkill> = cached_skills
                 .into_iter()
@@ -1028,6 +1230,27 @@ async fn build_marketplace_skills(
         Ok(client) => client,
         Err(_) => return default_marketplace_skills(),
     };
+
+    if source == "skills.sh" && !is_searching {
+        match load_skills_sh_homepage_items(&client).await {
+            Ok(homepage_items) => {
+                let homepage_skills = map_skills_sh_items_to_marketplace(homepage_items);
+                if !homepage_skills.is_empty() {
+                    save_marketplace_cache(source, &homepage_skills);
+                    let homepage_page = paginate_marketplace_skills(&homepage_skills, page, limit);
+                    if should_use_skills_sh_homepage_page(page, homepage_page.len(), limit) {
+                        return homepage_page;
+                    }
+                }
+            }
+            Err(error) => {
+                if let Some(cached_page) = load_marketplace_cache_page(source, page, limit) {
+                    return cached_page;
+                }
+                eprintln!("Failed to load live skills.sh homepage leaderboard: {error}");
+            }
+        }
+    }
 
     let mut skills = Vec::new();
 
@@ -1061,7 +1284,9 @@ async fn build_marketplace_skills(
         }
     }
 
-    skills.retain(|skill| matches_marketplace_query(skill, query));
+    if !is_searching {
+        skills.retain(|skill| matches_marketplace_query(skill, query));
+    }
     if !source.is_empty() {
         skills.retain(|skill| skill.source_site == source);
     }
@@ -1078,7 +1303,7 @@ async fn build_marketplace_skills(
     };
 
     // 如果是第一页且不是搜索，保存到缓存
-    if page == 1 && !is_searching && !result.is_empty() {
+    if page == 1 && !is_searching && source != "skills.sh" && !result.is_empty() {
         save_marketplace_cache(source, &result);
     }
 
@@ -2388,8 +2613,15 @@ pub async fn get_workspace_snapshot() -> WorkspaceSnapshot {
     WorkspaceSnapshot {
         local_candidates: build_local_candidates(&installed_skills),
         installed_skills,
-        marketplace_skills: build_marketplace_skills(None, 1, MARKETPLACE_FETCH_LIMIT, None, true)
-            .await,
+        marketplace_skills: build_marketplace_skills(
+            None,
+            1,
+            MARKETPLACE_FETCH_LIMIT,
+            None,
+            true,
+            false,
+        )
+        .await,
         tool_configs: build_tool_configs(),
         git_account: build_git_account(),
     }
@@ -2414,10 +2646,19 @@ pub async fn list_marketplace_skills(
     page: Option<usize>,
     limit: Option<usize>,
     query: Option<String>,
+    refresh: Option<bool>,
 ) -> Vec<MarketplaceSkill> {
     let page = page.unwrap_or(1).max(1);
     let limit = limit.unwrap_or(MARKETPLACE_FETCH_LIMIT).max(1);
-    build_marketplace_skills(source_site.as_deref(), page, limit, query.as_deref(), true).await
+    build_marketplace_skills(
+        source_site.as_deref(),
+        page,
+        limit,
+        query.as_deref(),
+        true,
+        refresh.unwrap_or(false),
+    )
+    .await
 }
 
 #[tauri::command]
@@ -3353,7 +3594,10 @@ fn detect_repo_source_type(repo_url: &str) -> &'static str {
 mod tests {
     use serde_json::json;
 
-    use super::collect_skills_manager_cached_items;
+    use super::{
+        collect_skills_manager_cached_items, parse_skills_sh_homepage_items,
+        should_use_skills_sh_homepage_page,
+    };
 
     #[test]
     fn preserves_skills_sh_cache_page_order() {
@@ -3407,5 +3651,82 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(names, vec!["first-skill", "second-skill", "third-skill"]);
+    }
+
+    #[test]
+    fn parses_skills_sh_homepage_leaderboard_order() {
+        let html = r#"
+        <main>
+          <h2>Skills Leaderboard</h2>
+          <div>
+            <a href="/vercel-labs/skills/find-skills">
+              <div class="lg:col-span-1 text-left"><span>1</span></div>
+              <div class="lg:col-span-13 min-w-1 flex flex-col lg:flex-row lg:items-baseline lg:gap-2">
+                <h3>find-skills</h3>
+                <p>vercel-labs/skills</p>
+              </div>
+              <div class="lg:col-span-2 text-right flex items-center justify-end gap-2">
+                <span class="font-mono text-sm text-foreground">1.4M</span>
+              </div>
+            </a>
+            <a href="/anthropics/skills/frontend-design">
+              <div class="lg:col-span-1 text-left"><span>2</span></div>
+              <div class="lg:col-span-13 min-w-1 flex flex-col lg:flex-row lg:items-baseline lg:gap-2">
+                <h3>frontend-design</h3>
+                <p>anthropics/skills</p>
+              </div>
+              <div class="lg:col-span-2 text-right flex items-center justify-end gap-2">
+                <span class="font-mono text-sm text-foreground">380.5K</span>
+              </div>
+            </a>
+            <a href="/vercel-labs/agent-skills/vercel-react-best-practices">
+              <div class="lg:col-span-1 text-left"><span>3</span></div>
+              <div class="lg:col-span-13 min-w-1 flex flex-col lg:flex-row lg:items-baseline lg:gap-2">
+                <h3>vercel-react-best-practices</h3>
+                <p>vercel-labs/agent-skills</p>
+              </div>
+              <div class="lg:col-span-2 text-right flex items-center justify-end gap-2">
+                <span class="font-mono text-sm text-foreground">380.3K</span>
+              </div>
+            </a>
+          </div>
+        </main>
+        "#;
+
+        let items = parse_skills_sh_homepage_items(html);
+        let names = items
+            .iter()
+            .map(|item| item.name.as_str())
+            .collect::<Vec<_>>();
+        let sources = items
+            .iter()
+            .map(|item| item.source.as_str())
+            .collect::<Vec<_>>();
+        let installs = items.iter().map(|item| item.installs).collect::<Vec<_>>();
+
+        assert_eq!(
+            names,
+            vec![
+                "find-skills",
+                "frontend-design",
+                "vercel-react-best-practices"
+            ]
+        );
+        assert_eq!(
+            sources,
+            vec![
+                "vercel-labs/skills",
+                "anthropics/skills",
+                "vercel-labs/agent-skills"
+            ]
+        );
+        assert_eq!(installs, vec![1_400_000, 380_500, 380_300]);
+    }
+
+    #[test]
+    fn falls_back_when_homepage_tail_page_is_short() {
+        assert!(should_use_skills_sh_homepage_page(1, 5, 18));
+        assert!(should_use_skills_sh_homepage_page(3, 18, 18));
+        assert!(!should_use_skills_sh_homepage_page(11, 8, 18));
     }
 }

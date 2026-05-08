@@ -72,9 +72,9 @@ export function MarketRoute(props: MarketRouteProps) {
     loadInitialMarketplaceSkills,
     loadMoreMarketplaceSkills,
     searchMarketplaceSkills,
-    isMarketplaceLoading,
+    isMarketplaceLoadingBySource,
     isSearchLoading,
-    hasMoreMarketplaceSkills,
+    hasMoreMarketplaceSkillsBySource,
   } = useSkillWorkspace();
   const [internalInstallTab] = useState<InstallTab>("market");
   const activeInstallTab = controlledInstallTab ?? internalInstallTab;
@@ -165,24 +165,31 @@ export function MarketRoute(props: MarketRouteProps) {
     void loadInitialRef.current(activeSourceSite);
   }, [activeInstallTab, activeSourceSite, isSearching, loadInitialRef]);
 
-  const isMarketplaceLoadingRef = useRef(isMarketplaceLoading);
-  const hasMoreMarketplaceSkillsRef = useRef(hasMoreMarketplaceSkills);
+  const isMarketplaceLoadingRef = useRef(isMarketplaceLoadingBySource);
+  const hasMoreMarketplaceSkillsRef = useRef(hasMoreMarketplaceSkillsBySource);
   const loadMoreMarketplaceSkillsRef = useRef(loadMoreMarketplaceSkills);
+  const isMarketplaceLoading = isMarketplaceLoadingBySource[activeSourceSite] ?? false;
+  const hasMoreMarketplaceSkills = hasMoreMarketplaceSkillsBySource[activeSourceSite] ?? false;
 
   useEffect(() => {
-    isMarketplaceLoadingRef.current = isMarketplaceLoading;
-  }, [isMarketplaceLoading]);
+    isMarketplaceLoadingRef.current = isMarketplaceLoadingBySource;
+  }, [isMarketplaceLoadingBySource]);
 
   useEffect(() => {
-    hasMoreMarketplaceSkillsRef.current = hasMoreMarketplaceSkills;
-  }, [hasMoreMarketplaceSkills]);
+    hasMoreMarketplaceSkillsRef.current = hasMoreMarketplaceSkillsBySource;
+  }, [hasMoreMarketplaceSkillsBySource]);
 
   useEffect(() => {
     loadMoreMarketplaceSkillsRef.current = loadMoreMarketplaceSkills;
   }, [loadMoreMarketplaceSkills]);
 
   const handleScroll = useCallback(() => {
-    if (loadingMoreRef.current || isMarketplaceLoadingRef.current || !hasMoreMarketplaceSkillsRef.current) {
+    const sourceSite = latestSourceRef.current;
+    if (
+      loadingMoreRef.current ||
+      isMarketplaceLoadingRef.current[sourceSite] ||
+      !hasMoreMarketplaceSkillsRef.current[sourceSite]
+    ) {
       return;
     }
     const scrollContainer = document.querySelector(".page-content");
@@ -194,7 +201,7 @@ export function MarketRoute(props: MarketRouteProps) {
       return;
     }
     loadingMoreRef.current = true;
-    void loadMoreMarketplaceSkillsRef.current?.(latestSourceRef.current).finally(() => {
+    void loadMoreMarketplaceSkillsRef.current?.(sourceSite).finally(() => {
       loadingMoreRef.current = false;
     });
   }, []);

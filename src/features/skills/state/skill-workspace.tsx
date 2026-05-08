@@ -67,10 +67,10 @@ type SkillWorkspaceContextValue = {
   toolConfigs: ToolConfig[];
   gitAccount: GitAccountSummary | null;
   isLoading: boolean;
-  isMarketplaceLoading: boolean;
+  isMarketplaceLoadingBySource: Record<MarketplaceSourceSite, boolean>;
   isSearchLoading: boolean;
   installingMarketplaceSkillIds: Set<string>;
-  hasMoreMarketplaceSkills: boolean;
+  hasMoreMarketplaceSkillsBySource: Record<MarketplaceSourceSite, boolean>;
   installFromMarket: (skill: MarketplaceSkill) => Promise<void>;
   loadInitialMarketplaceSkills: (sourceSite: MarketplaceSourceSite) => Promise<void>;
   loadMoreMarketplaceSkills: (sourceSite: MarketplaceSourceSite) => Promise<void>;
@@ -262,17 +262,35 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       : startupCache?.gitAccount ?? null,
   );
   const [isLoading, setIsLoading] = useState(!usesFixtureData && startupCache === null);
-  const [isMarketplaceLoading, setIsMarketplaceLoading] = useState(false);
+  const [isMarketplaceLoadingBySource, setIsMarketplaceLoadingBySource] = useState<
+    Record<MarketplaceSourceSite, boolean>
+  >({
+    "skills.sh": false,
+    skillsmp: false,
+  });
   const [isSearchLoading, setIsSearchLoading] = useState(false);
   const [installingMarketplaceSkillIds, setInstallingMarketplaceSkillIds] = useState<Set<string>>(new Set());
   const installingMarketplaceSkillIdsRef = useRef(new Set<string>());
+  const marketplaceLoadingBySourceRef = useRef<Record<MarketplaceSourceSite, boolean>>({
+    "skills.sh": false,
+    skillsmp: false,
+  });
   const [marketplacePageBySource, setMarketplacePageBySource] = useState<
     Record<MarketplaceSourceSite, number>
   >({
     "skills.sh": 0,
     skillsmp: 0,
   });
-  const [hasMoreMarketplaceSkills, setHasMoreMarketplaceSkills] = useState(true);
+  const [hasMoreMarketplaceSkillsBySource, setHasMoreMarketplaceSkillsBySource] = useState<
+    Record<MarketplaceSourceSite, boolean>
+  >({
+    "skills.sh": true,
+    skillsmp: true,
+  });
+  const marketplaceHasMoreBySourceRef = useRef<Record<MarketplaceSourceSite, boolean>>({
+    "skills.sh": true,
+    skillsmp: true,
+  });
   const [defaultOpenToolId, setDefaultOpenToolIdState] = useState(getInitialDefaultOpenToolId);
 
   useEffect(() => {
@@ -435,17 +453,27 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
     }
   }
 
-  async function loadMarketplacePage(sourceSite: MarketplaceSourceSite, page: number, append: boolean) {
-    if (isMarketplaceLoading) {
+  async function loadMarketplacePage(
+    sourceSite: MarketplaceSourceSite,
+    page: number,
+    append: boolean,
+    options?: { refresh?: boolean },
+  ) {
+    if (marketplaceLoadingBySourceRef.current[sourceSite]) {
       return;
     }
 
-    setIsMarketplaceLoading(true);
+    marketplaceLoadingBySourceRef.current = {
+      ...marketplaceLoadingBySourceRef.current,
+      [sourceSite]: true,
+    };
+    setIsMarketplaceLoadingBySource(marketplaceLoadingBySourceRef.current);
     try {
       const pageSkills = await fetchMarketplaceSkillsByPage({
         sourceSite,
         page,
         limit: MARKETPLACE_PAGE_SIZE,
+        refresh: options?.refresh,
       });
       setMarketplaceSkills((current) => {
         const base = current.filter((item) => item.sourceSite !== sourceSite);
@@ -458,18 +486,35 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
         ...current,
         [sourceSite]: page,
       }));
-      setHasMoreMarketplaceSkills(pageSkills.length > 0);
+      const nextHasMoreBySource = {
+        ...marketplaceHasMoreBySourceRef.current,
+        [sourceSite]: pageSkills.length >= MARKETPLACE_PAGE_SIZE,
+      };
+      marketplaceHasMoreBySourceRef.current = nextHasMoreBySource;
+      setHasMoreMarketplaceSkillsBySource(nextHasMoreBySource);
     } finally {
-      setIsMarketplaceLoading(false);
+      marketplaceLoadingBySourceRef.current = {
+        ...marketplaceLoadingBySourceRef.current,
+        [sourceSite]: false,
+      };
+      setIsMarketplaceLoadingBySource(marketplaceLoadingBySourceRef.current);
     }
   }
 
   async function handleLoadInitialMarketplaceSkills(sourceSite: MarketplaceSourceSite) {
     await loadMarketplacePage(sourceSite, 1, false);
+    if (sourceSite !== "skills.sh") {
+      return;
+    }
+
+    // skills.sh 先用缓存兜底首屏，再后台刷新并写回缓存，避免空白页和长期陈旧数据。
+    void loadMarketplacePage(sourceSite, 1, false, { refresh: true }).catch((error) => {
+      console.error(`Failed to refresh ${sourceSite} marketplace skills:`, error);
+    });
   }
 
   async function handleLoadMoreMarketplaceSkills(sourceSite: MarketplaceSourceSite) {
-    if (!hasMoreMarketplaceSkills) {
+    if (!marketplaceHasMoreBySourceRef.current[sourceSite]) {
       return;
     }
 
@@ -583,10 +628,10 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       toolConfigs,
       gitAccount,
       isLoading,
-      isMarketplaceLoading,
+      isMarketplaceLoadingBySource,
       isSearchLoading,
       installingMarketplaceSkillIds,
-      hasMoreMarketplaceSkills,
+      hasMoreMarketplaceSkillsBySource,
       installFromMarket: handleInstallFromMarket,
       loadInitialMarketplaceSkills: handleLoadInitialMarketplaceSkills,
       loadMoreMarketplaceSkills: handleLoadMoreMarketplaceSkills,
@@ -614,11 +659,11 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
     [
       defaultOpenToolId,
       gitAccount,
-      hasMoreMarketplaceSkills,
+      hasMoreMarketplaceSkillsBySource,
       installedSkills,
       installingMarketplaceSkillIds,
       isLoading,
-      isMarketplaceLoading,
+      isMarketplaceLoadingBySource,
       isSearchLoading,
       localCandidates,
       marketplacePageBySource,
