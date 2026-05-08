@@ -12,7 +12,7 @@ export function ToolSyncPanel({ skillName, tools }: ToolSyncPanelProps) {
 
   return (
     <section>
-      <h4>同步到工具</h4>
+      <h4>启用到应用</h4>
       <div className="tool-pill-grid">
         {tools.map((tool) => {
           const enabled = isToolEnabledStatus(tool.statusLabel);
