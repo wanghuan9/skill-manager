@@ -6,6 +6,7 @@ import {
   sortToolCards,
   TOOL_SURFACE_LABELS,
 } from "@/features/skills/utils/open-tools";
+import { getToolLogoUrl } from "@/features/skills/utils/tool-logo";
 
 export function SettingsRoute() {
   const {
@@ -82,20 +83,29 @@ export function SettingsRoute() {
         </button>
         {isToolStatusExpanded ? (
           <div className="settings-tool-grid">
-            {supportedToolCards.map((tool) => (
-              <article
-                key={tool.id}
-                className={`settings-tool-card${tool.isInstalled ? " is-installed" : ""}`}
-              >
-                <span className={`settings-tool-card__status${tool.isInstalled ? " is-installed" : ""}`}>
-                  {tool.isInstalled ? "已安装" : "未安装"}
-                </span>
-                <strong>{tool.name}</strong>
-                <span className="settings-tool-card__surface">
-                  {tool.surfaceTypes.map((surface) => TOOL_SURFACE_LABELS[surface]).join(" / ")}
-                </span>
-              </article>
-            ))}
+            {supportedToolCards.map((tool) => {
+              const logoUrl = getToolLogoUrl(tool.id);
+
+              return (
+                <article
+                  key={tool.id}
+                  className={`settings-tool-card${tool.isInstalled ? " is-installed" : ""}`}
+                >
+                  <span className="settings-tool-card__logo" aria-hidden="true">
+                    {logoUrl ? <img src={logoUrl} alt="" /> : <span>{tool.name.slice(0, 1)}</span>}
+                  </span>
+                  <span className="settings-tool-card__copy">
+                    <strong>{tool.name}</strong>
+                    <span className={`settings-tool-card__status${tool.isInstalled ? " is-installed" : ""}`}>
+                      {tool.statusLabel}
+                    </span>
+                    <span className="settings-tool-card__surface">
+                      {tool.surfaceTypes.map((surface) => TOOL_SURFACE_LABELS[surface]).join(" / ")}
+                    </span>
+                  </span>
+                </article>
+              );
+            })}
           </div>
         ) : null}
       </section>
