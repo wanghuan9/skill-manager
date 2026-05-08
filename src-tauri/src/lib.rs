@@ -19,6 +19,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::get_workspace_snapshot,
+            commands::list_startup_installed_skills,
             commands::list_installed_skills,
             commands::list_marketplace_skills,
             commands::get_marketplace_skill_description,

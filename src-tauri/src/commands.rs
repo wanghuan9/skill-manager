@@ -1400,31 +1400,34 @@ fn build_git_account() -> GitAccountSummary {
     }
 }
 
-fn installed_tool_sync_entries() -> Vec<ToolSyncStatus> {
-    build_tool_configs()
-        .into_iter()
+fn installed_tool_sync_entries_from_configs(tool_configs: &[ToolConfig]) -> Vec<ToolSyncStatus> {
+    tool_configs
+        .iter()
         .filter(|tool| tool.status_label == "已安装")
         .map(|tool| ToolSyncStatus {
-            name: tool.name,
+            name: tool.name.clone(),
             status_label: "未启用".into(),
         })
         .collect()
 }
 
-fn normalize_skill_tools(skill: &SkillSummary) -> SkillSummary {
+fn normalize_skill_tools_with_entries(
+    skill: &SkillSummary,
+    installed_tool_entries: &[ToolSyncStatus],
+) -> SkillSummary {
     let mut tool_status_map = skill
         .tools
         .iter()
         .cloned()
         .map(|tool| (tool.name.clone(), tool.status_label))
         .collect::<BTreeMap<_, _>>();
-    let merged_tools = installed_tool_sync_entries()
-        .into_iter()
+    let merged_tools = installed_tool_entries
+        .iter()
         .map(|tool| ToolSyncStatus {
             name: tool.name.clone(),
             status_label: tool_status_map
                 .remove(&tool.name)
-                .unwrap_or(tool.status_label),
+                .unwrap_or_else(|| tool.status_label.clone()),
         })
         .collect::<Vec<_>>();
     let synced_tool_count = merged_tools
@@ -1444,11 +1447,24 @@ fn normalize_skill_tools(skill: &SkillSummary) -> SkillSummary {
     }
 }
 
-fn resolve_installed_skills() -> Vec<SkillSummary> {
-    let skills = load_installed_skills(&default_installed_skills());
-    skills
+fn normalize_skill_tools(skill: &SkillSummary) -> SkillSummary {
+    let tool_configs = build_tool_configs();
+    let installed_tool_entries = installed_tool_sync_entries_from_configs(&tool_configs);
+    normalize_skill_tools_with_entries(skill, &installed_tool_entries)
+}
+
+fn resolve_startup_installed_skills() -> Vec<SkillSummary> {
+    let tool_configs = build_tool_configs();
+    let installed_tool_entries = installed_tool_sync_entries_from_configs(&tool_configs);
+    load_installed_skills(&default_installed_skills())
         .iter()
-        .map(normalize_skill_tools)
+        .map(|skill| normalize_skill_tools_with_entries(skill, &installed_tool_entries))
+        .collect()
+}
+
+fn resolve_installed_skills() -> Vec<SkillSummary> {
+    resolve_startup_installed_skills()
+        .iter()
         .map(|skill| enrich_skill_with_cached_update_state(&skill))
         .collect()
 }
@@ -2332,6 +2348,13 @@ pub async fn get_workspace_snapshot() -> WorkspaceSnapshot {
         tool_configs: build_tool_configs(),
         git_account: build_git_account(),
     }
+}
+
+#[tauri::command]
+pub async fn list_startup_installed_skills() -> Vec<SkillSummary> {
+    tauri::async_runtime::spawn_blocking(resolve_startup_installed_skills)
+        .await
+        .unwrap_or_default()
 }
 
 #[tauri::command]

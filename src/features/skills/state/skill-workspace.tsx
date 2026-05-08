@@ -19,6 +19,7 @@ import {
   fetchPushPreviewSnapshot,
   fetchPushTargetSnapshot,
   fetchToolConfigs,
+  fetchStartupInstalledSkills,
   importLocalSkill,
   installSkillFromMarket,
   installSkillFromRepo,
@@ -30,6 +31,7 @@ import {
   toggleSkillTool,
   updateSkill,
 } from "@/features/skills/api/skill-client";
+import { waitForNextPaint } from "@/app/utils/wait-for-next-paint";
 import { workspaceSnapshotFixture } from "@/features/skills/state/skill-fixtures";
 import type {
   GitAccountSummary,
@@ -47,8 +49,15 @@ import type {
 import { buildOpenToolOptions } from "@/features/skills/utils/open-tools";
 
 const DEFAULT_OPEN_TOOL_STORAGE_KEY = "skillm.defaultOpenToolId";
+const STARTUP_WORKSPACE_CACHE_KEY = "skillm.startupWorkspaceCache";
 const FALLBACK_OPEN_TOOL_ID = "finder";
 const MARKETPLACE_PAGE_SIZE = 18;
+const STARTUP_LOAD_DELAY_MS = 0;
+const STARTUP_CACHED_COLLAB_STATUSES = new Set<SkillSummary["collabStatus"]>([
+  "update-available",
+  "pending-push",
+  "diverged",
+]);
 
 type SkillWorkspaceContextValue = {
   installedSkills: SkillSummary[];
@@ -102,6 +111,13 @@ type SkillWorkspaceProviderProps = {
   children: ReactNode;
 };
 
+type StartupWorkspaceCache = {
+  installedSkills: SkillSummary[];
+  localCandidates: LocalSkillCandidate[];
+  toolConfigs: ToolConfig[];
+  gitAccount: GitAccountSummary;
+};
+
 function removeInstalledMarketplaceSkill(
   skills: MarketplaceSkill[],
   installedSkill: SkillSummary,
@@ -127,24 +143,123 @@ function getInitialDefaultOpenToolId() {
   return window.localStorage.getItem(DEFAULT_OPEN_TOOL_STORAGE_KEY) ?? FALLBACK_OPEN_TOOL_ID;
 }
 
+function readStartupWorkspaceCache(): StartupWorkspaceCache | null {
+  if (
+    typeof window === "undefined" ||
+    typeof window.localStorage?.getItem !== "function"
+  ) {
+    return null;
+  }
+
+  const payload = window.localStorage.getItem(STARTUP_WORKSPACE_CACHE_KEY);
+  if (!payload) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(payload) as Partial<StartupWorkspaceCache>;
+    if (
+      !Array.isArray(parsed.installedSkills) ||
+      !Array.isArray(parsed.localCandidates) ||
+      !Array.isArray(parsed.toolConfigs) ||
+      !parsed.gitAccount
+    ) {
+      return null;
+    }
+
+    return {
+      installedSkills: parsed.installedSkills,
+      localCandidates: parsed.localCandidates,
+      toolConfigs: parsed.toolConfigs,
+      gitAccount: parsed.gitAccount,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function writeStartupWorkspaceCache(cache: StartupWorkspaceCache) {
+  if (
+    typeof window === "undefined" ||
+    typeof window.localStorage?.setItem !== "function"
+  ) {
+    return;
+  }
+
+  window.localStorage.setItem(STARTUP_WORKSPACE_CACHE_KEY, JSON.stringify(cache));
+}
+
+export function mergeStartupSkillStatusCache(
+  skills: SkillSummary[],
+  cachedSkills: SkillSummary[],
+) {
+  if (cachedSkills.length === 0) {
+    return skills;
+  }
+
+  const cachedByLocalPath = new Map(
+    cachedSkills
+      .filter((skill) => skill.localPath.trim().length > 0)
+      .map((skill) => [skill.localPath, skill]),
+  );
+  const cachedByName = new Map(cachedSkills.map((skill) => [skill.name, skill]));
+
+  return skills.map((skill) => {
+    const cachedSkill =
+      cachedByLocalPath.get(skill.localPath) ??
+      (skill.localPath.trim().length === 0 ? cachedByName.get(skill.name) : undefined);
+    if (
+      !cachedSkill ||
+      skill.collabStatus !== "clean" ||
+      !STARTUP_CACHED_COLLAB_STATUSES.has(cachedSkill.collabStatus)
+    ) {
+      return skill;
+    }
+
+    return {
+      ...skill,
+      branch: cachedSkill.branch,
+      collabStatus: cachedSkill.collabStatus,
+      statusText: cachedSkill.statusText,
+      lastSyncedAt: cachedSkill.lastSyncedAt,
+      lastCheckedAt: cachedSkill.lastCheckedAt,
+      lastEditor: cachedSkill.lastEditor,
+      commitLabel: cachedSkill.commitLabel,
+      gitLinked: cachedSkill.gitLinked,
+    };
+  });
+}
+
 export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps) {
   const usesFixtureData = shouldUseFixtureData();
+  const startupCache = useMemo(
+    () => (usesFixtureData ? null : readStartupWorkspaceCache()),
+    [usesFixtureData],
+  );
   const [installedSkills, setInstalledSkills] = useState<SkillSummary[]>(
-    usesFixtureData ? workspaceSnapshotFixture.installedSkills : [],
+    usesFixtureData
+      ? workspaceSnapshotFixture.installedSkills
+      : startupCache?.installedSkills ?? [],
   );
   const [marketplaceSkills, setMarketplaceSkills] = useState<MarketplaceSkill[]>(
     usesFixtureData ? workspaceSnapshotFixture.marketplaceSkills : [],
   );
   const [localCandidates, setLocalCandidates] = useState<LocalSkillCandidate[]>(
-    usesFixtureData ? workspaceSnapshotFixture.localCandidates : [],
+    usesFixtureData
+      ? workspaceSnapshotFixture.localCandidates
+      : startupCache?.localCandidates ?? [],
   );
   const [toolConfigs, setToolConfigs] = useState<ToolConfig[]>(
-    usesFixtureData ? workspaceSnapshotFixture.toolConfigs : [],
+    usesFixtureData
+      ? workspaceSnapshotFixture.toolConfigs
+      : startupCache?.toolConfigs ?? [],
   );
   const [gitAccount, setGitAccount] = useState<GitAccountSummary | null>(
-    usesFixtureData ? workspaceSnapshotFixture.gitAccount : null,
+    usesFixtureData
+      ? workspaceSnapshotFixture.gitAccount
+      : startupCache?.gitAccount ?? null,
   );
-  const [isLoading, setIsLoading] = useState(!usesFixtureData);
+  const [isLoading, setIsLoading] = useState(!usesFixtureData && startupCache === null);
   const [isMarketplaceLoading, setIsMarketplaceLoading] = useState(false);
   const [isSearchLoading, setIsSearchLoading] = useState(false);
   const [installingMarketplaceSkillIds, setInstallingMarketplaceSkillIds] = useState<Set<string>>(new Set());
@@ -167,6 +282,19 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
 
     handleSetDefaultOpenToolId(availableTools[0]?.id ?? FALLBACK_OPEN_TOOL_ID);
   }, [defaultOpenToolId, toolConfigs]);
+
+  useEffect(() => {
+    if (usesFixtureData || !gitAccount) {
+      return;
+    }
+
+    writeStartupWorkspaceCache({
+      installedSkills,
+      localCandidates,
+      toolConfigs,
+      gitAccount,
+    });
+  }, [gitAccount, installedSkills, localCandidates, toolConfigs, usesFixtureData]);
 
   function handleSetDefaultOpenToolId(toolId: string) {
     setDefaultOpenToolIdState(toolId);
@@ -223,20 +351,55 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
     }
 
     let active = true;
+    const hasStartupCache = startupCache !== null;
 
-    async function loadWorkspace() {
-      setIsLoading(true);
+    async function loadStartupWorkspace() {
+      if (!hasStartupCache) {
+        setIsLoading(true);
+      }
+
+      await waitForNextPaint();
+
       try {
-        const workspace = await loadWorkspaceCore();
+        const skills = await fetchStartupInstalledSkills();
         if (!active) {
           return;
         }
 
-        setInstalledSkills(workspace.skills);
-        setLocalCandidates(workspace.candidates);
-        setToolConfigs(workspace.tools);
-        setGitAccount(workspace.account);
+        const cachedSkills = startupCache?.installedSkills ?? [];
+        const skillsWithCachedStatus = mergeStartupSkillStatusCache(skills, cachedSkills);
+        setInstalledSkills(skillsWithCachedStatus);
+        setIsLoading(false);
         void refreshGitStatesInBackground(() => active);
+
+        const [candidatesResult, toolsResult, accountResult] = await Promise.allSettled([
+          fetchLocalSkillCandidates(),
+          fetchToolConfigs(),
+          fetchGitAccount(),
+        ]);
+        if (!active) {
+          return;
+        }
+
+        if (candidatesResult.status === "fulfilled") {
+          setLocalCandidates(candidatesResult.value);
+        } else {
+          console.error("Failed to load local skill candidates:", candidatesResult.reason);
+        }
+
+        if (toolsResult.status === "fulfilled") {
+          setToolConfigs(toolsResult.value);
+        } else {
+          console.error("Failed to load tool configs:", toolsResult.reason);
+        }
+
+        if (accountResult.status === "fulfilled") {
+          setGitAccount(accountResult.value);
+        } else {
+          console.error("Failed to load git account:", accountResult.reason);
+        }
+      } catch (error) {
+        console.error("Failed to load startup workspace:", error);
       } finally {
         if (active) {
           setIsLoading(false);
@@ -244,12 +407,15 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       }
     }
 
-    void loadWorkspace();
+    const timer = window.setTimeout(() => {
+      void loadStartupWorkspace();
+    }, STARTUP_LOAD_DELAY_MS);
 
     return () => {
       active = false;
+      window.clearTimeout(timer);
     };
-  }, [usesFixtureData]);
+  }, [startupCache, usesFixtureData]);
 
   async function handleInstallFromMarket(skill: MarketplaceSkill) {
     if (installingMarketplaceSkillIdsRef.current.has(skill.id)) {
