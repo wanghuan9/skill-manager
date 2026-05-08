@@ -159,18 +159,32 @@ export const marketplaceSkillFixtures: MarketplaceSkill[] = [
 
 export const localSkillFixtures: LocalSkillCandidate[] = [
   {
-    name: "knowledge-base-reading",
-    description: "面向本地知识库查询和业务代码定位。",
-    localPath: "/Users/wanghuan/.skills-manager/skills/knowledge-base-reading",
-    detectedFrom: "~/.skills-manager/skills",
-    sourceHint: "检测到本地技能目录",
+    name: "excalidraw-diagram",
+    description: "生成可直接在 Excalidraw 打开的手绘风图表。",
+    localPath: "/Users/wanghuan/.cursor/skills/excalidraw-diagram",
+    detectedFrom: "/Users/wanghuan/.cursor/skills",
+    sourceHint: "符号链接",
+  },
+  {
+    name: "excalidraw-diagram",
+    description: "生成可直接在 Excalidraw 打开的手绘风图表。",
+    localPath: "/Users/wanghuan/.claude/skills/excalidraw-diagram",
+    detectedFrom: "/Users/wanghuan/.claude/skills",
+    sourceHint: "符号链接",
+  },
+  {
+    name: "excalidraw-diagram",
+    description: "生成可直接在 Excalidraw 打开的手绘风图表。",
+    localPath: "/Users/wanghuan/.codeium/windsurf/skills/excalidraw-diagram",
+    detectedFrom: "/Users/wanghuan/.codeium/windsurf/skills",
+    sourceHint: "符号链接",
   },
   {
     name: "technical-design",
     description: "根据产品文档和需求输入整理技术设计骨架。",
-    localPath: "/Users/wanghuan/.skills-manager/skills/technical-design",
-    detectedFrom: "~/.skills-manager/skills",
-    sourceHint: "可直接纳入统一管理",
+    localPath: "/Users/wanghuan/.codex/skills/technical-design",
+    detectedFrom: "/Users/wanghuan/.codex/skills",
+    sourceHint: "符号链接",
   },
 ];
 

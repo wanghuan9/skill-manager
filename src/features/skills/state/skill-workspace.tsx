@@ -21,6 +21,7 @@ import {
   fetchToolConfigs,
   fetchStartupInstalledSkills,
   importLocalSkill,
+  installLocalSkill,
   installSkillFromMarket,
   installSkillFromRepo,
   installSelectedRepoSkills,
@@ -76,6 +77,7 @@ type SkillWorkspaceContextValue = {
   searchMarketplaceSkills: (query: string) => Promise<MarketplaceSkill[]>;
   discoverRepoSkills: (repoUrl: string) => Promise<RepoSkillCandidate[]>;
   installFromRepo: (repoUrl: string, selectedPaths: string[]) => Promise<void>;
+  installFromLocalPath: (localPath: string, skillName?: string) => Promise<void>;
   importCandidate: (localPath: string) => Promise<void>;
   refreshWorkspace: () => Promise<void>;
   updateSkill: (skillName: string) => Promise<void>;
@@ -509,6 +511,14 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
     });
   }
 
+  async function handleInstallFromLocalPath(localPath: string, skillName?: string) {
+    const installedSkill = await installLocalSkill({ localPath, skillName });
+    setInstalledSkills((current) => [installedSkill, ...current.filter((item) => item.name !== installedSkill.name)]);
+    setLocalCandidates((current) =>
+      current.filter((candidate) => candidate.localPath !== localPath && candidate.localPath !== installedSkill.localPath),
+    );
+  }
+
   async function handleImportCandidate(localPath: string) {
     const importedSkill = await importLocalSkill(localPath);
     setInstalledSkills((current) => [importedSkill, ...current.filter((item) => item.name !== importedSkill.name)]);
@@ -583,6 +593,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       searchMarketplaceSkills: handleSearchMarketplaceSkills,
       discoverRepoSkills: handleDiscoverRepoSkills,
       installFromRepo: handleInstallFromRepo,
+      installFromLocalPath: handleInstallFromLocalPath,
       importCandidate: handleImportCandidate,
       refreshWorkspace: loadWorkspaceSnapshot,
       updateSkill: handleUpdateSkill,

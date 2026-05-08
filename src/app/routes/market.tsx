@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { LocalInstallPanel } from "@/features/install/components/LocalInstallPanel";
 import { MarketplaceInstallPanel } from "@/features/install/components/MarketplaceInstallPanel";
 import { RepoInstallPanel } from "@/features/install/components/RepoInstallPanel";
 import { LocalSkillImportList } from "@/features/local-skills/components/LocalSkillImportList";
@@ -86,18 +87,21 @@ export function MarketRoute(props: MarketRouteProps) {
   const loadingMoreRef = useRef(false);
   const loadInitialRef = useRef(loadInitialMarketplaceSkills);
   const searchMarketplaceRef = useRef(searchMarketplaceSkills);
-  const lastTabSkillsRef = useRef<MarketplaceSkill[]>([]);
+  const lastTabSkillsRef = useRef<Record<MarketplaceSourceSite, MarketplaceSkill[]>>({
+    "skills.sh": [],
+    skillsmp: [],
+  });
   const normalizedSearchQuery = debouncedSearchQuery.trim();
   const isSearching = normalizedSearchQuery.length > 0;
   const tabSkills = useMemo(
     () => marketplaceSkills.filter((skill) => skill.sourceSite === activeSourceSite),
     [activeSourceSite, marketplaceSkills],
   );
-  // 只在非搜索状态下才更新缓存，避免搜索结果污染
+  // 只在非搜索状态下更新当前来源的缓存，避免搜索结果污染，也避免切换来源时串用另一组列表。
   if (tabSkills.length > 0 && !isSearching) {
-    lastTabSkillsRef.current = tabSkills;
+    lastTabSkillsRef.current[activeSourceSite] = tabSkills;
   }
-  const stableTabSkills = tabSkills.length > 0 ? tabSkills : lastTabSkillsRef.current;
+  const stableTabSkills = tabSkills.length > 0 ? tabSkills : lastTabSkillsRef.current[activeSourceSite] ?? [];
   const displayedMarketplaceSkills = isSearching && searchDone ? searchResults : stableTabSkills;
   const installedMarketplaceSkillIds = useMemo(
     () => buildInstalledMarketplaceSkillIds(displayedMarketplaceSkills, installedSkills),
@@ -237,13 +241,10 @@ export function MarketRoute(props: MarketRouteProps) {
         ) : null}
         {activeInstallTab === "git" ? <RepoInstallPanel /> : null}
         {activeInstallTab === "local" ? (
-          <section className="panel-card market-panel">
-            <div className="panel-header">
-              <h2>本地安装</h2>
-              <p>扫描本机已有 skill 目录，把本地能力统一纳入安装与同步管理。</p>
-            </div>
+          <div className="local-install-layout">
             <LocalSkillImportList />
-          </section>
+            <LocalInstallPanel />
+          </div>
         ) : null}
       </section>
     </div>

@@ -223,9 +223,9 @@ fn read_skill_description(skill_file: &Path) -> Option<String> {
         let trimmed = line.trim();
         let looks_like_frontmatter_field = trimmed.split_once(':').is_some_and(|(key, _)| {
             !key.is_empty()
-                && key
-                    .chars()
-                    .all(|character| character.is_ascii_alphanumeric() || character == '-' || character == '_')
+                && key.chars().all(|character| {
+                    character.is_ascii_alphanumeric() || character == '-' || character == '_'
+                })
         });
         if trimmed.is_empty()
             || trimmed.starts_with('#')

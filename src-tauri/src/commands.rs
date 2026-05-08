@@ -5,10 +5,11 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Mutex, OnceLock};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use reqwest::Client;
 use serde::Deserialize;
+use zip::ZipArchive;
 
 use crate::git_state::{
     clear_skill_update_cache, enrich_newly_installed_skill_with_git_state,
@@ -489,6 +490,12 @@ fn load_skills_manager_cached_items() -> Vec<SkillsManagerCachedSkill> {
         Ok(value) => value,
         Err(_) => return Vec::new(),
     };
+    collect_skills_manager_cached_items(&payload)
+}
+
+fn collect_skills_manager_cached_items(
+    payload: &serde_json::Value,
+) -> Vec<SkillsManagerCachedSkill> {
     let Some(pages) = payload.get("pages").and_then(|value| value.as_array()) else {
         return Vec::new();
     };
@@ -560,7 +567,7 @@ fn load_skills_manager_cached_items() -> Vec<SkillsManagerCachedSkill> {
         }
     }
 
-    items.sort_by(|a, b| b.installs.cmp(&a.installs));
+    // 保持缓存文件中的原始榜单顺序，避免本地再次排序后与 skills.sh 官网顺序不一致。
     items
 }
 
@@ -866,13 +873,32 @@ fn marketplace_cache_file() -> Option<PathBuf> {
     )
 }
 
-fn load_marketplace_cache() -> Option<Vec<MarketplaceSkill>> {
+fn marketplace_cache_key(source: &str) -> String {
+    if source.trim().is_empty() {
+        "all".into()
+    } else {
+        source.trim().to_lowercase()
+    }
+}
+
+fn load_marketplace_cache(source: &str) -> Option<Vec<MarketplaceSkill>> {
     let cache_path = marketplace_cache_file()?;
     let content = fs::read_to_string(cache_path).ok()?;
     let cached: serde_json::Value = serde_json::from_str(&content).ok()?;
-    let skills_array = cached.get("skills").and_then(|v| v.as_array())?;
+    let source_key = marketplace_cache_key(source);
+    let version = cached
+        .get("version")
+        .and_then(|value| value.as_u64())
+        .unwrap_or_default();
+    if version < 2 {
+        return None;
+    }
+    let sources = cached.get("sources")?.as_object()?;
+    let source_entry = sources.get(&source_key)?;
+    let skills_array = source_entry.get("skills").and_then(|v| v.as_array())?;
     let timestamp = cached
         .get("timestamp")
+        .or_else(|| source_entry.get("timestamp"))
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
 
@@ -924,7 +950,7 @@ fn normalize_cached_marketplace_skill(mut skill: MarketplaceSkill) -> Marketplac
     skill
 }
 
-fn save_marketplace_cache(skills: &[MarketplaceSkill]) {
+fn save_marketplace_cache(source: &str, skills: &[MarketplaceSkill]) {
     let cache_path = match marketplace_cache_file() {
         Some(path) => path,
         None => return,
@@ -942,10 +968,29 @@ fn save_marketplace_cache(skills: &[MarketplaceSkill]) {
         .map(|d| d.as_secs())
         .unwrap_or(0);
 
-    let cache_data = serde_json::json!({
-        "timestamp": timestamp,
-        "skills": skills
-    });
+    let source_key = marketplace_cache_key(source);
+    let mut cache_data = fs::read_to_string(&cache_path)
+        .ok()
+        .and_then(|content| serde_json::from_str::<serde_json::Value>(&content).ok())
+        .unwrap_or_else(|| serde_json::json!({}));
+    let Some(cache_object) = cache_data.as_object_mut() else {
+        return;
+    };
+    cache_object.insert("version".into(), serde_json::json!(2_u64));
+    cache_object.insert("timestamp".into(), serde_json::json!(timestamp));
+    let sources_value = cache_object
+        .entry("sources")
+        .or_insert_with(|| serde_json::json!({}));
+    let Some(sources_object) = sources_value.as_object_mut() else {
+        return;
+    };
+    sources_object.insert(
+        source_key,
+        serde_json::json!({
+            "timestamp": timestamp,
+            "skills": skills
+        }),
+    );
 
     let _ = fs::write(
         cache_path,
@@ -965,7 +1010,7 @@ async fn build_marketplace_skills(
 
     // 如果是第一页且不是搜索，尝试从缓存读取
     if page == 1 && !is_searching {
-        if let Some(cached_skills) = load_marketplace_cache() {
+        if let Some(cached_skills) = load_marketplace_cache(source) {
             let filtered: Vec<MarketplaceSkill> = cached_skills
                 .into_iter()
                 .filter(|skill| matches_marketplace_query(skill, query))
@@ -1034,7 +1079,7 @@ async fn build_marketplace_skills(
 
     // 如果是第一页且不是搜索，保存到缓存
     if page == 1 && !is_searching && !result.is_empty() {
-        save_marketplace_cache(&result);
+        save_marketplace_cache(source, &result);
     }
 
     result
@@ -1047,7 +1092,7 @@ fn build_local_candidates(installed_skills: &[SkillSummary]) -> Vec<LocalSkillCa
             let local_path = format!("{detected_from}/{name}");
             LocalSkillCandidate {
                 description: format!("从 {detected_from} 发现的本地技能。"),
-                source_hint: "检测到本地技能目录，可一键纳入统一管理".into(),
+                source_hint: "符号链接".into(),
                 name,
                 local_path,
                 detected_from,
@@ -2716,6 +2761,267 @@ pub async fn install_selected_repo_skills(
 }
 
 #[tauri::command]
+pub async fn install_local_skill(
+    local_path: String,
+    skill_name: Option<String>,
+) -> Result<SkillSummary, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        install_local_skill_blocking(&local_path, skill_name)
+    })
+    .await
+    .map_err(|error| format!("后台安装本地技能失败: {error}"))?
+}
+
+fn install_local_skill_blocking(
+    local_path: &str,
+    skill_name: Option<String>,
+) -> Result<SkillSummary, String> {
+    let source_path = PathBuf::from(local_path.trim());
+    if !source_path.exists() {
+        return Err("本地路径不存在，请检查后重试。".into());
+    }
+
+    let (source_dir, cleanup_dir) = resolve_local_install_source(&source_path)?;
+    let inferred_name = skill_name
+        .and_then(|value| normalize_optional_skill_name(&value))
+        .or_else(|| read_skill_name(&source_dir.join("SKILL.md")))
+        .or_else(|| {
+            source_dir
+                .file_name()
+                .and_then(|value| value.to_str())
+                .map(sanitize_storage_name)
+        })
+        .unwrap_or_else(|| "local-skill".into());
+    let target_dir = skill_directory(&inferred_name)
+        .map_err(|error| format!("无法确定 skill 安装目录: {error}"))?;
+    let installed_local_path = copy_local_skill_dir(&source_dir, &target_dir)?;
+
+    if let Some(dir) = cleanup_dir {
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    let skill_file = Path::new(&installed_local_path).join("SKILL.md");
+    let description = read_skill_description(&skill_file);
+    let installed_skill = SkillSummary {
+        name: inferred_name,
+        source_label: "本地安装".into(),
+        source_type: "local".into(),
+        source_url: source_path.to_string_lossy().to_string(),
+        description,
+        local_path: installed_local_path,
+        branch: "local".into(),
+        collab_status: "clean".into(),
+        status_text: "本地技能已安装，可继续同步到目标工具。".into(),
+        last_synced_at: "刚刚".into(),
+        last_checked_at: "刚刚".into(),
+        synced_tool_count: 0,
+        last_editor: "".into(),
+        commit_label: "local-only".into(),
+        git_linked: false,
+        tools: vec![],
+    };
+
+    let installed_skill = enrich_skill_with_git_state(&normalize_skill_tools(&installed_skill));
+    let mut installed_skills = load_installed_skills(&default_installed_skills());
+    persist_skill_timestamps(&installed_skill);
+    installed_skills.retain(|skill| skill.name != installed_skill.name);
+    installed_skills.insert(0, installed_skill.clone());
+    save_installed_skills(&installed_skills)?;
+
+    Ok(installed_skill)
+}
+
+fn normalize_optional_skill_name(value: &str) -> Option<String> {
+    let normalized = sanitize_storage_name(value.trim());
+    if normalized.is_empty() || normalized == "skill" {
+        None
+    } else {
+        Some(normalized)
+    }
+}
+
+fn resolve_local_install_source(source_path: &Path) -> Result<(PathBuf, Option<PathBuf>), String> {
+    if source_path.is_dir() {
+        return find_single_local_skill_dir(source_path).map(|path| (path, None));
+    }
+
+    if !source_path.is_file() {
+        return Err("请选择 skill 文件夹或 .zip/.skill 压缩包。".into());
+    }
+
+    let extension = source_path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if !matches!(extension.as_str(), "zip" | "skill") {
+        return Err("仅支持 skill 文件夹、.zip 或 .skill 文件。".into());
+    }
+
+    let extract_dir = local_import_extract_dir(source_path)?;
+    if extract_dir.exists() {
+        fs::remove_dir_all(&extract_dir).map_err(|error| format!("清理导入缓存失败: {error}"))?;
+    }
+    fs::create_dir_all(&extract_dir).map_err(|error| format!("创建导入缓存失败: {error}"))?;
+    extract_skill_archive(source_path, &extract_dir)?;
+    let skill_dir = find_single_local_skill_dir(&extract_dir)?;
+    Ok((skill_dir, Some(extract_dir)))
+}
+
+fn local_import_extract_dir(source_path: &Path) -> Result<PathBuf, String> {
+    let home_dir = env::var("HOME").map_err(|_| "无法读取 HOME 环境变量".to_string())?;
+    let source_name = source_path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .map(sanitize_storage_name)
+        .unwrap_or_else(|| "skill".into());
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| format!("生成导入缓存目录失败: {error}"))?
+        .as_millis();
+    Ok(PathBuf::from(home_dir)
+        .join(".skillm/imports")
+        .join(format!("{source_name}-{timestamp}")))
+}
+
+fn extract_skill_archive(archive_path: &Path, target_dir: &Path) -> Result<(), String> {
+    let file = fs::File::open(archive_path).map_err(|error| format!("打开压缩包失败: {error}"))?;
+    let mut archive = ZipArchive::new(file).map_err(|error| format!("读取压缩包失败: {error}"))?;
+
+    for index in 0..archive.len() {
+        let mut entry = archive
+            .by_index(index)
+            .map_err(|error| format!("读取压缩包条目失败: {error}"))?;
+        let Some(enclosed_name) = entry.enclosed_name() else {
+            continue;
+        };
+        let output_path = target_dir.join(enclosed_name);
+        if entry.is_dir() {
+            fs::create_dir_all(&output_path)
+                .map_err(|error| format!("创建压缩包目录失败: {error}"))?;
+            continue;
+        }
+        if let Some(parent) = output_path.parent() {
+            fs::create_dir_all(parent).map_err(|error| format!("创建压缩包目录失败: {error}"))?;
+        }
+        let mut output_file = fs::File::create(&output_path)
+            .map_err(|error| format!("写入压缩包文件失败: {error}"))?;
+        std::io::copy(&mut entry, &mut output_file)
+            .map_err(|error| format!("解压压缩包文件失败: {error}"))?;
+    }
+
+    Ok(())
+}
+
+fn find_single_local_skill_dir(root: &Path) -> Result<PathBuf, String> {
+    let skill_dirs = collect_local_skill_dirs(root, 0, 4)?;
+    if skill_dirs.is_empty() {
+        return Err("未在本地路径中找到 SKILL.md。".into());
+    }
+    if skill_dirs.len() > 1 {
+        return Err("该路径包含多个 skill，请选择具体的技能目录。".into());
+    }
+
+    Ok(skill_dirs[0].clone())
+}
+
+fn collect_local_skill_dirs(
+    root: &Path,
+    depth: usize,
+    max_depth: usize,
+) -> Result<Vec<PathBuf>, String> {
+    if root.join("SKILL.md").is_file() {
+        return Ok(vec![root.to_path_buf()]);
+    }
+    if depth >= max_depth {
+        return Ok(Vec::new());
+    }
+
+    let mut skill_dirs = Vec::new();
+    let mut child_paths = fs::read_dir(root)
+        .map_err(|error| format!("读取本地路径失败: {error}"))?
+        .flatten()
+        .map(|entry| entry.path())
+        .collect::<Vec<_>>();
+    child_paths.sort();
+    for child_path in child_paths {
+        let Some(name) = child_path.file_name().and_then(|value| value.to_str()) else {
+            continue;
+        };
+        if !child_path.is_dir()
+            || name.starts_with('.')
+            || matches!(name, "node_modules" | "dist" | "target")
+        {
+            continue;
+        }
+        skill_dirs.extend(collect_local_skill_dirs(&child_path, depth + 1, max_depth)?);
+    }
+
+    Ok(skill_dirs)
+}
+
+fn copy_local_skill_dir(source_dir: &Path, target_dir: &Path) -> Result<String, String> {
+    let source_canonical = source_dir
+        .canonicalize()
+        .map_err(|error| format!("解析本地技能目录失败: {error}"))?;
+    if target_dir.exists() {
+        let target_canonical = target_dir
+            .canonicalize()
+            .map_err(|error| format!("解析目标技能目录失败: {error}"))?;
+        if source_canonical == target_canonical {
+            return Ok(target_dir.to_string_lossy().to_string());
+        }
+        fs::remove_dir_all(target_dir)
+            .map_err(|error| format!("清理旧 skill 目录失败: {error}"))?;
+    }
+    if let Some(parent) = target_dir.parent() {
+        fs::create_dir_all(parent).map_err(|error| format!("创建 skill 目录失败: {error}"))?;
+    }
+    copy_dir_contents(&source_canonical, target_dir)?;
+    Ok(target_dir.to_string_lossy().to_string())
+}
+
+fn copy_dir_contents(source_dir: &Path, target_dir: &Path) -> Result<(), String> {
+    fs::create_dir_all(target_dir).map_err(|error| format!("创建 skill 目录失败: {error}"))?;
+    for entry in
+        fs::read_dir(source_dir).map_err(|error| format!("读取本地技能目录失败: {error}"))?
+    {
+        let entry = entry.map_err(|error| format!("读取本地技能条目失败: {error}"))?;
+        let path = entry.path();
+        let file_name = entry.file_name();
+        if file_name.to_string_lossy() == ".git" {
+            continue;
+        }
+        let target_path = target_dir.join(file_name);
+        if path.is_dir() {
+            copy_dir_contents(&path, &target_path)?;
+        } else {
+            fs::copy(&path, &target_path)
+                .map_err(|error| format!("复制 skill 文件失败: {error}"))?;
+        }
+    }
+    Ok(())
+}
+
+fn read_skill_name(skill_file: &Path) -> Option<String> {
+    let content = fs::read_to_string(skill_file).ok()?;
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed == "---" {
+            continue;
+        }
+        if let Some(value) = trimmed.strip_prefix("name:") {
+            let normalized = value.trim().trim_matches('"').trim_matches('\'');
+            return normalize_optional_skill_name(normalized);
+        }
+        if !trimmed.is_empty() && !trimmed.contains(':') {
+            return None;
+        }
+    }
+    None
+}
+
+#[tauri::command]
 pub fn import_local_skill(local_path: &str) -> Result<SkillSummary, String> {
     let skill_name = local_path
         .trim_end_matches('/')
@@ -3041,4 +3347,65 @@ fn detect_repo_source_type(repo_url: &str) -> &'static str {
     }
 
     "github"
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::collect_skills_manager_cached_items;
+
+    #[test]
+    fn preserves_skills_sh_cache_page_order() {
+        let payload = json!({
+            "pages": [
+                {
+                    "page": 2,
+                    "response": {
+                        "skills": [
+                            {
+                                "source_name": "skills.sh",
+                                "slug": "team/repo/third-skill",
+                                "skill_path": "third-skill",
+                                "name": "third-skill",
+                                "description": "third",
+                                "install_count": 9999
+                            }
+                        ]
+                    }
+                },
+                {
+                    "page": 1,
+                    "response": {
+                        "skills": [
+                            {
+                                "source_name": "skills.sh",
+                                "slug": "team/repo/first-skill",
+                                "skill_path": "first-skill",
+                                "name": "first-skill",
+                                "description": "first",
+                                "install_count": 10
+                            },
+                            {
+                                "source_name": "skills.sh",
+                                "slug": "team/repo/second-skill",
+                                "skill_path": "second-skill",
+                                "name": "second-skill",
+                                "description": "second",
+                                "install_count": 8
+                            }
+                        ]
+                    }
+                }
+            ]
+        });
+
+        let items = collect_skills_manager_cached_items(&payload);
+        let names = items
+            .iter()
+            .map(|item| item.name.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(names, vec!["first-skill", "second-skill", "third-skill"]);
+    }
 }

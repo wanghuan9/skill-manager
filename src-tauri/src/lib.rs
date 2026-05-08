@@ -17,6 +17,7 @@ pub fn run() {
             }
             Ok(())
         })
+        .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             commands::get_workspace_snapshot,
             commands::list_startup_installed_skills,
@@ -30,6 +31,7 @@ pub fn run() {
             commands::install_skill_from_repo,
             commands::discover_repo_skills,
             commands::install_selected_repo_skills,
+            commands::install_local_skill,
             commands::import_local_skill,
             commands::get_push_target_snapshot,
             commands::get_push_preview_snapshot,

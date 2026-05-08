@@ -37,6 +37,11 @@ type InstallSelectedRepoSkillsInput = {
   selectedPaths: string[];
 };
 
+type InstallLocalSkillInput = {
+  localPath: string;
+  skillName?: string;
+};
+
 type PushPreviewInput = {
   skillName: string;
   targetBranch: string;
@@ -198,6 +203,28 @@ export async function installSelectedRepoSkills(
   });
 
   return invokeOrFallback("install_selected_repo_skills", input, fallback);
+}
+
+export async function installLocalSkill(input: InstallLocalSkillInput): Promise<SkillSummary> {
+  const normalizedName = input.skillName?.trim();
+  const fallbackName =
+    normalizedName ||
+    input.localPath.trim().split(/[\\/]/).filter(Boolean).at(-1)?.replace(/\.(zip|skill)$/i, "") ||
+    "local-skill";
+  const fallback = {
+    ...installedSkillFixtures[0],
+    name: fallbackName,
+    description: "从本地路径安装的技能。",
+    sourceLabel: "本地安装",
+    sourceType: "local" as const,
+    sourceUrl: input.localPath,
+    localPath: `/Users/demo/.skillm/skills/${fallbackName}`,
+    collabStatus: "clean" as const,
+    statusText: "本地技能已安装，可继续同步到目标工具。",
+    gitLinked: false,
+  };
+
+  return invokeOrFallback("install_local_skill", input, fallback);
 }
 
 export async function importLocalSkill(localPath: string): Promise<SkillSummary> {

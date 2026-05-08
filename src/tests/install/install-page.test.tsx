@@ -29,6 +29,18 @@ test("discovers repo skills and allows multi-select install", async () => {
   expect(screen.getByText("release-scribe")).toBeInTheDocument();
 });
 
+test("installs a local skill from a typed path", async () => {
+  render(<App />);
+  await userEvent.click(screen.getByRole("button", { name: /安装/ }));
+  await userEvent.click(screen.getByRole("tab", { name: "本地安装" }));
+
+  await userEvent.type(screen.getByRole("textbox", { name: "本地 skill 路径" }), "/Users/demo/skills/local-helper");
+  await userEvent.type(screen.getByRole("textbox", { name: "技能名称（可选）" }), "local-helper");
+  await userEvent.click(screen.getByRole("button", { name: "安装技能" }));
+
+  expect(await screen.findByRole("status")).toHaveTextContent("本地技能已安装");
+});
+
 test("shows install errors in the global notification stack", async () => {
   render(<App />);
   await userEvent.click(screen.getByRole("button", { name: /安装/ }));
@@ -66,4 +78,26 @@ test("searches marketplace skills across all supported sources", async () => {
 
   expect(await screen.findByText("release-guardian")).toBeInTheDocument();
   expect(screen.getByText("repo-guardian")).toBeInTheDocument();
+});
+
+test("keeps source results isolated and preserves the skills.sh display order", async () => {
+  render(<App />);
+  await userEvent.click(screen.getByRole("button", { name: /安装/ }));
+
+  const skillsShCards = screen
+    .getAllByRole("heading", { level: 3 })
+    .map((item) => item.textContent);
+  expect(skillsShCards).toEqual(["workflow-critic", "design-system-reviewer"]);
+
+  await userEvent.click(screen.getByRole("tab", { name: "skillsmp" }));
+
+  const skillsMpCards = await screen.findAllByRole("heading", { level: 3 });
+  expect(skillsMpCards.map((item) => item.textContent)).toEqual(["release-guardian", "repo-guardian"]);
+  expect(screen.queryByText("workflow-critic")).not.toBeInTheDocument();
+
+  await userEvent.click(screen.getByRole("tab", { name: "skills.sh" }));
+  expect(screen.getAllByRole("heading", { level: 3 }).map((item) => item.textContent)).toEqual([
+    "workflow-critic",
+    "design-system-reviewer",
+  ]);
 });
