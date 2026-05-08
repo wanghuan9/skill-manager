@@ -21,7 +21,7 @@ export function SettingsRoute() {
   );
   const selectedDefaultToolId = openToolOptions.some((tool) => tool.id === defaultOpenToolId)
     ? defaultOpenToolId
-    : "";
+    : openToolOptions[0]?.id ?? "";
   const [isToolStatusExpanded, setIsToolStatusExpanded] = useState(false);
   const toolStatusPanelClassName = `panel-card placeholder-panel settings-panel settings-panel--tool-status${
     isToolStatusExpanded ? "" : " is-clickable"

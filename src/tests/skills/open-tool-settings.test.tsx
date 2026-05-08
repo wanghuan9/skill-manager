@@ -13,12 +13,17 @@ test("allows selecting default open tool in settings", async () => {
   expect(screen.getByText("工具状态")).toBeInTheDocument();
 
   expect(screen.getByRole("option", { name: "Cursor" })).toBeInTheDocument();
+  expect(screen.getByRole("option", { name: "访达" })).toBeInTheDocument();
   expect(screen.queryByRole("option", { name: "Claude Code" })).not.toBeInTheDocument();
   expect(screen.queryByRole("option", { name: "Codex" })).not.toBeInTheDocument();
 
   await userEvent.selectOptions(select, "cursor");
 
   expect(screen.getByDisplayValue("Cursor")).toBeInTheDocument();
+
+  await userEvent.selectOptions(select, "finder");
+
+  expect(screen.getByDisplayValue("访达")).toBeInTheDocument();
 
   await userEvent.click(screen.getByRole("button", { name: "工具状态" }));
   expect(screen.getByText("CodeBuddy")).toBeInTheDocument();

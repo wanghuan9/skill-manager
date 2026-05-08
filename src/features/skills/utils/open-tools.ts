@@ -14,6 +14,12 @@ export type OpenToolCard = OpenToolOption & {
   supportsDirectOpen: boolean;
 };
 
+export const FINDER_OPEN_TOOL_OPTION: OpenToolOption = {
+  id: "finder",
+  name: "访达",
+  primaryType: "desktop",
+};
+
 const TOOL_POPULARITY_RANK: Record<string, number> = {
   cursor: 1,
   "claude-code": 2,
@@ -80,9 +86,17 @@ export function buildInstalledToolCards(toolConfigs: ToolConfig[]): OpenToolCard
 }
 
 export function buildOpenToolOptions(toolConfigs: ToolConfig[]): OpenToolOption[] {
-  return buildSupportedAiToolCards(toolConfigs)
-    .filter((tool) => tool.isInstalled && tool.primaryType === "editor" && tool.supportsDirectOpen)
+  const installedEditorOptions = buildSupportedAiToolCards(toolConfigs)
+    .filter(
+      (tool) =>
+        tool.id !== FINDER_OPEN_TOOL_OPTION.id &&
+        tool.isInstalled &&
+        tool.primaryType === "editor" &&
+        tool.supportsDirectOpen,
+    )
     .map(({ id, name, primaryType }) => ({ id, name, primaryType }));
+
+  return [...installedEditorOptions, FINDER_OPEN_TOOL_OPTION];
 }
 
 export function sortToolCards<T extends OpenToolCard>(toolCards: T[], defaultOpenToolId?: string) {

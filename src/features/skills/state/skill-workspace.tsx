@@ -144,10 +144,10 @@ function getInitialDefaultOpenToolId() {
     typeof window === "undefined" ||
     typeof window.localStorage?.getItem !== "function"
   ) {
-    return FALLBACK_OPEN_TOOL_ID;
+    return "";
   }
 
-  return window.localStorage.getItem(DEFAULT_OPEN_TOOL_STORAGE_KEY) ?? FALLBACK_OPEN_TOOL_ID;
+  return window.localStorage.getItem(DEFAULT_OPEN_TOOL_STORAGE_KEY) ?? "";
 }
 
 function readStartupWorkspaceCache(): StartupWorkspaceCache | null {
@@ -299,9 +299,13 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
   const [defaultOpenToolId, setDefaultOpenToolIdState] = useState(getInitialDefaultOpenToolId);
 
   useEffect(() => {
+    if (toolConfigs.length === 0) {
+      return;
+    }
+
     const availableTools = buildOpenToolOptions(toolConfigs);
     const availableToolIds = new Set(availableTools.map((tool) => tool.id));
-    if (availableToolIds.size === 0 || availableToolIds.has(defaultOpenToolId)) {
+    if (availableToolIds.has(defaultOpenToolId)) {
       return;
     }
 
@@ -633,9 +637,15 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
   }
 
   async function handleOpenSkillWithDefaultTool(skillName: string) {
+    const availableTools = buildOpenToolOptions(toolConfigs);
+    const availableToolIds = new Set(availableTools.map((tool) => tool.id));
+    const resolvedOpenToolId = availableToolIds.has(defaultOpenToolId)
+      ? defaultOpenToolId
+      : availableTools[0]?.id ?? FALLBACK_OPEN_TOOL_ID;
+
     await openSkillInEditor({
       skillName,
-      editorId: defaultOpenToolId || FALLBACK_OPEN_TOOL_ID,
+      editorId: resolvedOpenToolId,
     });
   }
 
