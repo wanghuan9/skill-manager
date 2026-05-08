@@ -2001,8 +2001,9 @@ code {
   padding: 4px 4px 8px;
   border-bottom: 1px solid var(--line);
   position: sticky;
-  top: 0;
+  top: 8px;
   z-index: 2;
+  border-radius: 12px;
   background: var(--surface);
   backdrop-filter: blur(8px);
 }
