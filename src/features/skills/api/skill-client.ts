@@ -48,6 +48,10 @@ type OpenSkillInEditorInput = {
   editorId: string;
 };
 
+type OpenToolSkillsFolderInput = {
+  toolId: string;
+};
+
 type UpdateSkillInput = {
   skillName: string;
 };
@@ -251,6 +255,10 @@ export async function openExternalLink(url: string): Promise<void> {
 
 export async function openSkillInEditor(input: OpenSkillInEditorInput): Promise<void> {
   return invokeOrFallback("open_skill_in_editor", input, undefined);
+}
+
+export async function openToolSkillsFolder(input: OpenToolSkillsFolderInput): Promise<void> {
+  return invokeOrFallback("open_tool_skills_folder", input, undefined);
 }
 
 export async function updateSkill(

@@ -12,6 +12,17 @@ test("renders installed tools only with manage action", async () => {
   const manageButtons = screen.getAllByRole("button", { name: "管理" });
   expect(manageButtons.length).toBeGreaterThan(0);
   expect(manageButtons[0]).toHaveClass("tool-card__manage-button");
+  expect(screen.getByRole("button", { name: "打开 Claude Code Skills 文件夹" })).toBeInTheDocument();
+});
+
+test("can open a tool skills folder from the tools page", async () => {
+  window.localStorage.clear();
+  render(<App />);
+
+  await userEvent.click(screen.getByRole("button", { name: /工具/ }));
+  await userEvent.click(screen.getByRole("button", { name: "打开 Claude Code Skills 文件夹" }));
+
+  expect(screen.getByRole("button", { name: "打开 Claude Code Skills 文件夹" })).toBeEnabled();
 });
 
 test("can enable all visible skills from tool manage dialog", async () => {

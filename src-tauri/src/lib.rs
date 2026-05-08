@@ -36,6 +36,7 @@ pub fn run() {
             commands::get_update_preview_snapshot,
             commands::open_skill_repository,
             commands::open_external_link,
+            commands::open_tool_skills_folder,
             commands::open_skill_in_editor,
             commands::update_skill,
             commands::get_skill_file_browser,

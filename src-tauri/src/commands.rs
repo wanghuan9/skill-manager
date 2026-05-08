@@ -2865,6 +2865,12 @@ pub fn open_external_link(url: &str) -> Result<(), String> {
 }
 
 #[tauri::command]
+pub fn open_tool_skills_folder(tool_id: &str) -> Result<(), String> {
+    let skills_path = get_tool_skills_path(tool_id)?;
+    open_path_with_finder(&skills_path)
+}
+
+#[tauri::command]
 pub fn open_skill_in_editor(skill_name: &str, editor_id: &str) -> Result<(), String> {
     let (installed_skills, skill_index) = find_skill_by_name(skill_name)?;
     let skill = &installed_skills[skill_index];

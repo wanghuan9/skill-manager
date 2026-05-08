@@ -2811,7 +2811,7 @@ code {
 
 .tool-card-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
 }
 
@@ -2822,12 +2822,12 @@ code {
 }
 
 .tool-card {
-  padding: 14px 16px;
+  padding: 15px;
 }
 
 .tool-card--simple {
   display: grid;
-  gap: 10px;
+  gap: 12px;
 }
 
 .tool-card--status {
@@ -2886,6 +2886,13 @@ code {
   flex-shrink: 0;
 }
 
+.tool-card__status-badges .status-badge {
+  min-height: 20px;
+  padding: 3px 7px;
+  font-size: 0.68rem;
+  line-height: 1;
+}
+
 .tool-card__status {
   font-size: 0.76rem;
   font-weight: 700;
@@ -2898,31 +2905,97 @@ code {
 
 .tool-card__simple-copy {
   display: grid;
-  gap: 3px;
+  gap: 8px;
 }
 
-.tool-card__simple-copy span {
-  font-size: 0.8rem;
+.tool-card__simple-copy > span {
+  font-size: 0.82rem;
   color: var(--muted);
   line-height: 1.35;
 }
 
 .tool-card__meta {
-  font-size: 0.76rem;
+  font-size: 0.8rem;
   color: color-mix(in srgb, var(--muted) 92%, #42506a 8%);
 }
 
-.tool-card__meta--path {
+.tool-card__path-label {
+  color: #657086;
+  font-size: 0.74rem;
+  line-height: 1.35;
+  white-space: nowrap;
+}
+
+.tool-card__path-value {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  min-height: 22px;
+  padding: 3px 4px;
+  border-radius: 6px;
+  background: rgba(246, 249, 253, 0.96);
+  box-shadow: inset 0 0 0 1px rgba(225, 233, 245, 0.42);
+  color: #263244;
+  font-family:
+    "SF Mono",
+    "JetBrains Mono",
+    monospace;
+  font-size: 0.64rem;
+  line-height: 1.35;
+}
+
+.tool-card__path-row {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr) 20px;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.tool-card__path-button {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: #77869c;
+  cursor: pointer;
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease,
+    color 120ms ease,
+    transform 120ms ease;
+}
+
+.tool-card__path-button svg {
+  width: 14px;
+  height: 14px;
+}
+
+.tool-card__path-button:hover:not(:disabled) {
+  border-color: rgba(47, 120, 255, 0.2);
+  background: rgba(47, 120, 255, 0.08);
+  color: var(--accent);
+  transform: translateY(-1px);
+}
+
+.tool-card__path-button:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+.tool-card__path-button:disabled {
+  cursor: default;
+  opacity: 0.58;
 }
 
 .tool-card__logo {
   display: grid;
   place-items: center;
-  width: 28px;
-  height: 28px;
+  width: 30px;
+  height: 30px;
   border-radius: 8px;
   background: linear-gradient(180deg, rgba(25, 27, 31, 0.06), rgba(25, 27, 31, 0.02));
   border: 1px solid var(--line);
@@ -2933,8 +3006,8 @@ code {
 }
 
 .tool-card__logo-image {
-  width: 18px;
-  height: 18px;
+  width: 19px;
+  height: 19px;
   display: block;
   object-fit: contain;
 }
@@ -2992,6 +3065,16 @@ code {
 .primary-button--compact:active:not(:disabled) {
   box-shadow: 0 4px 10px rgba(25, 27, 31, 0.14);
   transform: translateY(1px);
+}
+
+.primary-button--compact.tool-card__manage-button {
+  min-width: 64px;
+  min-height: 32px;
+  padding-inline: 12px;
+  border-radius: 9px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  box-shadow: 0 4px 10px rgba(47, 120, 255, 0.14);
 }
 
 .tool-path-row {
@@ -3532,7 +3615,6 @@ code {
 }
 
 @media (max-width: 1100px) {
-  .tool-card-grid,
   .install-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -3540,6 +3622,12 @@ code {
   .page-topbar {
     align-items: flex-start;
     flex-direction: column;
+  }
+}
+
+@media (max-width: 1180px) {
+  .tool-card-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
@@ -3633,6 +3721,10 @@ code {
 
   .install-card__install-button {
     width: 100%;
+  }
+
+  .tool-card-grid {
+    grid-template-columns: 1fr;
   }
 
   .toolbar,
