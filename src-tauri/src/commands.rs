@@ -1326,8 +1326,74 @@ fn build_local_candidates(installed_skills: &[SkillSummary]) -> Vec<LocalSkillCa
         .collect()
 }
 
-fn detect_tool_installation_label(paths: &[PathBuf]) -> String {
-    if paths.iter().any(|path| path.exists()) {
+#[derive(Clone, Copy)]
+struct SoftwareDetectionSpec {
+    app_names: &'static [&'static str],
+    executable_names: &'static [&'static str],
+}
+
+fn software_spec(
+    app_names: &'static [&'static str],
+    executable_names: &'static [&'static str],
+) -> SoftwareDetectionSpec {
+    SoftwareDetectionSpec {
+        app_names,
+        executable_names,
+    }
+}
+
+const EDITOR_HOST_APPS: &[&str] = &[
+    "Cursor",
+    "Visual Studio Code",
+    "Visual Studio Code - Insiders",
+    "Windsurf",
+    "Trae",
+    "TRAE",
+    "Trae CN",
+    "IntelliJ IDEA",
+    "IntelliJ IDEA CE",
+    "IntelliJ IDEA Ultimate",
+    "WebStorm",
+    "PyCharm",
+];
+
+const EDITOR_HOST_EXECUTABLES: &[&str] = &["cursor", "code", "windsurf", "trae"];
+
+fn executable_exists(executable_name: &str) -> bool {
+    if executable_name.contains('/') {
+        return Path::new(executable_name).exists();
+    }
+
+    let mut search_dirs = env::var_os("PATH")
+        .map(|paths| env::split_paths(&paths).collect::<Vec<_>>())
+        .unwrap_or_default();
+    search_dirs.extend([
+        PathBuf::from("/opt/homebrew/bin"),
+        PathBuf::from("/usr/local/bin"),
+        PathBuf::from("/usr/bin"),
+        PathBuf::from("/bin"),
+        PathBuf::from("/usr/sbin"),
+        PathBuf::from("/sbin"),
+    ]);
+
+    search_dirs
+        .into_iter()
+        .any(|dir| dir.join(executable_name).exists())
+}
+
+fn software_exists(spec: &SoftwareDetectionSpec) -> bool {
+    (!spec.app_names.is_empty() && find_app_bundle(spec.app_names).is_some())
+        || spec
+            .executable_names
+            .iter()
+            .any(|executable_name| executable_exists(executable_name))
+}
+
+fn detect_tool_installation_label(
+    config_paths: &[PathBuf],
+    software_spec: &SoftwareDetectionSpec,
+) -> String {
+    if config_paths.iter().any(|path| path.exists()) && software_exists(software_spec) {
         "已安装".to_string()
     } else {
         "未安装".to_string()
@@ -1347,6 +1413,7 @@ fn build_tool_configs() -> Vec<ToolConfig> {
             vec!["cli", "desktop", "ide-plugin"],
             false,
             vec![home_path.join(".claude")],
+            software_spec(&["Claude"], &["claude"]),
         ),
         (
             "codex",
@@ -1357,6 +1424,7 @@ fn build_tool_configs() -> Vec<ToolConfig> {
             vec!["desktop", "cli"],
             false,
             vec![home_path.join(".codex")],
+            software_spec(&["Codex"], &["codex"]),
         ),
         (
             "opencode",
@@ -1367,6 +1435,7 @@ fn build_tool_configs() -> Vec<ToolConfig> {
             vec!["cli", "desktop", "ide-plugin"],
             false,
             vec![home_path.join(".config/opencode")],
+            software_spec(&["OpenCode"], &["opencode"]),
         ),
         (
             "cursor",
@@ -1376,10 +1445,8 @@ fn build_tool_configs() -> Vec<ToolConfig> {
             "editor",
             vec!["editor"],
             true,
-            vec![
-                home_path.join(".cursor"),
-                PathBuf::from("/Applications/Cursor.app"),
-            ],
+            vec![home_path.join(".cursor")],
+            software_spec(&["Cursor"], &["cursor"]),
         ),
         (
             "gemini",
@@ -1390,6 +1457,7 @@ fn build_tool_configs() -> Vec<ToolConfig> {
             vec!["cli"],
             false,
             vec![home_path.join(".gemini")],
+            software_spec(&[], &["gemini"]),
         ),
         (
             "antigravity",
@@ -1399,10 +1467,8 @@ fn build_tool_configs() -> Vec<ToolConfig> {
             "editor",
             vec!["editor"],
             true,
-            vec![
-                home_path.join(".gemini/antigravity"),
-                PathBuf::from("/Applications/Antigravity.app"),
-            ],
+            vec![home_path.join(".gemini/antigravity")],
+            software_spec(&["Antigravity"], &[]),
         ),
         (
             "windsurf",
@@ -1415,8 +1481,8 @@ fn build_tool_configs() -> Vec<ToolConfig> {
             vec![
                 home_path.join(".windsurf"),
                 home_path.join(".codeium/windsurf"),
-                PathBuf::from("/Applications/Windsurf.app"),
             ],
+            software_spec(&["Windsurf"], &["windsurf"]),
         ),
         (
             "openclaw",
@@ -1427,6 +1493,7 @@ fn build_tool_configs() -> Vec<ToolConfig> {
             vec!["desktop"],
             false,
             vec![home_path.join(".openclaw")],
+            software_spec(&["OpenClaw"], &["openclaw"]),
         ),
         (
             "continue",
@@ -1437,6 +1504,7 @@ fn build_tool_configs() -> Vec<ToolConfig> {
             vec!["editor", "ide-plugin"],
             false,
             vec![home_path.join(".continue")],
+            software_spec(EDITOR_HOST_APPS, EDITOR_HOST_EXECUTABLES),
         ),
         (
             "iflow",
@@ -1447,6 +1515,7 @@ fn build_tool_configs() -> Vec<ToolConfig> {
             vec!["cli"],
             false,
             vec![home_path.join(".iflow")],
+            software_spec(&["iFlow"], &["iflow"]),
         ),
         (
             "codebuddy",
@@ -1457,6 +1526,7 @@ fn build_tool_configs() -> Vec<ToolConfig> {
             vec!["editor", "ide-plugin"],
             false,
             vec![home_path.join(".codebuddy")],
+            software_spec(&["CodeBuddy"], &["codebuddy"]),
         ),
         (
             "trae",
@@ -1466,10 +1536,8 @@ fn build_tool_configs() -> Vec<ToolConfig> {
             "editor",
             vec!["editor"],
             true,
-            vec![
-                home_path.join(".trae"),
-                PathBuf::from("/Applications/Trae.app"),
-            ],
+            vec![home_path.join(".trae")],
+            software_spec(&["Trae", "TRAE"], &["trae"]),
         ),
         (
             "droid",
@@ -1480,6 +1548,7 @@ fn build_tool_configs() -> Vec<ToolConfig> {
             vec!["editor"],
             false,
             vec![home_path.join(".factory")],
+            software_spec(&["Droid", "Factory"], &["droid"]),
         ),
         (
             "augment",
@@ -1490,6 +1559,7 @@ fn build_tool_configs() -> Vec<ToolConfig> {
             vec!["editor", "ide-plugin", "desktop"],
             false,
             vec![home_path.join(".augment")],
+            software_spec(&["Augment"], &["augment"]),
         ),
         (
             "cline",
@@ -1500,6 +1570,7 @@ fn build_tool_configs() -> Vec<ToolConfig> {
             vec!["editor", "cli"],
             false,
             vec![home_path.join(".cline")],
+            software_spec(EDITOR_HOST_APPS, EDITOR_HOST_EXECUTABLES),
         ),
         (
             "commandcode",
@@ -1510,6 +1581,7 @@ fn build_tool_configs() -> Vec<ToolConfig> {
             vec!["editor"],
             false,
             vec![home_path.join(".commandcode")],
+            software_spec(&["CommandCode"], &["commandcode"]),
         ),
         (
             "crush",
@@ -1520,6 +1592,7 @@ fn build_tool_configs() -> Vec<ToolConfig> {
             vec!["cli"],
             false,
             vec![home_path.join(".config/crush")],
+            software_spec(&["Crush"], &["crush"]),
         ),
         (
             "goose",
@@ -1530,6 +1603,7 @@ fn build_tool_configs() -> Vec<ToolConfig> {
             vec!["cli"],
             false,
             vec![home_path.join(".config/goose")],
+            software_spec(&["Goose"], &["goose"]),
         ),
         (
             "junie",
@@ -1540,6 +1614,7 @@ fn build_tool_configs() -> Vec<ToolConfig> {
             vec!["editor", "ide-plugin"],
             false,
             vec![home_path.join(".junie")],
+            software_spec(EDITOR_HOST_APPS, EDITOR_HOST_EXECUTABLES),
         ),
         (
             "kilo-code",
@@ -1550,6 +1625,7 @@ fn build_tool_configs() -> Vec<ToolConfig> {
             vec!["editor"],
             false,
             vec![home_path.join(".kilocode")],
+            software_spec(EDITOR_HOST_APPS, EDITOR_HOST_EXECUTABLES),
         ),
         (
             "kiro",
@@ -1559,10 +1635,8 @@ fn build_tool_configs() -> Vec<ToolConfig> {
             "editor",
             vec!["editor", "cli"],
             true,
-            vec![
-                home_path.join(".kiro"),
-                PathBuf::from("/Applications/Kiro.app"),
-            ],
+            vec![home_path.join(".kiro")],
+            software_spec(&["Kiro", "Kiro CLI"], &["kiro"]),
         ),
         (
             "qoder",
@@ -1573,6 +1647,7 @@ fn build_tool_configs() -> Vec<ToolConfig> {
             vec!["editor", "ide-plugin"],
             false,
             vec![home_path.join(".qoder")],
+            software_spec(&["Qoder"], &["qoder"]),
         ),
         (
             "qwen-code",
@@ -1583,6 +1658,7 @@ fn build_tool_configs() -> Vec<ToolConfig> {
             vec!["cli"],
             false,
             vec![home_path.join(".qwen")],
+            software_spec(&[], &["qwen"]),
         ),
         (
             "roo-code",
@@ -1593,6 +1669,7 @@ fn build_tool_configs() -> Vec<ToolConfig> {
             vec!["editor"],
             false,
             vec![home_path.join(".roo")],
+            software_spec(EDITOR_HOST_APPS, EDITOR_HOST_EXECUTABLES),
         ),
         (
             "zencoder",
@@ -1603,6 +1680,7 @@ fn build_tool_configs() -> Vec<ToolConfig> {
             vec!["editor", "ide-plugin", "desktop"],
             false,
             vec![home_path.join(".zencoder")],
+            software_spec(&["Zencoder"], &["zencoder"]),
         ),
         (
             "trae-cn",
@@ -1613,6 +1691,7 @@ fn build_tool_configs() -> Vec<ToolConfig> {
             vec!["editor"],
             false,
             vec![home_path.join(".trae-cn")],
+            software_spec(&["Trae CN", "TRAE CN"], &["trae-cn", "trae"]),
         ),
         (
             "hermes",
@@ -1623,6 +1702,7 @@ fn build_tool_configs() -> Vec<ToolConfig> {
             vec!["cli"],
             false,
             vec![home_path.join(".hermes")],
+            software_spec(&["Hermes"], &["hermes"]),
         ),
         (
             "github-copilot",
@@ -1633,6 +1713,7 @@ fn build_tool_configs() -> Vec<ToolConfig> {
             vec!["editor", "ide-plugin"],
             false,
             vec![home_path.join(".copilot")],
+            software_spec(EDITOR_HOST_APPS, EDITOR_HOST_EXECUTABLES),
         ),
     ];
 
@@ -1647,12 +1728,13 @@ fn build_tool_configs() -> Vec<ToolConfig> {
                 primary_type,
                 surface_types,
                 supports_direct_open,
-                detection_paths,
+                config_paths,
+                software_spec,
             )| ToolConfig {
                 id: id.into(),
                 name: name.into(),
                 skills_path: skills_path.to_string_lossy().to_string(),
-                status_label: detect_tool_installation_label(&detection_paths),
+                status_label: detect_tool_installation_label(&config_paths, &software_spec),
                 is_enabled,
                 primary_type: primary_type.into(),
                 surface_types: surface_types.into_iter().map(|item| item.into()).collect(),
@@ -1754,20 +1836,26 @@ struct EditorOpenInfo {
     app_display_name: Option<String>,
 }
 
-/// Scan /Applications for .app bundles whose name (case-insensitive) matches one of the given candidates.
+/// Scan common macOS application directories for .app bundles whose name matches a candidate.
 fn find_app_bundle(app_name_candidates: &[&str]) -> Option<String> {
-    let apps_dir = PathBuf::from("/Applications");
-    if let Ok(entries) = std::fs::read_dir(&apps_dir) {
-        for entry in entries.flatten() {
-            let name = entry.file_name();
-            let name_str = name.to_string_lossy();
-            if !name_str.ends_with(".app") {
-                continue;
-            }
-            let stem = name_str.trim_end_matches(".app");
-            for candidate in app_name_candidates {
-                if stem.eq_ignore_ascii_case(candidate) {
-                    return Some(entry.path().to_string_lossy().to_string());
+    let mut app_dirs = vec![PathBuf::from("/Applications")];
+    if let Some(home_dir) = env::var_os("HOME") {
+        app_dirs.push(PathBuf::from(home_dir).join("Applications"));
+    }
+
+    for apps_dir in app_dirs {
+        if let Ok(entries) = std::fs::read_dir(&apps_dir) {
+            for entry in entries.flatten() {
+                let name = entry.file_name();
+                let name_str = name.to_string_lossy();
+                if !name_str.ends_with(".app") {
+                    continue;
+                }
+                let stem = name_str.trim_end_matches(".app");
+                for candidate in app_name_candidates {
+                    if stem.eq_ignore_ascii_case(candidate) {
+                        return Some(entry.path().to_string_lossy().to_string());
+                    }
                 }
             }
         }
