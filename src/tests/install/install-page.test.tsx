@@ -27,6 +27,7 @@ test("shows MCP marketplace separately from skill-only install methods", async (
   expect(screen.getByRole("heading", { name: "安装源", level: 2 })).toBeInTheDocument();
   expect(screen.getByRole("tab", { name: "mcp.directory" })).toBeInTheDocument();
   expect(await screen.findByText("playwright")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "加载更多" })).toBeInTheDocument();
 });
 
 test("keeps MCP marketplace card and detail metadata consistent", async () => {
@@ -63,6 +64,30 @@ test("installs MCP marketplace servers into the managed MCP list without enablin
   await userEvent.click(installButtons[0]);
 
   expect(await screen.findByRole("button", { name: "已加入" })).toBeDisabled();
+});
+
+test("searches MCP marketplace and restores browse pagination after clearing query", async () => {
+  render(<App />);
+  await userEvent.click(screen.getByRole("button", { name: /安装/ }));
+  await userEvent.click(screen.getByRole("tab", { name: "MCP" }));
+
+  expect(await screen.findByText("context7")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "加载更多" })).toBeInTheDocument();
+
+  const searchInput = screen.getByRole("searchbox", { name: "搜索 MCP" });
+  await userEvent.type(searchInput, "playwright");
+
+  await waitFor(() => {
+    expect(screen.getByText("playwright")).toBeInTheDocument();
+    expect(screen.queryByText("context7")).not.toBeInTheDocument();
+  });
+  expect(screen.queryByRole("button", { name: "加载更多" })).not.toBeInTheDocument();
+
+  await userEvent.clear(searchInput);
+
+  await waitFor(() => {
+    expect(screen.getByRole("button", { name: "加载更多" })).toBeInTheDocument();
+  });
 });
 
 test("discovers repo skills and allows multi-select install", async () => {

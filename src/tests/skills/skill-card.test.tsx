@@ -38,7 +38,26 @@ test("shows remote and local updated time on skill card", () => {
 
   expect(screen.getByText("更新时间：")).toBeInTheDocument();
   expect(screen.queryByText("远端更新时间：")).not.toBeInTheDocument();
-  expect(screen.queryByText("远端更新人：")).not.toBeInTheDocument();
+  expect(screen.queryByText("更新人：")).not.toBeInTheDocument();
+});
+
+test("sanitizes trailing emoticon in remote updater", async () => {
+  const skill = installedSkillFixtures.find((item) => item.name === "excalidraw-diagram");
+  if (!skill) {
+    throw new Error("missing excalidraw-diagram fixture");
+  }
+
+  render(
+    <SkillWorkspaceProvider>
+      <SkillCard skill={{ ...skill, lastEditor: "Agent Fitz ;-)" }} />
+    </SkillWorkspaceProvider>,
+  );
+
+  await userEvent.click(screen.getByRole("button", { name: /展开 excalidraw-diagram/ }));
+
+  expect(screen.getByText("更新人")).toBeInTheDocument();
+  expect(screen.getByText("Agent Fitz")).toBeInTheDocument();
+  expect(screen.queryByText("Agent Fitz ;-)")).not.toBeInTheDocument();
 });
 
 test("opens skill file dialog from fixed action button", async () => {

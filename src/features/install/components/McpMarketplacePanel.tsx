@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { useNotifications } from "@/app/notifications";
 import {
   fetchMcpMarketplaceServers,
@@ -25,29 +25,91 @@ export function McpMarketplacePanel(props: McpMarketplacePanelProps) {
   const [installingServerIds, setInstallingServerIds] = useState<Set<string>>(new Set());
   const [selectedServer, setSelectedServer] = useState<McpMarketplaceServer | null>(null);
   const [isLoading, setIsLoading] = useState(true);
-  const normalizedQuery = searchQuery.trim();
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
+  const [page, setPage] = useState(0);
+  const [errorMessage, setErrorMessage] = useState("");
+  const [debouncedQuery, setDebouncedQuery] = useState("");
+  const searchCacheRef = useRef(new Map<string, McpMarketplaceServer[]>());
+  const pageCacheRef = useRef(new Map<number, McpMarketplaceServer[]>());
+  const workspaceLoadedRef = useRef(false);
+  const normalizedQuery = debouncedQuery.trim();
+  const isSearching = normalizedQuery.length > 0;
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setDebouncedQuery(searchQuery);
+    }, 300);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [searchQuery]);
 
   useEffect(() => {
     let active = true;
 
-    async function loadServers() {
+    async function ensureWorkspaceLoaded() {
+      if (workspaceLoadedRef.current) {
+        return;
+      }
+
+      const workspace = await fetchMcpWorkspace();
+      if (!active) {
+        return;
+      }
+      setInstalledServerIds(new Set(workspace.servers.map((server) => server.id)));
+      workspaceLoadedRef.current = true;
+    }
+
+    async function loadFirstPage() {
       setIsLoading(true);
+      setErrorMessage("");
       try {
-        const [marketplaceServers, workspace] = await Promise.all([
-          fetchMcpMarketplaceServers({
-            sourceSite: MCP_MARKETPLACE_SOURCE_SITE,
-            page: 1,
-            limit: MCP_MARKETPLACE_PAGE_SIZE,
-            query: normalizedQuery,
-          }),
-          fetchMcpWorkspace(),
-        ]);
+        await ensureWorkspaceLoaded();
+        const cacheKey = normalizedQuery.toLowerCase();
+        const cachedSearch = cacheKey ? searchCacheRef.current.get(cacheKey) : undefined;
+        const cachedPage = cacheKey ? undefined : pageCacheRef.current.get(1);
+        const cachedServers = cachedSearch ?? cachedPage;
         if (!active) {
           return;
         }
 
+        if (cachedServers) {
+          setServers(cachedServers);
+          setPage(cacheKey ? 1 : Math.max(pageCacheRef.current.size, 1));
+          setHasMore(cacheKey ? cachedServers.length >= MCP_MARKETPLACE_PAGE_SIZE : cachedServers.length > 0);
+          setIsLoading(false);
+          return;
+        }
+
+        const marketplaceServers = await fetchMcpMarketplaceServers({
+          sourceSite: MCP_MARKETPLACE_SOURCE_SITE,
+          page: 1,
+          limit: MCP_MARKETPLACE_PAGE_SIZE,
+          query: normalizedQuery,
+        });
+        if (!active) {
+          return;
+        }
+
+        if (cacheKey) {
+          searchCacheRef.current.set(cacheKey, marketplaceServers);
+        } else {
+          pageCacheRef.current.set(1, marketplaceServers);
+        }
         setServers(marketplaceServers);
-        setInstalledServerIds(new Set(workspace.servers.map((server) => server.id)));
+        setPage(1);
+        setHasMore(isSearching ? marketplaceServers.length >= MCP_MARKETPLACE_PAGE_SIZE : marketplaceServers.length > 0);
+      } catch (error) {
+        if (!active) {
+          return;
+        }
+        setServers([]);
+        setPage(0);
+        setHasMore(false);
+        const message = error instanceof Error ? error.message : "加载 MCP 市场失败，请稍后重试。";
+        setErrorMessage(message);
       } finally {
         if (active) {
           setIsLoading(false);
@@ -55,14 +117,47 @@ export function McpMarketplacePanel(props: McpMarketplacePanelProps) {
       }
     }
 
-    const timer = window.setTimeout(() => {
-      void loadServers();
-    }, 250);
+    void loadFirstPage();
+
     return () => {
       active = false;
-      window.clearTimeout(timer);
     };
   }, [normalizedQuery]);
+
+  async function handleLoadMore() {
+    if (isSearching || isLoading || isLoadingMore || !hasMore) {
+      return;
+    }
+
+    const nextPage = page + 1;
+    const cachedPage = pageCacheRef.current.get(nextPage);
+    if (cachedPage) {
+      setServers((current) => [...current, ...cachedPage]);
+      setPage(nextPage);
+      setHasMore(cachedPage.length >= MCP_MARKETPLACE_PAGE_SIZE);
+      return;
+    }
+
+    setIsLoadingMore(true);
+    setErrorMessage("");
+    try {
+      const nextServers = await fetchMcpMarketplaceServers({
+        sourceSite: MCP_MARKETPLACE_SOURCE_SITE,
+        page: nextPage,
+        limit: MCP_MARKETPLACE_PAGE_SIZE,
+      });
+      pageCacheRef.current.set(nextPage, nextServers);
+      setServers((current) => [...current, ...nextServers]);
+      setPage(nextPage);
+      setHasMore(nextServers.length >= MCP_MARKETPLACE_PAGE_SIZE);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "加载更多 MCP 失败，请稍后重试。";
+      setErrorMessage(message);
+      notify({ message, tone: "error" });
+    } finally {
+      setIsLoadingMore(false);
+    }
+  }
 
   async function handleInstall(server: McpMarketplaceServer) {
     if (!server.server) {
@@ -131,74 +226,96 @@ export function McpMarketplacePanel(props: McpMarketplacePanelProps) {
         {isLoading ? (
           <section className="placeholder-card">
             <h3>正在搜索 MCP</h3>
-            <p>{normalizedQuery ? `正在从 ${MCP_MARKETPLACE_SOURCE_LABEL} 搜索 "${normalizedQuery}"...` : `正在加载 ${MCP_MARKETPLACE_SOURCE_LABEL} 推荐服务。`}</p>
+            <p>{normalizedQuery ? `正在从 ${MCP_MARKETPLACE_SOURCE_LABEL} 搜索 "${normalizedQuery}"...` : `正在加载 ${MCP_MARKETPLACE_SOURCE_LABEL} 真实服务列表。`}</p>
           </section>
         ) : servers.length > 0 ? (
-          servers.map((server) => {
-            const resolvedId = normalizeMcpServerId(server.name);
-            const isInstalled = installedServerIds.has(resolvedId);
-            const isInstalling = installingServerIds.has(server.id);
-            const canInstall = Boolean(server.server);
+          <>
+            {servers.map((server) => {
+              const resolvedId = normalizeMcpServerId(server.name);
+              const isInstalled = installedServerIds.has(resolvedId);
+              const isInstalling = installingServerIds.has(server.id);
+              const canInstall = Boolean(server.server);
 
-            return (
-              <article key={server.id} className="placeholder-card install-card mcp-market-card">
-                <div
-                  className="install-card__surface"
-                  role="button"
-                  tabIndex={0}
-                  onClick={() => setSelectedServer(server)}
-                  onKeyDown={(event) => handleServerSurfaceKeyDown(event, server)}
-                >
-                  <div className="install-card__header">
-                    <div className="install-card__lead">
-                      <div className="install-card__avatar install-card__avatar--sky">
-                        {server.avatarUrl ? <img src={server.avatarUrl} alt="" loading="lazy" /> : <McpIcon />}
-                      </div>
-                      <div className="install-card__title-group">
-                        <div className="install-card__title-row">
-                          <h3 title={server.name}>{server.name}</h3>
-                          <a
-                            className="install-card__link"
-                            href={server.sourceUrl}
-                            aria-label={`打开 ${server.name} 来源`}
-                            onClick={(event) => {
-                              event.preventDefault();
-                              event.stopPropagation();
-                              void openExternalLink(server.sourceUrl);
-                            }}
-                          >
-                            <ExternalLinkIcon />
-                          </a>
+              return (
+                <article key={server.id} className="placeholder-card install-card mcp-market-card">
+                  <div
+                    className="install-card__surface"
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => setSelectedServer(server)}
+                    onKeyDown={(event) => handleServerSurfaceKeyDown(event, server)}
+                  >
+                    <div className="install-card__header">
+                      <div className="install-card__lead">
+                        <div className="install-card__avatar install-card__avatar--sky">
+                          {server.avatarUrl ? <img src={server.avatarUrl} alt="" loading="lazy" /> : <McpIcon />}
                         </div>
-                        <p>{server.description}</p>
+                        <div className="install-card__title-group">
+                          <div className="install-card__title-row">
+                            <h3 title={server.name}>{server.name}</h3>
+                            <a
+                              className="install-card__link"
+                              href={server.sourceUrl}
+                              aria-label={`打开 ${server.name} 来源`}
+                              onClick={(event) => {
+                                event.preventDefault();
+                                event.stopPropagation();
+                                void openExternalLink(server.sourceUrl);
+                              }}
+                            >
+                              <ExternalLinkIcon />
+                            </a>
+                          </div>
+                          <p>{server.description}</p>
+                        </div>
                       </div>
+                      <button
+                        className="primary-button install-card__install-button"
+                        type="button"
+                        disabled={isInstalled || isInstalling || !canInstall}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          void handleInstall(server);
+                        }}
+                      >
+                        {isInstalled ? "已加入" : isInstalling ? "安装中..." : canInstall ? "安装" : "需补全"}
+                      </button>
                     </div>
-                    <button
-                      className="primary-button install-card__install-button"
-                      type="button"
-                      disabled={isInstalled || isInstalling || !canInstall}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        void handleInstall(server);
-                      }}
-                    >
-                      {isInstalled ? "已加入" : isInstalling ? "安装中..." : canInstall ? "安装" : "需补全"}
-                    </button>
+                    <div className="install-card__chips">
+                      <span className="install-card__chip">来源: {server.sourceSite.toLowerCase()}</span>
+                      <span className="install-card__chip">作者: {server.publisher}</span>
+                      <span className="install-card__chip">下载量: {server.popularityLabel}</span>
+                      <span className="install-card__chip">分类: {server.category}</span>
+                    </div>
                   </div>
-                  <div className="install-card__chips">
-                    <span className="install-card__chip">来源: {server.sourceSite.toLowerCase()}</span>
-                    <span className="install-card__chip">作者: {server.publisher}</span>
-                    <span className="install-card__chip">下载量: {server.popularityLabel}</span>
-                    <span className="install-card__chip">分类: {server.category}</span>
-                  </div>
-                </div>
-              </article>
-            );
-          })
+                </article>
+              );
+            })}
+            {errorMessage ? (
+              <p className="install-loading-text" role="status">{errorMessage}</p>
+            ) : null}
+            {!isSearching && isLoadingMore ? (
+              <p className="install-loading-text">加载中...</p>
+            ) : null}
+            {!isSearching && hasMore ? (
+              <button className="secondary-button" type="button" onClick={() => void handleLoadMore()} disabled={isLoadingMore}>
+                {isLoadingMore ? "加载中..." : "加载更多"}
+              </button>
+            ) : null}
+            {!isSearching && !hasMore ? (
+              <p className="install-loading-text">已加载全部 MCP</p>
+            ) : null}
+          </>
         ) : (
           <section className="placeholder-card">
             <h3>暂无可安装 MCP</h3>
-            <p>{normalizedQuery ? `没有在 ${MCP_MARKETPLACE_SOURCE_LABEL} 中找到 "${normalizedQuery}"。` : `${MCP_MARKETPLACE_SOURCE_LABEL} 暂时没有可展示的服务。`}</p>
+            <p>
+              {errorMessage
+                ? errorMessage
+                : normalizedQuery
+                  ? `没有在 ${MCP_MARKETPLACE_SOURCE_LABEL} 中找到 "${normalizedQuery}"。`
+                  : `${MCP_MARKETPLACE_SOURCE_LABEL} 暂时没有可展示的服务。`}
+            </p>
           </section>
         )}
       </div>

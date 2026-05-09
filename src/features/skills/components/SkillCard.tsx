@@ -5,6 +5,7 @@ import { ToolSyncPanel } from "@/features/skills/components/ToolSyncPanel";
 import { useSkillWorkspace } from "@/features/skills/state/skill-workspace";
 import type { SkillSummary } from "@/features/skills/state/skill-store";
 import { formatSkillDescription } from "@/features/skills/utils/skill-description";
+import { formatSkillLastEditor } from "@/features/skills/utils/skill-editor";
 import { formatSkillSourceLabel } from "@/features/skills/utils/skill-source";
 import { mergeSkillToolsWithInstalledTools } from "@/features/skills/utils/skill-tools";
 import { formatSkillUpdatedAt } from "@/features/skills/utils/skill-time";
@@ -103,7 +104,7 @@ export function SkillCard({ skill }: SkillCardProps) {
   const skillDescription = formatSkillDescription(skill.description);
   const remoteUpdatedAt = formatSkillUpdatedAt(skill.remoteUpdatedAt);
   const localUpdatedAt = formatSkillUpdatedAt(skill.localUpdatedAt);
-  const remoteUpdater = skill.lastEditor || "未获取";
+  const remoteUpdater = formatSkillLastEditor(skill.lastEditor) || "未获取";
   const enabledTools = skillTools.filter((tool) => isToolEnabledStatus(tool.statusLabel));
   const visibleTools = enabledTools.slice(0, 2);
   const hiddenToolCount = Math.max(enabledTools.length - visibleTools.length, 0);
@@ -330,7 +331,7 @@ export function SkillCard({ skill }: SkillCardProps) {
                   <dd>{remoteUpdatedAt || "未获取"}</dd>
                 </div>
                 <div>
-                  <dt>远端更新人</dt>
+                  <dt>更新人</dt>
                   <dd>{remoteUpdater}</dd>
                 </div>
                 <div>
