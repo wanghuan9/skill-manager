@@ -91,16 +91,22 @@ export function SettingsRoute() {
                   key={tool.id}
                   className={`settings-tool-card${tool.isInstalled ? " is-installed" : ""}`}
                 >
-                  <span className="settings-tool-card__logo" aria-hidden="true">
-                    {logoUrl ? <img src={logoUrl} alt="" /> : <span>{tool.name.slice(0, 1)}</span>}
-                  </span>
-                  <span className="settings-tool-card__copy">
-                    <strong>{tool.name}</strong>
-                    <span className={`settings-tool-card__status${tool.isInstalled ? " is-installed" : ""}`}>
+                  <span className="settings-tool-card__status-row">
+                    <span
+                      className={`settings-tool-card__status-badge${tool.isInstalled ? " is-installed" : ""}`}
+                    >
                       {tool.statusLabel}
                     </span>
-                    <span className="settings-tool-card__surface">
-                      {tool.surfaceTypes.map((surface) => TOOL_SURFACE_LABELS[surface]).join(" / ")}
+                  </span>
+                  <span className="settings-tool-card__content-row">
+                    <span className="settings-tool-card__logo" aria-hidden="true">
+                      {logoUrl ? <img src={logoUrl} alt="" /> : <span>{tool.name.slice(0, 1)}</span>}
+                    </span>
+                    <span className="settings-tool-card__copy">
+                      <strong>{tool.name}</strong>
+                      <span className="settings-tool-card__surface">
+                        {tool.surfaceTypes.map((surface) => TOOL_SURFACE_LABELS[surface]).join(" / ")}
+                      </span>
                     </span>
                   </span>
                 </article>

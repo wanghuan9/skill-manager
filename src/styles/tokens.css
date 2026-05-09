@@ -4123,7 +4123,7 @@ code {
 .settings-tool-grid {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 10px;
+  gap: 8px;
   padding: 0 20px 18px;
 }
 
@@ -4137,15 +4137,18 @@ code {
 }
 
 .settings-tool-card {
-  display: grid;
-  grid-template-columns: 32px minmax(0, 1fr);
+  display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: 9px;
-  min-height: 66px;
-  padding: 9px 11px;
-  border-radius: 12px;
+  justify-content: center;
+  gap: 3px;
+  min-height: 78px;
+  padding: 7px 6px;
+  border-radius: 14px;
   border: 1px solid rgba(205, 217, 235, 0.95);
   background: rgba(248, 251, 255, 0.76);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.64);
+  text-align: center;
   transition:
     border-color 140ms ease,
     transform 140ms ease,
@@ -4155,7 +4158,7 @@ code {
 
 .settings-tool-card.is-installed {
   border-color: rgba(39, 179, 106, 0.32);
-  background: #eef8f5;
+  background: linear-gradient(180deg, #f1fbf7 0%, #edf8f4 100%);
 }
 
 .settings-tool-card:hover {
@@ -4167,35 +4170,41 @@ code {
 }
 
 .settings-tool-card strong {
+  max-width: 100%;
   min-width: 0;
-  overflow: hidden;
+  display: block;
   color: var(--heading);
-  font-size: 0.84rem;
-  line-height: 1.18;
+  font-size: 0.8rem;
+  line-height: 1.12;
+  font-weight: 650;
   letter-spacing: 0;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  white-space: normal;
+  text-align: left;
 }
 
 .settings-tool-card__logo {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 32px;
+  width: 28px;
+  height: 28px;
   overflow: hidden;
-  border-radius: 10px;
-  background: rgba(255, 255, 255, 0.78);
+  border-radius: 9px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.96) 0%, rgba(246, 250, 255, 0.88) 100%);
   color: #5a6f9f;
-  font-size: 0.92rem;
+  font-size: 0.74rem;
   font-weight: 800;
-  box-shadow: inset 0 0 0 1px rgba(207, 219, 238, 0.38);
+  box-shadow:
+    inset 0 0 0 1px rgba(207, 219, 238, 0.44),
+    0 3px 8px rgba(142, 156, 181, 0.1);
 }
 
 .settings-tool-card__logo img {
-  width: 82%;
-  height: 82%;
+  width: 76%;
+  height: 76%;
   object-fit: contain;
+  border-radius: 8px;
 }
 
 .settings-tool-card__logo span {
@@ -4206,31 +4215,57 @@ code {
   height: 100%;
 }
 
+.settings-tool-card__content-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+  width: fit-content;
+  max-width: 100%;
+}
+
 .settings-tool-card__copy {
   display: grid;
   min-width: 0;
-  gap: 2px;
+  gap: 5px;
 }
 
-.settings-tool-card__status {
-  font-size: 0.72rem;
-  font-weight: 650;
-  color: color-mix(in srgb, var(--muted) 92%, #44516b 8%);
-  line-height: 1.12;
+.settings-tool-card__status-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-width: 0;
+  margin-bottom: 4px;
 }
 
-.settings-tool-card__status.is-installed {
-  color: color-mix(in srgb, var(--muted) 92%, #44516b 8%);
+.settings-tool-card__status-badge {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #748196;
+  font-size: 0.56rem;
+  font-weight: 700;
+  line-height: 1.05;
+  letter-spacing: 0;
+  white-space: nowrap;
+}
+
+.settings-tool-card__status-badge.is-installed {
+  color: #27985f;
 }
 
 .settings-tool-card__surface {
+  max-width: 100%;
   min-width: 0;
-  overflow: hidden;
   color: color-mix(in srgb, var(--muted) 92%, #44516b 8%);
-  font-size: 0.64rem;
-  line-height: 1.25;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  font-size: 0.61rem;
+  line-height: 1.08;
+  white-space: normal;
+  text-align: left;
 }
 
 @media (max-width: 1180px) {
@@ -4253,15 +4288,36 @@ code {
   }
 
   .settings-tool-card {
-    grid-template-columns: 30px minmax(0, 1fr);
-    gap: 8px;
-    padding: 9px 10px;
+    gap: 3px;
+    min-height: 74px;
+    padding: 7px 6px;
+  }
+
+  .settings-tool-card__status-row {
+    margin-bottom: 4px;
+  }
+
+  .settings-tool-card__content-row {
+    gap: 6px;
   }
 
   .settings-tool-card__logo {
-    width: 30px;
-    height: 30px;
-    border-radius: 9px;
+    width: 26px;
+    height: 26px;
+    border-radius: 8px;
+  }
+
+  .settings-tool-card strong {
+    font-size: 0.76rem;
+    line-height: 1.08;
+  }
+
+  .settings-tool-card__status-badge {
+    font-size: 0.53rem;
+  }
+
+  .settings-tool-card__surface {
+    font-size: 0.58rem;
   }
 }
 
