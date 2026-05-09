@@ -16,6 +16,7 @@ import type {
   McpWorkspaceSnapshot,
 } from "@/features/skills/state/skill-store";
 import { getToolLogoUrl } from "@/features/skills/utils/tool-logo";
+import { getMonogramLabel } from "@/features/skills/utils/monogram";
 
 type McpFormState = {
   id: string;
@@ -94,43 +95,13 @@ function sourceLabelForMcpSource(sourceUrl: string) {
   return "仓库";
 }
 
-function McpServerTypeIcon({ serverType }: { serverType: string }) {
-  if (serverType === "stdio") {
-    return (
-      <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
-        <path
-          d="M4.25 5.25h11.5v9.5H4.25v-9.5Z"
-          stroke="currentColor"
-          strokeWidth="1.5"
-          strokeLinejoin="round"
-        />
-        <path
-          d="m6.75 8 2 2-2 2M10.25 12h3"
-          stroke="currentColor"
-          strokeWidth="1.5"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-      </svg>
-    );
-  }
-
+function McpServerMonogram({ server }: { server: McpServerSummary }) {
+  const statusClassName = server.enabledAppCount > 0 ? "is-active" : "is-inactive";
   return (
-    <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
-      <path
-        d="M7.25 10a2.75 2.75 0 1 1-1.1-2.2l1.45 1.1M12.75 10a2.75 2.75 0 1 0 1.1-2.2l-1.45 1.1"
-        stroke="currentColor"
-        strokeWidth="1.5"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-      <path
-        d="M7.5 10h5"
-        stroke="currentColor"
-        strokeWidth="1.5"
-        strokeLinecap="round"
-      />
-    </svg>
+    <div className="link-badge link-badge--mcp-monogram" aria-hidden="true">
+      <span className="link-badge__label">{getMonogramLabel(server.name || server.id)}</span>
+      <span className={`link-badge__status-dot ${statusClassName}`} />
+    </div>
   );
 }
 
@@ -495,9 +466,7 @@ export function McpRoute() {
                 >
                   <div className="mcp-server-card__main">
                     <div className="mcp-server-card__identity">
-                      <div className={`link-badge ${server.serverType === "stdio" ? "link-badge--local" : "link-badge--market"}`} aria-hidden="true">
-                        <McpServerTypeIcon serverType={server.serverType} />
-                      </div>
+                      <McpServerMonogram server={server} />
                       <div className="mcp-server-card__title-stack">
                         <div className="mcp-server-card__title-row">
                           <strong>{server.name}</strong>

@@ -8,6 +8,7 @@ import {
   readSkillGroupCollapsedState,
   writeSkillGroupCollapsedState,
 } from "@/features/skills/utils/skill-view-preference";
+import { getMonogramLabel } from "@/features/skills/utils/monogram";
 import type { SkillSummary } from "@/features/skills/state/skill-store";
 
 type SkillToolbarProps = {
@@ -90,6 +91,14 @@ function formatGroupSourceUrl(sourceUrl: string) {
   } catch {
     return sourceUrl;
   }
+}
+
+function SkillGroupMonogram({ label }: { label: string }) {
+  return (
+    <div className="skill-group-section__icon" aria-hidden="true">
+      {getMonogramLabel(label)}
+    </div>
+  );
 }
 
 export function SkillListToolbar(props: SkillToolbarProps) {
@@ -250,18 +259,19 @@ export function SkillListPage(props: SkillListPageProps) {
                   aria-label={`${isCollapsed ? "展开" : "收起"}来源分组 ${group.label}`}
                 >
                   <div className="skill-group-section__title">
-                      <div className="skill-group-section__copy">
-                        <div className="skill-group-section__name-row">
-                          <h3>{group.label}</h3>
-                          <span className="skill-group-section__badge" aria-hidden="true">
-                            分组
-                          </span>
-                          <span className="skill-group-section__count">{group.skills.length} 个技能</span>
-                        </div>
-                        <p className="skill-group-section__source">
-                          <span>来源于：{groupSourceUrl}</span>
-                        </p>
+                    <SkillGroupMonogram label={group.label} />
+                    <div className="skill-group-section__copy">
+                      <div className="skill-group-section__name-row">
+                        <h3>{group.label}</h3>
+                        <span className="skill-group-section__badge" aria-hidden="true">
+                          分组
+                        </span>
+                        <span className="skill-group-section__count">{group.skills.length} 个技能</span>
                       </div>
+                      <p className="skill-group-section__source">
+                        <span>来源于：{groupSourceUrl}</span>
+                      </p>
+                    </div>
                   </div>
                   <div className="skill-group-section__meta">
                     {updateCount > 0 ? <span className="skill-group-section__state skill-group-section__state--update">可更新 {updateCount}</span> : null}

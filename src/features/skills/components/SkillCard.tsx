@@ -9,87 +9,18 @@ import { formatSkillSourceLabel } from "@/features/skills/utils/skill-source";
 import { mergeSkillToolsWithInstalledTools } from "@/features/skills/utils/skill-tools";
 import { formatSkillUpdatedAt } from "@/features/skills/utils/skill-time";
 import { isToolEnabledStatus } from "@/features/skills/utils/tool-status";
+import { getMonogramLabel } from "@/features/skills/utils/monogram";
 
 type SkillCardProps = {
   skill: SkillSummary;
 };
 
-type SourceIconKind = "github" | "gitlab" | "local" | "default";
-
-function resolveSourceIconKind(sourceLabel: string, sourceType: SkillSummary["sourceType"]): SourceIconKind {
-  if (sourceLabel === "本地") {
-    return "local";
-  }
-  if (sourceLabel === "GitLab") {
-    return "gitlab";
-  }
-  if (sourceLabel === "GitHub") {
-    return "github";
-  }
-  if (sourceType === "local") {
-    return "local";
-  }
-  if (sourceType === "gitlab") {
-    return "gitlab";
-  }
-  if (sourceType === "github" || sourceType === "gitee") {
-    return "github";
-  }
-
-  return "default";
-}
-
-function SourceIcon({ iconKind }: { iconKind: SourceIconKind }) {
-  switch (iconKind) {
-    case "github":
-      return (
-        <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
-          <path
-            d="M4.75 5.5A1.75 1.75 0 0 1 6.5 3.75h7A1.75 1.75 0 0 1 15.25 5.5v9A1.75 1.75 0 0 1 13.5 16.25h-7a1.75 1.75 0 0 1-1.75-1.75v-9Z"
-            stroke="currentColor"
-            strokeWidth="1.5"
-          />
-          <path d="M7 7.25h6M7 10h6M7 12.75h3.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-          <path d="M4.75 6.5H3.5M4.75 13.5H3.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-        </svg>
-      );
-    case "gitlab":
-      return (
-        <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
-          <path
-            d="M5.5 4.5h2.25l2.25 6 2.25-6h2.25l1.5 4.25L10 15.5 4 8.75 5.5 4.5Z"
-            stroke="currentColor"
-            strokeWidth="1.5"
-            strokeLinejoin="round"
-          />
-          <path d="M7.75 4.5 10 10.5 12.25 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
-        </svg>
-      );
-    case "local":
-      return (
-        <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
-          <path
-            d="M3.75 6.5A1.75 1.75 0 0 1 5.5 4.75h3l1.25 1.5h4.75a1.75 1.75 0 0 1 1.75 1.75v5.5a1.75 1.75 0 0 1-1.75 1.75h-9A1.75 1.75 0 0 1 3.75 13.5v-7Z"
-            stroke="currentColor"
-            strokeWidth="1.5"
-            strokeLinejoin="round"
-          />
-          <path d="M7 10.25h5.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-        </svg>
-      );
-    default:
-      return (
-        <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
-          <path
-            d="M5 4.75h10v10.5H5z"
-            stroke="currentColor"
-            strokeWidth="1.5"
-            strokeLinejoin="round"
-          />
-          <path d="M7.5 8h5M7.5 11h5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-        </svg>
-      );
-  }
+function SkillMonogram({ name }: { name: string }) {
+  return (
+    <div className="link-badge link-badge--monogram" aria-hidden="true">
+      <span className="link-badge__label">{getMonogramLabel(name)}</span>
+    </div>
+  );
 }
 
 function ViewFileIcon() {
@@ -167,7 +98,6 @@ export function SkillCard({ skill }: SkillCardProps) {
   const skillTools = mergeSkillToolsWithInstalledTools(skill.tools, toolConfigs);
   const sourceLabel = formatSkillSourceLabel(skill.sourceLabel);
   const skillDescription = formatSkillDescription(skill.description);
-  const sourceIconKind = resolveSourceIconKind(sourceLabel, skill.sourceType);
   const updatedAt = formatSkillUpdatedAt(skill.lastSyncedAt);
   const enabledTools = skillTools.filter((tool) => isToolEnabledStatus(tool.statusLabel));
   const visibleTools = enabledTools.slice(0, 2);
@@ -271,11 +201,17 @@ export function SkillCard({ skill }: SkillCardProps) {
             <div className="skill-card__summary-content">
               <div className="skill-card__summary-top">
                 <div className="skill-card__identity">
-                  <div className={`link-badge link-badge--${sourceIconKind}`} aria-hidden="true">
-                    <SourceIcon iconKind={sourceIconKind} />
-                  </div>
-                  <div className="skill-card__title-row">
-                    <h3>{skill.name}</h3>
+                  <SkillMonogram name={skill.name} />
+                  <div className="skill-card__title-stack">
+                    <div className="skill-card__title-row">
+                      <h3>{skill.name}</h3>
+                    </div>
+                    <div className="skill-card__list-meta">
+                      <span className="skill-card__meta-label-inline">来源：</span>
+                      <span className="skill-card__meta-value">{sourceLabel}</span>
+                      <span className="skill-card__meta-label-inline">更新时间：</span>
+                      <span className="skill-card__meta-value">{updatedAt}</span>
+                    </div>
                   </div>
                 </div>
                 <div className="skill-card__summary-tools" aria-label="已启用工具">
@@ -294,12 +230,6 @@ export function SkillCard({ skill }: SkillCardProps) {
                     <span className="skill-card__tool-empty">未启用到工具</span>
                   )}
                 </div>
-              </div>
-              <div className="skill-card__list-meta">
-                <span className="skill-card__meta-label-inline">来源：</span>
-                <span className="skill-card__meta-value">{sourceLabel}</span>
-                <span className="skill-card__meta-label-inline">更新时间：</span>
-                <span className="skill-card__meta-value">{updatedAt}</span>
               </div>
             </div>
           </button>
