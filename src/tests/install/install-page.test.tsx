@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { App } from "@/app/App";
 
@@ -24,8 +24,34 @@ test("shows MCP marketplace separately from skill-only install methods", async (
   expect(screen.getByRole("tab", { name: "MCP" })).toHaveAttribute("aria-selected", "true");
   expect(screen.queryByRole("tab", { name: "Git 安装" })).not.toBeInTheDocument();
   expect(screen.queryByRole("tab", { name: "本地安装" })).not.toBeInTheDocument();
-  expect(screen.getByRole("tab", { name: "MCP.Directory" })).toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: "安装源", level: 2 })).toBeInTheDocument();
+  expect(screen.getByRole("tab", { name: "mcp.directory" })).toBeInTheDocument();
   expect(await screen.findByText("playwright")).toBeInTheDocument();
+});
+
+test("keeps MCP marketplace card and detail metadata consistent", async () => {
+  render(<App />);
+  await userEvent.click(screen.getByRole("button", { name: /安装/ }));
+  await userEvent.click(screen.getByRole("tab", { name: "MCP" }));
+
+  const context7Heading = await screen.findByRole("heading", { name: "context7", level: 3 });
+  const context7Card = context7Heading.closest("article");
+  if (!context7Card) {
+    throw new Error("context7 marketplace card was not rendered");
+  }
+
+  expect(within(context7Card).getByText("来源: mcp.directory")).toBeInTheDocument();
+  expect(within(context7Card).getByText("作者: upstash")).toBeInTheDocument();
+  expect(within(context7Card).getByText("下载量: 36.7K")).toBeInTheDocument();
+  expect(within(context7Card).getByText("分类: AI/ML")).toBeInTheDocument();
+
+  await userEvent.click(context7Heading);
+
+  const detailDialog = screen.getByRole("dialog", { name: "context7 详情" });
+  expect(within(detailDialog).getByText("来源: mcp.directory")).toBeInTheDocument();
+  expect(within(detailDialog).getByText("作者: upstash")).toBeInTheDocument();
+  expect(within(detailDialog).getByText("下载量: 36.7K")).toBeInTheDocument();
+  expect(within(detailDialog).getByText("分类: AI/ML")).toBeInTheDocument();
 });
 
 test("installs MCP marketplace servers into the managed MCP list without enabling tools", async () => {

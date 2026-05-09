@@ -9,6 +9,8 @@ import {
 import type { McpMarketplaceServer } from "@/features/skills/state/skill-store";
 
 const MCP_MARKETPLACE_PAGE_SIZE = 24;
+const MCP_MARKETPLACE_SOURCE_SITE = "MCP.Directory";
+const MCP_MARKETPLACE_SOURCE_LABEL = "mcp.directory";
 
 type McpMarketplacePanelProps = {
   searchQuery: string;
@@ -33,7 +35,7 @@ export function McpMarketplacePanel(props: McpMarketplacePanelProps) {
       try {
         const [marketplaceServers, workspace] = await Promise.all([
           fetchMcpMarketplaceServers({
-            sourceSite: "MCP.Directory",
+            sourceSite: MCP_MARKETPLACE_SOURCE_SITE,
             page: 1,
             limit: MCP_MARKETPLACE_PAGE_SIZE,
             query: normalizedQuery,
@@ -101,7 +103,7 @@ export function McpMarketplacePanel(props: McpMarketplacePanelProps) {
     <section className="panel-card market-panel mcp-market-panel">
       <div className="market-source-bar">
         <div className="panel-header">
-          <h2>MCP 来源</h2>
+          <h2>安装源</h2>
         </div>
         <label className="market-search-field">
           <span className="sr-only">搜索 MCP</span>
@@ -110,7 +112,7 @@ export function McpMarketplacePanel(props: McpMarketplacePanelProps) {
               className="market-search-input"
               type="search"
               value={searchQuery}
-              placeholder="搜索 MCP（MCP.Directory）"
+              placeholder="搜索 MCP（支持全部安装源）"
               onChange={(event) => onSearchQueryChange(event.target.value)}
             />
             {isLoading ? (
@@ -118,9 +120,9 @@ export function McpMarketplacePanel(props: McpMarketplacePanelProps) {
             ) : null}
           </div>
         </label>
-        <div className="source-tab-row" role="tablist" aria-label="MCP 来源">
+        <div className="source-tab-row" role="tablist" aria-label="安装源">
           <button className="source-tab is-selected" type="button" role="tab" aria-selected="true">
-            MCP.Directory
+            {MCP_MARKETPLACE_SOURCE_LABEL}
           </button>
         </div>
       </div>
@@ -129,7 +131,7 @@ export function McpMarketplacePanel(props: McpMarketplacePanelProps) {
         {isLoading ? (
           <section className="placeholder-card">
             <h3>正在搜索 MCP</h3>
-            <p>{normalizedQuery ? `正在从 MCP.Directory 搜索 "${normalizedQuery}"...` : "正在加载 MCP.Directory 推荐服务。"}</p>
+            <p>{normalizedQuery ? `正在从 ${MCP_MARKETPLACE_SOURCE_LABEL} 搜索 "${normalizedQuery}"...` : `正在加载 ${MCP_MARKETPLACE_SOURCE_LABEL} 推荐服务。`}</p>
           </section>
         ) : servers.length > 0 ? (
           servers.map((server) => {
@@ -184,10 +186,10 @@ export function McpMarketplacePanel(props: McpMarketplacePanelProps) {
                     </button>
                   </div>
                   <div className="install-card__chips">
-                    <span className="install-card__chip">来源: {server.sourceSite}</span>
+                    <span className="install-card__chip">来源: {server.sourceSite.toLowerCase()}</span>
                     <span className="install-card__chip">作者: {server.publisher}</span>
+                    <span className="install-card__chip">下载量: {server.popularityLabel}</span>
                     <span className="install-card__chip">分类: {server.category}</span>
-                    <span className="install-card__chip">传输: {server.transportLabel}</span>
                   </div>
                 </div>
               </article>
@@ -196,7 +198,7 @@ export function McpMarketplacePanel(props: McpMarketplacePanelProps) {
         ) : (
           <section className="placeholder-card">
             <h3>暂无可安装 MCP</h3>
-            <p>{normalizedQuery ? `没有在 MCP.Directory 中找到 "${normalizedQuery}"。` : "MCP.Directory 暂时没有可展示的服务。"}</p>
+            <p>{normalizedQuery ? `没有在 ${MCP_MARKETPLACE_SOURCE_LABEL} 中找到 "${normalizedQuery}"。` : `${MCP_MARKETPLACE_SOURCE_LABEL} 暂时没有可展示的服务。`}</p>
           </section>
         )}
       </div>
@@ -244,24 +246,28 @@ function McpServerDetailModal(props: McpServerDetailModalProps) {
             <h3>{server.name}</h3>
             <p>{server.publisher} · {server.category}</p>
           </div>
-          <button className="skill-detail-modal__close" type="button" onClick={onClose} aria-label="关闭详情">
-            ×
-          </button>
+          <div className="skill-detail-modal__actions">
+            <a
+              className="skill-detail-modal__action-link"
+              href={server.sourceUrl}
+              onClick={(event) => {
+                event.preventDefault();
+                void openExternalLink(server.sourceUrl);
+              }}
+            >
+              <ExternalLinkIcon />
+              打开来源
+            </a>
+            <button className="skill-detail-modal__close" type="button" onClick={onClose} aria-label="关闭详情">
+              ×
+            </button>
+          </div>
         </header>
         <div className="skill-detail-modal__meta">
-          <span className="install-card__chip">来源: {server.sourceSite}</span>
-          <span className="install-card__chip">传输: {server.transportLabel}</span>
-          <span className="install-card__chip">热度: {server.popularityLabel}</span>
-          <a
-            className="install-card__chip skill-detail-modal__link"
-            href={server.sourceUrl}
-            onClick={(event) => {
-              event.preventDefault();
-              void openExternalLink(server.sourceUrl);
-            }}
-          >
-            打开来源
-          </a>
+          <span className="install-card__chip">来源: {server.sourceSite.toLowerCase()}</span>
+          <span className="install-card__chip">作者: {server.publisher}</span>
+          <span className="install-card__chip">下载量: {server.popularityLabel}</span>
+          <span className="install-card__chip">分类: {server.category}</span>
         </div>
         <article className="skill-detail-modal__content">
           <h4>MCP 介绍</h4>

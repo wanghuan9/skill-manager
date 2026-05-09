@@ -274,6 +274,8 @@ function SkillDetailModal(props: SkillDetailModalProps) {
     };
   }, [onClose]);
 
+  const officialRepositoryUrl = buildOfficialRepositoryUrl(skill.sourceUrl);
+
   return (
     <div className="skill-detail-modal__backdrop" role="presentation" onClick={onClose}>
       <section
@@ -288,9 +290,22 @@ function SkillDetailModal(props: SkillDetailModalProps) {
             <h3>{skill.name}</h3>
             <p>来源 {skill.sourceSite} · 作者 {skill.maintainer}</p>
           </div>
-          <button className="skill-detail-modal__close" type="button" onClick={onClose} aria-label="关闭详情">
-            ×
-          </button>
+          <div className="skill-detail-modal__actions">
+            <a
+              className="skill-detail-modal__action-link"
+              href={officialRepositoryUrl}
+              onClick={(event) => {
+                event.preventDefault();
+                void openExternalLink(officialRepositoryUrl);
+              }}
+            >
+              <ExternalLinkIcon />
+              打开仓库
+            </a>
+            <button className="skill-detail-modal__close" type="button" onClick={onClose} aria-label="关闭详情">
+              ×
+            </button>
+          </div>
         </header>
         <div className="skill-detail-modal__meta">
           <span className="install-card__chip">来源: {skill.sourceSite}</span>
@@ -299,16 +314,6 @@ function SkillDetailModal(props: SkillDetailModalProps) {
             <DownloadIcon />
             {skill.popularityLabel}
           </span>
-          <a
-            className="install-card__chip skill-detail-modal__link"
-            href={buildOfficialRepositoryUrl(skill.sourceUrl)}
-            onClick={(event) => {
-              event.preventDefault();
-              void openExternalLink(buildOfficialRepositoryUrl(skill.sourceUrl));
-            }}
-          >
-            打开仓库
-          </a>
         </div>
         <article className="skill-detail-modal__content">
           <h4>Skill 介绍</h4>
