@@ -1445,7 +1445,7 @@ pub fn remove_skill_symlink(tool_skills_path: &str, skill_name: &str) -> Result<
     Ok(())
 }
 
-fn remove_reserved_workspace_symlinks(tool_skills_path: &str) -> Result<(), String> {
+pub fn remove_reserved_workspace_entries(tool_skills_path: &str) -> Result<(), String> {
     if sync_trace_enabled() {
         eprintln!(
             "[sync-trace] remove_reserved_workspace_symlinks tool_skills_path={tool_skills_path}"
@@ -1533,7 +1533,7 @@ pub fn reconcile_tool_skill_symlinks(
             .map_err(|error| format!("创建工具 skills 目录失败: {error}"))?;
     }
 
-    remove_reserved_workspace_symlinks(tool_skills_path)?;
+    remove_reserved_workspace_entries(tool_skills_path)?;
 
     let expected_skill_names = enabled_skills
         .iter()
@@ -1654,7 +1654,7 @@ pub fn remove_skill_symlinks_from_all_tools(skill_name: &str) -> Result<(), Stri
 pub fn remove_reserved_workspace_symlinks_from_all_tools() -> Result<(), String> {
     for tool_id in tool_ids() {
         if let Ok(tool_skills_path) = get_tool_skills_path(tool_id) {
-            let _ = remove_reserved_workspace_symlinks(&tool_skills_path);
+            let _ = remove_reserved_workspace_entries(&tool_skills_path);
         }
     }
 
@@ -1745,7 +1745,7 @@ fn git_worktree_root(path: &Path) -> Option<PathBuf> {
 mod tests {
     use super::{
         clone_branch_for_resolved_path, create_skill_symlink, reconcile_tool_skill_symlinks,
-        remove_reserved_workspace_symlinks, skill_dir_match_score, MarketSourceSpec,
+        remove_reserved_workspace_entries, skill_dir_match_score, MarketSourceSpec,
         ResolvedRemoteSkillPath,
     };
     use crate::models::SkillSummary;
@@ -1914,7 +1914,7 @@ mod tests {
             std::env::set_var("HOME", &home_dir);
         }
 
-        remove_reserved_workspace_symlinks(tool_skills_dir.to_string_lossy().as_ref())
+        remove_reserved_workspace_entries(tool_skills_dir.to_string_lossy().as_ref())
             .expect("remove reserved symlinks");
 
         assert!(!tool_skills_dir.join("cache").exists());

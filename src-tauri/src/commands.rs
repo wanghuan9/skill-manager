@@ -19,7 +19,7 @@ use crate::git_state::{
 use crate::library::{
     clone_repo_for_discovery, clone_repo_for_discovery_with_sparse_paths, clone_repo_skill,
     ensure_repo_skill_with_sparse_paths, get_tool_skills_path, install_market_skill_from_source,
-    parse_market_source_url, reconcile_tool_skill_symlinks,
+    parse_market_source_url, reconcile_tool_skill_symlinks, remove_reserved_workspace_entries,
     remove_reserved_workspace_symlinks_from_all_tools, remove_skill_symlink,
     remove_skill_symlinks_from_all_tools, sanitize_storage_name, skill_directory,
 };
@@ -3978,7 +3978,6 @@ pub fn toggle_skill_tool_status(skill_name: &str, tool_name: &str) -> Result<Ski
             "[sync-trace] command toggle_skill_tool_status skill_name={skill_name} tool_name={tool_name}"
         );
     }
-    let _ = remove_reserved_workspace_symlinks_from_all_tools();
     let mut installed_skills = resolve_startup_installed_skills();
     let skill_index = installed_skills
         .iter()
@@ -3986,6 +3985,7 @@ pub fn toggle_skill_tool_status(skill_name: &str, tool_name: &str) -> Result<Ski
         .ok_or_else(|| format!("未找到技能 {skill_name}"))?;
     let tool_id = tool_name_to_id(tool_name)?;
     let tool_skills_path = get_tool_skills_path(&tool_id)?;
+    let _ = remove_reserved_workspace_entries(&tool_skills_path);
     let is_enabling = installed_skills[skill_index]
         .tools
         .iter()
@@ -4008,7 +4008,6 @@ pub fn toggle_skill_tool_status(skill_name: &str, tool_name: &str) -> Result<Ski
     reconcile_tool_skill_symlinks(&tool_skills_path, &enabled_skills)?;
 
     save_installed_skills(&installed_skills)?;
-    let _ = remove_reserved_workspace_symlinks_from_all_tools();
     Ok(installed_skills[skill_index].clone())
 }
 
@@ -4023,9 +4022,9 @@ pub fn set_tool_skill_statuses(
             "[sync-trace] command set_tool_skill_statuses tool_name={tool_name} enabled={enabled} skill_names={skill_names:?}"
         );
     }
-    let _ = remove_reserved_workspace_symlinks_from_all_tools();
     let tool_id = tool_name_to_id(tool_name)?;
     let tool_skills_path = get_tool_skills_path(&tool_id)?;
+    let _ = remove_reserved_workspace_entries(&tool_skills_path);
     let target_skill_names = skill_names
         .into_iter()
         .map(|name| name.trim().to_string())
