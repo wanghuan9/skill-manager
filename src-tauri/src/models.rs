@@ -72,6 +72,7 @@ pub struct ToolConfig {
     pub id: String,
     pub name: String,
     pub skills_path: String,
+    pub mcp_config_path: String,
     pub status_label: String,
     pub is_enabled: bool,
     pub primary_type: String,

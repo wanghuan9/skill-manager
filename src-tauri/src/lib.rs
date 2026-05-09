@@ -1,6 +1,7 @@
 mod commands;
 mod git_state;
 mod library;
+mod mcp_manager;
 mod models;
 mod state;
 
@@ -39,6 +40,7 @@ pub fn run() {
             commands::open_skill_repository,
             commands::open_external_link,
             commands::open_tool_skills_folder,
+            commands::open_tool_mcp_config,
             commands::open_skill_in_editor,
             commands::update_skill,
             commands::get_skill_file_browser,
@@ -47,6 +49,13 @@ pub fn run() {
             commands::delete_skill,
             commands::toggle_skill_tool_status,
             commands::refresh_git_states,
+            mcp_manager::list_mcp_workspace,
+            mcp_manager::list_mcp_marketplace_servers,
+            mcp_manager::install_mcp_server_from_marketplace,
+            mcp_manager::import_mcp_servers_from_apps,
+            mcp_manager::upsert_mcp_server,
+            mcp_manager::delete_mcp_server,
+            mcp_manager::toggle_mcp_server_app,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { SkillsRoute } from "@/app/routes/skills";
 import { ToolsRoute } from "@/app/routes/tools";
-import { InstallTabSwitcher, MarketRoute, type InstallTab } from "@/app/routes/market";
+import { McpRoute } from "@/app/routes/mcp";
+import { MarketRoute, type InstallTab } from "@/app/routes/market";
 import { SettingsRoute } from "@/app/routes/settings";
 import { FeedbackRoute } from "@/app/routes/feedback";
 import { NotificationProvider } from "@/app/notifications";
@@ -15,6 +16,7 @@ import {
 } from "@/features/skills/utils/skill-view-preference";
 
 type RouteKey = "skills" | "tools" | "install" | "settings" | "feedback";
+type SkillsSectionKey = "skills" | "mcp";
 
 type RouteDefinition = {
   key: RouteKey;
@@ -108,6 +110,7 @@ function renderRoute(
   showGroupView: boolean,
   activeInstallTab: InstallTab,
   onInstallTabChange: (tab: InstallTab) => void,
+  activeSkillsSection: SkillsSectionKey,
 ) {
   if (route === "tools") {
     return <ToolsRoute />;
@@ -122,13 +125,33 @@ function renderRoute(
     return <FeedbackRoute />;
   }
 
+  if (activeSkillsSection === "mcp") {
+    return <McpRoute />;
+  }
+
   return <SkillsRoute query={skillQuery} showGroupView={showGroupView} />;
+}
+
+function McpNavIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path
+        d="M9.4 15.6 15 10a2.55 2.55 0 0 0-3.6-3.6l-6.2 6.2a3.7 3.7 0 0 0 5.2 5.2l7.2-7.2a4.75 4.75 0 0 0-6.7-6.7L4.1 10.7"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.9"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
 }
 
 function AppContent() {
   const { installedSkills, refreshWorkspace, toolConfigs } = useSkillWorkspace();
   const initialSkillViewMode = readSkillViewModePreference();
   const [activeRoute, setActiveRoute] = useState<RouteKey>("skills");
+  const [activeSkillsSection, setActiveSkillsSection] = useState<SkillsSectionKey>("skills");
   const [skillQuery, setSkillQuery] = useState("");
   const [showGroupView, setShowGroupView] = useState(
     () => resolveSkillViewModePreference(initialSkillViewMode, installedSkills.length) === "grouped",
@@ -141,9 +164,12 @@ function AppContent() {
   const updatableSkillCount = installedSkills.filter((skill) => skill.collabStatus === "update-available").length;
   const pendingPushSkillCount = installedSkills.filter((skill) => skill.collabStatus === "pending-push").length;
   const installedToolCount = toolConfigs.filter((tool) => tool.statusLabel === "已安装").length;
+  const mcpToolCount = toolConfigs.filter((tool) => tool.statusLabel === "已安装" && tool.mcpConfigPath).length;
   const activeDescription =
-    activeRoute === "skills"
+    activeRoute === "skills" && activeSkillsSection === "skills"
       ? `已安装的 ${installedSkills.length} 个技能，可更新 ${updatableSkillCount} 个，待推送 ${pendingPushSkillCount} 个`
+      : activeRoute === "skills"
+        ? `扫描、编辑并同步 ${mcpToolCount} 个工具的 MCP 配置`
       : activeRoute === "tools"
         ? `已安装 ${installedToolCount} 个工具`
       : activeDefinition.description;
@@ -228,20 +254,45 @@ function AppContent() {
         <div className="sidebar-divider" aria-hidden="true" />
         <nav aria-label="Primary" className="nav-list">
           {routes.map((route) => {
-            const selected = route.key === activeRoute;
+            const selected = route.key === activeRoute && (
+              route.key !== "skills" || activeSkillsSection === "skills"
+            );
 
             return (
-              <button
-                key={route.key}
-                className={`nav-item${selected ? " is-selected" : ""}`}
-                type="button"
-                onClick={() => setActiveRoute(route.key)}
-              >
-                <span className="nav-icon" aria-hidden="true">
-                  <NavRouteIcon route={route.key} />
-                </span>
-                <span className="nav-label">{route.label}</span>
-              </button>
+              <div key={route.key} className="nav-group">
+                <button
+                  className={`nav-item${selected ? " is-selected" : ""}`}
+                  type="button"
+                  onClick={() => {
+                    setActiveRoute(route.key);
+                    if (route.key === "skills") {
+                      setActiveSkillsSection("skills");
+                    }
+                  }}
+                >
+                  <span className="nav-icon" aria-hidden="true">
+                    <NavRouteIcon route={route.key} />
+                  </span>
+                  <span className="nav-label">{route.label}</span>
+                </button>
+                {route.key === "skills" ? (
+                  <button
+                    className={`nav-item nav-sub-item${
+                      activeRoute === "skills" && activeSkillsSection === "mcp" ? " is-selected" : ""
+                    }`}
+                    type="button"
+                    onClick={() => {
+                      setActiveRoute("skills");
+                      setActiveSkillsSection("mcp");
+                    }}
+                  >
+                    <span className="nav-icon" aria-hidden="true">
+                      <McpNavIcon />
+                    </span>
+                    <span className="nav-label">MCP</span>
+                  </button>
+                ) : null}
+              </div>
             );
           })}
         </nav>
@@ -251,13 +302,17 @@ function AppContent() {
           {activeRoute === "skills" ? (
             <div className="page-header--split">
               <div className="page-header__row">
-                <h1>{activeDefinition.label}</h1>
-                <SkillListToolbar
-                  query={skillQuery}
-                  onQueryChange={setSkillQuery}
-                  showGroupView={showGroupView}
-                  onShowGroupViewChange={handleShowGroupViewChange}
-                />
+                <h1>{activeSkillsSection === "mcp" ? "MCP" : activeDefinition.label}</h1>
+                {activeSkillsSection === "skills" ? (
+                  <SkillListToolbar
+                    query={skillQuery}
+                    onQueryChange={setSkillQuery}
+                    showGroupView={showGroupView}
+                    onShowGroupViewChange={handleShowGroupViewChange}
+                  />
+                ) : (
+                  <div className="mcp-header-toolbar-slot" id="mcp-header-toolbar-slot" />
+                )}
               </div>
               <p>{activeDescription}</p>
             </div>
@@ -312,10 +367,7 @@ function AppContent() {
             <div className="page-header--split">
               <div className="page-header__row">
                 <h1>{activeDefinition.label}</h1>
-                <InstallTabSwitcher
-                  activeInstallTab={activeInstallTab}
-                  onInstallTabChange={setActiveInstallTab}
-                />
+                <div className="install-header-toolbar-slot" id="install-header-toolbar-slot" />
               </div>
               <p>{activeDescription}</p>
             </div>
@@ -328,7 +380,7 @@ function AppContent() {
         </header>
         <div className="page-header-divider" aria-hidden="true" />
         <section className="page-content">
-          {renderRoute(activeRoute, skillQuery, showGroupView, activeInstallTab, setActiveInstallTab)}
+          {renderRoute(activeRoute, skillQuery, showGroupView, activeInstallTab, setActiveInstallTab, activeSkillsSection)}
         </section>
       </main>
     </div>

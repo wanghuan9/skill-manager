@@ -13,6 +13,10 @@ test("renders installed tools only with manage action", async () => {
   expect(manageButtons.length).toBeGreaterThan(0);
   expect(manageButtons[0]).toHaveClass("tool-card__manage-button");
   expect(screen.getByRole("button", { name: "打开 Claude Code Skills 文件夹" })).toBeInTheDocument();
+  expect(screen.getAllByText("MCP 配置：").length).toBeGreaterThan(0);
+  expect(screen.getByText("/Users/wanghuan/.claude.json")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "打开 Claude Code MCP 配置" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "打开 Antigravity MCP 配置" })).toBeDisabled();
 });
 
 test("can open a tool skills folder from the tools page", async () => {
@@ -23,6 +27,16 @@ test("can open a tool skills folder from the tools page", async () => {
   await userEvent.click(screen.getByRole("button", { name: "打开 Claude Code Skills 文件夹" }));
 
   expect(screen.getByRole("button", { name: "打开 Claude Code Skills 文件夹" })).toBeEnabled();
+});
+
+test("can open a tool MCP config from the tools page", async () => {
+  window.localStorage.clear();
+  render(<App />);
+
+  await userEvent.click(screen.getByRole("button", { name: /工具/ }));
+  await userEvent.click(screen.getByRole("button", { name: "打开 Claude Code MCP 配置" }));
+
+  expect(screen.getByRole("button", { name: "打开 Claude Code MCP 配置" })).toBeEnabled();
 });
 
 test("can enable all visible skills from tool manage dialog", async () => {

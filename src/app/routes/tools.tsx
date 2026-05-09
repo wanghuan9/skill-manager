@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { ToolManageDialog } from "@/features/skills/components/ToolManageDialog";
-import { openToolSkillsFolder } from "@/features/skills/api/skill-client";
+import { openToolMcpConfig, openToolSkillsFolder } from "@/features/skills/api/skill-client";
 import { useSkillWorkspace } from "@/features/skills/state/skill-workspace";
 import { getToolLogoUrl } from "@/features/skills/utils/tool-logo";
 import {
@@ -61,6 +61,26 @@ function FolderOpenIcon() {
   );
 }
 
+function EditorOpenIcon() {
+  return (
+    <svg viewBox="0 0 18 18" fill="none" aria-hidden="true">
+      <path
+        d="M4 3.7h6.2l3.8 3.8v6.8H4V3.7Z"
+        stroke="currentColor"
+        strokeWidth="1.25"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M10.2 3.8v3.8H14M6.3 10.1h5.4M6.3 12.4h3.8"
+        stroke="currentColor"
+        strokeWidth="1.25"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 export function ToolsRoute() {
   const { defaultOpenToolId, toolConfigs } = useSkillWorkspace();
   const installedTools = useMemo(
@@ -69,6 +89,7 @@ export function ToolsRoute() {
   );
   const [managingToolId, setManagingToolId] = useState("");
   const [openingToolId, setOpeningToolId] = useState("");
+  const [openingMcpToolId, setOpeningMcpToolId] = useState("");
   const managingTool = installedTools.find((tool) => tool.id === managingToolId) ?? null;
 
   async function handleOpenSkillsFolder(toolId: string) {
@@ -87,6 +108,22 @@ export function ToolsRoute() {
     }
   }
 
+  async function handleOpenMcpConfig(toolId: string) {
+    if (openingMcpToolId) {
+      return;
+    }
+
+    setOpeningMcpToolId(toolId);
+    try {
+      await openToolMcpConfig({ toolId, editorId: defaultOpenToolId });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "打开 MCP 配置失败";
+      window.alert(message);
+    } finally {
+      setOpeningMcpToolId("");
+    }
+  }
+
   return (
     <div className="tools-route">
       <section className="tools-section">
@@ -94,6 +131,8 @@ export function ToolsRoute() {
           {installedTools.map((tool) => {
             const isDefault = tool.id === defaultOpenToolId;
             const isOpeningFolder = openingToolId === tool.id;
+            const isOpeningMcpConfig = openingMcpToolId === tool.id;
+            const mcpConfigPath = tool.mcpConfigPath || "未识别";
 
             return (
               <article key={tool.id} className="tool-card tool-card--simple">
@@ -135,6 +174,23 @@ export function ToolsRoute() {
                     >
                       <FolderOpenIcon />
                       <span className="sr-only">{isOpeningFolder ? "正在打开" : "打开文件夹"}</span>
+                    </button>
+                  </div>
+                  <div className="tool-card__path-row">
+                    <span className="tool-card__path-label">MCP 配置：</span>
+                    <span className="tool-card__path-value" title={tool.mcpConfigPath || undefined}>
+                      {mcpConfigPath}
+                    </span>
+                    <button
+                      className="tool-card__path-button"
+                      type="button"
+                      onClick={() => void handleOpenMcpConfig(tool.id)}
+                      aria-label={`打开 ${tool.name} MCP 配置`}
+                      data-tooltip="用编辑器打开"
+                      disabled={Boolean(openingMcpToolId) || !tool.mcpConfigPath}
+                    >
+                      <EditorOpenIcon />
+                      <span className="sr-only">{isOpeningMcpConfig ? "正在打开" : "打开配置"}</span>
                     </button>
                   </div>
                 </div>

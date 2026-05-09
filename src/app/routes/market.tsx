@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { LocalInstallPanel } from "@/features/install/components/LocalInstallPanel";
 import { MarketplaceInstallPanel } from "@/features/install/components/MarketplaceInstallPanel";
+import { McpMarketplacePanel } from "@/features/install/components/McpMarketplacePanel";
 import { RepoInstallPanel } from "@/features/install/components/RepoInstallPanel";
 import { LocalSkillImportList } from "@/features/local-skills/components/LocalSkillImportList";
 import { useSkillWorkspace } from "@/features/skills/state/skill-workspace";
@@ -9,11 +11,17 @@ import { buildInstalledMarketplaceSkillIds } from "@/features/skills/utils/skill
 import { dedupeMarketplaceSkills } from "@/features/skills/utils/marketplace-skills";
 
 export type InstallTab = "market" | "git" | "local";
+type InstallCategory = "skill" | "mcp";
 
 export const installTabs: { key: InstallTab; label: string }[] = [
   { key: "market", label: "市场安装" },
   { key: "git", label: "Git 安装" },
   { key: "local", label: "本地安装" },
+];
+
+const installCategories: { key: InstallCategory; label: string }[] = [
+  { key: "skill", label: "Skill" },
+  { key: "mcp", label: "MCP" },
 ];
 
 const sourceTabs: MarketplaceSourceSite[] = ["skills.sh", "skillsmp"];
@@ -77,10 +85,13 @@ export function MarketRoute(props: MarketRouteProps) {
     isSearchLoading,
     hasMoreMarketplaceSkillsBySource,
   } = useSkillWorkspace();
-  const [internalInstallTab] = useState<InstallTab>("market");
+  const [internalInstallTab, setInternalInstallTab] = useState<InstallTab>("market");
+  const [activeInstallCategory, setActiveInstallCategory] = useState<InstallCategory>("skill");
   const activeInstallTab = controlledInstallTab ?? internalInstallTab;
   const [activeSourceSite, setActiveSourceSite] = useState<MarketplaceSourceSite>("skills.sh");
   const [searchQuery, setSearchQuery] = useState("");
+  const [mcpSearchQuery, setMcpSearchQuery] = useState("");
+  const [categoryToolbarContainer, setCategoryToolbarContainer] = useState<HTMLElement | null>(null);
   const [debouncedSearchQuery, setDebouncedSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<MarketplaceSkill[]>([]);
   const [searchDone, setSearchDone] = useState(false);
@@ -112,6 +123,10 @@ export function MarketRoute(props: MarketRouteProps) {
   useEffect(() => {
     latestSourceRef.current = activeSourceSite;
   }, [activeSourceSite]);
+
+  useEffect(() => {
+    setCategoryToolbarContainer(document.getElementById("install-header-toolbar-slot"));
+  }, []);
 
   useEffect(() => {
     loadInitialRef.current = loadInitialMarketplaceSkills;
@@ -220,40 +235,127 @@ export function MarketRoute(props: MarketRouteProps) {
     };
   }, [activeInstallTab, isSearching, handleScroll]);
 
+  const categorySwitcher = (
+    <InstallCategorySwitcher
+      activeCategory={activeInstallCategory}
+      onCategoryChange={setActiveInstallCategory}
+    />
+  );
+
   return (
     <div className="market-route">
+      {categoryToolbarContainer ? createPortal(categorySwitcher, categoryToolbarContainer) : null}
       <section className="market-shell">
-        {activeInstallTab === "market" ? (
-          <MarketplaceInstallPanel
-            activeSourceSite={activeSourceSite}
-            sourceTabs={sourceTabs}
-            marketplaceSkills={displayedMarketplaceSkills}
-            onSourceChange={setActiveSourceSite}
-            searchQuery={searchQuery}
-            onSearchQueryChange={setSearchQuery}
-            isSearching={isSearching}
-            isSearchLoading={isSearchLoading}
-            isInitialLoading={false}
-            isLoadingMore={isSearching ? false : isMarketplaceLoading}
-            hasMore={isSearching ? false : hasMoreMarketplaceSkills}
-            installedMarketplaceSkillIds={installedMarketplaceSkillIds}
-            onLoadMore={() => {
-              if (isSearching || isMarketplaceLoading || !hasMoreMarketplaceSkills) {
-                return;
-              }
-              void loadMoreMarketplaceSkills(activeSourceSite);
-            }}
+        {categoryToolbarContainer ? null : categorySwitcher}
+        {activeInstallCategory === "skill" ? (
+          <>
+            <InstallTabSwitcher
+              activeInstallTab={activeInstallTab}
+              onInstallTabChange={props.onInstallTabChange ?? setInternalInstallTab}
+            />
+            {activeInstallTab === "market" ? (
+              <MarketplaceInstallPanel
+                activeSourceSite={activeSourceSite}
+                sourceTabs={sourceTabs}
+                marketplaceSkills={displayedMarketplaceSkills}
+                onSourceChange={setActiveSourceSite}
+                searchQuery={searchQuery}
+                onSearchQueryChange={setSearchQuery}
+                isSearching={isSearching}
+                isSearchLoading={isSearchLoading}
+                isInitialLoading={false}
+                isLoadingMore={isSearching ? false : isMarketplaceLoading}
+                hasMore={isSearching ? false : hasMoreMarketplaceSkills}
+                installedMarketplaceSkillIds={installedMarketplaceSkillIds}
+                onLoadMore={() => {
+                  if (isSearching || isMarketplaceLoading || !hasMoreMarketplaceSkills) {
+                    return;
+                  }
+                  void loadMoreMarketplaceSkills(activeSourceSite);
+                }}
+              />
+            ) : null}
+            {activeInstallTab === "git" ? <RepoInstallPanel /> : null}
+            {activeInstallTab === "local" ? (
+              <div className="local-install-layout">
+                <LocalSkillImportList />
+                <LocalInstallPanel />
+              </div>
+            ) : null}
+          </>
+        ) : (
+          <McpMarketplacePanel
+            searchQuery={mcpSearchQuery}
+            onSearchQueryChange={setMcpSearchQuery}
           />
-        ) : null}
-        {activeInstallTab === "git" ? <RepoInstallPanel /> : null}
-        {activeInstallTab === "local" ? (
-          <div className="local-install-layout">
-            <LocalSkillImportList />
-            <LocalInstallPanel />
-          </div>
-        ) : null}
+        )}
       </section>
     </div>
+  );
+}
+
+type InstallCategorySwitcherProps = {
+  activeCategory: InstallCategory;
+  onCategoryChange: (category: InstallCategory) => void;
+};
+
+function InstallCategorySwitcher(props: InstallCategorySwitcherProps) {
+  const { activeCategory, onCategoryChange } = props;
+
+  return (
+    <div className="install-category-row" role="tablist" aria-label="安装类型">
+      {installCategories.map((category) => {
+        const selected = category.key === activeCategory;
+
+        return (
+          <button
+            key={category.key}
+            className={`install-category-tab${selected ? " is-selected" : ""}`}
+            type="button"
+            role="tab"
+            aria-selected={selected}
+            onClick={() => onCategoryChange(category.key)}
+          >
+            <span className="install-category-tab__icon">
+              <InstallCategoryIcon category={category.key} />
+            </span>
+            <span>{category.label}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function InstallCategoryIcon(props: { category: InstallCategory }) {
+  const { category } = props;
+
+  if (category === "skill") {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path
+          d="M12 4a8 8 0 1 0 0 16a8 8 0 0 0 0-16Zm0 0c1.5 1.7 2.3 4.3 2.3 8s-.8 6.3-2.3 8m0-16C10.5 5.7 9.7 8.3 9.7 12s.8 6.3 2.3 8M4.8 12h14.4"
+          fill="none"
+          stroke="currentColor"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          strokeWidth="1.8"
+        />
+      </svg>
+    );
+  }
+
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path
+        d="M9.5 14.5 14.5 9.5M10 8H8a4 4 0 0 0 0 8h2m4-8h2a4 4 0 0 1 0 8h-2"
+        fill="none"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="1.8"
+      />
+    </svg>
   );
 }
 

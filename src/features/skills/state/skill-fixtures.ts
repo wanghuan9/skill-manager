@@ -2,12 +2,14 @@ import type {
   GitAccountSummary,
   LocalSkillCandidate,
   MarketplaceSkill,
+  McpMarketplaceServer,
   PushPreviewSnapshot,
   PushTargetSnapshot,
   RepoSkillCandidate,
   SkillFileBrowserSnapshot,
   SkillFileDocument,
   ToolConfig,
+  McpWorkspaceSnapshot,
   WorkspaceSnapshot,
 } from "@/features/skills/state/skill-store";
 import type { SkillSummary } from "@/features/skills/state/skill-store";
@@ -157,6 +159,44 @@ export const marketplaceSkillFixtures: MarketplaceSkill[] = [
   },
 ];
 
+export const mcpMarketplaceServerFixtures: McpMarketplaceServer[] = [
+  {
+    id: "mcp-directory-context7",
+    name: "context7",
+    sourceSite: "MCP.Directory",
+    description: "Injects up-to-date documentation and code examples into AI coding prompts.",
+    publisher: "upstash",
+    category: "AI/ML",
+    transportLabel: "HTTP / stdio",
+    sourceUrl: "https://mcp.directory/servers/context7",
+    popularityLabel: "36.7K",
+    avatarUrl: "https://github.com/upstash.png",
+    server: {
+      type: "http",
+      url: "https://mcp.context7.com/mcp",
+      description: "Injects up-to-date documentation and code examples into AI coding prompts.",
+    },
+  },
+  {
+    id: "mcp-directory-playwright",
+    name: "playwright",
+    sourceSite: "MCP.Directory",
+    description: "Browser automation MCP server for testing, scraping, and visual inspection workflows.",
+    publisher: "microsoft",
+    category: "Browser Automation",
+    transportLabel: "stdio",
+    sourceUrl: "https://mcp.directory/servers/playwright",
+    popularityLabel: "12.4K",
+    avatarUrl: "https://github.com/microsoft.png",
+    server: {
+      type: "stdio",
+      command: "npx",
+      args: ["-y", "@playwright/mcp"],
+      description: "Browser automation MCP server for testing, scraping, and visual inspection workflows.",
+    },
+  },
+];
+
 export const localSkillFixtures: LocalSkillCandidate[] = [
   {
     name: "excalidraw-diagram",
@@ -240,35 +280,101 @@ export const repoSkillCandidateFixtures: Record<string, RepoSkillCandidate[]> = 
 };
 
 export const toolConfigFixtures: ToolConfig[] = [
-  { id: "claude-code", name: "Claude Code", skillsPath: "/Users/wanghuan/.claude/skills", statusLabel: "已安装", isEnabled: true, primaryType: "cli", surfaceTypes: ["cli", "desktop", "ide-plugin"], supportsDirectOpen: false },
-  { id: "codex", name: "Codex", skillsPath: "/Users/wanghuan/.codex/skills", statusLabel: "已安装", isEnabled: true, primaryType: "desktop", surfaceTypes: ["desktop", "cli"], supportsDirectOpen: false },
-  { id: "opencode", name: "OpenCode", skillsPath: "/Users/wanghuan/.config/opencode/skills", statusLabel: "已安装", isEnabled: true, primaryType: "cli", surfaceTypes: ["cli", "desktop", "ide-plugin"], supportsDirectOpen: false },
-  { id: "cursor", name: "Cursor", skillsPath: "/Users/wanghuan/.cursor/skills", statusLabel: "已安装", isEnabled: true, primaryType: "editor", surfaceTypes: ["editor"], supportsDirectOpen: true },
-  { id: "gemini", name: "Gemini CLI", skillsPath: "/Users/wanghuan/.gemini/skills", statusLabel: "已安装", isEnabled: true, primaryType: "cli", surfaceTypes: ["cli"], supportsDirectOpen: false },
-  { id: "antigravity", name: "Antigravity", skillsPath: "/Users/wanghuan/.gemini/antigravity/skills", statusLabel: "已安装", isEnabled: true, primaryType: "editor", surfaceTypes: ["editor"], supportsDirectOpen: true },
-  { id: "windsurf", name: "Windsurf", skillsPath: "/Users/wanghuan/.codeium/windsurf/skills", statusLabel: "已安装", isEnabled: true, primaryType: "editor", surfaceTypes: ["editor"], supportsDirectOpen: true },
-  { id: "openclaw", name: "OpenClaw", skillsPath: "/Users/wanghuan/.openclaw/skills", statusLabel: "已安装", isEnabled: true, primaryType: "desktop", surfaceTypes: ["desktop"], supportsDirectOpen: false },
-  { id: "continue", name: "Continue", skillsPath: "/Users/wanghuan/.continue/skills", statusLabel: "已安装", isEnabled: true, primaryType: "editor", surfaceTypes: ["editor", "ide-plugin"], supportsDirectOpen: false },
-  { id: "iflow", name: "iFlow", skillsPath: "/Users/wanghuan/.iflow/skills", statusLabel: "已安装", isEnabled: true, primaryType: "cli", surfaceTypes: ["cli"], supportsDirectOpen: false },
-  { id: "codebuddy", name: "CodeBuddy", skillsPath: "/Users/wanghuan/.codebuddy/skills", statusLabel: "未安装", isEnabled: false, primaryType: "editor", surfaceTypes: ["editor", "ide-plugin"], supportsDirectOpen: false },
-  { id: "trae", name: "Trae", skillsPath: "/Users/wanghuan/.trae/skills", statusLabel: "未安装", isEnabled: false, primaryType: "editor", surfaceTypes: ["editor"], supportsDirectOpen: true },
-  { id: "droid", name: "Droid", skillsPath: "/Users/wanghuan/.factory/skills", statusLabel: "未安装", isEnabled: false, primaryType: "editor", surfaceTypes: ["editor"], supportsDirectOpen: false },
-  { id: "augment", name: "Augment", skillsPath: "/Users/wanghuan/.augment/skills", statusLabel: "未安装", isEnabled: false, primaryType: "editor", surfaceTypes: ["editor", "ide-plugin", "desktop"], supportsDirectOpen: false },
-  { id: "cline", name: "Cline", skillsPath: "/Users/wanghuan/.cline/skills", statusLabel: "未安装", isEnabled: false, primaryType: "editor", surfaceTypes: ["editor", "cli"], supportsDirectOpen: false },
-  { id: "commandcode", name: "CommandCode", skillsPath: "/Users/wanghuan/.commandcode/skills", statusLabel: "未安装", isEnabled: false, primaryType: "editor", surfaceTypes: ["editor"], supportsDirectOpen: false },
-  { id: "crush", name: "Crush", skillsPath: "/Users/wanghuan/.config/crush/skills", statusLabel: "未安装", isEnabled: false, primaryType: "cli", surfaceTypes: ["cli"], supportsDirectOpen: false },
-  { id: "goose", name: "Goose", skillsPath: "/Users/wanghuan/.config/goose/skills", statusLabel: "未安装", isEnabled: false, primaryType: "cli", surfaceTypes: ["cli"], supportsDirectOpen: false },
-  { id: "junie", name: "Junie", skillsPath: "/Users/wanghuan/.junie/skills", statusLabel: "未安装", isEnabled: false, primaryType: "editor", surfaceTypes: ["editor", "ide-plugin"], supportsDirectOpen: false },
-  { id: "kilo-code", name: "Kilo Code", skillsPath: "/Users/wanghuan/.kilocode/skills", statusLabel: "未安装", isEnabled: false, primaryType: "editor", surfaceTypes: ["editor"], supportsDirectOpen: false },
-  { id: "kiro", name: "Kiro", skillsPath: "/Users/wanghuan/.kiro/skills", statusLabel: "已安装", isEnabled: true, primaryType: "editor", surfaceTypes: ["editor", "cli"], supportsDirectOpen: true },
-  { id: "qoder", name: "Qoder", skillsPath: "/Users/wanghuan/.qoder/skills", statusLabel: "未安装", isEnabled: false, primaryType: "editor", surfaceTypes: ["editor", "ide-plugin"], supportsDirectOpen: false },
-  { id: "qwen-code", name: "Qwen Code", skillsPath: "/Users/wanghuan/.qwen/skills", statusLabel: "未安装", isEnabled: false, primaryType: "cli", surfaceTypes: ["cli"], supportsDirectOpen: false },
-  { id: "roo-code", name: "Roo Code", skillsPath: "/Users/wanghuan/.roo/skills", statusLabel: "未安装", isEnabled: false, primaryType: "editor", surfaceTypes: ["editor"], supportsDirectOpen: false },
-  { id: "zencoder", name: "Zencoder", skillsPath: "/Users/wanghuan/.zencoder/skills", statusLabel: "未安装", isEnabled: false, primaryType: "editor", surfaceTypes: ["editor", "ide-plugin", "desktop"], supportsDirectOpen: false },
-  { id: "trae-cn", name: "Trae CN", skillsPath: "/Users/wanghuan/.trae-cn/skills", statusLabel: "未安装", isEnabled: false, primaryType: "editor", surfaceTypes: ["editor"], supportsDirectOpen: false },
-  { id: "hermes", name: "Hermes", skillsPath: "/Users/wanghuan/.hermes/skills", statusLabel: "未安装", isEnabled: false, primaryType: "cli", surfaceTypes: ["cli"], supportsDirectOpen: false },
-  { id: "github-copilot", name: "GitHub Copilot", skillsPath: "/Users/wanghuan/.copilot/skills", statusLabel: "未安装", isEnabled: false, primaryType: "editor", surfaceTypes: ["editor", "ide-plugin"], supportsDirectOpen: false },
+  { id: "claude-code", name: "Claude Code", skillsPath: "/Users/wanghuan/.claude/skills", mcpConfigPath: "/Users/wanghuan/.claude.json", statusLabel: "已安装", isEnabled: true, primaryType: "cli", surfaceTypes: ["cli", "desktop", "ide-plugin"], supportsDirectOpen: false },
+  { id: "codex", name: "Codex", skillsPath: "/Users/wanghuan/.codex/skills", mcpConfigPath: "/Users/wanghuan/.codex/config.toml", statusLabel: "已安装", isEnabled: true, primaryType: "desktop", surfaceTypes: ["desktop", "cli"], supportsDirectOpen: false },
+  { id: "opencode", name: "OpenCode", skillsPath: "/Users/wanghuan/.config/opencode/skills", mcpConfigPath: "/Users/wanghuan/.config/opencode/opencode.json", statusLabel: "已安装", isEnabled: true, primaryType: "cli", surfaceTypes: ["cli", "desktop", "ide-plugin"], supportsDirectOpen: false },
+  { id: "cursor", name: "Cursor", skillsPath: "/Users/wanghuan/.cursor/skills", mcpConfigPath: "/Users/wanghuan/.cursor/mcp.json", statusLabel: "已安装", isEnabled: true, primaryType: "editor", surfaceTypes: ["editor"], supportsDirectOpen: true },
+  { id: "gemini", name: "Gemini CLI", skillsPath: "/Users/wanghuan/.gemini/skills", mcpConfigPath: "/Users/wanghuan/.gemini/settings.json", statusLabel: "已安装", isEnabled: true, primaryType: "cli", surfaceTypes: ["cli"], supportsDirectOpen: false },
+  { id: "antigravity", name: "Antigravity", skillsPath: "/Users/wanghuan/.gemini/antigravity/skills", mcpConfigPath: "", statusLabel: "已安装", isEnabled: true, primaryType: "editor", surfaceTypes: ["editor"], supportsDirectOpen: true },
+  { id: "windsurf", name: "Windsurf", skillsPath: "/Users/wanghuan/.codeium/windsurf/skills", mcpConfigPath: "/Users/wanghuan/.codeium/windsurf/mcp_config.json", statusLabel: "已安装", isEnabled: true, primaryType: "editor", surfaceTypes: ["editor"], supportsDirectOpen: true },
+  { id: "openclaw", name: "OpenClaw", skillsPath: "/Users/wanghuan/.openclaw/skills", mcpConfigPath: "/Users/wanghuan/.openclaw/openclaw.json", statusLabel: "已安装", isEnabled: true, primaryType: "desktop", surfaceTypes: ["desktop"], supportsDirectOpen: false },
+  { id: "continue", name: "Continue", skillsPath: "/Users/wanghuan/.continue/skills", mcpConfigPath: "/Users/wanghuan/.continue/config.yaml", statusLabel: "已安装", isEnabled: true, primaryType: "editor", surfaceTypes: ["editor", "ide-plugin"], supportsDirectOpen: false },
+  { id: "iflow", name: "iFlow", skillsPath: "/Users/wanghuan/.iflow/skills", mcpConfigPath: "", statusLabel: "已安装", isEnabled: true, primaryType: "cli", surfaceTypes: ["cli"], supportsDirectOpen: false },
+  { id: "codebuddy", name: "CodeBuddy", skillsPath: "/Users/wanghuan/.codebuddy/skills", mcpConfigPath: "", statusLabel: "未安装", isEnabled: false, primaryType: "editor", surfaceTypes: ["editor", "ide-plugin"], supportsDirectOpen: false },
+  { id: "trae", name: "Trae", skillsPath: "/Users/wanghuan/.trae/skills", mcpConfigPath: "", statusLabel: "未安装", isEnabled: false, primaryType: "editor", surfaceTypes: ["editor"], supportsDirectOpen: true },
+  { id: "droid", name: "Droid", skillsPath: "/Users/wanghuan/.factory/skills", mcpConfigPath: "", statusLabel: "未安装", isEnabled: false, primaryType: "editor", surfaceTypes: ["editor"], supportsDirectOpen: false },
+  { id: "augment", name: "Augment", skillsPath: "/Users/wanghuan/.augment/skills", mcpConfigPath: "", statusLabel: "未安装", isEnabled: false, primaryType: "editor", surfaceTypes: ["editor", "ide-plugin", "desktop"], supportsDirectOpen: false },
+  { id: "cline", name: "Cline", skillsPath: "/Users/wanghuan/.cline/skills", mcpConfigPath: "", statusLabel: "未安装", isEnabled: false, primaryType: "editor", surfaceTypes: ["editor", "cli"], supportsDirectOpen: false },
+  { id: "commandcode", name: "CommandCode", skillsPath: "/Users/wanghuan/.commandcode/skills", mcpConfigPath: "", statusLabel: "未安装", isEnabled: false, primaryType: "editor", surfaceTypes: ["editor"], supportsDirectOpen: false },
+  { id: "crush", name: "Crush", skillsPath: "/Users/wanghuan/.config/crush/skills", mcpConfigPath: "", statusLabel: "未安装", isEnabled: false, primaryType: "cli", surfaceTypes: ["cli"], supportsDirectOpen: false },
+  { id: "goose", name: "Goose", skillsPath: "/Users/wanghuan/.config/goose/skills", mcpConfigPath: "", statusLabel: "未安装", isEnabled: false, primaryType: "cli", surfaceTypes: ["cli"], supportsDirectOpen: false },
+  { id: "junie", name: "Junie", skillsPath: "/Users/wanghuan/.junie/skills", mcpConfigPath: "", statusLabel: "未安装", isEnabled: false, primaryType: "editor", surfaceTypes: ["editor", "ide-plugin"], supportsDirectOpen: false },
+  { id: "kilo-code", name: "Kilo Code", skillsPath: "/Users/wanghuan/.kilocode/skills", mcpConfigPath: "", statusLabel: "未安装", isEnabled: false, primaryType: "editor", surfaceTypes: ["editor"], supportsDirectOpen: false },
+  { id: "kiro", name: "Kiro", skillsPath: "/Users/wanghuan/.kiro/skills", mcpConfigPath: "", statusLabel: "已安装", isEnabled: true, primaryType: "editor", surfaceTypes: ["editor", "cli"], supportsDirectOpen: true },
+  { id: "qoder", name: "Qoder", skillsPath: "/Users/wanghuan/.qoder/skills", mcpConfigPath: "", statusLabel: "未安装", isEnabled: false, primaryType: "editor", surfaceTypes: ["editor", "ide-plugin"], supportsDirectOpen: false },
+  { id: "qwen-code", name: "Qwen Code", skillsPath: "/Users/wanghuan/.qwen/skills", mcpConfigPath: "", statusLabel: "未安装", isEnabled: false, primaryType: "cli", surfaceTypes: ["cli"], supportsDirectOpen: false },
+  { id: "roo-code", name: "Roo Code", skillsPath: "/Users/wanghuan/.roo/skills", mcpConfigPath: "", statusLabel: "未安装", isEnabled: false, primaryType: "editor", surfaceTypes: ["editor"], supportsDirectOpen: false },
+  { id: "zencoder", name: "Zencoder", skillsPath: "/Users/wanghuan/.zencoder/skills", mcpConfigPath: "", statusLabel: "未安装", isEnabled: false, primaryType: "editor", surfaceTypes: ["editor", "ide-plugin", "desktop"], supportsDirectOpen: false },
+  { id: "trae-cn", name: "Trae CN", skillsPath: "/Users/wanghuan/.trae-cn/skills", mcpConfigPath: "", statusLabel: "未安装", isEnabled: false, primaryType: "editor", surfaceTypes: ["editor"], supportsDirectOpen: false },
+  { id: "hermes", name: "Hermes", skillsPath: "/Users/wanghuan/.hermes/skills", mcpConfigPath: "", statusLabel: "未安装", isEnabled: false, primaryType: "cli", surfaceTypes: ["cli"], supportsDirectOpen: false },
+  { id: "github-copilot", name: "GitHub Copilot", skillsPath: "/Users/wanghuan/.copilot/skills", mcpConfigPath: "", statusLabel: "未安装", isEnabled: false, primaryType: "editor", surfaceTypes: ["editor", "ide-plugin"], supportsDirectOpen: false },
 ];
+
+const mcpFixtureApps = toolConfigFixtures.map((tool) => ({
+  id: tool.id,
+  name: tool.name,
+  configPath: tool.mcpConfigPath,
+  statusLabel: tool.statusLabel,
+}));
+
+function buildMcpFixtureServerApps(enabledAppIds: string[]) {
+  const enabledAppIdSet = new Set(enabledAppIds);
+
+  return mcpFixtureApps.map((app) => ({
+    appId: app.id,
+    appName: app.name,
+    configPath: app.configPath,
+    statusLabel: app.statusLabel,
+    isEnabled: enabledAppIdSet.has(app.id),
+  }));
+}
+
+export const mcpWorkspaceFixture: McpWorkspaceSnapshot = {
+  storagePath: "/Users/demo/.skillm/mcp-servers.json",
+  apps: mcpFixtureApps,
+  servers: [
+    {
+      id: "context7",
+      name: "context7",
+      serverType: "stdio",
+      commandLabel: "npx -y @upstash/context7-mcp",
+      description: "Up-to-date code documentation for LLMs and AI code editors",
+      sourceUrl: "https://github.com/upstash/context7",
+      serverJson: JSON.stringify(
+        {
+          type: "stdio",
+          command: "npx",
+          args: ["-y", "@upstash/context7-mcp"],
+        },
+        null,
+        2,
+      ),
+      enabledAppCount: 2,
+      apps: buildMcpFixtureServerApps(["claude-code", "codex"]),
+    },
+    {
+      id: "linear",
+      name: "linear",
+      serverType: "sse",
+      commandLabel: "https://mcp.linear.app/sse",
+      description: "Linear's official MCP server for issue tracking workflows.",
+      sourceUrl: "",
+      serverJson: JSON.stringify(
+        {
+          type: "sse",
+          url: "https://mcp.linear.app/sse",
+          headers: {
+            Authorization: "Bearer ${LINEAR_API_KEY}",
+          },
+        },
+        null,
+        2,
+      ),
+      enabledAppCount: 1,
+      apps: buildMcpFixtureServerApps(["gemini"]),
+    },
+  ],
+};
 
 export const gitAccountFixture: GitAccountSummary = {
   provider: "GitHub",

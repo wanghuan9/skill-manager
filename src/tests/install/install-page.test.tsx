@@ -6,12 +6,37 @@ test("renders install-source and repository install panels", async () => {
   render(<App />);
   await userEvent.click(screen.getByRole("button", { name: /安装/ }));
   expect(screen.getByRole("heading", { name: "安装", level: 1 })).toBeInTheDocument();
+  expect(screen.getByRole("tab", { name: "Skill" })).toHaveAttribute("aria-selected", "true");
+  expect(screen.getByRole("tab", { name: "MCP" })).toBeInTheDocument();
   expect(screen.getByRole("tab", { name: "市场安装" })).toBeInTheDocument();
   expect(screen.getByRole("tab", { name: "skills.sh" })).toBeInTheDocument();
   expect(screen.getByRole("tab", { name: "skillsmp" })).toBeInTheDocument();
   await userEvent.click(screen.getByRole("tab", { name: "Git 安装" }));
   expect(screen.getByRole("textbox", { name: "Git 仓库地址" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "识别仓库技能" })).toBeInTheDocument();
+});
+
+test("shows MCP marketplace separately from skill-only install methods", async () => {
+  render(<App />);
+  await userEvent.click(screen.getByRole("button", { name: /安装/ }));
+  await userEvent.click(screen.getByRole("tab", { name: "MCP" }));
+
+  expect(screen.getByRole("tab", { name: "MCP" })).toHaveAttribute("aria-selected", "true");
+  expect(screen.queryByRole("tab", { name: "Git 安装" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("tab", { name: "本地安装" })).not.toBeInTheDocument();
+  expect(screen.getByRole("tab", { name: "MCP.Directory" })).toBeInTheDocument();
+  expect(await screen.findByText("playwright")).toBeInTheDocument();
+});
+
+test("installs MCP marketplace servers into the managed MCP list without enabling tools", async () => {
+  render(<App />);
+  await userEvent.click(screen.getByRole("button", { name: /安装/ }));
+  await userEvent.click(screen.getByRole("tab", { name: "MCP" }));
+
+  const installButtons = await screen.findAllByRole("button", { name: "安装" });
+  await userEvent.click(installButtons[0]);
+
+  expect(await screen.findByRole("button", { name: "已加入" })).toBeDisabled();
 });
 
 test("discovers repo skills and allows multi-select install", async () => {

@@ -10,6 +10,7 @@ export type OpenToolCard = OpenToolOption & {
   statusLabel: string;
   isInstalled: boolean;
   skillsPath: string;
+  mcpConfigPath: string;
   surfaceTypes: ToolSurfaceType[];
   supportsDirectOpen: boolean;
 };
@@ -72,6 +73,7 @@ function toOpenToolCard(tool: ToolConfig): OpenToolCard {
     statusLabel: tool.statusLabel,
     isInstalled: tool.statusLabel === "已安装",
     skillsPath: tool.skillsPath,
+    mcpConfigPath: tool.mcpConfigPath,
     surfaceTypes: tool.surfaceTypes,
     supportsDirectOpen: tool.supportsDirectOpen,
   };

@@ -1400,6 +1400,20 @@ fn detect_tool_installation_label(
     }
 }
 
+fn mcp_config_path_for_tool(tool_id: &str, home_path: &Path) -> PathBuf {
+    match tool_id {
+        "claude-code" => home_path.join(".claude.json"),
+        "codex" => home_path.join(".codex/config.toml"),
+        "cursor" => home_path.join(".cursor/mcp.json"),
+        "gemini" => home_path.join(".gemini/settings.json"),
+        "opencode" => home_path.join(".config/opencode/opencode.json"),
+        "windsurf" => home_path.join(".codeium/windsurf/mcp_config.json"),
+        "openclaw" => home_path.join(".openclaw/openclaw.json"),
+        "continue" => home_path.join(".continue/config.yaml"),
+        _ => PathBuf::new(),
+    }
+}
+
 fn build_tool_configs() -> Vec<ToolConfig> {
     let home_dir = env::var("HOME").unwrap_or_else(|_| "~".to_string());
     let home_path = PathBuf::from(&home_dir);
@@ -1730,15 +1744,20 @@ fn build_tool_configs() -> Vec<ToolConfig> {
                 supports_direct_open,
                 config_paths,
                 software_spec,
-            )| ToolConfig {
-                id: id.into(),
-                name: name.into(),
-                skills_path: skills_path.to_string_lossy().to_string(),
-                status_label: detect_tool_installation_label(&config_paths, &software_spec),
-                is_enabled,
-                primary_type: primary_type.into(),
-                surface_types: surface_types.into_iter().map(|item| item.into()).collect(),
-                supports_direct_open,
+            )| {
+                let mcp_config_path = mcp_config_path_for_tool(id, &home_path);
+
+                ToolConfig {
+                    id: id.into(),
+                    name: name.into(),
+                    skills_path: skills_path.to_string_lossy().to_string(),
+                    mcp_config_path: mcp_config_path.to_string_lossy().to_string(),
+                    status_label: detect_tool_installation_label(&config_paths, &software_spec),
+                    is_enabled,
+                    primary_type: primary_type.into(),
+                    surface_types: surface_types.into_iter().map(|item| item.into()).collect(),
+                    supports_direct_open,
+                }
             },
         )
         .collect()
@@ -1887,6 +1906,7 @@ fn discover_cli_in_bundle(app_bundle_path: &str) -> Option<String> {
 /// Map editor_id to possible .app display names for scanning /Applications.
 fn editor_app_name_candidates(editor_id: &str) -> &[&str] {
     match editor_id {
+        "antigravity" => &["Antigravity"],
         "cursor" => &["Cursor"],
         "windsurf" => &["Windsurf"],
         "kiro" => &["Kiro", "Kiro CLI"],
@@ -2420,6 +2440,20 @@ fn open_path_with_open_a(app_name: &str, path: &str) -> Result<(), String> {
     Err(format!("打开编辑器失败: {stderr}"))
 }
 
+fn open_path_with_default_text_editor(path: &str) -> Result<(), String> {
+    let output = Command::new("open")
+        .args(["-t", path])
+        .output()
+        .map_err(|error| format!("打开默认文本编辑器失败: {error}"))?;
+
+    if output.status.success() {
+        return Ok(());
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    Err(format!("打开默认文本编辑器失败: {stderr}"))
+}
+
 /// Check whether an editor app is currently running by looking for its process.
 fn is_editor_running(app_display_name: &str) -> bool {
     Command::new("pgrep")
@@ -2455,6 +2489,36 @@ fn open_path_with_editor(path: &str, editor_id: &str) -> Result<(), String> {
     }
 
     Err("打开编辑器失败，请确认已安装对应应用。".into())
+}
+
+fn ensure_text_config_file(path: &Path) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| format!("创建配置目录失败: {error}"))?;
+    }
+
+    if path.exists() {
+        return Ok(());
+    }
+
+    let initial_content = match path.extension().and_then(|value| value.to_str()) {
+        Some("json") => "{}\n",
+        _ => "",
+    };
+    fs::write(path, initial_content).map_err(|error| format!("创建 MCP 配置文件失败: {error}"))
+}
+
+fn open_config_file_with_preferred_editor(
+    path: &Path,
+    editor_id: Option<&str>,
+) -> Result<(), String> {
+    let path_string = path.to_string_lossy().to_string();
+    if let Some(editor_id) = editor_id.map(str::trim).filter(|value| !value.is_empty()) {
+        if editor_id != "finder" && open_path_with_editor(&path_string, editor_id).is_ok() {
+            return Ok(());
+        }
+    }
+
+    open_path_with_default_text_editor(&path_string)
 }
 
 fn update_skill_repo(skill: &SkillSummary) -> Result<(), String> {
@@ -3503,6 +3567,18 @@ pub fn open_external_link(url: &str) -> Result<(), String> {
 pub fn open_tool_skills_folder(tool_id: &str) -> Result<(), String> {
     let skills_path = get_tool_skills_path(tool_id)?;
     open_path_with_finder(&skills_path)
+}
+
+#[tauri::command]
+pub fn open_tool_mcp_config(tool_id: &str, editor_id: Option<String>) -> Result<(), String> {
+    let home_dir = env::var("HOME").map_err(|error| format!("读取 HOME 失败: {error}"))?;
+    let config_path = mcp_config_path_for_tool(tool_id, &PathBuf::from(home_dir));
+    if config_path.as_os_str().is_empty() {
+        return Err("暂未识别该工具的 MCP 配置文件。".into());
+    }
+
+    ensure_text_config_file(&config_path)?;
+    open_config_file_with_preferred_editor(&config_path, editor_id.as_deref())
 }
 
 #[tauri::command]

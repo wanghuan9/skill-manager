@@ -6,6 +6,7 @@ function buildToolConfig(overrides: Partial<ToolConfig>): ToolConfig {
     id: "cursor",
     name: "Cursor",
     skillsPath: "/Users/demo/.cursor/skills",
+    mcpConfigPath: "/Users/demo/.cursor/mcp.json",
     statusLabel: "已安装",
     isEnabled: true,
     primaryType: "editor",

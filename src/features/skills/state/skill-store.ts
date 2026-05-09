@@ -2,6 +2,7 @@ export type SkillCollabStatus = "clean" | "update-available" | "pending-push" | 
 
 export type SourceType = "github" | "gitlab" | "gitee" | "local";
 export type MarketplaceSourceSite = "skills.sh" | "skillsmp";
+export type McpMarketplaceSourceSite = "MCP.Directory";
 
 export type SkillToolSyncStatus = {
   name: string;
@@ -84,6 +85,20 @@ export type MarketplaceSkill = {
   avatarUrl?: string | null;
 };
 
+export type McpMarketplaceServer = {
+  id: string;
+  name: string;
+  sourceSite: McpMarketplaceSourceSite;
+  description: string;
+  publisher: string;
+  category: string;
+  transportLabel: string;
+  sourceUrl: string;
+  popularityLabel: string;
+  avatarUrl?: string | null;
+  server: Record<string, unknown> | null;
+};
+
 export type LocalSkillCandidate = {
   name: string;
   description: string;
@@ -106,6 +121,7 @@ export type ToolConfig = {
   id: string;
   name: string;
   skillsPath: string;
+  mcpConfigPath: string;
   statusLabel: string;
   isEnabled: boolean;
   primaryType: ToolType;
@@ -125,4 +141,47 @@ export type WorkspaceSnapshot = {
   localCandidates: LocalSkillCandidate[];
   toolConfigs: ToolConfig[];
   gitAccount: GitAccountSummary;
+};
+
+export type McpTargetApp = {
+  id: string;
+  name: string;
+  configPath: string;
+  statusLabel: string;
+};
+
+export type McpAppStatus = {
+  appId: string;
+  appName: string;
+  configPath: string;
+  statusLabel: string;
+  isEnabled: boolean;
+};
+
+export type McpServerSummary = {
+  id: string;
+  name: string;
+  serverType: string;
+  commandLabel: string;
+  description: string;
+  sourceUrl: string;
+  serverJson: string;
+  enabledAppCount: number;
+  apps: McpAppStatus[];
+};
+
+export type McpServerRecord = {
+  id: string;
+  name: string;
+  server: Record<string, unknown>;
+  description: string;
+  sourceUrl: string;
+  enabledAppIds: string[];
+  updatedAt: string;
+};
+
+export type McpWorkspaceSnapshot = {
+  storagePath: string;
+  apps: McpTargetApp[];
+  servers: McpServerSummary[];
 };

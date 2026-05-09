@@ -28,3 +28,6 @@ url = "2.5"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 regex = "1.11"
 zip = { version = "2", default-features = false, features = ["deflate"] }
+json5 = "0.4"
+toml_edit = "0.22"
+base64 = "0.22"

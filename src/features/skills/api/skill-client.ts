@@ -4,6 +4,8 @@ import {
   installedSkillFixtures,
   localSkillFixtures,
   marketplaceSkillFixtures,
+  mcpMarketplaceServerFixtures,
+  mcpWorkspaceFixture,
   pushPreviewFixtures,
   pushTargetFixtures,
   repoSkillCandidateFixtures,
@@ -17,6 +19,10 @@ import type {
   LocalSkillCandidate,
   MarketplaceSkill,
   MarketplaceSourceSite,
+  McpMarketplaceServer,
+  McpMarketplaceSourceSite,
+  McpServerRecord,
+  McpWorkspaceSnapshot,
   PushPreviewSnapshot,
   PushTargetSnapshot,
   RepoSkillCandidate,
@@ -57,6 +63,11 @@ type OpenToolSkillsFolderInput = {
   toolId: string;
 };
 
+type OpenToolMcpConfigInput = {
+  toolId: string;
+  editorId?: string;
+};
+
 type UpdateSkillInput = {
   skillName: string;
 };
@@ -73,6 +84,16 @@ type SaveSkillFileInput = SkillFileInput & {
 type ToggleSkillToolInput = {
   skillName: string;
   toolName: string;
+};
+
+type ToggleMcpAppInput = {
+  serverId: string;
+  appId: string;
+  enabled: boolean;
+};
+
+type InstallMcpMarketplaceServerInput = {
+  server: McpMarketplaceServer;
 };
 
 export function shouldUseFixtureData() {
@@ -289,6 +310,10 @@ export async function openToolSkillsFolder(input: OpenToolSkillsFolderInput): Pr
   return invokeOrFallback("open_tool_skills_folder", input, undefined);
 }
 
+export async function openToolMcpConfig(input: OpenToolMcpConfigInput): Promise<void> {
+  return invokeOrFallback("open_tool_mcp_config", input, undefined);
+}
+
 export async function updateSkill(
   input: UpdateSkillInput,
 ): Promise<SkillSummary> {
@@ -363,4 +388,153 @@ export async function toggleSkillTool(input: ToggleSkillToolInput): Promise<Skil
   };
 
   return invokeOrFallback("toggle_skill_tool_status", input, fallback);
+}
+
+export async function fetchMcpWorkspace(): Promise<McpWorkspaceSnapshot> {
+  return invokeOrFallback("list_mcp_workspace", {}, mcpWorkspaceFixture);
+}
+
+export async function fetchMcpMarketplaceServers(input: {
+  sourceSite?: McpMarketplaceSourceSite;
+  page: number;
+  limit: number;
+  query?: string;
+  refresh?: boolean;
+}): Promise<McpMarketplaceServer[]> {
+  const normalizedQuery = input.query?.trim().toLowerCase() ?? "";
+  const filtered = normalizedQuery
+    ? mcpMarketplaceServerFixtures.filter((server) => {
+        const searchableText = `${server.name} ${server.description} ${server.publisher} ${server.category}`.toLowerCase();
+        return searchableText.includes(normalizedQuery);
+      })
+    : mcpMarketplaceServerFixtures;
+  const start = Math.max(0, (input.page - 1) * input.limit);
+  const fallback = filtered.slice(start, start + input.limit);
+
+  return invokeOrFallback(
+    "list_mcp_marketplace_servers",
+    {
+      sourceSite: input.sourceSite,
+      page: input.page,
+      limit: input.limit,
+      query: input.query,
+      refresh: input.refresh,
+    },
+    fallback,
+  );
+}
+
+export async function installMcpServerFromMarketplace(
+  input: InstallMcpMarketplaceServerInput,
+): Promise<McpWorkspaceSnapshot> {
+  const installedServer = {
+    id: normalizeMcpServerId(input.server.name),
+    name: input.server.name,
+    serverType: String(input.server.server?.type ?? "stdio"),
+    commandLabel: buildMcpCommandLabel(input.server.server),
+    description: input.server.description,
+    sourceUrl: input.server.sourceUrl,
+    serverJson: JSON.stringify(input.server.server ?? {}, null, 2),
+    enabledAppCount: 0,
+    apps: mcpWorkspaceFixture.apps.map((app) => ({
+      appId: app.id,
+      appName: app.name,
+      configPath: app.configPath,
+      statusLabel: app.statusLabel,
+      isEnabled: false,
+    })),
+  };
+  const fallback = {
+    ...mcpWorkspaceFixture,
+    servers: [installedServer, ...mcpWorkspaceFixture.servers.filter((item) => item.id !== installedServer.id)],
+  };
+
+  return invokeOrFallback("install_mcp_server_from_marketplace", input, fallback);
+}
+
+export async function importMcpServersFromApps(): Promise<number> {
+  return invokeOrFallback("import_mcp_servers_from_apps", {}, 2);
+}
+
+export async function saveMcpServer(server: McpServerRecord): Promise<McpWorkspaceSnapshot> {
+  const explicitDescription = typeof server.server.description === "string"
+    ? server.server.description.trim()
+    : "";
+  const commandLabel =
+    typeof server.server.command === "string"
+      ? [server.server.command, ...(Array.isArray(server.server.args) ? server.server.args : [])].join(" ")
+      : String(server.server.url ?? "");
+  const serverType = String(server.server.type ?? "stdio");
+  const nextServer = {
+    id: server.id,
+    name: server.name || server.id,
+    serverType,
+    commandLabel,
+    description: explicitDescription || `用于向已安装工具同步 ${server.name || server.id} MCP 配置。`,
+    sourceUrl: server.sourceUrl,
+    serverJson: JSON.stringify(server.server, null, 2),
+    enabledAppCount: server.enabledAppIds.length,
+    apps: mcpWorkspaceFixture.apps.map((app) => ({
+      appId: app.id,
+      appName: app.name,
+      configPath: app.configPath,
+      statusLabel: app.statusLabel,
+      isEnabled: server.enabledAppIds.includes(app.id),
+    })),
+  };
+  const fallback = {
+    ...mcpWorkspaceFixture,
+    servers: [nextServer, ...mcpWorkspaceFixture.servers.filter((item) => item.id !== server.id)],
+  };
+  return invokeOrFallback("upsert_mcp_server", { server }, fallback);
+}
+
+export async function deleteMcpServer(serverId: string): Promise<McpWorkspaceSnapshot> {
+  const fallback = {
+    ...mcpWorkspaceFixture,
+    servers: mcpWorkspaceFixture.servers.filter((item) => item.id !== serverId),
+  };
+  return invokeOrFallback("delete_mcp_server", { id: serverId }, fallback);
+}
+
+export async function toggleMcpServerApp(input: ToggleMcpAppInput): Promise<McpWorkspaceSnapshot> {
+  const fallback = {
+    ...mcpWorkspaceFixture,
+    servers: mcpWorkspaceFixture.servers.map((server) => (
+      server.id === input.serverId
+        ? {
+            ...server,
+            enabledAppCount: server.apps.filter((app) =>
+              app.appId === input.appId ? input.enabled : app.isEnabled,
+            ).length,
+            apps: server.apps.map((app) =>
+              app.appId === input.appId ? { ...app, isEnabled: input.enabled } : app,
+            ),
+          }
+        : server
+    )),
+  };
+  return invokeOrFallback("toggle_mcp_server_app", input, fallback);
+}
+
+function normalizeMcpServerId(name: string) {
+  const normalized = name
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_.-]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return normalized || "mcp-server";
+}
+
+function buildMcpCommandLabel(server: Record<string, unknown> | null) {
+  if (!server) {
+    return "";
+  }
+  if (typeof server.command === "string") {
+    const args = Array.isArray(server.args)
+      ? server.args.filter((item): item is string => typeof item === "string")
+      : [];
+    return [server.command, ...args].join(" ");
+  }
+  return typeof server.url === "string" ? server.url : "";
 }
