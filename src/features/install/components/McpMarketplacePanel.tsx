@@ -272,6 +272,8 @@ function McpServerDetailModal(props: McpServerDetailModalProps) {
         <article className="skill-detail-modal__content">
           <h4>MCP 介绍</h4>
           <p>{server.description}</p>
+        </article>
+        <article className="skill-detail-modal__config">
           <h4>安装配置</h4>
           <pre className="mcp-market-config-preview">{serverJson}</pre>
         </article>

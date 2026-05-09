@@ -2349,6 +2349,12 @@ code {
   white-space: pre-wrap;
 }
 
+.skill-detail-modal__config {
+  min-height: 0;
+  display: grid;
+  gap: 8px;
+}
+
 .placeholder-card {
   padding: 12px;
 }
@@ -2573,7 +2579,7 @@ code {
 }
 
 .skill-detail-modal {
-  width: min(760px, calc(100vw - 40px));
+  width: min(640px, calc(100vw - 40px));
   max-height: min(78vh, 820px);
   display: grid;
   grid-template-rows: auto auto minmax(0, 1fr);
@@ -2635,6 +2641,7 @@ code {
 
 .skill-detail-modal__title-group h3,
 .skill-detail-modal__title-group p,
+.skill-detail-modal__config h4,
 .skill-detail-modal__content h4,
 .skill-detail-modal__content p {
   margin: 0;
@@ -2688,6 +2695,7 @@ code {
   border: 1px solid #dbe5f2;
 }
 
+.skill-detail-modal__config h4,
 .skill-detail-modal__content h4 {
   font-size: 0.92rem;
 }
