@@ -1,5 +1,7 @@
-import { useId, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
+import { fetchMcpWorkspace, toggleMcpServerApp } from "@/features/skills/api/skill-client";
 import { useSkillWorkspace } from "@/features/skills/state/skill-workspace";
+import type { McpWorkspaceSnapshot } from "@/features/skills/state/skill-store";
 import type { OpenToolCard } from "@/features/skills/utils/open-tools";
 import { isToolEnabledStatus } from "@/features/skills/utils/tool-status";
 
@@ -9,12 +11,113 @@ type ToolManageDialogProps = {
   tool: OpenToolCard;
 };
 
+type CapabilityTabKey = "skills" | "mcp";
+
+type CapabilityRow = {
+  id: string;
+  name: string;
+  isEnabled: boolean;
+};
+
+function sortCapabilityRows(left: CapabilityRow, right: CapabilityRow) {
+  return left.name.localeCompare(right.name);
+}
+
+function patchMcpWorkspaceToggle(
+  workspace: McpWorkspaceSnapshot,
+  serverId: string,
+  appId: string,
+  enabled: boolean,
+): McpWorkspaceSnapshot {
+  return {
+    ...workspace,
+    servers: workspace.servers.map((server) => {
+      if (server.id !== serverId) {
+        return server;
+      }
+
+      const nextApps = server.apps.map((app) => (
+        app.appId === appId ? { ...app, isEnabled: enabled } : app
+      ));
+      return {
+        ...server,
+        enabledAppCount: nextApps.filter((app) => app.isEnabled).length,
+        apps: nextApps,
+      };
+    }),
+  };
+}
+
+function patchMcpWorkspaceBulkToggle(
+  workspace: McpWorkspaceSnapshot,
+  rows: CapabilityRow[],
+  appId: string,
+  enabled: boolean,
+): McpWorkspaceSnapshot {
+  return rows.reduce(
+    (current, row) => patchMcpWorkspaceToggle(current, row.id, appId, enabled),
+    workspace,
+  );
+}
+
 export function ToolManageDialog({ isOpen, onClose, tool }: ToolManageDialogProps) {
   const dialogTitleId = useId();
   const { installedSkills, toggleSkillTool } = useSkillWorkspace();
+  const [activeTab, setActiveTab] = useState<CapabilityTabKey>("skills");
   const [query, setQuery] = useState("");
   const [showEnabledOnly, setShowEnabledOnly] = useState(false);
   const [isUpdatingAll, setIsUpdatingAll] = useState(false);
+  const [mcpWorkspace, setMcpWorkspace] = useState<McpWorkspaceSnapshot | null>(null);
+  const [isMcpLoading, setIsMcpLoading] = useState(false);
+  const [mcpErrorMessage, setMcpErrorMessage] = useState("");
+  const supportsMcp = Boolean(tool.mcpConfigPath);
+  const normalizedQuery = query.trim().toLowerCase();
+
+  useEffect(() => {
+    if (!isOpen) {
+      return;
+    }
+
+    setActiveTab("skills");
+    setQuery("");
+    setShowEnabledOnly(false);
+    setIsUpdatingAll(false);
+    setMcpErrorMessage("");
+  }, [isOpen, tool.id]);
+
+  useEffect(() => {
+    if (!isOpen || !supportsMcp) {
+      setMcpWorkspace(null);
+      setIsMcpLoading(false);
+      return;
+    }
+
+    let isCancelled = false;
+    setIsMcpLoading(true);
+    setMcpErrorMessage("");
+
+    void fetchMcpWorkspace()
+      .then((workspace) => {
+        if (!isCancelled) {
+          setMcpWorkspace(workspace);
+        }
+      })
+      .catch((error) => {
+        if (!isCancelled) {
+          const message = error instanceof Error ? error.message : "加载 MCP 配置失败";
+          setMcpErrorMessage(message);
+        }
+      })
+      .finally(() => {
+        if (!isCancelled) {
+          setIsMcpLoading(false);
+        }
+      });
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [isOpen, supportsMcp, tool.id]);
 
   const skillRows = useMemo(() => {
     return installedSkills
@@ -23,22 +126,17 @@ export function ToolManageDialog({ isOpen, onClose, tool }: ToolManageDialogProp
         const isEnabled = matchedTool ? isToolEnabledStatus(matchedTool.statusLabel) : false;
 
         return {
-          skillName: skill.name,
+          id: skill.name,
+          name: skill.name,
           isEnabled,
         };
       })
-      .filter((item) => item.skillName.toLowerCase().includes(query.trim().toLowerCase()))
+      .filter((item) => item.name.toLowerCase().includes(normalizedQuery))
       .filter((item) => (showEnabledOnly ? item.isEnabled : true))
-      .sort((left, right) => {
-        if (left.isEnabled !== right.isEnabled) {
-          return left.isEnabled ? -1 : 1;
-        }
+      .sort(sortCapabilityRows);
+  }, [installedSkills, normalizedQuery, showEnabledOnly, tool.name]);
 
-        return left.skillName.localeCompare(right.skillName);
-      });
-  }, [installedSkills, query, showEnabledOnly, tool.name]);
-
-  const enabledCount = useMemo(
+  const enabledSkillCount = useMemo(
     () => installedSkills.filter((skill) => {
       const matchedTool = skill.tools.find((item) => item.name === tool.name);
       return matchedTool ? isToolEnabledStatus(matchedTool.statusLabel) : false;
@@ -46,40 +144,156 @@ export function ToolManageDialog({ isOpen, onClose, tool }: ToolManageDialogProp
     [installedSkills, tool.name],
   );
 
-  const disabledVisibleCount = skillRows.filter((item) => !item.isEnabled).length;
-  const enabledVisibleCount = skillRows.filter((item) => item.isEnabled).length;
+  const mcpRows = useMemo(() => {
+    if (!supportsMcp || !mcpWorkspace) {
+      return [];
+    }
+
+    return mcpWorkspace.servers
+      .map((server) => {
+        const matchedApp = server.apps.find((app) => app.appId === tool.id);
+        return {
+          id: server.id,
+          name: server.name,
+          isEnabled: matchedApp?.isEnabled ?? false,
+        };
+      })
+      .filter((item) => item.name.toLowerCase().includes(normalizedQuery))
+      .filter((item) => (showEnabledOnly ? item.isEnabled : true))
+      .sort(sortCapabilityRows);
+  }, [mcpWorkspace, normalizedQuery, showEnabledOnly, supportsMcp, tool.id]);
+
+  const enabledMcpCount = useMemo(() => {
+    if (!supportsMcp || !mcpWorkspace) {
+      return 0;
+    }
+
+    return mcpWorkspace.servers.filter((server) =>
+      server.apps.some((app) => app.appId === tool.id && app.isEnabled)
+    ).length;
+  }, [mcpWorkspace, supportsMcp, tool.id]);
+
+  const activeRows = activeTab === "skills" ? skillRows : mcpRows;
+  const disabledVisibleCount = activeRows.filter((item) => !item.isEnabled).length;
+  const enabledVisibleCount = activeRows.filter((item) => item.isEnabled).length;
+  const summaryLabel = supportsMcp
+    ? `Skills ${enabledSkillCount}/${installedSkills.length} · MCP ${enabledMcpCount}/${mcpWorkspace?.servers.length ?? 0}`
+    : `Skills ${enabledSkillCount}/${installedSkills.length} · MCP 未识别`;
+
+  async function handleToggleSkill(skillName: string) {
+    await toggleSkillTool({ skillName, toolName: tool.name });
+  }
+
+  async function handleToggleMcp(serverId: string, enabled: boolean) {
+    await toggleMcpServerApp({
+      serverId,
+      appId: tool.id,
+      enabled,
+    });
+    setMcpWorkspace((current) => (
+      current ? patchMcpWorkspaceToggle(current, serverId, tool.id, enabled) : current
+    ));
+  }
 
   async function handleToggleAllOn() {
-    const disabledSkillNames = skillRows
-      .filter((item) => !item.isEnabled)
-      .map((item) => item.skillName);
-    if (disabledSkillNames.length === 0) {
+    if (activeTab === "skills") {
+      const disabledSkillNames = skillRows
+        .filter((item) => !item.isEnabled)
+        .map((item) => item.name);
+      if (disabledSkillNames.length === 0) {
+        return;
+      }
+
+      setIsUpdatingAll(true);
+      try {
+        await Promise.all(
+          disabledSkillNames.map((skillName) => toggleSkillTool({ skillName, toolName: tool.name })),
+        );
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "批量启用 Skills 失败";
+        window.alert(message);
+      } finally {
+        setIsUpdatingAll(false);
+      }
+      return;
+    }
+
+    if (!supportsMcp || !mcpWorkspace) {
+      return;
+    }
+
+    const disabledRows = mcpRows.filter((item) => !item.isEnabled);
+    if (disabledRows.length === 0) {
       return;
     }
 
     setIsUpdatingAll(true);
     try {
-      await Promise.all(
-        disabledSkillNames.map((skillName) => toggleSkillTool({ skillName, toolName: tool.name })),
-      );
+      for (const row of disabledRows) {
+        await toggleMcpServerApp({
+          serverId: row.id,
+          appId: tool.id,
+          enabled: true,
+        });
+      }
+      setMcpWorkspace((current) => (
+        current ? patchMcpWorkspaceBulkToggle(current, disabledRows, tool.id, true) : current
+      ));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "批量启用 MCP 失败";
+      window.alert(message);
     } finally {
       setIsUpdatingAll(false);
     }
   }
 
   async function handleToggleAllOff() {
-    const enabledSkillNames = skillRows
-      .filter((item) => item.isEnabled)
-      .map((item) => item.skillName);
-    if (enabledSkillNames.length === 0) {
+    if (activeTab === "skills") {
+      const enabledSkillNames = skillRows
+        .filter((item) => item.isEnabled)
+        .map((item) => item.name);
+      if (enabledSkillNames.length === 0) {
+        return;
+      }
+
+      setIsUpdatingAll(true);
+      try {
+        await Promise.all(
+          enabledSkillNames.map((skillName) => toggleSkillTool({ skillName, toolName: tool.name })),
+        );
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "批量关闭 Skills 失败";
+        window.alert(message);
+      } finally {
+        setIsUpdatingAll(false);
+      }
+      return;
+    }
+
+    if (!supportsMcp || !mcpWorkspace) {
+      return;
+    }
+
+    const enabledRows = mcpRows.filter((item) => item.isEnabled);
+    if (enabledRows.length === 0) {
       return;
     }
 
     setIsUpdatingAll(true);
     try {
-      await Promise.all(
-        enabledSkillNames.map((skillName) => toggleSkillTool({ skillName, toolName: tool.name })),
-      );
+      for (const row of enabledRows) {
+        await toggleMcpServerApp({
+          serverId: row.id,
+          appId: tool.id,
+          enabled: false,
+        });
+      }
+      setMcpWorkspace((current) => (
+        current ? patchMcpWorkspaceBulkToggle(current, enabledRows, tool.id, false) : current
+      ));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "批量关闭 MCP 失败";
+      window.alert(message);
     } finally {
       setIsUpdatingAll(false);
     }
@@ -100,10 +314,8 @@ export function ToolManageDialog({ isOpen, onClose, tool }: ToolManageDialogProp
       >
         <div className="tool-manage-dialog__header">
           <div className="tool-manage-dialog__title">
-            <h3 id={dialogTitleId}>配置启用 Skills</h3>
-            <p>
-              {tool.name} 已启用 {enabledCount}/{installedSkills.length} 个 Skills
-            </p>
+            <h3 id={dialogTitleId}>配置 {tool.name}</h3>
+            <p>{summaryLabel}</p>
           </div>
           <button
             className="tool-manage-dialog__close"
@@ -114,11 +326,34 @@ export function ToolManageDialog({ isOpen, onClose, tool }: ToolManageDialogProp
             ×
           </button>
         </div>
+
+        <div className="tool-manage-dialog__tabs" role="tablist" aria-label="能力类型">
+          <button
+            className={`tool-manage-dialog__tab${activeTab === "skills" ? " is-selected" : ""}`}
+            type="button"
+            role="tab"
+            aria-selected={activeTab === "skills"}
+            onClick={() => setActiveTab("skills")}
+          >
+            Skills
+          </button>
+          <button
+            className={`tool-manage-dialog__tab${activeTab === "mcp" ? " is-selected" : ""}`}
+            type="button"
+            role="tab"
+            aria-selected={activeTab === "mcp"}
+            onClick={() => setActiveTab("mcp")}
+            disabled={!supportsMcp}
+          >
+            MCP
+          </button>
+        </div>
+
         <div className="tool-manage-dialog__toolbar">
           <input
             className="tool-manage-dialog__search"
             type="search"
-            placeholder="搜索 Skills"
+            placeholder={activeTab === "skills" ? "搜索 Skills" : "搜索 MCP"}
             value={query}
             onChange={(event) => setQuery(event.target.value)}
           />
@@ -139,7 +374,7 @@ export function ToolManageDialog({ isOpen, onClose, tool }: ToolManageDialogProp
               className="secondary-button secondary-button--compact"
               type="button"
               onClick={() => void handleToggleAllOn()}
-              disabled={isUpdatingAll || disabledVisibleCount === 0}
+              disabled={isUpdatingAll || disabledVisibleCount === 0 || (activeTab === "mcp" && isMcpLoading)}
             >
               {isUpdatingAll ? "处理中..." : "全部开启"}
             </button>
@@ -147,34 +382,60 @@ export function ToolManageDialog({ isOpen, onClose, tool }: ToolManageDialogProp
               className="secondary-button secondary-button--compact"
               type="button"
               onClick={() => void handleToggleAllOff()}
-              disabled={isUpdatingAll || enabledVisibleCount === 0}
+              disabled={isUpdatingAll || enabledVisibleCount === 0 || (activeTab === "mcp" && isMcpLoading)}
             >
               {isUpdatingAll ? "处理中..." : "全部关闭"}
             </button>
           </div>
         </div>
+
         <div className="tool-manage-dialog__list">
-          {skillRows.map((item) => (
-            <div
-              key={item.skillName}
-              className={`tool-manage-dialog__item${item.isEnabled ? " is-enabled" : ""}`}
-            >
-              <span>{item.skillName}</span>
-              <button
-                className={`switch-button${item.isEnabled ? " is-enabled" : ""}`}
-                type="button"
-                onClick={() => void toggleSkillTool({ skillName: item.skillName, toolName: tool.name })}
-                aria-pressed={item.isEnabled}
-                aria-label={`${item.isEnabled ? "关闭" : "启用"} ${item.skillName}`}
+          {activeTab === "mcp" && !supportsMcp ? (
+            <div className="tool-manage-dialog__empty">暂未识别 {tool.name} 的 MCP 配置路径。</div>
+          ) : null}
+          {activeTab === "mcp" && supportsMcp && isMcpLoading ? (
+            <div className="tool-manage-dialog__empty">正在加载 MCP 列表...</div>
+          ) : null}
+          {activeTab === "mcp" && supportsMcp && !isMcpLoading && mcpErrorMessage ? (
+            <div className="tool-manage-dialog__empty">{mcpErrorMessage}</div>
+          ) : null}
+          {(activeTab === "skills" || (activeTab === "mcp" && supportsMcp && !isMcpLoading && !mcpErrorMessage))
+            ? activeRows.map((item) => (
+              <div
+                key={item.id}
+                className={`tool-manage-dialog__item${item.isEnabled ? " is-enabled" : ""}`}
               >
-                <span className="switch-button__thumb" />
-              </button>
+                <span className="tool-manage-dialog__item-name" title={item.name}>
+                  {item.name}
+                </span>
+                <button
+                  className={`switch-button${item.isEnabled ? " is-enabled" : ""}`}
+                  type="button"
+                  onClick={() => {
+                    if (activeTab === "skills") {
+                      void handleToggleSkill(item.name);
+                      return;
+                    }
+
+                    void handleToggleMcp(item.id, !item.isEnabled);
+                  }}
+                  aria-pressed={item.isEnabled}
+                  aria-label={`${item.isEnabled ? "关闭" : "启用"} ${item.name}`}
+                  disabled={isUpdatingAll}
+                >
+                  <span className="switch-button__thumb" />
+                </button>
+              </div>
+            ))
+            : null}
+          {(activeTab === "skills" || (activeTab === "mcp" && supportsMcp && !isMcpLoading && !mcpErrorMessage)) &&
+          activeRows.length === 0 ? (
+            <div className="tool-manage-dialog__empty">
+              {activeTab === "skills" ? "没有匹配的 Skill。" : "没有匹配的 MCP。"}
             </div>
-          ))}
-          {skillRows.length === 0 ? (
-            <div className="tool-manage-dialog__empty">没有匹配的 skill。</div>
           ) : null}
         </div>
+
         <div className="tool-manage-dialog__actions">
           <button
             className="primary-button primary-button--compact"

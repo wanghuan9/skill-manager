@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { App } from "@/app/App";
 
@@ -45,12 +45,70 @@ test("can enable all visible skills from tool manage dialog", async () => {
   render(<App />);
 
   await userEvent.click(screen.getByRole("button", { name: /工具/ }));
-  await userEvent.click(screen.getAllByRole("button", { name: "管理" })[0]);
+  const claudeToolCard = screen.getByText("Claude Code").closest("article");
+  expect(claudeToolCard).not.toBeNull();
+  await userEvent.click(within(claudeToolCard as HTMLElement).getByRole("button", { name: "管理" }));
 
+  expect(screen.getByRole("tab", { name: "Skills" })).toHaveAttribute("aria-selected", "true");
+  expect(screen.getByRole("tab", { name: "MCP" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "全部开启" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "全部关闭" })).toBeInTheDocument();
 
   await userEvent.click(screen.getByRole("button", { name: "全部开启" }));
 
-  expect(await screen.findByText(/已启用 4\/4 个 Skills/)).toBeInTheDocument();
+  expect(await screen.findByText(/Skills 4\/4/)).toBeInTheDocument();
+});
+
+test("can toggle MCP servers from tool manage dialog", async () => {
+  window.localStorage.clear();
+  render(<App />);
+
+  await userEvent.click(screen.getByRole("button", { name: /工具/ }));
+  const claudeToolCard = screen.getByText("Claude Code").closest("article");
+  expect(claudeToolCard).not.toBeNull();
+  await userEvent.click(within(claudeToolCard as HTMLElement).getByRole("button", { name: "管理" }));
+
+  await userEvent.click(screen.getByRole("tab", { name: "MCP" }));
+
+  expect(await screen.findByText("context7")).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "关闭 context7" }));
+
+  expect(await screen.findByText("Skills 3/4 · MCP 0/2")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "启用 context7" })).toBeInTheDocument();
+});
+
+test("keeps skill rows in a stable order when toggling", async () => {
+  window.localStorage.clear();
+  render(<App />);
+
+  await userEvent.click(screen.getByRole("button", { name: /工具/ }));
+  const claudeToolCard = screen.getByText("Claude Code").closest("article");
+  expect(claudeToolCard).not.toBeNull();
+  await userEvent.click(within(claudeToolCard as HTMLElement).getByRole("button", { name: "管理" }));
+
+  const beforeRows = screen
+    .getAllByLabelText(/^(关闭|启用) /)
+    .filter((button) => button.getAttribute("aria-label")?.includes("MCP") !== true)
+    .slice(0, 4)
+    .map((button) => button.getAttribute("aria-label"));
+  expect(beforeRows).toEqual([
+    "启用 drawio-diagram",
+    "关闭 excalidraw-diagram",
+    "关闭 multi-search-engine",
+    "关闭 skill-publisher",
+  ]);
+
+  await userEvent.click(screen.getByRole("button", { name: "启用 drawio-diagram" }));
+
+  const afterRows = screen
+    .getAllByLabelText(/^(关闭|启用) /)
+    .filter((button) => button.getAttribute("aria-label")?.includes("MCP") !== true)
+    .slice(0, 4)
+    .map((button) => button.getAttribute("aria-label"));
+  expect(afterRows).toEqual([
+    "关闭 drawio-diagram",
+    "关闭 excalidraw-diagram",
+    "关闭 multi-search-engine",
+    "关闭 skill-publisher",
+  ]);
 });
