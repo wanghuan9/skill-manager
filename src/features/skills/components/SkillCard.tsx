@@ -96,7 +96,10 @@ export function SkillCard({ skill }: SkillCardProps) {
   const [isUpdating, setIsUpdating] = useState(false);
   const deleteActionRef = useRef<HTMLButtonElement | null>(null);
   const skillTools = mergeSkillToolsWithInstalledTools(skill.tools, toolConfigs);
-  const sourceLabel = formatSkillSourceLabel(skill.sourceLabel);
+  const sourceLabel = formatSkillSourceLabel(skill.sourceLabel, {
+    sourceType: skill.sourceType,
+    sourceUrl: skill.sourceUrl,
+  });
   const skillDescription = formatSkillDescription(skill.description);
   const remoteUpdatedAt = formatSkillUpdatedAt(skill.remoteUpdatedAt);
   const localUpdatedAt = formatSkillUpdatedAt(skill.localUpdatedAt);

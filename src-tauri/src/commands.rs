@@ -3228,7 +3228,7 @@ pub fn install_skill_from_repo(repo_url: &str) -> Result<SkillSummary, String> {
     let cloned_path = clone_repo_skill(repo_url, repo_name)?;
     let installed_skill = SkillSummary {
         name: repo_name.into(),
-        source_label: "自定义仓库".into(),
+        source_label: source_label_for_type(detect_repo_source_type(repo_url)).into(),
         source_type: detect_repo_source_type(repo_url).into(),
         source_url: repo_url.into(),
         description: "从仓库导入的 skill，后续可继续同步和检查更新。".into(),
@@ -3382,7 +3382,7 @@ pub async fn install_selected_repo_skills(
             };
             let installed_skill = SkillSummary {
                 name: skill_name,
-                source_label: "自定义仓库".into(),
+                source_label: source_label_for_type(&spec.source_type).into(),
                 source_type: spec.source_type.clone(),
                 source_url: build_repo_skill_source_url(&spec, selected_path),
                 description,

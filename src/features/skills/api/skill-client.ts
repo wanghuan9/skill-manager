@@ -288,8 +288,16 @@ export async function installSelectedRepoSkills(
       ...installedSkillFixtures[0],
       name: candidate.name,
       description: candidate.description,
-      sourceLabel: "自定义仓库",
-      sourceType: "github" as const,
+      sourceLabel: input.repoUrl.includes("gitee.com")
+        ? "Gitee"
+        : input.repoUrl.includes("gitlab.com")
+          ? "GitLab"
+          : "GitHub",
+      sourceType: input.repoUrl.includes("gitee.com")
+        ? "gitee" as const
+        : input.repoUrl.includes("gitlab.com")
+          ? "gitlab" as const
+          : "github" as const,
       sourceUrl: input.repoUrl,
       localPath: `/Users/demo/.skillm/skills/${repoName}/${candidate.relativePath}`,
       collabStatus: "clean" as const,
