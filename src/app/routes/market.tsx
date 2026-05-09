@@ -334,12 +334,8 @@ function InstallCategoryIcon(props: { category: InstallCategory }) {
     return (
       <svg viewBox="0 0 24 24" aria-hidden="true">
         <path
-          d="M12 4a8 8 0 1 0 0 16a8 8 0 0 0 0-16Zm0 0c1.5 1.7 2.3 4.3 2.3 8s-.8 6.3-2.3 8m0-16C10.5 5.7 9.7 8.3 9.7 12s.8 6.3 2.3 8M4.8 12h14.4"
-          fill="none"
-          stroke="currentColor"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          strokeWidth="1.8"
+          d="M12 4.5 14 10l5.5 2-5.5 2L12 19.5l-2-5.5L4.5 12 10 10 12 4.5Z"
+          fill="currentColor"
         />
       </svg>
     );
@@ -348,12 +344,25 @@ function InstallCategoryIcon(props: { category: InstallCategory }) {
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true">
       <path
-        d="M9.5 14.5 14.5 9.5M10 8H8a4 4 0 0 0 0 8h2m4-8h2a4 4 0 0 1 0 8h-2"
+        d="M2.4 11.3 11.45 2.26a3.2 3.2 0 0 1 4.53 4.53l-6.84 6.83"
         fill="none"
         stroke="currentColor"
         strokeLinecap="round"
-        strokeLinejoin="round"
-        strokeWidth="1.8"
+        strokeWidth="1.6"
+      />
+      <path
+        d="m9.24 13.53 6.74-6.74a3.2 3.2 0 0 1 4.52 0l.05.05a3.2 3.2 0 0 1 0 4.52l-8.19 8.19a1.07 1.07 0 0 0 0 1.51l1.68 1.68"
+        fill="none"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeWidth="1.6"
+      />
+      <path
+        d="m13.71 4.53-6.69 6.69a3.2 3.2 0 0 0 4.53 4.53l6.69-6.7"
+        fill="none"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeWidth="1.6"
       />
     </svg>
   );

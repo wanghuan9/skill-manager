@@ -473,21 +473,18 @@ code {
 .nav-icon {
   display: grid;
   place-items: center;
-  width: 24px;
-  height: 24px;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
   border-radius: 8px;
   background: rgba(117, 128, 147, 0.08);
   color: #4b5563;
 }
 
 .nav-icon svg {
-  width: 14px;
-  height: 14px;
+  width: 16px;
+  height: 16px;
   display: block;
-}
-
-.nav-settings-icon {
-  overflow: visible;
 }
 
 .nav-item.is-selected .nav-icon {

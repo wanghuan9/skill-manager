@@ -36,7 +36,7 @@ function NavRouteIcon(props: { route: RouteKey }) {
   const { route } = props;
   if (route === "tools") {
     return (
-      <svg viewBox="-2 -2 28 28" aria-hidden="true" className="nav-settings-icon">
+      <svg viewBox="0 0 24 24" aria-hidden="true">
         <path
           d="M14.8 4.6a5.2 5.2 0 0 0-6.2 6.7L4.7 15.2a1.4 1.4 0 0 0 0 2l2.1 2.1a1.4 1.4 0 0 0 2 0l3.9-3.9a5.2 5.2 0 0 0 6.7-6.2l-3 3h-2l-1.4-1.4v-2l3-3Z"
           fill="none"
@@ -136,12 +136,25 @@ function McpNavIcon() {
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true">
       <path
-        d="M9.4 15.6 15 10a2.55 2.55 0 0 0-3.6-3.6l-6.2 6.2a3.7 3.7 0 0 0 5.2 5.2l7.2-7.2a4.75 4.75 0 0 0-6.7-6.7L4.1 10.7"
+        d="M2.4 11.3 11.45 2.26a3.2 3.2 0 0 1 4.53 4.53l-6.84 6.83"
         fill="none"
         stroke="currentColor"
-        strokeWidth="1.9"
+        strokeWidth="1.6"
         strokeLinecap="round"
-        strokeLinejoin="round"
+      />
+      <path
+        d="m9.24 13.53 6.74-6.74a3.2 3.2 0 0 1 4.52 0l.05.05a3.2 3.2 0 0 1 0 4.52l-8.19 8.19a1.07 1.07 0 0 0 0 1.51l1.68 1.68"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+      />
+      <path
+        d="m13.71 4.53-6.69 6.69a3.2 3.2 0 0 0 4.53 4.53l6.69-6.7"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
       />
     </svg>
   );
