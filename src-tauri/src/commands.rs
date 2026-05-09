@@ -2449,6 +2449,10 @@ fn repository_root_path(skill_path: &str) -> Result<String, String> {
     Ok(root)
 }
 
+fn open_target_path_for_skill(skill_path: &str) -> String {
+    repository_root_path(skill_path).unwrap_or_else(|_| skill_path.to_string())
+}
+
 fn open_path_with_finder(path: &str) -> Result<(), String> {
     let output = Command::new("open")
         .arg(path)
@@ -2572,6 +2576,10 @@ fn intellij_trusted_location_for_project(project_path: &Path) -> PathBuf {
         }
     }
 
+    if project_path.join(".git").exists() {
+        return project_path.to_path_buf();
+    }
+
     project_path.parent().unwrap_or(project_path).to_path_buf()
 }
 
@@ -2598,9 +2606,9 @@ fn intellij_config_dirs() -> Result<Vec<PathBuf>, String> {
     Ok(config_dirs)
 }
 
-fn trust_intellij_skill_parent(skill_path: &str) -> Result<(), String> {
-    let skill_path = PathBuf::from(skill_path);
-    let trusted_path = intellij_trusted_location_for_project(&skill_path);
+fn trust_intellij_project_path(project_path: &str) -> Result<(), String> {
+    let project_path = PathBuf::from(project_path);
+    let trusted_path = intellij_trusted_location_for_project(&project_path);
     let trusted_path = path_to_jetbrains_macro(&trusted_path);
     for config_dir in intellij_config_dirs()? {
         let trusted_paths_path = config_dir.join("options/trusted-paths.xml");
@@ -3755,14 +3763,15 @@ pub fn open_tool_mcp_config(tool_id: &str, editor_id: Option<String>) -> Result<
 pub fn open_skill_in_editor(skill_name: &str, editor_id: &str) -> Result<(), String> {
     let (installed_skills, skill_index) = find_skill_by_name(skill_name)?;
     let skill = &installed_skills[skill_index];
+    let target_path = open_target_path_for_skill(&skill.local_path);
     if editor_id == "finder" {
-        return open_path_with_finder(&skill.local_path);
+        return open_path_with_finder(&target_path);
     }
     if editor_id == "intellij" {
-        trust_intellij_skill_parent(&skill.local_path)?;
+        trust_intellij_project_path(&target_path)?;
     }
 
-    open_path_with_editor(&skill.local_path, editor_id)
+    open_path_with_editor(&target_path, editor_id)
 }
 
 #[tauri::command]
@@ -3933,11 +3942,29 @@ mod tests {
 
     use super::{
         collect_skills_manager_cached_items, insert_trusted_project_path,
-        intellij_trusted_location_for_project, parse_skills_sh_homepage_items,
+        intellij_trusted_location_for_project, open_target_path_for_skill,
+        parse_skills_sh_homepage_items,
         should_use_skills_sh_homepage_page,
     };
     use std::env;
+    use std::fs;
     use std::path::PathBuf;
+    use std::process::Command;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_test_dir(label: &str) -> PathBuf {
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time should be available")
+            .as_nanos();
+        let temp_dir = env::temp_dir().join(format!(
+            "skillm-commands-test-{label}-{}-{}",
+            std::process::id(),
+            timestamp
+        ));
+        fs::create_dir_all(&temp_dir).expect("create temp test dir");
+        temp_dir
+    }
 
     #[test]
     fn preserves_skills_sh_cache_page_order() {
@@ -4109,6 +4136,52 @@ mod tests {
         assert_eq!(
             intellij_trusted_location_for_project(&project_path),
             expected_root
+        );
+    }
+
+    #[test]
+    fn trusts_repo_root_for_non_managed_git_projects() {
+        let temp_dir = temp_test_dir("intellij-repo-root");
+        let project_path = temp_dir.join("repo");
+        fs::create_dir_all(project_path.join(".git")).expect("create .git marker");
+
+        assert_eq!(
+            intellij_trusted_location_for_project(&project_path),
+            project_path
+        );
+    }
+
+    #[test]
+    fn opens_git_repository_root_for_nested_skill_paths() {
+        let temp_dir = temp_test_dir("open-target-git-root");
+        let repo_path = temp_dir.join("repo");
+        fs::create_dir_all(repo_path.join("skills/example-skill"))
+            .expect("create nested skill path");
+
+        let status = Command::new("git")
+            .args(["init", "--quiet"])
+            .arg(&repo_path)
+            .status()
+            .expect("git init should run");
+        assert!(status.success(), "git init should succeed");
+
+        let nested_skill_path = repo_path.join("skills/example-skill");
+        let expected_repo_path = fs::canonicalize(&repo_path).expect("canonicalize repo path");
+        assert_eq!(
+            open_target_path_for_skill(&nested_skill_path.to_string_lossy()),
+            expected_repo_path.to_string_lossy()
+        );
+    }
+
+    #[test]
+    fn falls_back_to_skill_path_when_git_root_is_missing() {
+        let temp_dir = temp_test_dir("open-target-no-git");
+        let skill_path = temp_dir.join("skills/example-skill");
+        fs::create_dir_all(&skill_path).expect("create skill path");
+
+        assert_eq!(
+            open_target_path_for_skill(&skill_path.to_string_lossy()),
+            skill_path.to_string_lossy()
         );
     }
 }
