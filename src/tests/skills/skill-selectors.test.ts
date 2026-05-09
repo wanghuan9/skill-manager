@@ -13,7 +13,8 @@ function createSkill(overrides: Partial<SkillSummary>): SkillSummary {
     branch: "main",
     collabStatus: "clean",
     statusText: "",
-    lastSyncedAt: "",
+    remoteUpdatedAt: "",
+    localUpdatedAt: "",
     lastCheckedAt: "",
     syncedToolCount: 0,
     lastEditor: "",
@@ -25,40 +26,52 @@ function createSkill(overrides: Partial<SkillSummary>): SkillSummary {
 }
 
 describe("filterSkills", () => {
-  it("sorts skills not enabled in any tool first", () => {
+  it("sorts by local updated time in descending order", () => {
     const skills = filterSkills(
       [
         createSkill({
-          name: "enabled-skill",
-          collabStatus: "pending-push",
-          tools: [{ name: "Codex", statusLabel: "已同步" }],
+          name: "older-skill",
+          localUpdatedAt: "2026/5/9 09:00:00",
         }),
         createSkill({
-          name: "disabled-skill",
-          collabStatus: "clean",
-          tools: [{ name: "Codex", statusLabel: "未启用" }],
+          name: "newer-skill",
+          localUpdatedAt: "2026/5/9 10:00:00",
         }),
       ],
       { query: "", status: "all" },
     );
 
-    expect(skills.map((skill) => skill.name)).toEqual(["disabled-skill", "enabled-skill"]);
+    expect(skills.map((skill) => skill.name)).toEqual(["newer-skill", "older-skill"]);
   });
 
-  it("keeps status priority and name sorting after enabled tool priority", () => {
+  it("keeps enabled-tool and status priority when local updated time is the same", () => {
     const skills = filterSkills(
       [
-        createSkill({ name: "clean-skill", collabStatus: "clean" }),
-        createSkill({ name: "update-skill", collabStatus: "update-available" }),
-        createSkill({ name: "alpha-clean-skill", collabStatus: "clean" }),
+        createSkill({
+          name: "enabled-clean-skill",
+          collabStatus: "clean",
+          localUpdatedAt: "2026/5/9 10:00:00",
+          tools: [{ name: "Codex", statusLabel: "已同步" }],
+        }),
+        createSkill({
+          name: "disabled-clean-skill",
+          collabStatus: "clean",
+          localUpdatedAt: "2026/5/9 10:00:00",
+          tools: [{ name: "Codex", statusLabel: "未启用" }],
+        }),
+        createSkill({
+          name: "update-skill",
+          collabStatus: "update-available",
+          localUpdatedAt: "2026/5/9 10:00:00",
+        }),
       ],
       { query: "", status: "all" },
     );
 
     expect(skills.map((skill) => skill.name)).toEqual([
       "update-skill",
-      "alpha-clean-skill",
-      "clean-skill",
+      "disabled-clean-skill",
+      "enabled-clean-skill",
     ]);
   });
 });

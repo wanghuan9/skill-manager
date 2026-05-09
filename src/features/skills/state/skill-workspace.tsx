@@ -28,6 +28,7 @@ import {
   openSkillInEditor,
   openSkillRepository,
   saveSkillFileContent,
+  setToolSkillStatuses,
   shouldUseFixtureData,
   toggleSkillTool,
   updateSkill,
@@ -99,6 +100,11 @@ type SkillWorkspaceContextValue = {
     content: string;
   }) => Promise<SkillFileDocument>;
   toggleSkillTool: (input: { skillName: string; toolName: string }) => Promise<void>;
+  setToolSkillStatuses: (input: {
+    toolName: string;
+    skillNames: string[];
+    enabled: boolean;
+  }) => Promise<void>;
   loadPushPreview: (input: {
     skillName: string;
     targetBranch: string;
@@ -123,6 +129,10 @@ type StartupWorkspaceCache = {
   localCandidates: LocalSkillCandidate[];
   toolConfigs: ToolConfig[];
   gitAccount: GitAccountSummary;
+};
+
+type CachedSkillSummary = Partial<SkillSummary> & {
+  lastSyncedAt?: string;
 };
 
 function removeInstalledMarketplaceSkill(
@@ -150,6 +160,34 @@ function getInitialDefaultOpenToolId() {
   return window.localStorage.getItem(DEFAULT_OPEN_TOOL_STORAGE_KEY) ?? "";
 }
 
+function normalizeCachedSkillSummary(skill: CachedSkillSummary): SkillSummary {
+  const normalizedUpdatedAt =
+    skill.localUpdatedAt?.trim()
+    || skill.remoteUpdatedAt?.trim()
+    || skill.lastSyncedAt?.trim()
+    || "";
+
+  return {
+    name: skill.name ?? "",
+    sourceLabel: skill.sourceLabel ?? "",
+    sourceType: skill.sourceType ?? "local",
+    sourceUrl: skill.sourceUrl ?? "",
+    description: skill.description ?? "",
+    localPath: skill.localPath ?? "",
+    branch: skill.branch ?? "",
+    collabStatus: skill.collabStatus ?? "clean",
+    statusText: skill.statusText ?? "",
+    remoteUpdatedAt: skill.remoteUpdatedAt ?? skill.lastSyncedAt ?? normalizedUpdatedAt,
+    localUpdatedAt: skill.localUpdatedAt ?? skill.lastSyncedAt ?? normalizedUpdatedAt,
+    lastCheckedAt: skill.lastCheckedAt ?? "",
+    syncedToolCount: skill.syncedToolCount ?? 0,
+    lastEditor: skill.lastEditor ?? "",
+    commitLabel: skill.commitLabel ?? "",
+    gitLinked: skill.gitLinked ?? false,
+    tools: skill.tools ?? [],
+  };
+}
+
 function readStartupWorkspaceCache(): StartupWorkspaceCache | null {
   if (
     typeof window === "undefined" ||
@@ -175,7 +213,9 @@ function readStartupWorkspaceCache(): StartupWorkspaceCache | null {
     }
 
     return {
-      installedSkills: parsed.installedSkills,
+      installedSkills: parsed.installedSkills.map((skill) =>
+        normalizeCachedSkillSummary(skill as CachedSkillSummary),
+      ),
       localCandidates: parsed.localCandidates,
       toolConfigs: parsed.toolConfigs,
       gitAccount: parsed.gitAccount,
@@ -228,7 +268,8 @@ export function mergeStartupSkillStatusCache(
       branch: cachedSkill.branch,
       collabStatus: cachedSkill.collabStatus,
       statusText: cachedSkill.statusText,
-      lastSyncedAt: cachedSkill.lastSyncedAt,
+      remoteUpdatedAt: cachedSkill.remoteUpdatedAt,
+      localUpdatedAt: cachedSkill.localUpdatedAt,
       lastCheckedAt: cachedSkill.lastCheckedAt,
       lastEditor: cachedSkill.lastEditor,
       commitLabel: cachedSkill.commitLabel,
@@ -636,6 +677,23 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
     setInstalledSkills((current) => [updatedSkill, ...current.filter((item) => item.name !== updatedSkill.name)]);
   }
 
+  async function handleSetToolSkillStatuses(input: {
+    toolName: string;
+    skillNames: string[];
+    enabled: boolean;
+  }) {
+    const updatedSkills = await setToolSkillStatuses(input);
+    if (updatedSkills.length === 0) {
+      return;
+    }
+
+    const updatedNames = new Set(updatedSkills.map((skill) => skill.name));
+    setInstalledSkills((current) => [
+      ...updatedSkills,
+      ...current.filter((skill) => !updatedNames.has(skill.name)),
+    ]);
+  }
+
   async function handleOpenSkillWithDefaultTool(skillName: string) {
     const availableTools = buildOpenToolOptions(toolConfigs);
     const availableToolIds = new Set(availableTools.map((tool) => tool.id));
@@ -677,6 +735,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       loadSkillFileContent: fetchSkillFileContent,
       saveSkillFileContent,
       toggleSkillTool: handleToggleSkillTool,
+      setToolSkillStatuses: handleSetToolSkillStatuses,
       loadPushPreview: fetchPushPreviewSnapshot,
       loadPushTargets: fetchPushTargetSnapshot,
       openSkillRepository,
@@ -698,6 +757,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       marketplacePageBySource,
       marketplaceSkills,
       toolConfigs,
+      handleSetToolSkillStatuses,
     ],
   );
 

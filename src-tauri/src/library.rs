@@ -18,6 +18,10 @@ const GIT_CLONE_HISTORY_DEPTH: &str = "20";
 const GIT_NETWORK_TIMEOUT: Duration = Duration::from_secs(120);
 const GIT_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 
+fn sync_trace_enabled() -> bool {
+    env::var("SKILLM_TRACE_SYNC").ok().as_deref() == Some("1")
+}
+
 pub fn install_market_skill_from_source(
     skill: &SkillSummary,
     skill_path: Option<&str>,
@@ -1306,11 +1310,22 @@ pub fn create_skill_symlink(
     skill_name: &str,
     tool_skills_path: &str,
 ) -> Result<(), String> {
+    if sync_trace_enabled() {
+        eprintln!(
+            "[sync-trace] create_skill_symlink skill_name={skill_name} skill_local_path={skill_local_path} tool_skills_path={tool_skills_path}"
+        );
+    }
     let skill_path = PathBuf::from(skill_local_path);
     let tool_path = PathBuf::from(tool_skills_path);
     let normalized_skill_name = skill_name.trim();
     if normalized_skill_name.is_empty() {
         return Err("无法获取 skill 名称".to_string());
+    }
+    if is_reserved_workspace_name(normalized_skill_name) {
+        return Err(format!(
+            "同步失败：{} 是内部保留目录名，不能作为 skill 同步",
+            normalized_skill_name
+        ));
     }
     if !skill_path.is_dir() || !skill_path.join("SKILL.md").is_file() {
         return Err(format!(
@@ -1318,6 +1333,7 @@ pub fn create_skill_symlink(
             skill_path.to_string_lossy()
         ));
     }
+    ensure_managed_skill_sync_source(&skill_path)?;
     if is_reserved_workspace_dir(&skill_path) {
         return Err(format!(
             "同步失败：不能把内部工作区目录 {} 当作 skill 链接",
@@ -1365,10 +1381,56 @@ pub fn create_skill_symlink(
 }
 
 fn is_reserved_workspace_dir(path: &Path) -> bool {
-    matches!(
-        path.file_name().and_then(|value| value.to_str()),
-        Some(name) if RESERVED_WORKSPACE_LINK_NAMES.contains(&name)
-    )
+    path.file_name()
+        .and_then(|value| value.to_str())
+        .is_some_and(is_reserved_workspace_name)
+}
+
+fn is_reserved_workspace_name(name: &str) -> bool {
+    RESERVED_WORKSPACE_LINK_NAMES.contains(&name)
+}
+
+fn managed_workspace_root() -> Result<PathBuf, String> {
+    let home_dir = env::var("HOME").map_err(|_| "无法读取 HOME 环境变量".to_string())?;
+    Ok(PathBuf::from(home_dir).join(".skillm"))
+}
+
+fn managed_skill_library_root() -> Result<PathBuf, String> {
+    Ok(managed_workspace_root()?.join("skills"))
+}
+
+fn ensure_managed_skill_sync_source(skill_path: &Path) -> Result<(), String> {
+    let canonical_skill_path = skill_path
+        .canonicalize()
+        .map_err(|error| format!("解析 skill 目录失败: {error}"))?;
+    let canonical_skill_root = managed_skill_library_root()?
+        .canonicalize()
+        .map_err(|error| format!("解析 skill 库目录失败: {error}"))?;
+
+    if canonical_skill_path == canonical_skill_root
+        || !canonical_skill_path.starts_with(&canonical_skill_root)
+    {
+        return Err(format!(
+            "同步失败：只允许同步 {} 下的 skill 目录",
+            canonical_skill_root.to_string_lossy()
+        ));
+    }
+
+    Ok(())
+}
+
+fn is_managed_workspace_path(path: &Path) -> bool {
+    let Ok(target_path) = path.canonicalize() else {
+        return false;
+    };
+    let Ok(workspace_root) = managed_workspace_root() else {
+        return false;
+    };
+    let Ok(workspace_root) = workspace_root.canonicalize() else {
+        return false;
+    };
+
+    target_path.starts_with(&workspace_root)
 }
 
 pub fn remove_skill_symlink(tool_skills_path: &str, skill_name: &str) -> Result<(), String> {
@@ -1384,14 +1446,123 @@ pub fn remove_skill_symlink(tool_skills_path: &str, skill_name: &str) -> Result<
 }
 
 fn remove_reserved_workspace_symlinks(tool_skills_path: &str) -> Result<(), String> {
+    if sync_trace_enabled() {
+        eprintln!(
+            "[sync-trace] remove_reserved_workspace_symlinks tool_skills_path={tool_skills_path}"
+        );
+    }
     let tool_path = PathBuf::from(tool_skills_path);
-    for name in RESERVED_WORKSPACE_LINK_NAMES {
-        let symlink_path = tool_path.join(name);
-        if symlink_path.is_symlink() {
-            fs::remove_file(&symlink_path)
-                .map_err(|error| format!("删除内部工作区错误链接失败: {error}"))?;
+    if !tool_path.exists() {
+        return Ok(());
+    }
+    let entries =
+        fs::read_dir(&tool_path).map_err(|error| format!("读取工具 skills 目录失败: {error}"))?;
+
+    for entry in entries {
+        let entry = entry.map_err(|error| format!("读取工具 skills 条目失败: {error}"))?;
+        let entry_path = entry.path();
+
+        let entry_name = entry_path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or_default();
+        let should_remove = is_reserved_workspace_name(entry_name)
+            || (entry_path.is_symlink() && is_reserved_workspace_symlink_target(&entry_path));
+        if should_remove {
+            if sync_trace_enabled() {
+                eprintln!(
+                    "[sync-trace] removing_reserved_entry entry_path={}",
+                    entry_path.to_string_lossy()
+                );
+            }
+            remove_reserved_workspace_entry(&entry_path)?;
         }
     }
+    Ok(())
+}
+
+fn remove_reserved_workspace_entry(entry_path: &Path) -> Result<(), String> {
+    let metadata = fs::symlink_metadata(entry_path)
+        .map_err(|error| format!("读取内部工作区错误条目失败: {error}"))?;
+    let file_type = metadata.file_type();
+
+    if file_type.is_symlink() || file_type.is_file() {
+        fs::remove_file(entry_path).map_err(|error| format!("删除内部工作区错误链接失败: {error}"))
+    } else if file_type.is_dir() {
+        fs::remove_dir_all(entry_path)
+            .map_err(|error| format!("删除内部工作区错误目录失败: {error}"))
+    } else {
+        fs::remove_file(entry_path).map_err(|error| format!("删除内部工作区错误条目失败: {error}"))
+    }
+}
+
+fn is_reserved_workspace_symlink_target(symlink_path: &Path) -> bool {
+    let Ok(target_path) = symlink_path.canonicalize() else {
+        return false;
+    };
+    let Ok(workspace_root) = managed_workspace_root() else {
+        return false;
+    };
+    [
+        workspace_root.join("cache"),
+        workspace_root.join("repo-cache"),
+        workspace_root.join("skills"),
+        workspace_root.join("imports"),
+    ]
+    .into_iter()
+    .filter_map(|path| path.canonicalize().ok())
+    .any(|reserved_target| target_path == reserved_target)
+}
+
+pub fn reconcile_tool_skill_symlinks(
+    tool_skills_path: &str,
+    enabled_skills: &[SkillSummary],
+) -> Result<(), String> {
+    if sync_trace_enabled() {
+        let enabled_skill_names = enabled_skills
+            .iter()
+            .map(|skill| skill.name.as_str())
+            .collect::<Vec<_>>();
+        eprintln!(
+            "[sync-trace] reconcile_tool_skill_symlinks tool_skills_path={tool_skills_path} enabled_skills={enabled_skill_names:?}"
+        );
+    }
+    let tool_path = PathBuf::from(tool_skills_path);
+    if !tool_path.exists() {
+        fs::create_dir_all(&tool_path)
+            .map_err(|error| format!("创建工具 skills 目录失败: {error}"))?;
+    }
+
+    remove_reserved_workspace_symlinks(tool_skills_path)?;
+
+    let expected_skill_names = enabled_skills
+        .iter()
+        .map(|skill| skill.name.as_str())
+        .collect::<std::collections::HashSet<_>>();
+
+    let entries =
+        fs::read_dir(&tool_path).map_err(|error| format!("读取工具 skills 目录失败: {error}"))?;
+    for entry in entries {
+        let entry = entry.map_err(|error| format!("读取工具 skills 条目失败: {error}"))?;
+        let symlink_path = entry.path();
+        if !symlink_path.is_symlink() || !is_managed_workspace_path(&symlink_path) {
+            continue;
+        }
+
+        let entry_name = symlink_path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or_default();
+        if !expected_skill_names.contains(entry_name) {
+            fs::remove_file(&symlink_path)
+                .map_err(|error| format!("删除多余的技能链接失败: {error}"))?;
+        }
+    }
+
+    for skill in enabled_skills {
+        create_skill_symlink(&skill.local_path, &skill.name, tool_skills_path)?;
+    }
+
     Ok(())
 }
 
@@ -1573,10 +1744,31 @@ fn git_worktree_root(path: &Path) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::{
-        clone_branch_for_resolved_path, skill_dir_match_score, MarketSourceSpec,
+        clone_branch_for_resolved_path, create_skill_symlink, reconcile_tool_skill_symlinks,
+        remove_reserved_workspace_symlinks, skill_dir_match_score, MarketSourceSpec,
         ResolvedRemoteSkillPath,
     };
+    use crate::models::SkillSummary;
+    use std::fs;
     use std::path::PathBuf;
+    use std::sync::Mutex;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    static HOME_ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    fn temp_test_dir(label: &str) -> PathBuf {
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time should be available")
+            .as_nanos();
+        let temp_dir = std::env::temp_dir().join(format!(
+            "skillm-library-test-{label}-{}-{}",
+            std::process::id(),
+            timestamp
+        ));
+        fs::create_dir_all(&temp_dir).expect("create temp test dir");
+        temp_dir
+    }
 
     #[test]
     fn resolved_default_branch_does_not_fall_back_to_source_branch_hint() {
@@ -1616,5 +1808,216 @@ mod tests {
             ),
             None
         );
+    }
+
+    #[test]
+    fn create_skill_symlink_rejects_reserved_workspace_name() {
+        let temp_dir = temp_test_dir("reserved-symlink");
+        let source_skill_dir = temp_dir.join("source-skill");
+        let tool_skills_dir = temp_dir.join("tool-skills");
+        fs::create_dir_all(&source_skill_dir).expect("create source skill dir");
+        fs::write(source_skill_dir.join("SKILL.md"), "# source-skill").expect("write SKILL.md");
+        fs::create_dir_all(&tool_skills_dir).expect("create tool skills dir");
+
+        let error = create_skill_symlink(
+            source_skill_dir.to_string_lossy().as_ref(),
+            "skills",
+            tool_skills_dir.to_string_lossy().as_ref(),
+        )
+        .expect_err("reserved workspace name should be rejected");
+
+        assert!(error.contains("内部保留目录名"));
+        assert!(!tool_skills_dir.join("skills").exists());
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn create_skill_symlink_rejects_source_outside_managed_skill_root() {
+        let _guard = HOME_ENV_LOCK.lock().expect("lock HOME env for test");
+        let temp_dir = temp_test_dir("external-symlink");
+        let home_dir = temp_dir.join("home");
+        let external_skill_dir = temp_dir.join("external-skill");
+        let tool_skills_dir = temp_dir.join("tool-skills");
+        fs::create_dir_all(home_dir.join(".skillm/skills")).expect("create managed skill root");
+        fs::create_dir_all(&external_skill_dir).expect("create external skill dir");
+        fs::write(external_skill_dir.join("SKILL.md"), "# external-skill").expect("write SKILL.md");
+        fs::create_dir_all(&tool_skills_dir).expect("create tool skills dir");
+
+        let original_home = std::env::var_os("HOME");
+        // SAFETY: test restores HOME before exit and runs in-process only for this case.
+        unsafe {
+            std::env::set_var("HOME", &home_dir);
+        }
+
+        let error = create_skill_symlink(
+            external_skill_dir.to_string_lossy().as_ref(),
+            "external-skill",
+            tool_skills_dir.to_string_lossy().as_ref(),
+        )
+        .expect_err("external skill path should be rejected");
+
+        assert!(error.contains("只允许同步"));
+        assert!(!tool_skills_dir.join("external-skill").exists());
+
+        if let Some(home) = original_home {
+            // SAFETY: restore HOME after the test mutation above.
+            unsafe {
+                std::env::set_var("HOME", home);
+            }
+        } else {
+            // SAFETY: restore HOME after the test mutation above.
+            unsafe {
+                std::env::remove_var("HOME");
+            }
+        }
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn remove_reserved_workspace_symlinks_drops_managed_workspace_links() {
+        let _guard = HOME_ENV_LOCK.lock().expect("lock HOME env for test");
+        let temp_dir = temp_test_dir("reserved-cleanup");
+        let home_dir = temp_dir.join("home");
+        let tool_skills_dir = temp_dir.join("tool-skills");
+        fs::create_dir_all(home_dir.join(".skillm/cache")).expect("create cache dir");
+        fs::create_dir_all(home_dir.join(".skillm/repo-cache")).expect("create repo-cache dir");
+        fs::create_dir_all(home_dir.join(".skillm/skills")).expect("create skills dir");
+        fs::create_dir_all(home_dir.join(".skillm/imports")).expect("create imports dir");
+        fs::create_dir_all(&tool_skills_dir).expect("create tool skills dir");
+        fs::create_dir_all(tool_skills_dir.join("imports").join("stale"))
+            .expect("create imports directory");
+        fs::write(tool_skills_dir.join("state.json"), "{}").expect("write state.json");
+
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(
+                home_dir.join(".skillm/cache"),
+                tool_skills_dir.join("cache"),
+            )
+            .expect("create cache symlink");
+            std::os::unix::fs::symlink(
+                home_dir.join(".skillm/repo-cache"),
+                tool_skills_dir.join("repo-cache"),
+            )
+            .expect("create repo-cache symlink");
+            std::os::unix::fs::symlink(
+                home_dir.join(".skillm/skills"),
+                tool_skills_dir.join("skills"),
+            )
+            .expect("create skills symlink");
+        }
+
+        let original_home = std::env::var_os("HOME");
+        // SAFETY: test restores HOME before exit and runs in-process only for this case.
+        unsafe {
+            std::env::set_var("HOME", &home_dir);
+        }
+
+        remove_reserved_workspace_symlinks(tool_skills_dir.to_string_lossy().as_ref())
+            .expect("remove reserved symlinks");
+
+        assert!(!tool_skills_dir.join("cache").exists());
+        assert!(!tool_skills_dir.join("repo-cache").exists());
+        assert!(!tool_skills_dir.join("skills").exists());
+        assert!(!tool_skills_dir.join("imports").exists());
+        assert!(!tool_skills_dir.join("state.json").exists());
+
+        if let Some(home) = original_home {
+            // SAFETY: restore HOME after the test mutation above.
+            unsafe {
+                std::env::set_var("HOME", home);
+            }
+        } else {
+            // SAFETY: restore HOME after the test mutation above.
+            unsafe {
+                std::env::remove_var("HOME");
+            }
+        }
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn reconcile_tool_skill_symlinks_removes_unmanaged_workspace_entries() {
+        let _guard = HOME_ENV_LOCK.lock().expect("lock HOME env for test");
+        let temp_dir = temp_test_dir("reconcile-tool-skills");
+        let home_dir = temp_dir.join("home");
+        let tool_skills_dir = temp_dir.join("tool-skills");
+        let kept_skill_dir = home_dir.join(".skillm/skills/kept-skill");
+        let stale_skill_dir = home_dir.join(".skillm/skills/stale-skill");
+        let external_skill_dir = temp_dir.join("external-skill");
+        fs::create_dir_all(&kept_skill_dir).expect("create kept skill dir");
+        fs::create_dir_all(&stale_skill_dir).expect("create stale skill dir");
+        fs::create_dir_all(home_dir.join(".skillm/cache")).expect("create cache dir");
+        fs::create_dir_all(&external_skill_dir).expect("create external skill dir");
+        fs::create_dir_all(&tool_skills_dir).expect("create tool skills dir");
+        fs::write(kept_skill_dir.join("SKILL.md"), "# kept-skill").expect("write kept SKILL");
+        fs::write(stale_skill_dir.join("SKILL.md"), "# stale-skill").expect("write stale SKILL");
+        fs::write(external_skill_dir.join("SKILL.md"), "# external-skill")
+            .expect("write external SKILL");
+
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(&kept_skill_dir, tool_skills_dir.join("kept-skill"))
+                .expect("create kept symlink");
+            std::os::unix::fs::symlink(&stale_skill_dir, tool_skills_dir.join("stale-skill"))
+                .expect("create stale symlink");
+            std::os::unix::fs::symlink(
+                home_dir.join(".skillm/cache"),
+                tool_skills_dir.join("cache"),
+            )
+            .expect("create cache symlink");
+            std::os::unix::fs::symlink(&external_skill_dir, tool_skills_dir.join("external-skill"))
+                .expect("create external symlink");
+        }
+
+        let original_home = std::env::var_os("HOME");
+        // SAFETY: test restores HOME after the temporary override.
+        unsafe {
+            std::env::set_var("HOME", &home_dir);
+        }
+
+        reconcile_tool_skill_symlinks(
+            tool_skills_dir.to_string_lossy().as_ref(),
+            &[SkillSummary {
+                name: "kept-skill".into(),
+                source_label: "GitHub".into(),
+                source_type: "github".into(),
+                source_url: "https://github.com/demo/kept-skill".into(),
+                description: "kept".into(),
+                local_path: kept_skill_dir.to_string_lossy().to_string(),
+                branch: "main".into(),
+                collab_status: "clean".into(),
+                status_text: "ok".into(),
+                remote_updated_at: "刚刚".into(),
+                local_updated_at: "刚刚".into(),
+                last_synced_at: "刚刚".into(),
+                last_checked_at: "刚刚".into(),
+                synced_tool_count: 1,
+                last_editor: "".into(),
+                commit_label: "abc123".into(),
+                git_linked: false,
+                tools: vec![],
+            }],
+        )
+        .expect("reconcile tool skill symlinks");
+
+        assert!(tool_skills_dir.join("kept-skill").exists());
+        assert!(!tool_skills_dir.join("stale-skill").exists());
+        assert!(!tool_skills_dir.join("cache").exists());
+        assert!(tool_skills_dir.join("external-skill").exists());
+
+        if let Some(home) = original_home {
+            // SAFETY: restore HOME after the test mutation above.
+            unsafe {
+                std::env::set_var("HOME", home);
+            }
+        } else {
+            // SAFETY: restore HOME after the test mutation above.
+            unsafe {
+                std::env::remove_var("HOME");
+            }
+        }
+        let _ = fs::remove_dir_all(temp_dir);
     }
 }

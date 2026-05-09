@@ -57,6 +57,10 @@ test("can enable all visible skills from tool manage dialog", async () => {
   await userEvent.click(screen.getByRole("button", { name: "全部开启" }));
 
   expect(await screen.findByText(/Skills 4\/4/)).toBeInTheDocument();
+
+  await userEvent.click(screen.getByRole("button", { name: "全部关闭" }));
+
+  expect(await screen.findByText(/Skills 0\/4/)).toBeInTheDocument();
 });
 
 test("can toggle MCP servers from tool manage dialog", async () => {

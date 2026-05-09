@@ -19,7 +19,8 @@ export type SkillSummary = {
   branch: string;
   collabStatus: SkillCollabStatus;
   statusText: string;
-  lastSyncedAt: string;
+  remoteUpdatedAt: string;
+  localUpdatedAt: string;
   lastCheckedAt: string;
   syncedToolCount: number;
   lastEditor: string;

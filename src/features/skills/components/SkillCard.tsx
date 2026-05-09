@@ -98,7 +98,9 @@ export function SkillCard({ skill }: SkillCardProps) {
   const skillTools = mergeSkillToolsWithInstalledTools(skill.tools, toolConfigs);
   const sourceLabel = formatSkillSourceLabel(skill.sourceLabel);
   const skillDescription = formatSkillDescription(skill.description);
-  const updatedAt = formatSkillUpdatedAt(skill.lastSyncedAt);
+  const remoteUpdatedAt = formatSkillUpdatedAt(skill.remoteUpdatedAt);
+  const localUpdatedAt = formatSkillUpdatedAt(skill.localUpdatedAt);
+  const remoteUpdater = skill.lastEditor || "未获取";
   const enabledTools = skillTools.filter((tool) => isToolEnabledStatus(tool.statusLabel));
   const visibleTools = enabledTools.slice(0, 2);
   const hiddenToolCount = Math.max(enabledTools.length - visibleTools.length, 0);
@@ -209,8 +211,8 @@ export function SkillCard({ skill }: SkillCardProps) {
                     <div className="skill-card__list-meta">
                       <span className="skill-card__meta-label-inline">来源：</span>
                       <span className="skill-card__meta-value">{sourceLabel}</span>
-                      <span className="skill-card__meta-label-inline">更新时间：</span>
-                      <span className="skill-card__meta-value">{updatedAt}</span>
+                      <span className="skill-card__meta-label-inline">本地更新时间：</span>
+                      <span className="skill-card__meta-value">{localUpdatedAt || "未获取"}</span>
                     </div>
                   </div>
                 </div>
@@ -321,12 +323,16 @@ export function SkillCard({ skill }: SkillCardProps) {
                   </dd>
                 </div>
                 <div>
-                  <dt>更新时间</dt>
-                  <dd>{updatedAt}</dd>
+                  <dt>远端更新时间</dt>
+                  <dd>{remoteUpdatedAt || "未获取"}</dd>
                 </div>
                 <div>
-                  <dt>更新人</dt>
-                  <dd>{skill.lastEditor || "未获取"}</dd>
+                  <dt>远端更新人</dt>
+                  <dd>{remoteUpdater}</dd>
+                </div>
+                <div>
+                  <dt>本地更新时间</dt>
+                  <dd>{localUpdatedAt || "未获取"}</dd>
                 </div>
               </dl>
             </section>

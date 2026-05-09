@@ -16,6 +16,7 @@ pub fn run() {
                         .build(),
                 )?;
             }
+            let _ = library::remove_reserved_workspace_symlinks_from_all_tools();
             Ok(())
         })
         .plugin(tauri_plugin_dialog::init())
@@ -48,6 +49,7 @@ pub fn run() {
             commands::save_skill_file_content,
             commands::delete_skill,
             commands::toggle_skill_tool_status,
+            commands::set_tool_skill_statuses,
             commands::refresh_git_states,
             mcp_manager::list_mcp_workspace,
             mcp_manager::list_mcp_marketplace_servers,

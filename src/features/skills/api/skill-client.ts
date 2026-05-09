@@ -86,6 +86,12 @@ type ToggleSkillToolInput = {
   toolName: string;
 };
 
+type SetToolSkillStatusesInput = {
+  toolName: string;
+  skillNames: string[];
+  enabled: boolean;
+};
+
 type ToggleMcpAppInput = {
   serverId: string;
   appId: string;
@@ -94,6 +100,10 @@ type ToggleMcpAppInput = {
 
 type InstallMcpMarketplaceServerInput = {
   server: McpMarketplaceServer;
+};
+
+type LegacySkillSummary = Partial<SkillSummary> & {
+  lastSyncedAt?: string;
 };
 
 export function shouldUseFixtureData() {
@@ -108,20 +118,71 @@ async function invokeOrFallback<T>(command: string, args: Record<string, unknown
   return invoke<T>(command, args);
 }
 
+function normalizeSkillSummary(skill: LegacySkillSummary): SkillSummary {
+  const normalizedUpdatedAt =
+    skill.localUpdatedAt?.trim()
+    || skill.remoteUpdatedAt?.trim()
+    || skill.lastSyncedAt?.trim()
+    || "";
+
+  return {
+    name: skill.name ?? "",
+    sourceLabel: skill.sourceLabel ?? "",
+    sourceType: skill.sourceType ?? "local",
+    sourceUrl: skill.sourceUrl ?? "",
+    description: skill.description ?? "",
+    localPath: skill.localPath ?? "",
+    branch: skill.branch ?? "",
+    collabStatus: skill.collabStatus ?? "clean",
+    statusText: skill.statusText ?? "",
+    remoteUpdatedAt: skill.remoteUpdatedAt ?? skill.lastSyncedAt ?? normalizedUpdatedAt,
+    localUpdatedAt: skill.localUpdatedAt ?? skill.lastSyncedAt ?? normalizedUpdatedAt,
+    lastCheckedAt: skill.lastCheckedAt ?? "",
+    syncedToolCount: skill.syncedToolCount ?? 0,
+    lastEditor: skill.lastEditor ?? "",
+    commitLabel: skill.commitLabel ?? "",
+    gitLinked: skill.gitLinked ?? false,
+    tools: skill.tools ?? [],
+  };
+}
+
+function normalizeSkillSummaryList(skills: LegacySkillSummary[]): SkillSummary[] {
+  return skills.map((skill) => normalizeSkillSummary(skill));
+}
+
 export async function fetchWorkspaceSnapshot(): Promise<WorkspaceSnapshot> {
-  return invokeOrFallback("get_workspace_snapshot", {}, workspaceSnapshotFixture);
+  const snapshot = await invokeOrFallback("get_workspace_snapshot", {}, workspaceSnapshotFixture);
+  return {
+    ...snapshot,
+    installedSkills: normalizeSkillSummaryList(snapshot.installedSkills),
+  };
 }
 
 export async function fetchInstalledSkills(): Promise<SkillSummary[]> {
-  return invokeOrFallback("list_installed_skills", {}, installedSkillFixtures);
+  const skills = await invokeOrFallback<LegacySkillSummary[]>(
+    "list_installed_skills",
+    {},
+    installedSkillFixtures,
+  );
+  return normalizeSkillSummaryList(skills);
 }
 
 export async function fetchStartupInstalledSkills(): Promise<SkillSummary[]> {
-  return invokeOrFallback("list_startup_installed_skills", {}, installedSkillFixtures);
+  const skills = await invokeOrFallback<LegacySkillSummary[]>(
+    "list_startup_installed_skills",
+    {},
+    installedSkillFixtures,
+  );
+  return normalizeSkillSummaryList(skills);
 }
 
 export async function fetchGitStates(): Promise<SkillSummary[]> {
-  return invokeOrFallback("refresh_git_states", {}, installedSkillFixtures);
+  const skills = await invokeOrFallback<LegacySkillSummary[]>(
+    "refresh_git_states",
+    {},
+    installedSkillFixtures,
+  );
+  return normalizeSkillSummaryList(skills);
 }
 
 export async function fetchMarketplaceSkills(): Promise<MarketplaceSkill[]> {
@@ -189,8 +250,20 @@ export async function fetchGitAccount(): Promise<GitAccountSummary> {
 }
 
 export async function installSkillFromMarket(skill: MarketplaceSkill): Promise<SkillSummary> {
-  const fallback = installedSkillFixtures[0];
-  return invokeOrFallback("install_skill_from_market", { skill }, fallback);
+  const fallback = normalizeSkillSummary({
+    ...installedSkillFixtures[0],
+    name: skill.name,
+    description: skill.description,
+    sourceLabel: skill.sourceSite,
+    sourceType: skill.sourceType,
+    sourceUrl: skill.sourceUrl,
+    remoteUpdatedAt: skill.updatedAt,
+    localUpdatedAt: "刚刚",
+    collabStatus: "clean",
+    statusText: "已安装到本地，可继续同步到工具。",
+  });
+  const installedSkill = await invokeOrFallback<LegacySkillSummary>("install_skill_from_market", { skill }, fallback);
+  return normalizeSkillSummary(installedSkill);
 }
 
 export async function installSkillFromRepo(
@@ -224,7 +297,8 @@ export async function installSelectedRepoSkills(
     };
   });
 
-  return invokeOrFallback("install_selected_repo_skills", input, fallback);
+  const installedSkills = await invokeOrFallback<LegacySkillSummary[]>("install_selected_repo_skills", input, fallback);
+  return normalizeSkillSummaryList(installedSkills);
 }
 
 export async function installLocalSkill(input: InstallLocalSkillInput): Promise<SkillSummary> {
@@ -246,7 +320,12 @@ export async function installLocalSkill(input: InstallLocalSkillInput): Promise<
     gitLinked: false,
   };
 
-  return invokeOrFallback("install_local_skill", input, fallback);
+  const installedSkill = await invokeOrFallback<LegacySkillSummary>("install_local_skill", input, {
+    ...fallback,
+    remoteUpdatedAt: "",
+    localUpdatedAt: "刚刚",
+  });
+  return normalizeSkillSummary(installedSkill);
 }
 
 export async function importLocalSkill(localPath: string): Promise<SkillSummary> {
@@ -263,7 +342,12 @@ export async function importLocalSkill(localPath: string): Promise<SkillSummary>
     statusText: "已纳入管理，建议同步到目标工具。",
   };
 
-  return invokeOrFallback("import_local_skill", { localPath }, fallback);
+  const importedSkill = await invokeOrFallback<LegacySkillSummary>("import_local_skill", { localPath }, {
+    ...fallback,
+    remoteUpdatedAt: "",
+    localUpdatedAt: "刚刚",
+  });
+  return normalizeSkillSummary(importedSkill);
 }
 
 export async function fetchPushTargetSnapshot(skillName: string): Promise<PushTargetSnapshot> {
@@ -327,7 +411,11 @@ export async function updateSkill(
     lastCheckedAt: "刚刚检查",
   };
 
-  return invokeOrFallback("update_skill", input, fallback);
+  const updatedSkill = await invokeOrFallback<LegacySkillSummary>("update_skill", input, {
+    ...fallback,
+    localUpdatedAt: "刚刚",
+  });
+  return normalizeSkillSummary(updatedSkill);
 }
 
 export async function fetchSkillFileBrowser(skillName: string): Promise<SkillFileBrowserSnapshot> {
@@ -387,7 +475,38 @@ export async function toggleSkillTool(input: ToggleSkillToolInput): Promise<Skil
     ),
   };
 
-  return invokeOrFallback("toggle_skill_tool_status", input, fallback);
+  const updatedSkill = await invokeOrFallback<LegacySkillSummary>("toggle_skill_tool_status", input, fallback);
+  return normalizeSkillSummary(updatedSkill);
+}
+
+export async function setToolSkillStatuses(
+  input: SetToolSkillStatusesInput,
+): Promise<SkillSummary[]> {
+  const fallback = input.skillNames.map((skillName) => {
+    const fallbackSource =
+      installedSkillFixtures.find((skill) => skill.name === skillName) ??
+      installedSkillFixtures[0];
+    const mergedTools = mergeSkillToolsWithInstalledTools(fallbackSource.tools, toolConfigFixtures);
+    return {
+      ...fallbackSource,
+      name: skillName,
+      tools: mergedTools.map((tool) =>
+        tool.name === input.toolName
+          ? {
+              ...tool,
+              statusLabel: input.enabled ? "已启用" : "未启用",
+            }
+          : tool
+      ),
+    };
+  });
+
+  const updatedSkills = await invokeOrFallback<LegacySkillSummary[]>(
+    "set_tool_skill_statuses",
+    input,
+    fallback,
+  );
+  return normalizeSkillSummaryList(updatedSkills);
 }
 
 export async function fetchMcpWorkspace(): Promise<McpWorkspaceSnapshot> {

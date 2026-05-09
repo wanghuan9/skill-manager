@@ -47,6 +47,7 @@ pub fn enrich_skill_with_git_state(skill: &SkillSummary) -> SkillSummary {
     if !skill_path.exists() || repo_root(skill_path).is_none() {
         let mut unlinked = skill.clone();
         if let Some(updated_at) = latest_local_content_modified_at(skill_path) {
+            unlinked.local_updated_at = updated_at.clone();
             unlinked.last_synced_at = updated_at;
         }
         unlinked.git_linked = false;
@@ -74,24 +75,42 @@ pub fn enrich_skill_with_git_state(skill: &SkillSummary) -> SkillSummary {
         remote_counts,
         collab_status,
     );
-    let last_synced_at = if working_tree_dirty {
+    let fallback_local_updated_at = if skill.local_updated_at.trim().is_empty() {
+        skill.last_synced_at.clone()
+    } else {
+        skill.local_updated_at.clone()
+    };
+    let fallback_remote_updated_at = if skill.remote_updated_at.trim().is_empty() {
+        fallback_local_updated_at.clone()
+    } else {
+        skill.remote_updated_at.clone()
+    };
+    let local_updated_at = if working_tree_dirty {
         latest_local_content_modified_at(skill_path)
             .or_else(|| latest_commit_time(skill_path))
-            .unwrap_or_else(|| skill.last_synced_at.clone())
+            .unwrap_or_else(|| fallback_local_updated_at.clone())
     } else {
         latest_commit_time(skill_path)
             .or_else(|| latest_local_content_modified_at(skill_path))
-            .unwrap_or_else(|| skill.last_synced_at.clone())
+            .unwrap_or_else(|| fallback_local_updated_at.clone())
     };
+    let remote_updated_at = latest_remote_commit_time(skill_path, &branch)
+        .or_else(|| latest_commit_time(skill_path))
+        .unwrap_or_else(|| fallback_remote_updated_at.clone());
+    let remote_updated_by = latest_remote_commit_author(skill_path, &branch)
+        .or_else(|| latest_commit_author(skill_path))
+        .unwrap_or_else(|| skill.last_editor.clone());
 
     let mut enriched = skill.clone();
     enriched.branch = branch;
     enriched.commit_label = commit_label;
     enriched.collab_status = collab_status.to_string();
     enriched.status_text = status_text;
-    enriched.last_synced_at = last_synced_at;
+    enriched.remote_updated_at = remote_updated_at;
+    enriched.local_updated_at = local_updated_at.clone();
+    enriched.last_synced_at = local_updated_at;
     enriched.last_checked_at = "刚刚检查".into();
-    enriched.last_editor = latest_commit_author(skill_path).unwrap_or_default();
+    enriched.last_editor = remote_updated_by;
     enriched.git_linked = true;
     enriched
 }
@@ -101,6 +120,7 @@ pub fn enrich_newly_installed_skill_with_git_state(skill: &SkillSummary) -> Skil
     if !skill_path.exists() || repo_root(skill_path).is_none() {
         let mut unlinked = skill.clone();
         if let Some(updated_at) = latest_local_content_modified_at(skill_path) {
+            unlinked.local_updated_at = updated_at.clone();
             unlinked.last_synced_at = updated_at;
         }
         unlinked.git_linked = false;
@@ -115,25 +135,54 @@ pub fn enrich_newly_installed_skill_with_git_state(skill: &SkillSummary) -> Skil
         .map(|output| !output.trim().is_empty())
         .unwrap_or(false);
     let (collab_status, status_text) = derive_collab_status(working_tree_dirty, Some((0, 0)));
+    let fallback_local_updated_at = if skill.local_updated_at.trim().is_empty() {
+        skill.last_synced_at.clone()
+    } else {
+        skill.local_updated_at.clone()
+    };
+    let fallback_remote_updated_at = if skill.remote_updated_at.trim().is_empty() {
+        fallback_local_updated_at.clone()
+    } else {
+        skill.remote_updated_at.clone()
+    };
+    let local_updated_at = latest_commit_time(skill_path)
+        .or_else(|| latest_local_content_modified_at(skill_path))
+        .unwrap_or_else(|| fallback_local_updated_at.clone());
+    let remote_updated_at = latest_remote_commit_time(skill_path, &branch)
+        .or_else(|| latest_commit_time(skill_path))
+        .unwrap_or_else(|| fallback_remote_updated_at.clone());
+    let remote_updated_by = latest_remote_commit_author(skill_path, &branch)
+        .or_else(|| latest_commit_author(skill_path))
+        .unwrap_or_else(|| skill.last_editor.clone());
 
     let mut enriched = skill.clone();
     enriched.branch = branch;
     enriched.commit_label = commit_label;
     enriched.collab_status = collab_status.to_string();
     enriched.status_text = status_text;
-    enriched.last_synced_at = latest_commit_time(skill_path)
-        .or_else(|| latest_local_content_modified_at(skill_path))
-        .unwrap_or_else(|| skill.last_synced_at.clone());
+    enriched.remote_updated_at = remote_updated_at;
+    enriched.local_updated_at = local_updated_at.clone();
+    enriched.last_synced_at = local_updated_at;
     enriched.last_checked_at = "刚刚检查".into();
-    enriched.last_editor = latest_commit_author(skill_path).unwrap_or_default();
+    enriched.last_editor = remote_updated_by;
     enriched.git_linked = true;
     enriched
 }
 
 pub fn enrich_skill_with_cached_update_state(skill: &SkillSummary) -> SkillSummary {
     let skill_path = Path::new(&skill.local_path);
-    if !skill_path.exists() || repo_root(skill_path).is_none() {
+    if !skill_path.exists() {
         return skill.clone();
+    }
+
+    if repo_root(skill_path).is_none() {
+        let mut enriched = skill.clone();
+        if let Some(updated_at) = latest_local_content_modified_at(skill_path) {
+            enriched.local_updated_at = updated_at.clone();
+            enriched.last_synced_at = updated_at;
+        }
+        enriched.git_linked = false;
+        return enriched;
     }
 
     let branch = run_git(skill_path, &["rev-parse", "--abbrev-ref", "HEAD"])
@@ -143,6 +192,21 @@ pub fn enrich_skill_with_cached_update_state(skill: &SkillSummary) -> SkillSumma
     let head = run_git(skill_path, &["rev-parse", "HEAD"]).unwrap_or_else(|| commit_label.clone());
     let working_tree_signature =
         run_git(skill_path, &["status", "--porcelain", "--", "."]).unwrap_or_default();
+    let working_tree_dirty = !working_tree_signature.trim().is_empty();
+    let fallback_local_updated_at = if skill.local_updated_at.trim().is_empty() {
+        skill.last_synced_at.clone()
+    } else {
+        skill.local_updated_at.clone()
+    };
+    let local_updated_at = if working_tree_dirty {
+        latest_local_content_modified_at(skill_path)
+            .or_else(|| latest_commit_time(skill_path))
+            .unwrap_or_else(|| fallback_local_updated_at.clone())
+    } else {
+        latest_commit_time(skill_path)
+            .or_else(|| latest_local_content_modified_at(skill_path))
+            .unwrap_or_else(|| fallback_local_updated_at.clone())
+    };
 
     if cached_pending_push_entry(skill, &branch, &head, &working_tree_signature).is_some() {
         let mut enriched = skill.clone();
@@ -150,13 +214,21 @@ pub fn enrich_skill_with_cached_update_state(skill: &SkillSummary) -> SkillSumma
         enriched.commit_label = commit_label;
         enriched.collab_status = STATUS_PENDING_PUSH.into();
         enriched.status_text = "本地存在待推送内容，已使用上次检测结果。".into();
+        enriched.local_updated_at = local_updated_at.clone();
+        enriched.last_synced_at = local_updated_at;
         enriched.last_checked_at = "已缓存".into();
         enriched.git_linked = true;
         return enriched;
     }
 
     if cached_update_counts(skill, &branch, &head).is_none() {
-        return skill.clone();
+        let mut enriched = skill.clone();
+        enriched.branch = branch;
+        enriched.commit_label = commit_label;
+        enriched.local_updated_at = local_updated_at.clone();
+        enriched.last_synced_at = local_updated_at;
+        enriched.git_linked = true;
+        return enriched;
     }
 
     let mut enriched = skill.clone();
@@ -164,6 +236,8 @@ pub fn enrich_skill_with_cached_update_state(skill: &SkillSummary) -> SkillSumma
     enriched.commit_label = commit_label;
     enriched.collab_status = STATUS_UPDATE_AVAILABLE.into();
     enriched.status_text = "远端存在更新，已使用上次检测结果。".into();
+    enriched.local_updated_at = local_updated_at.clone();
+    enriched.last_synced_at = local_updated_at;
     enriched.last_checked_at = "已缓存".into();
     enriched.git_linked = true;
     enriched
@@ -473,21 +547,66 @@ fn run_git(skill_path: &Path, args: &[&str]) -> Option<String> {
     Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
+fn run_git_owned(skill_path: &Path, args: &[String]) -> Option<String> {
+    let output = Command::new(GIT_BINARY)
+        .args(["-C", skill_path.to_string_lossy().as_ref()])
+        .args(args)
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
 fn latest_commit_author(skill_path: &Path) -> Option<String> {
-    run_git(skill_path, &["log", "-1", "--pretty=format:%an"])
+    latest_commit_author_for_ref(skill_path, None)
 }
 
 fn latest_commit_time(skill_path: &Path) -> Option<String> {
-    run_git(
-        skill_path,
-        &[
-            "log",
-            "-1",
-            "--date=format-local:%Y/%-m/%-d %H:%M:%S",
-            "--pretty=format:%cd",
-        ],
-    )
-    .filter(|value| !value.trim().is_empty())
+    latest_commit_time_for_ref(skill_path, None)
+}
+
+fn latest_remote_commit_author(skill_path: &Path, branch: &str) -> Option<String> {
+    let remote_branch = resolve_remote_branch(skill_path, branch)?;
+    latest_commit_author_for_ref(skill_path, Some(remote_branch.as_str()))
+}
+
+fn latest_remote_commit_time(skill_path: &Path, branch: &str) -> Option<String> {
+    let remote_branch = resolve_remote_branch(skill_path, branch)?;
+    latest_commit_time_for_ref(skill_path, Some(remote_branch.as_str()))
+}
+
+fn latest_commit_author_for_ref(skill_path: &Path, git_ref: Option<&str>) -> Option<String> {
+    latest_commit_value_for_ref(skill_path, git_ref, false)
+}
+
+fn latest_commit_time_for_ref(skill_path: &Path, git_ref: Option<&str>) -> Option<String> {
+    latest_commit_value_for_ref(skill_path, git_ref, true)
+}
+
+fn latest_commit_value_for_ref(
+    skill_path: &Path,
+    git_ref: Option<&str>,
+    include_date_format: bool,
+) -> Option<String> {
+    let mut args = vec!["log".to_string()];
+    if let Some(reference) = git_ref.filter(|value| !value.trim().is_empty()) {
+        args.push(reference.to_string());
+    }
+    args.push("-1".to_string());
+    if include_date_format {
+        args.push("--date=format-local:%Y/%-m/%-d %H:%M:%S".to_string());
+        args.push("--pretty=format:%cd".to_string());
+    } else {
+        args.push("--pretty=format:%an".to_string());
+    }
+    args.push("--".to_string());
+    args.push(".".to_string());
+
+    run_git_owned(skill_path, &args).filter(|value| !value.trim().is_empty())
 }
 
 fn latest_local_content_modified_at(skill_path: &Path) -> Option<String> {
@@ -580,6 +699,8 @@ mod tests {
             branch: "main".into(),
             collab_status: STATUS_CLEAN.into(),
             status_text: "ok".into(),
+            remote_updated_at: "刚刚".into(),
+            local_updated_at: "刚刚".into(),
             last_synced_at: "刚刚".into(),
             last_checked_at: "刚刚".into(),
             synced_tool_count: 0,
@@ -726,6 +847,178 @@ mod tests {
 
         assert_eq!(skill_a_divergence, (0, 0));
         assert_eq!(skill_b_divergence, (1, 0));
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn latest_remote_commit_author_only_uses_commits_touching_skill_path() {
+        let temp_dir = unique_temp_dir("path-remote-author");
+        let remote_dir = temp_dir.join("remote.git");
+        let local_dir = temp_dir.join("local");
+        let remote_work_dir = temp_dir.join("remote-work");
+
+        fs::create_dir_all(&temp_dir).expect("create test temp dir");
+        run_git_test(["init", "--bare", remote_dir.to_str().expect("remote path")]);
+        run_git_test([
+            "clone",
+            remote_dir.to_str().expect("remote path"),
+            local_dir.to_str().expect("local path"),
+        ]);
+        run_git_test([
+            "-C",
+            local_dir.to_str().expect("local path"),
+            "checkout",
+            "-b",
+            "main",
+        ]);
+        run_git_test([
+            "-C",
+            local_dir.to_str().expect("local path"),
+            "config",
+            "user.email",
+            "skilla@example.com",
+        ]);
+        run_git_test([
+            "-C",
+            local_dir.to_str().expect("local path"),
+            "config",
+            "user.name",
+            "Skill A Author",
+        ]);
+
+        fs::create_dir_all(local_dir.join("skills/skill-a")).expect("create skill-a");
+        fs::create_dir_all(local_dir.join("skills/skill-b")).expect("create skill-b");
+        fs::write(local_dir.join("skills/skill-a/SKILL.md"), "# skill-a\n").expect("write skill-a");
+        fs::write(local_dir.join("skills/skill-b/SKILL.md"), "# skill-b\n").expect("write skill-b");
+        run_git_test(["-C", local_dir.to_str().expect("local path"), "add", "."]);
+        run_git_test([
+            "-C",
+            local_dir.to_str().expect("local path"),
+            "commit",
+            "-m",
+            "initial skills",
+        ]);
+        run_git_test([
+            "-C",
+            local_dir.to_str().expect("local path"),
+            "push",
+            "-u",
+            "origin",
+            "main",
+        ]);
+
+        run_git_test([
+            "clone",
+            remote_dir.to_str().expect("remote path"),
+            remote_work_dir.to_str().expect("remote work path"),
+        ]);
+        run_git_test([
+            "-C",
+            remote_work_dir.to_str().expect("remote work path"),
+            "checkout",
+            "main",
+        ]);
+        run_git_test([
+            "-C",
+            remote_work_dir.to_str().expect("remote work path"),
+            "config",
+            "user.email",
+            "skillb@example.com",
+        ]);
+        run_git_test([
+            "-C",
+            remote_work_dir.to_str().expect("remote work path"),
+            "config",
+            "user.name",
+            "Skill B Author",
+        ]);
+        fs::write(
+            remote_work_dir.join("skills/skill-b/SKILL.md"),
+            "# skill-b\nupdated\n",
+        )
+        .expect("update skill-b");
+        run_git_test([
+            "-C",
+            remote_work_dir.to_str().expect("remote work path"),
+            "commit",
+            "-am",
+            "update skill-b",
+        ]);
+        run_git_test([
+            "-C",
+            remote_work_dir.to_str().expect("remote work path"),
+            "push",
+            "origin",
+            "main",
+        ]);
+
+        git_fetch_with_timeout(&local_dir.join("skills/skill-a"));
+        git_fetch_with_timeout(&local_dir.join("skills/skill-b"));
+
+        let skill_a_remote_author =
+            latest_remote_commit_author(&local_dir.join("skills/skill-a"), "main")
+                .expect("skill-a remote author");
+        let skill_b_remote_author =
+            latest_remote_commit_author(&local_dir.join("skills/skill-b"), "main")
+                .expect("skill-b remote author");
+
+        assert_eq!(skill_a_remote_author, "Skill A Author");
+        assert_eq!(skill_b_remote_author, "Skill B Author");
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn cached_update_state_refreshes_local_updated_at_from_working_tree() {
+        let temp_dir = unique_temp_dir("cached-local-updated-at");
+        let repo_dir = temp_dir.join("repo");
+
+        fs::create_dir_all(&temp_dir).expect("create test temp dir");
+        run_git_test(["init", repo_dir.to_str().expect("repo path")]);
+        run_git_test([
+            "-C",
+            repo_dir.to_str().expect("repo path"),
+            "checkout",
+            "-b",
+            "main",
+        ]);
+        run_git_test([
+            "-C",
+            repo_dir.to_str().expect("repo path"),
+            "config",
+            "user.email",
+            "skillm@example.com",
+        ]);
+        run_git_test([
+            "-C",
+            repo_dir.to_str().expect("repo path"),
+            "config",
+            "user.name",
+            "Skill Manager",
+        ]);
+
+        fs::write(repo_dir.join("SKILL.md"), "# demo-skill\n").expect("write skill file");
+        run_git_test(["-C", repo_dir.to_str().expect("repo path"), "add", "."]);
+        run_git_test([
+            "-C",
+            repo_dir.to_str().expect("repo path"),
+            "commit",
+            "-m",
+            "initial skill",
+        ]);
+
+        let mut skill = skill_summary("demo-skill", &repo_dir);
+        skill.local_updated_at = "2000/1/1 00:00:00".into();
+        skill.last_synced_at = "2000/1/1 00:00:00".into();
+
+        std::thread::sleep(Duration::from_secs(1));
+        fs::write(repo_dir.join("notes.md"), "dirty change\n").expect("write dirty file");
+
+        let enriched = enrich_skill_with_cached_update_state(&skill);
+
+        assert_ne!(enriched.local_updated_at, "2000/1/1 00:00:00");
+        assert_eq!(enriched.last_synced_at, enriched.local_updated_at);
 
         let _ = fs::remove_dir_all(temp_dir);
     }

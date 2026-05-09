@@ -19,6 +19,11 @@ pub struct SkillSummary {
     pub branch: String,
     pub collab_status: String,
     pub status_text: String,
+    #[serde(default)]
+    pub remote_updated_at: String,
+    #[serde(default)]
+    pub local_updated_at: String,
+    #[serde(default)]
     pub last_synced_at: String,
     pub last_checked_at: String,
     pub synced_tool_count: usize,

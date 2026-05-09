@@ -24,6 +24,27 @@ function withTime(baseDate: Date, timeText: string) {
   return formatDate(nextDate);
 }
 
+export function parseSkillTimestamp(value: string) {
+  const trimmedValue = value.trim();
+  if (trimmedValue.length === 0) {
+    return Number.NEGATIVE_INFINITY;
+  }
+  if (trimmedValue === JUST_NOW || trimmedValue === JUST_CHECKED) {
+    return Date.now();
+  }
+  if (trimmedValue.startsWith(TODAY_PREFIX)) {
+    return Date.parse(withTime(new Date(), trimmedValue.slice(TODAY_PREFIX.length)));
+  }
+  if (trimmedValue.startsWith(YESTERDAY_PREFIX)) {
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    return Date.parse(withTime(yesterday, trimmedValue.slice(YESTERDAY_PREFIX.length)));
+  }
+
+  const parsedTimestamp = Date.parse(trimmedValue);
+  return Number.isNaN(parsedTimestamp) ? Number.NEGATIVE_INFINITY : parsedTimestamp;
+}
+
 export function formatSkillUpdatedAt(value: string) {
   const trimmedValue = value.trim();
   if (trimmedValue.length === 0) {

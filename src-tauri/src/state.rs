@@ -7,6 +7,8 @@ use crate::models::{SkillSummary, WorkspacePersistence};
 const STATE_DIR_NAME: &str = ".skillm";
 const STATE_FILE_NAME: &str = "state.json";
 const EMPTY_DESCRIPTION_VALUES: [&str; 4] = ["", "---", "...", "未提供简介"];
+const RESERVED_WORKSPACE_DIR_NAMES: [&str; 5] =
+    ["state.json", "skills", "repo-cache", "cache", "imports"];
 
 pub fn load_installed_skills(default_skills: &[SkillSummary]) -> Vec<SkillSummary> {
     let contents = workspace_state_candidates()
@@ -112,6 +114,12 @@ pub fn scan_local_skill_candidates(installed_skills: &[SkillSummary]) -> Vec<(St
             if !path.is_dir() {
                 continue;
             }
+            let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
+                continue;
+            };
+            if is_reserved_workspace_name(name) {
+                continue;
+            }
             if is_reserved_skillm_path(&home_dir, &path) {
                 continue;
             }
@@ -126,10 +134,6 @@ pub fn scan_local_skill_candidates(installed_skills: &[SkillSummary]) -> Vec<(St
             {
                 continue;
             }
-
-            let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
-                continue;
-            };
 
             candidates.push((name.to_string(), root.to_string_lossy().to_string()));
         }
@@ -146,10 +150,13 @@ fn is_reserved_skillm_path(home_dir: &Path, path: &Path) -> bool {
         return false;
     }
 
-    matches!(
-        path.file_name().and_then(|value| value.to_str()),
-        Some("repo-cache" | "cache" | "imports")
-    )
+    path.file_name()
+        .and_then(|value| value.to_str())
+        .is_some_and(is_reserved_workspace_name)
+}
+
+fn is_reserved_workspace_name(name: &str) -> bool {
+    RESERVED_WORKSPACE_DIR_NAMES.contains(&name)
 }
 
 fn workspace_state_file() -> Option<PathBuf> {
@@ -170,6 +177,13 @@ fn home_dir() -> Option<PathBuf> {
 }
 
 fn hydrate_skill_description(mut skill: SkillSummary) -> SkillSummary {
+    if skill.local_updated_at.trim().is_empty() {
+        skill.local_updated_at = skill.last_synced_at.clone();
+    }
+    if skill.remote_updated_at.trim().is_empty() {
+        skill.remote_updated_at = skill.last_synced_at.clone();
+    }
+
     if !needs_description_refresh(&skill.description) {
         return skill;
     }
@@ -183,8 +197,19 @@ fn hydrate_skill_description(mut skill: SkillSummary) -> SkillSummary {
 }
 
 fn is_skill_local_path_valid(skill: &SkillSummary) -> bool {
+    if is_reserved_workspace_name(skill.name.trim()) {
+        return false;
+    }
+
     let skill_path = Path::new(&skill.local_path);
     if !skill_path.is_dir() {
+        return false;
+    }
+    if skill_path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .is_some_and(is_reserved_workspace_name)
+    {
         return false;
     }
     skill_path.join("SKILL.md").is_file()
@@ -310,6 +335,8 @@ mod tests {
                 branch: "stable".into(),
                 collab_status: "clean".into(),
                 status_text: "ok".into(),
+                remote_updated_at: "刚刚".into(),
+                local_updated_at: "刚刚".into(),
                 last_synced_at: "刚刚".into(),
                 last_checked_at: "刚刚".into(),
                 synced_tool_count: 1,
@@ -349,6 +376,8 @@ mod tests {
             branch: "main".into(),
             collab_status: "clean".into(),
             status_text: "ok".into(),
+            remote_updated_at: "刚刚".into(),
+            local_updated_at: "刚刚".into(),
             last_synced_at: "刚刚".into(),
             last_checked_at: "刚刚".into(),
             synced_tool_count: 1,
@@ -389,6 +418,8 @@ mod tests {
                         branch: "main".into(),
                         collab_status: "clean".into(),
                         status_text: "ok".into(),
+                        remote_updated_at: "刚刚".into(),
+                        local_updated_at: "刚刚".into(),
                         last_synced_at: "刚刚".into(),
                         last_checked_at: "刚刚".into(),
                         synced_tool_count: 0,
@@ -407,6 +438,87 @@ mod tests {
                         branch: "main".into(),
                         collab_status: "clean".into(),
                         status_text: "ok".into(),
+                        remote_updated_at: "刚刚".into(),
+                        local_updated_at: "刚刚".into(),
+                        last_synced_at: "刚刚".into(),
+                        last_checked_at: "刚刚".into(),
+                        synced_tool_count: 0,
+                        last_editor: "".into(),
+                        commit_label: "def456".into(),
+                        git_linked: false,
+                        tools: vec![],
+                    },
+                ],
+            };
+            let state_file = temp_home.join(".skillm/state.json");
+            fs::create_dir_all(state_file.parent().expect("state parent exists"))
+                .expect("create state parent");
+            fs::write(
+                &state_file,
+                serde_json::to_string_pretty(&persisted).expect("serialize persistence"),
+            )
+            .expect("write state file");
+
+            let loaded = load_installed_skills(&[]);
+            assert_eq!(loaded.len(), 1);
+            assert_eq!(loaded[0].name, "kept-skill");
+
+            let rewritten: WorkspacePersistence = serde_json::from_str(
+                &fs::read_to_string(state_file).expect("read rewritten state file"),
+            )
+            .expect("deserialize rewritten state");
+            assert_eq!(rewritten.installed_skills.len(), 1);
+            assert_eq!(rewritten.installed_skills[0].name, "kept-skill");
+        });
+    }
+
+    #[test]
+    fn drops_reserved_workspace_skill_entries_and_rewrites_state_file() {
+        with_temp_home(|temp_home| {
+            let reserved_skill_dir = temp_home.join(".skillm/skills/skills");
+            fs::create_dir_all(&reserved_skill_dir).expect("create reserved skill dir");
+            fs::write(reserved_skill_dir.join("SKILL.md"), "# skills")
+                .expect("write SKILL.md for reserved dir");
+
+            let valid_skill_dir = temp_home.join(".skillm/skills/kept-skill");
+            fs::create_dir_all(&valid_skill_dir).expect("create valid skill dir");
+            fs::write(valid_skill_dir.join("SKILL.md"), "# kept-skill")
+                .expect("write SKILL.md for valid dir");
+
+            let persisted = WorkspacePersistence {
+                installed_skills: vec![
+                    SkillSummary {
+                        name: "skills".into(),
+                        source_label: "GitHub".into(),
+                        source_type: "github".into(),
+                        source_url: "https://github.com/demo/skills".into(),
+                        description: "container".into(),
+                        local_path: reserved_skill_dir.to_string_lossy().to_string(),
+                        branch: "main".into(),
+                        collab_status: "clean".into(),
+                        status_text: "ok".into(),
+                        remote_updated_at: "刚刚".into(),
+                        local_updated_at: "刚刚".into(),
+                        last_synced_at: "刚刚".into(),
+                        last_checked_at: "刚刚".into(),
+                        synced_tool_count: 0,
+                        last_editor: "".into(),
+                        commit_label: "abc123".into(),
+                        git_linked: false,
+                        tools: vec![],
+                    },
+                    SkillSummary {
+                        name: "kept-skill".into(),
+                        source_label: "GitHub".into(),
+                        source_type: "github".into(),
+                        source_url: "https://github.com/demo/kept-skill".into(),
+                        description: "kept".into(),
+                        local_path: valid_skill_dir.to_string_lossy().to_string(),
+                        branch: "main".into(),
+                        collab_status: "clean".into(),
+                        status_text: "ok".into(),
+                        remote_updated_at: "刚刚".into(),
+                        local_updated_at: "刚刚".into(),
                         last_synced_at: "刚刚".into(),
                         last_checked_at: "刚刚".into(),
                         synced_tool_count: 0,

@@ -62,7 +62,7 @@ function patchMcpWorkspaceBulkToggle(
 
 export function ToolManageDialog({ isOpen, onClose, tool }: ToolManageDialogProps) {
   const dialogTitleId = useId();
-  const { installedSkills, toggleSkillTool } = useSkillWorkspace();
+  const { installedSkills, setToolSkillStatuses, toggleSkillTool } = useSkillWorkspace();
   const [activeTab, setActiveTab] = useState<CapabilityTabKey>("skills");
   const [query, setQuery] = useState("");
   const [showEnabledOnly, setShowEnabledOnly] = useState(false);
@@ -206,9 +206,11 @@ export function ToolManageDialog({ isOpen, onClose, tool }: ToolManageDialogProp
 
       setIsUpdatingAll(true);
       try {
-        await Promise.all(
-          disabledSkillNames.map((skillName) => toggleSkillTool({ skillName, toolName: tool.name })),
-        );
+        await setToolSkillStatuses({
+          toolName: tool.name,
+          skillNames: disabledSkillNames,
+          enabled: true,
+        });
       } catch (error) {
         const message = error instanceof Error ? error.message : "批量启用 Skills 失败";
         window.alert(message);
@@ -258,9 +260,11 @@ export function ToolManageDialog({ isOpen, onClose, tool }: ToolManageDialogProp
 
       setIsUpdatingAll(true);
       try {
-        await Promise.all(
-          enabledSkillNames.map((skillName) => toggleSkillTool({ skillName, toolName: tool.name })),
-        );
+        await setToolSkillStatuses({
+          toolName: tool.name,
+          skillNames: enabledSkillNames,
+          enabled: false,
+        });
       } catch (error) {
         const message = error instanceof Error ? error.message : "批量关闭 Skills 失败";
         window.alert(message);

@@ -1,4 +1,5 @@
 import type { SkillSummary } from "@/features/skills/state/skill-store";
+import { parseSkillTimestamp } from "@/features/skills/utils/skill-time";
 import { isToolEnabledStatus } from "@/features/skills/utils/tool-status";
 
 type FilterOptions = {
@@ -33,6 +34,11 @@ export function filterSkills(skills: SkillSummary[], options: FilterOptions) {
   });
 
   return [...filteredSkills].sort((left, right) => {
+    const localUpdatedDiff = parseSkillTimestamp(right.localUpdatedAt) - parseSkillTimestamp(left.localUpdatedAt);
+    if (localUpdatedDiff !== 0) {
+      return localUpdatedDiff;
+    }
+
     const enabledToolDiff = Number(hasEnabledTool(left)) - Number(hasEnabledTool(right));
     if (enabledToolDiff !== 0) {
       return enabledToolDiff;

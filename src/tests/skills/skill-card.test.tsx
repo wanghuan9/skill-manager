@@ -24,6 +24,23 @@ test("updates directly from list action when skill has remote update", async () 
   expect(screen.queryByText("将拉取提交")).not.toBeInTheDocument();
 });
 
+test("shows remote and local updated time on skill card", () => {
+  const skill = installedSkillFixtures.find((item) => item.name === "drawio-diagram");
+  if (!skill) {
+    throw new Error("missing drawio-diagram fixture");
+  }
+
+  render(
+    <SkillWorkspaceProvider>
+      <SkillCard skill={skill} />
+    </SkillWorkspaceProvider>,
+  );
+
+  expect(screen.getByText("本地更新时间：")).toBeInTheDocument();
+  expect(screen.queryByText("远端更新时间：")).not.toBeInTheDocument();
+  expect(screen.queryByText("远端更新人：")).not.toBeInTheDocument();
+});
+
 test("opens skill file dialog from fixed action button", async () => {
   const skill = installedSkillFixtures.find((item) => item.name === "drawio-diagram");
   if (!skill) {
