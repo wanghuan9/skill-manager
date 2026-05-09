@@ -214,7 +214,7 @@ export function SkillCard({ skill }: SkillCardProps) {
                     <div className="skill-card__list-meta">
                       <span className="skill-card__meta-label-inline">来源：</span>
                       <span className="skill-card__meta-value">{sourceLabel}</span>
-                      <span className="skill-card__meta-label-inline">本地更新时间：</span>
+                      <span className="skill-card__meta-label-inline skill-card__meta-label-inline--section">更新时间：</span>
                       <span className="skill-card__meta-value">{localUpdatedAt || "未获取"}</span>
                     </div>
                   </div>

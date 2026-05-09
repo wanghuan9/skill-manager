@@ -36,7 +36,7 @@ test("shows remote and local updated time on skill card", () => {
     </SkillWorkspaceProvider>,
   );
 
-  expect(screen.getByText("本地更新时间：")).toBeInTheDocument();
+  expect(screen.getByText("更新时间：")).toBeInTheDocument();
   expect(screen.queryByText("远端更新时间：")).not.toBeInTheDocument();
   expect(screen.queryByText("远端更新人：")).not.toBeInTheDocument();
 });

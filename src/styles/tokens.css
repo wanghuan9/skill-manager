@@ -1751,17 +1751,15 @@ code {
   white-space: nowrap;
 }
 
-.skill-card__meta-value:not(:last-child)::after {
-  color: color-mix(in srgb, var(--muted) 48%, #ffffff 52%);
-  content: "·";
-  padding-left: 8px;
-}
-
 .skill-card__meta-label-inline {
   display: inline-block;
   min-width: 0;
   font-size: 0.72rem;
   color: color-mix(in srgb, var(--muted) 86%, #ffffff 14%);
+}
+
+.skill-card__meta-label-inline--section {
+  margin-left: 10px;
 }
 
 .skill-card__meta-value:last-child {
