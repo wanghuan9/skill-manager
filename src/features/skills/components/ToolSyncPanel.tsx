@@ -12,6 +12,7 @@ const TOOL_NAME_IDS: Record<string, string> = {
   "Claude Code": "claude-code",
   "Gemini CLI": "gemini",
   "GitHub Copilot": "github-copilot",
+  "IntelliJ IDEA": "intellij",
   "Kilo Code": "kilo-code",
   OpenCode: "opencode",
   OpenClaw: "openclaw",

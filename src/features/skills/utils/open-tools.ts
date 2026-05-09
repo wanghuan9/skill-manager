@@ -27,30 +27,33 @@ const TOOL_POPULARITY_RANK: Record<string, number> = {
   "github-copilot": 3,
   windsurf: 4,
   codex: 5,
-  gemini: 6,
-  kiro: 7,
-  opencode: 8,
-  antigravity: 9,
-  continue: 10,
-  cline: 11,
-  augment: 12,
-  trae: 13,
-  junie: 14,
-  "qwen-code": 15,
-  "roo-code": 16,
-  "kilo-code": 17,
-  zencoder: 18,
-  qoder: 19,
-  goose: 20,
-  crush: 21,
-  codebuddy: 22,
-  "trae-cn": 23,
-  openclaw: 24,
-  droid: 25,
-  iflow: 26,
-  commandcode: 27,
-  hermes: 28,
+  intellij: 6,
+  gemini: 7,
+  kiro: 8,
+  opencode: 9,
+  antigravity: 10,
+  continue: 11,
+  cline: 12,
+  augment: 13,
+  trae: 14,
+  junie: 15,
+  "qwen-code": 16,
+  "roo-code": 17,
+  "kilo-code": 18,
+  zencoder: 19,
+  qoder: 20,
+  goose: 21,
+  crush: 22,
+  codebuddy: 23,
+  "trae-cn": 24,
+  openclaw: 25,
+  droid: 26,
+  iflow: 27,
+  commandcode: 28,
+  hermes: 29,
 };
+
+const OPEN_ONLY_TOOL_IDS = new Set(["intellij"]);
 
 export const PRIMARY_TOOL_TYPE_LABELS: Record<ToolType, string> = {
   editor: "编辑器",
@@ -80,7 +83,9 @@ function toOpenToolCard(tool: ToolConfig): OpenToolCard {
 }
 
 export function buildSupportedAiToolCards(toolConfigs: ToolConfig[]): OpenToolCard[] {
-  return toolConfigs.map(toOpenToolCard);
+  return toolConfigs
+    .filter((tool) => !OPEN_ONLY_TOOL_IDS.has(tool.id))
+    .map(toOpenToolCard);
 }
 
 export function buildInstalledToolCards(toolConfigs: ToolConfig[]): OpenToolCard[] {
@@ -88,7 +93,8 @@ export function buildInstalledToolCards(toolConfigs: ToolConfig[]): OpenToolCard
 }
 
 export function buildOpenToolOptions(toolConfigs: ToolConfig[]): OpenToolOption[] {
-  const installedEditorOptions = buildSupportedAiToolCards(toolConfigs)
+  const installedEditorOptions = toolConfigs
+    .map(toOpenToolCard)
     .filter(
       (tool) =>
         tool.id !== FINDER_OPEN_TOOL_OPTION.id &&

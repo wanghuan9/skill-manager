@@ -1357,11 +1357,13 @@ const EDITOR_HOST_APPS: &[&str] = &[
     "PyCharm",
 ];
 
-const EDITOR_HOST_EXECUTABLES: &[&str] = &["cursor", "code", "windsurf", "trae"];
+const EDITOR_HOST_EXECUTABLES: &[&str] = &["cursor", "code", "windsurf", "trae", "idea"];
 
-fn executable_exists(executable_name: &str) -> bool {
+fn find_executable_path(executable_name: &str) -> Option<String> {
     if executable_name.contains('/') {
-        return Path::new(executable_name).exists();
+        return Path::new(executable_name)
+            .exists()
+            .then(|| executable_name.to_string());
     }
 
     let mut search_dirs = env::var_os("PATH")
@@ -1376,9 +1378,16 @@ fn executable_exists(executable_name: &str) -> bool {
         PathBuf::from("/sbin"),
     ]);
 
-    search_dirs
-        .into_iter()
-        .any(|dir| dir.join(executable_name).exists())
+    search_dirs.into_iter().find_map(|dir| {
+        let executable_path = dir.join(executable_name);
+        executable_path
+            .exists()
+            .then(|| executable_path.to_string_lossy().to_string())
+    })
+}
+
+fn executable_exists(executable_name: &str) -> bool {
+    find_executable_path(executable_name).is_some()
 }
 
 fn software_exists(spec: &SoftwareDetectionSpec) -> bool {
@@ -1393,7 +1402,8 @@ fn detect_tool_installation_label(
     config_paths: &[PathBuf],
     software_spec: &SoftwareDetectionSpec,
 ) -> String {
-    if config_paths.iter().any(|path| path.exists()) && software_exists(software_spec) {
+    let has_config = config_paths.is_empty() || config_paths.iter().any(|path| path.exists());
+    if has_config && software_exists(software_spec) {
         "已安装".to_string()
     } else {
         "未安装".to_string()
@@ -1497,6 +1507,24 @@ fn build_tool_configs() -> Vec<ToolConfig> {
                 home_path.join(".codeium/windsurf"),
             ],
             software_spec(&["Windsurf"], &["windsurf"]),
+        ),
+        (
+            "intellij",
+            "IntelliJ IDEA",
+            home_path.join(".intellij/skills"),
+            true,
+            "editor",
+            vec!["editor"],
+            true,
+            vec![],
+            software_spec(
+                &[
+                    "IntelliJ IDEA",
+                    "IntelliJ IDEA CE",
+                    "IntelliJ IDEA Ultimate",
+                ],
+                &["idea"],
+            ),
         ),
         (
             "openclaw",
@@ -1888,13 +1916,17 @@ fn discover_cli_in_bundle(app_bundle_path: &str) -> Option<String> {
     let bundle = PathBuf::from(app_bundle_path);
     let stem = bundle.file_stem()?.to_str()?.to_string();
     // Common CLI locations in Electron / JetBrains apps
-    let candidate_paths = [
+    let mut candidate_paths = vec![
         bundle.join("Contents/Resources/app/bin").join(&stem),
         bundle
             .join("Contents/Resources/app/bin")
             .join(&stem.to_lowercase()),
         bundle.join("Contents/MacOS").join(&stem),
     ];
+    if stem.to_lowercase().starts_with("intellij idea") {
+        candidate_paths.push(bundle.join("Contents/MacOS/idea"));
+    }
+
     for path in &candidate_paths {
         if path.exists() {
             return Some(path.to_string_lossy().to_string());
@@ -1920,6 +1952,17 @@ fn editor_app_name_candidates(editor_id: &str) -> &[&str] {
     }
 }
 
+fn editor_cli_name_candidates(editor_id: &str) -> &[&str] {
+    match editor_id {
+        "cursor" => &["cursor"],
+        "windsurf" => &["windsurf"],
+        "kiro" => &["kiro"],
+        "trae" => &["trae"],
+        "intellij" => &["idea"],
+        _ => &[],
+    }
+}
+
 /// Dynamically resolve editor launch info by scanning the user's installed apps.
 fn resolve_editor_open_info(editor_id: &str) -> Result<EditorOpenInfo, String> {
     let candidates = editor_app_name_candidates(editor_id);
@@ -1930,7 +1973,12 @@ fn resolve_editor_open_info(editor_id: &str) -> Result<EditorOpenInfo, String> {
     let app_bundle_path = find_app_bundle(candidates);
     let cli_path = app_bundle_path
         .as_ref()
-        .and_then(|p| discover_cli_in_bundle(p));
+        .and_then(|p| discover_cli_in_bundle(p))
+        .or_else(|| {
+            editor_cli_name_candidates(editor_id)
+                .iter()
+                .find_map(|name| find_executable_path(name))
+        });
     let app_display_name = app_bundle_path.as_ref().and_then(|p| {
         PathBuf::from(p)
             .file_stem()
@@ -1965,6 +2013,7 @@ fn tool_name_to_id(tool_name: &str) -> Result<String, String> {
         "Gemini CLI" => Ok("gemini".to_string()),
         "Antigravity" => Ok("antigravity".to_string()),
         "Windsurf" => Ok("windsurf".to_string()),
+        "IntelliJ IDEA" => Ok("intellij".to_string()),
         "OpenClaw" => Ok("openclaw".to_string()),
         "Continue" => Ok("continue".to_string()),
         "iFlow" => Ok("iflow".to_string()),
@@ -2438,6 +2487,127 @@ fn open_path_with_open_a(app_name: &str, path: &str) -> Result<(), String> {
 
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
     Err(format!("打开编辑器失败: {stderr}"))
+}
+
+fn path_to_jetbrains_macro(path: &Path) -> String {
+    if let Some(home_dir) = env::var_os("HOME") {
+        let home_path = PathBuf::from(home_dir);
+        if let Ok(relative_path) = path.strip_prefix(&home_path) {
+            let relative = relative_path.to_string_lossy();
+            if relative.is_empty() {
+                return "$USER_HOME$".to_string();
+            }
+
+            return format!("$USER_HOME$/{}", relative);
+        }
+    }
+
+    path.to_string_lossy().to_string()
+}
+
+fn xml_escape_attribute(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('"', "&quot;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+fn insert_trusted_project_path(xml: &str, trusted_path: &str) -> String {
+    if xml.contains(&format!("key=\"{}\"", xml_escape_attribute(trusted_path))) {
+        return xml.to_string();
+    }
+
+    let entry = format!(
+        "        <entry key=\"{}\" value=\"true\" />\n",
+        xml_escape_attribute(trusted_path)
+    );
+
+    if let Some(map_end_index) = xml.find("      </map>") {
+        let mut next_xml = xml.to_string();
+        next_xml.insert_str(map_end_index, &entry);
+        return next_xml;
+    }
+
+    if let Some(component_end_index) = xml.find("  </component>") {
+        let option = format!(
+            "    <option name=\"TRUSTED_PROJECT_PATHS\">\n      <map>\n{}      </map>\n    </option>\n",
+            entry
+        );
+        let mut next_xml = xml.to_string();
+        next_xml.insert_str(component_end_index, &option);
+        return next_xml;
+    }
+
+    format!(
+        "<application>\n  <component name=\"Trusted.Paths\">\n    <option name=\"TRUSTED_PROJECT_PATHS\">\n      <map>\n{}      </map>\n    </option>\n  </component>\n</application>\n",
+        entry
+    )
+}
+
+fn upsert_trusted_project_path(config_path: &Path, trusted_path: &str) -> Result<(), String> {
+    if let Some(parent) = config_path.parent() {
+        fs::create_dir_all(parent).map_err(|error| format!("创建 IDEA 配置目录失败: {error}"))?;
+    }
+
+    let current_xml = if config_path.exists() {
+        fs::read_to_string(config_path)
+            .map_err(|error| format!("读取 IDEA 信任配置失败: {error}"))?
+    } else {
+        String::new()
+    };
+    let next_xml = insert_trusted_project_path(&current_xml, trusted_path);
+    if next_xml == current_xml {
+        return Ok(());
+    }
+
+    fs::write(config_path, next_xml).map_err(|error| format!("写入 IDEA 信任配置失败: {error}"))
+}
+
+fn intellij_trusted_location_for_project(project_path: &Path) -> PathBuf {
+    if let Some(home_dir) = env::var_os("HOME") {
+        let managed_skills_root = PathBuf::from(home_dir).join(".skillm/skills");
+        if project_path.starts_with(&managed_skills_root) {
+            return managed_skills_root;
+        }
+    }
+
+    project_path.parent().unwrap_or(project_path).to_path_buf()
+}
+
+fn intellij_config_dirs() -> Result<Vec<PathBuf>, String> {
+    let home_dir = env::var_os("HOME").ok_or_else(|| "无法读取 HOME 环境变量".to_string())?;
+    let jetbrains_dir = PathBuf::from(home_dir).join("Library/Application Support/JetBrains");
+    if !jetbrains_dir.exists() {
+        return Ok(Vec::new());
+    }
+
+    let entries = fs::read_dir(&jetbrains_dir)
+        .map_err(|error| format!("读取 JetBrains 配置目录失败: {error}"))?;
+    let mut config_dirs = entries
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .map(|name| name.starts_with("IntelliJIdea"))
+                .unwrap_or(false)
+        })
+        .collect::<Vec<_>>();
+    config_dirs.sort();
+    Ok(config_dirs)
+}
+
+fn trust_intellij_skill_parent(skill_path: &str) -> Result<(), String> {
+    let skill_path = PathBuf::from(skill_path);
+    let trusted_path = intellij_trusted_location_for_project(&skill_path);
+    let trusted_path = path_to_jetbrains_macro(&trusted_path);
+    for config_dir in intellij_config_dirs()? {
+        let trusted_paths_path = config_dir.join("options/trusted-paths.xml");
+        upsert_trusted_project_path(&trusted_paths_path, &trusted_path)?;
+    }
+
+    Ok(())
 }
 
 fn open_path_with_default_text_editor(path: &str) -> Result<(), String> {
@@ -3588,6 +3758,9 @@ pub fn open_skill_in_editor(skill_name: &str, editor_id: &str) -> Result<(), Str
     if editor_id == "finder" {
         return open_path_with_finder(&skill.local_path);
     }
+    if editor_id == "intellij" {
+        trust_intellij_skill_parent(&skill.local_path)?;
+    }
 
     open_path_with_editor(&skill.local_path, editor_id)
 }
@@ -3759,9 +3932,12 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        collect_skills_manager_cached_items, parse_skills_sh_homepage_items,
+        collect_skills_manager_cached_items, insert_trusted_project_path,
+        intellij_trusted_location_for_project, parse_skills_sh_homepage_items,
         should_use_skills_sh_homepage_page,
     };
+    use std::env;
+    use std::path::PathBuf;
 
     #[test]
     fn preserves_skills_sh_cache_page_order() {
@@ -3892,5 +4068,47 @@ mod tests {
         assert!(should_use_skills_sh_homepage_page(1, 5, 18));
         assert!(should_use_skills_sh_homepage_page(3, 18, 18));
         assert!(!should_use_skills_sh_homepage_page(11, 8, 18));
+    }
+
+    #[test]
+    fn creates_intellij_trusted_project_paths_config() {
+        let xml = insert_trusted_project_path("", "$USER_HOME$/.skillm/skills");
+
+        assert!(xml.contains("<component name=\"Trusted.Paths\">"));
+        assert!(xml.contains("<option name=\"TRUSTED_PROJECT_PATHS\">"));
+        assert!(xml.contains("<entry key=\"$USER_HOME$/.skillm/skills\" value=\"true\" />"));
+    }
+
+    #[test]
+    fn appends_intellij_trusted_project_path_without_duplicates() {
+        let existing_xml = r#"<application>
+  <component name="Trusted.Paths">
+    <option name="TRUSTED_PROJECT_PATHS">
+      <map>
+        <entry key="$USER_HOME$/Projects" value="true" />
+      </map>
+    </option>
+  </component>
+</application>
+"#;
+
+        let xml = insert_trusted_project_path(existing_xml, "$USER_HOME$/.skillm/skills");
+        let duplicate_xml = insert_trusted_project_path(&xml, "$USER_HOME$/.skillm/skills");
+
+        assert!(xml.contains("<entry key=\"$USER_HOME$/Projects\" value=\"true\" />"));
+        assert!(xml.contains("<entry key=\"$USER_HOME$/.skillm/skills\" value=\"true\" />"));
+        assert_eq!(xml, duplicate_xml);
+    }
+
+    #[test]
+    fn trusts_managed_skill_root_for_intellij_projects() {
+        let home_dir = env::var_os("HOME").expect("HOME should exist in tests");
+        let expected_root = PathBuf::from(&home_dir).join(".skillm/skills");
+        let project_path = expected_root.join("drawio-diagram/skills/drawio-diagram");
+
+        assert_eq!(
+            intellij_trusted_location_for_project(&project_path),
+            expected_root
+        );
     }
 }

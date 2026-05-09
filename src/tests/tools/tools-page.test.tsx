@@ -7,6 +7,7 @@ test("renders installed tools only with manage action", async () => {
   render(<App />);
   await userEvent.click(screen.getByRole("button", { name: /工具/ }));
   expect(screen.getByText("Claude Code")).toBeInTheDocument();
+  expect(screen.queryByText("IntelliJ IDEA")).not.toBeInTheDocument();
   expect(screen.queryByText("Amp")).not.toBeInTheDocument();
   expect(screen.queryByText("Finder")).not.toBeInTheDocument();
   const manageButtons = screen.getAllByRole("button", { name: "管理" });

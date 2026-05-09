@@ -5,6 +5,7 @@ const TOOL_LOGO_URLS: Record<string, string> = {
   codex: "/tool-logos/codex.png",
   gemini: "/tool-logos/gemini.svg",
   windsurf: "/tool-logos/windsurf.ico",
+  intellij: "/tool-logos/intellij.svg",
   droid: "/tool-logos/droid.svg",
   goose: "/tool-logos/goose.svg",
   junie: "/tool-logos/junie.svg",

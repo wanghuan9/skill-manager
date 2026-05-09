@@ -19,9 +19,15 @@ function buildToolConfig(overrides: Partial<ToolConfig>): ToolConfig {
 test("adds Finder as a selectable default open tool", () => {
   const options = buildOpenToolOptions([
     buildToolConfig({ id: "cursor", name: "Cursor" }),
+    buildToolConfig({
+      id: "intellij",
+      name: "IntelliJ IDEA",
+      skillsPath: "/Users/demo/.intellij/skills",
+      mcpConfigPath: "",
+    }),
   ]);
 
-  expect(options.map((tool) => tool.id)).toEqual(["cursor", "finder"]);
+  expect(options.map((tool) => tool.id)).toEqual(["cursor", "intellij", "finder"]);
 });
 
 test("falls back to Finder when no editor can open directories directly", () => {

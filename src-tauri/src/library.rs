@@ -1407,6 +1407,7 @@ pub fn get_tool_skills_path(tool_id: &str) -> Result<String, String> {
         "gemini" => home_path.join(".gemini/skills"),
         "antigravity" => home_path.join(".gemini/antigravity/skills"),
         "windsurf" => home_path.join(".codeium/windsurf/skills"),
+        "intellij" => home_path.join(".intellij/skills"),
         "openclaw" => home_path.join(".openclaw/skills"),
         "continue" => home_path.join(".continue/skills"),
         "iflow" => home_path.join(".iflow/skills"),
@@ -1434,7 +1435,7 @@ pub fn get_tool_skills_path(tool_id: &str) -> Result<String, String> {
     Ok(skills_path.to_string_lossy().to_string())
 }
 
-fn tool_ids() -> [&'static str; 28] {
+fn tool_ids() -> [&'static str; 29] {
     [
         "claude-code",
         "codex",
@@ -1443,6 +1444,7 @@ fn tool_ids() -> [&'static str; 28] {
         "gemini",
         "antigravity",
         "windsurf",
+        "intellij",
         "openclaw",
         "continue",
         "iflow",
