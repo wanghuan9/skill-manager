@@ -53,7 +53,7 @@ const TOOL_POPULARITY_RANK: Record<string, number> = {
   hermes: 29,
 };
 
-const OPEN_ONLY_TOOL_IDS = new Set(["intellij"]);
+export const OPEN_ONLY_TOOL_IDS = new Set(["intellij"]);
 
 export const PRIMARY_TOOL_TYPE_LABELS: Record<ToolType, string> = {
   editor: "编辑器",

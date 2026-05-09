@@ -1802,7 +1802,7 @@ fn build_git_account() -> GitAccountSummary {
 fn installed_tool_sync_entries_from_configs(tool_configs: &[ToolConfig]) -> Vec<ToolSyncStatus> {
     tool_configs
         .iter()
-        .filter(|tool| tool.status_label == "已安装")
+        .filter(|tool| tool.status_label == "已安装" && tool.id != "intellij")
         .map(|tool| ToolSyncStatus {
             name: tool.name.clone(),
             status_label: "未启用".into(),

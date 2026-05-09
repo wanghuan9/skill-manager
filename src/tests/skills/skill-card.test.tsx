@@ -91,4 +91,5 @@ test("renders enabled tool with checkmark in tool sync panel", async () => {
   await userEvent.click(screen.getByRole("button", { name: /展开 drawio-diagram/ }));
 
   expect(screen.getAllByRole("button", { name: /取消启用/ }).length).toBeGreaterThan(0);
+  expect(screen.queryByRole("button", { name: /IntelliJ IDEA/ })).not.toBeInTheDocument();
 });
