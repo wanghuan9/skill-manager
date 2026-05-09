@@ -53,3 +53,22 @@ test("shows only installed MCP-ready apps in enable-to-tool controls", async () 
   expect(screen.queryByText("Antigravity")).not.toBeInTheDocument();
   expect(screen.queryByText("CodeBuddy")).not.toBeInTheDocument();
 });
+
+test("creates MCP without asking the user for an ID", async () => {
+  window.localStorage.clear();
+  render(<App />);
+
+  await userEvent.click(screen.getByRole("button", { name: "MCP" }));
+  await userEvent.click(await screen.findByRole("button", { name: "新增 MCP" }));
+
+  const dialog = await screen.findByRole("dialog", { name: "新增 MCP" });
+  expect(dialog).not.toHaveTextContent("MCP ID");
+
+  await userEvent.type(screen.getByLabelText("名称"), "Playwright Tools");
+  await userEvent.click(screen.getByRole("button", { name: "保存" }));
+
+  await waitFor(() => {
+    expect(screen.queryByRole("dialog", { name: "新增 MCP" })).not.toBeInTheDocument();
+  });
+  expect(screen.getByText("Playwright Tools")).toBeInTheDocument();
+});

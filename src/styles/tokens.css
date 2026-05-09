@@ -4677,14 +4677,14 @@ code {
 }
 
 .mcp-edit-dialog {
-  width: min(760px, calc(100vw - 32px));
+  width: min(700px, calc(100vw - 32px));
   max-height: calc(100vh - 48px);
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
   border: 1px solid var(--line);
-  border-radius: 10px;
+  border-radius: 8px;
   background: var(--surface);
-  box-shadow: 0 24px 64px rgba(15, 23, 42, 0.2);
+  box-shadow: 0 20px 54px rgba(15, 23, 42, 0.18);
   overflow: hidden;
 }
 
@@ -4693,8 +4693,8 @@ code {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  padding: 14px 16px;
+  gap: 10px;
+  padding: 12px 16px;
   border-bottom: 1px solid var(--line);
 }
 
@@ -4706,8 +4706,8 @@ code {
 
 .mcp-edit-dialog__body {
   display: grid;
-  gap: 14px;
-  padding: 16px;
+  gap: 12px;
+  padding: 14px 16px;
   overflow: auto;
 }
 
@@ -4719,7 +4719,7 @@ code {
 
 .mcp-form-field {
   display: grid;
-  gap: 7px;
+  gap: 6px;
   color: var(--heading);
   font-size: 0.86rem;
   font-weight: 800;
@@ -4736,7 +4736,7 @@ code {
 }
 
 .mcp-form-field input {
-  height: 38px;
+  height: 36px;
   padding: 0 11px;
 }
 
@@ -4746,7 +4746,7 @@ code {
 }
 
 .mcp-json-editor {
-  min-height: 240px;
+  min-height: 190px;
   resize: vertical;
   padding: 12px;
   font-family:
@@ -4765,22 +4765,29 @@ code {
 
 .mcp-form-apps {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: 8px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
 }
 
 .mcp-form-app {
   display: flex;
   align-items: center;
-  gap: 8px;
-  min-height: 36px;
-  padding: 8px 10px;
+  gap: 6px;
+  min-height: 34px;
+  padding: 6px 8px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: #f8fafc;
   color: var(--muted);
-  font-size: 0.82rem;
+  font-size: 0.8rem;
   font-weight: 800;
+}
+
+.mcp-form-app span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .mcp-form-app.is-selected {

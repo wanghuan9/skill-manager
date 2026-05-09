@@ -50,6 +50,29 @@ function parseServerJson(value: string): Record<string, unknown> {
   return parsed as Record<string, unknown>;
 }
 
+function normalizeMcpServerId(value: string) {
+  const normalized = value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_.-]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return normalized || "mcp-server";
+}
+
+function buildUniqueMcpServerId(value: string, servers: McpServerSummary[]) {
+  const baseId = normalizeMcpServerId(value);
+  const usedIds = new Set(servers.map((server) => server.id));
+  if (!usedIds.has(baseId)) {
+    return baseId;
+  }
+
+  let suffix = 2;
+  while (usedIds.has(`${baseId}-${suffix}`)) {
+    suffix += 1;
+  }
+  return `${baseId}-${suffix}`;
+}
+
 function targetAppLabel(app: McpTargetApp) {
   return `${app.name}${app.statusLabel === "已安装" ? "" : "（未安装）"}`;
 }
@@ -353,9 +376,11 @@ export function McpRoute() {
   }
 
   async function handleSave(formState: McpFormState) {
+    const name = formState.name.trim();
+    const serverId = editingServer?.id ?? buildUniqueMcpServerId(name, workspace?.servers ?? []);
     const serverRecord: McpServerRecord = {
-      id: formState.id.trim(),
-      name: formState.name.trim() || formState.id.trim(),
+      id: serverId,
+      name,
       server: parseServerJson(formState.serverJson),
       description: editingServer?.description ?? "",
       sourceUrl: editingServer?.sourceUrl ?? "",
@@ -628,8 +653,8 @@ function McpEditDialog(props: McpEditDialogProps) {
 
   async function handleSubmit() {
     setErrorMessage("");
-    if (!formState.id.trim()) {
-      setErrorMessage("MCP ID 不能为空");
+    if (!formState.name.trim()) {
+      setErrorMessage("名称不能为空");
       return;
     }
 
@@ -673,14 +698,6 @@ function McpEditDialog(props: McpEditDialogProps) {
           </button>
         </div>
         <div className="mcp-edit-dialog__body">
-          <label className="mcp-form-field">
-            <span>MCP ID</span>
-            <input
-              value={formState.id}
-              disabled={isEditing}
-              onChange={(event) => setFormState((current) => ({ ...current, id: event.target.value }))}
-            />
-          </label>
           <label className="mcp-form-field">
             <span>名称</span>
             <input
