@@ -1,4 +1,4 @@
-import { useDeferredValue, useEffect, useMemo, useState } from "react";
+import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useNotifications } from "@/app/notifications";
 import {
@@ -134,6 +134,71 @@ function McpServerTypeIcon({ serverType }: { serverType: string }) {
   );
 }
 
+function ImportIcon({ isSpinning = false }: { isSpinning?: boolean }) {
+  return (
+    <svg className={isSpinning ? "skills-toolbar-button__svg is-spinning" : "skills-toolbar-button__svg"} viewBox="0 0 20 20" fill="none" aria-hidden="true">
+      <path
+        d="M4.25 10.25A5.75 5.75 0 0 1 14.1 6.2"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M15.75 9.75A5.75 5.75 0 0 1 5.9 13.8"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M13.9 3.75v2.8h-2.8M6.1 16.25v-2.8h2.8"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function AddIcon() {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+      <path d="M10 4.75v10.5M4.75 10h10.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function EditIcon() {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+      <path
+        d="m4.75 13.25-.5 2.5 2.5-.5 8.15-8.15a1.75 1.75 0 0 0-2.47-2.47L4.75 13.25Z"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path d="m11.75 5.25 3 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function DeleteIcon() {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+      <path
+        d="M4.75 5.75h10.5M7.25 5.75V4.5c0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1v1.25m-6.25 0 .45 8.25c.03.61.54 1.08 1.15 1.08h3.8c.61 0 1.12-.47 1.15-1.08l.45-8.25M8.5 8.75v4.25m3 0V8.75"
+        stroke="currentColor"
+        strokeWidth="1.7"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 type McpToolLogoProps = {
   appId: string;
   appName: string;
@@ -176,6 +241,9 @@ export function McpRoute() {
   const [errorMessage, setErrorMessage] = useState("");
   const [toolbarContainer, setToolbarContainer] = useState<HTMLElement | null>(null);
   const [expandedServerIds, setExpandedServerIds] = useState<Record<string, boolean>>({});
+  const [deleteConfirmingServerId, setDeleteConfirmingServerId] = useState("");
+  const [deletingServerId, setDeletingServerId] = useState("");
+  const deleteActionRef = useRef<HTMLButtonElement | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -204,6 +272,32 @@ export function McpRoute() {
     setToolbarContainer(document.getElementById("mcp-header-toolbar-slot"));
   }, []);
 
+  useEffect(() => {
+    if (!deleteConfirmingServerId) {
+      return;
+    }
+
+    function handlePointerDown(event: PointerEvent) {
+      if (deleteActionRef.current?.contains(event.target as Node)) {
+        return;
+      }
+      setDeleteConfirmingServerId("");
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setDeleteConfirmingServerId("");
+      }
+    }
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [deleteConfirmingServerId]);
+
   const filteredServers = useMemo(() => {
     const normalizedQuery = deferredQuery.trim().toLowerCase();
     const servers = workspace?.servers ?? [];
@@ -222,6 +316,7 @@ export function McpRoute() {
       return;
     }
 
+    setDeleteConfirmingServerId("");
     setIsImporting(true);
     try {
       const count = await importMcpServersFromApps();
@@ -245,6 +340,7 @@ export function McpRoute() {
       return;
     }
 
+    setDeleteConfirmingServerId("");
     setUpdatingKey(key);
     try {
       const snapshot = await toggleMcpServerApp({
@@ -262,10 +358,17 @@ export function McpRoute() {
   }
 
   async function handleDelete(server: McpServerSummary) {
-    if (!window.confirm(`删除 MCP：${server.name}？`)) {
+    if (deletingServerId) {
       return;
     }
 
+    if (deleteConfirmingServerId !== server.id) {
+      setDeleteConfirmingServerId(server.id);
+      return;
+    }
+
+    setDeleteConfirmingServerId("");
+    setDeletingServerId(server.id);
     try {
       const snapshot = await deleteMcpServer(server.id);
       setWorkspace(snapshot);
@@ -273,6 +376,8 @@ export function McpRoute() {
     } catch (error) {
       const message = error instanceof Error ? error.message : "删除 MCP 失败";
       notify({ tone: "error", message });
+    } finally {
+      setDeletingServerId("");
     }
   }
 
@@ -290,7 +395,27 @@ export function McpRoute() {
     setWorkspace(snapshot);
     setIsCreating(false);
     setEditingServer(null);
+    setDeleteConfirmingServerId("");
     notify({ tone: "success", message: `已保存 ${serverRecord.name}` });
+  }
+
+  function handleEdit(server: McpServerSummary) {
+    if (deletingServerId) {
+      return;
+    }
+
+    setDeleteConfirmingServerId("");
+    setEditingServer(server);
+  }
+
+  function handleCreate() {
+    setDeleteConfirmingServerId("");
+    setIsCreating(true);
+  }
+
+  function handleCloseDialog() {
+    setIsCreating(false);
+    setEditingServer(null);
   }
 
   function toggleServerExpanded(serverId: string) {
@@ -325,14 +450,20 @@ export function McpRoute() {
         onClick={() => void handleImport()}
         disabled={isImporting}
       >
-        {isImporting ? "导入中..." : "扫描导入"}
+        <span aria-hidden="true" className="skills-toolbar-button__icon">
+          <ImportIcon isSpinning={isImporting} />
+        </span>
+        <span>{isImporting ? "导入中..." : "扫描导入"}</span>
       </button>
       <button
-        className="primary-button primary-button--compact skills-toolbar-button"
+        className="secondary-button secondary-button--compact skills-toolbar-button"
         type="button"
-        onClick={() => setIsCreating(true)}
+        onClick={handleCreate}
       >
-        新增 MCP
+        <span aria-hidden="true" className="skills-toolbar-button__icon">
+          <AddIcon />
+        </span>
+        <span>新增 MCP</span>
       </button>
     </section>
   );
@@ -348,6 +479,9 @@ export function McpRoute() {
           const isExpanded = expandedServerIds[server.id] ?? false;
           const visibleApps = server.apps.filter((app) => installedAppIdSet.has(app.appId));
           const serverDescription = formatMcpDescription(server);
+          const isDeleteConfirming = deleteConfirmingServerId === server.id;
+          const isDeleting = deletingServerId === server.id;
+          const deleteConfirmTooltipLabel = isDeleting ? "正在删除" : "再次点击删除";
 
           return (
             <article key={server.id} className={`mcp-server-card${isExpanded ? " is-expanded" : ""}`}>
@@ -375,22 +509,42 @@ export function McpRoute() {
                     </div>
                   </div>
                 </button>
-                <div className="mcp-server-card__actions">
+                <div className="skill-card__list-actions mcp-server-card__actions">
                   <button
-                    className="secondary-button secondary-button--compact"
+                    className="skill-card__icon-button"
                     type="button"
-                    onClick={() => setEditingServer(server)}
+                    onClick={() => handleEdit(server)}
+                    aria-label={`编辑 ${server.name}`}
+                    data-tooltip="编辑 MCP"
+                    disabled={Boolean(deletingServerId)}
                   >
-                    编辑
+                    <EditIcon />
                   </button>
-                  <button
-                    className="secondary-button secondary-button--compact danger-button"
-                    type="button"
-                    onClick={() => void handleDelete(server)}
-                  >
-                    删除
-                  </button>
-                  <span className="mcp-server-card__chevron" aria-hidden="true">
+                  {isDeleteConfirming || isDeleting ? (
+                    <button
+                      ref={deleteActionRef}
+                      className="skill-card__delete-confirm-button"
+                      type="button"
+                      onClick={() => void handleDelete(server)}
+                      aria-label={`${isDeleting ? "正在删除" : "确认删除"} ${server.name}`}
+                      data-tooltip={deleteConfirmTooltipLabel}
+                      disabled={isDeleting}
+                    >
+                      {isDeleting ? "删除中" : "确认"}
+                    </button>
+                  ) : (
+                    <button
+                      className="skill-card__icon-button skill-card__icon-button--delete"
+                      type="button"
+                      onClick={() => void handleDelete(server)}
+                      aria-label={`删除 ${server.name}`}
+                      data-tooltip="删除 MCP"
+                      disabled={Boolean(deletingServerId)}
+                    >
+                      <DeleteIcon />
+                    </button>
+                  )}
+                  <span className="skill-card__chevron mcp-server-card__chevron" aria-hidden="true">
                     {isExpanded ? "⌄" : "›"}
                   </span>
                 </div>
@@ -469,10 +623,7 @@ export function McpRoute() {
           apps={installedApps}
           initialState={formInitialState}
           isEditing={Boolean(editingServer)}
-          onClose={() => {
-            setIsCreating(false);
-            setEditingServer(null);
-          }}
+          onClose={handleCloseDialog}
           onSave={handleSave}
         />
       ) : null}

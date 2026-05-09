@@ -756,6 +756,10 @@ code {
 
 .skills-toolbar-button,
 .tools-refresh-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
   height: 36px;
   min-height: 36px;
   padding: 0 10px;
