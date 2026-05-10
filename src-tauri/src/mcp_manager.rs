@@ -7,10 +7,10 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::env;
 use std::ffi::OsString;
 use std::fs;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::{mpsc, Mutex, OnceLock};
+use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -34,6 +34,11 @@ static README_MARKDOWN_LINK_REGEX: OnceLock<Regex> = OnceLock::new();
 enum McpStdioWireFormat {
     ContentLength,
     LineDelimitedJson,
+}
+
+#[derive(Clone, Debug)]
+struct McpStdioDiscoveryAttempt {
+    tools: Vec<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -79,6 +84,8 @@ pub struct McpServerRecord {
     #[serde(default)]
     pub tools_discovered_at: String,
     #[serde(default)]
+    pub tools_discovery_error: String,
+    #[serde(default)]
     pub installed_at: String,
     pub updated_at: String,
 }
@@ -97,6 +104,8 @@ pub struct McpServerSummary {
     pub apps: Vec<McpAppStatus>,
     pub tools: Vec<McpServerToolStatus>,
     pub tools_discovered_at: String,
+    #[serde(default)]
+    pub tools_discovery_error: String,
     pub installed_at: String,
 }
 
@@ -338,6 +347,7 @@ pub async fn install_mcp_server_from_marketplace(
         enabled_app_ids: Vec::new(),
         tools: Vec::new(),
         tools_discovered_at: String::new(),
+        tools_discovery_error: String::new(),
         installed_at: now_label(),
         updated_at: now_label(),
     };
@@ -528,13 +538,17 @@ pub async fn refresh_mcp_server_tools(server_id: &str) -> Result<McpWorkspaceSna
     match discover_mcp_server_tools(&record.server) {
         Ok(discovered_tools) if !discovered_tools.is_empty() => {
             record.tools = merge_discovered_mcp_tools(&record.tools, discovered_tools);
+            record.tools_discovery_error.clear();
             for app_id in &record.enabled_app_ids {
                 sync_record_to_app(app_id, record)?;
             }
         }
-        Ok(_) => {}
+        Ok(_) => {
+            record.tools_discovery_error.clear();
+        }
         Err(error) => {
             log::warn!("探测 {} MCP tools 失败: {}", record.name, error);
+            record.tools_discovery_error = error;
         }
     }
     record.tools_discovered_at = now_label();
@@ -594,6 +608,7 @@ fn to_server_summary(
         apps: app_statuses,
         tools: normalized_mcp_tools(record),
         tools_discovered_at: record.tools_discovered_at.trim().to_string(),
+        tools_discovery_error: record.tools_discovery_error.trim().to_string(),
         installed_at: record.installed_at.trim().to_string(),
     })
 }
@@ -1195,6 +1210,7 @@ async fn upsert_imported_record(
             enabled_app_ids,
             tools: previous.tools,
             tools_discovered_at: previous.tools_discovered_at,
+            tools_discovery_error: previous.tools_discovery_error,
             installed_at: previous.installed_at,
             updated_at: previous.updated_at,
         }
@@ -1208,6 +1224,7 @@ async fn upsert_imported_record(
             enabled_app_ids: vec![app.id.to_string()],
             tools: Vec::new(),
             tools_discovered_at: String::new(),
+            tools_discovery_error: String::new(),
             installed_at: now_label(),
             updated_at: now_label(),
         }
@@ -1260,10 +1277,14 @@ async fn hydrate_imported_record(
         Ok(discovered_tools) if !discovered_tools.is_empty() => {
             record.tools = merge_discovered_mcp_tools(&record.tools, discovered_tools);
             record.tools_discovered_at = now_label();
+            record.tools_discovery_error.clear();
         }
-        Ok(_) => {}
+        Ok(_) => {
+            record.tools_discovery_error.clear();
+        }
         Err(error) => {
             log::warn!("导入时探测 {} MCP tools 失败: {}", record.name, error);
+            record.tools_discovery_error = error;
         }
     }
 }
@@ -1281,6 +1302,7 @@ fn normalize_record(mut record: McpServerRecord) -> Result<McpServerRecord, Stri
     record.description = record.description.trim().to_string();
     record.source_url = record.source_url.trim().to_string();
     record.tools_discovered_at = record.tools_discovered_at.trim().to_string();
+    record.tools_discovery_error = record.tools_discovery_error.trim().to_string();
     record.installed_at = record.installed_at.trim().to_string();
     if let Some(included_tool_names) = mcp_filter_included_tools(&record.server) {
         sync_mcp_tools_from_included_names(&mut record.tools, included_tool_names);
@@ -1299,7 +1321,11 @@ fn normalize_record(mut record: McpServerRecord) -> Result<McpServerRecord, Stri
     record.enabled_app_ids.dedup();
     normalize_mcp_tool_statuses(&mut record.tools);
     if record.tools.is_empty() {
-        record.tools_discovered_at.clear();
+        if record.tools_discovery_error.is_empty() {
+            record.tools_discovered_at.clear();
+        }
+    } else {
+        record.tools_discovery_error.clear();
     }
     if record.installed_at.is_empty() {
         record.installed_at = if record.updated_at.trim().is_empty() {
@@ -1356,13 +1382,14 @@ fn discover_mcp_server_tools(server: &Value) -> Result<Vec<String>, String> {
 
 fn discover_stdio_mcp_tools(server: &Value) -> Result<Vec<String>, String> {
     match discover_stdio_mcp_tools_with_wire_format(server, McpStdioWireFormat::ContentLength) {
-        Ok(tools) => Ok(tools),
+        Ok(result) => Ok(result.tools),
         Err(error) if should_retry_stdio_discovery_with_legacy_wire_format(&error) => {
             log::info!(
                 "使用标准 MCP stdio framing 探测失败，回退到逐行 JSON 重试: {}",
                 error
             );
             discover_stdio_mcp_tools_with_wire_format(server, McpStdioWireFormat::LineDelimitedJson)
+                .map(|result| result.tools)
         }
         Err(error) => Err(error),
     }
@@ -1371,7 +1398,7 @@ fn discover_stdio_mcp_tools(server: &Value) -> Result<Vec<String>, String> {
 fn discover_stdio_mcp_tools_with_wire_format(
     server: &Value,
     wire_format: McpStdioWireFormat,
-) -> Result<Vec<String>, String> {
+) -> Result<McpStdioDiscoveryAttempt, String> {
     let command = server
         .get("command")
         .and_then(Value::as_str)
@@ -1396,7 +1423,7 @@ fn discover_stdio_mcp_tools_with_wire_format(
         .args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null());
+        .stderr(Stdio::piped());
     child_command.env("PATH", augmented_path_env());
     if let Some(cwd) = server.get("cwd").and_then(Value::as_str).map(str::trim).filter(|value| !value.is_empty()) {
         child_command.current_dir(cwd);
@@ -1420,7 +1447,13 @@ fn discover_stdio_mcp_tools_with_wire_format(
         .stdout
         .take()
         .ok_or_else(|| "无法读取 MCP server stdout".to_string())?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| "无法读取 MCP server stderr".to_string())?;
     let (tx, rx) = mpsc::channel::<Value>();
+    let stderr_buffer = Arc::new(Mutex::new(String::new()));
+    let stderr_buffer_clone = Arc::clone(&stderr_buffer);
     thread::spawn(move || {
         let mut reader = BufReader::new(stdout);
         loop {
@@ -1434,15 +1467,41 @@ fn discover_stdio_mcp_tools_with_wire_format(
             }
         }
     });
+    thread::spawn(move || {
+        let mut reader = BufReader::new(stderr);
+        let mut content = String::new();
+        let _ = reader.read_to_string(&mut content);
+        if let Ok(mut buffer) = stderr_buffer_clone.lock() {
+            *buffer = content;
+        }
+    });
 
     write_mcp_stdio_message(&mut stdin, mcp_initialize_request(), wire_format)?;
-    let _ = read_mcp_response(&rx, 1)?;
-    write_mcp_stdio_message(&mut stdin, mcp_initialized_notification(), wire_format)?;
-    write_mcp_stdio_message(&mut stdin, mcp_tools_list_request(), wire_format)?;
-    let response = read_mcp_response(&rx, 2)?;
+    let response = match read_mcp_response(&rx, 1) {
+        Ok(_) => {
+            write_mcp_stdio_message(&mut stdin, mcp_initialized_notification(), wire_format)?;
+            write_mcp_stdio_message(&mut stdin, mcp_tools_list_request(), wire_format)?;
+            read_mcp_response(&rx, 2)?
+        }
+        Err(error) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            let stderr = stderr_buffer
+                .lock()
+                .map(|buffer| buffer.trim().to_string())
+                .unwrap_or_default();
+            return Err(format_stdio_discovery_error(&error, &stderr));
+        }
+    };
     let _ = child.kill();
     let _ = child.wait();
-    parse_mcp_tools_list_response(&response)
+    let tools = parse_mcp_tools_list_response(&response)?;
+    let stderr = stderr_buffer
+        .lock()
+        .map(|buffer| buffer.trim().to_string())
+        .unwrap_or_default();
+    let _ = stderr;
+    Ok(McpStdioDiscoveryAttempt { tools })
 }
 
 fn discover_http_mcp_tools(server: &Value) -> Result<Vec<String>, String> {
@@ -1582,6 +1641,29 @@ fn should_retry_stdio_discovery_with_legacy_wire_format(error: &str) -> bool {
         || error.contains("读取 MCP")
         || error.contains("解析 MCP")
         || error.contains("MCP 返回错误")
+}
+
+fn format_stdio_discovery_error(error: &str, stderr: &str) -> String {
+    if let Some(env_name) = extract_missing_env_name(stderr) {
+        return format!("MCP server 启动失败：缺少环境变量 {env_name}");
+    }
+    if !stderr.trim().is_empty() {
+        let summary = stderr.lines().find(|line| !line.trim().is_empty()).unwrap_or(stderr).trim();
+        return format!("{error}；stderr: {summary}");
+    }
+    error.to_string()
+}
+
+fn extract_missing_env_name(stderr: &str) -> Option<String> {
+    let normalized = stderr.trim();
+    let marker = "without ";
+    let index = normalized.find(marker)?;
+    let suffix = &normalized[index + marker.len()..];
+    let env_name = suffix.split_whitespace().next()?.trim_matches(|ch: char| !ch.is_ascii_alphanumeric() && ch != '_');
+    if env_name.is_empty() || !env_name.chars().all(|ch| ch.is_ascii_uppercase() || ch.is_ascii_digit() || ch == '_') {
+        return None;
+    }
+    Some(env_name.to_string())
 }
 
 fn post_mcp_http_message(
@@ -3233,7 +3315,20 @@ fn normalize_mcp_install_config(mut server: Value, description: &str) -> Option<
         obj.entry("description")
             .or_insert_with(|| Value::String(description.trim().to_string()));
     }
+    normalize_marketplace_install_env_aliases(obj);
     Some(server)
+}
+
+fn normalize_marketplace_install_env_aliases(obj: &mut Map<String, Value>) {
+    let Some(env) = obj.get_mut("env").and_then(Value::as_object_mut) else {
+        return;
+    };
+
+    if !env.contains_key("API_TOKEN") {
+        if let Some(brightdata_token) = env.remove("BRIGHTDATA_API_TOKEN") {
+            env.insert("API_TOKEN".to_string(), brightdata_token);
+        }
+    }
 }
 
 async fn fetch_mcp_directory_query(
@@ -3894,6 +3989,36 @@ A comprehensive GitLab MCP server for AI clients. Manage projects, merge request
     }
 
     #[test]
+    fn normalizes_brightdata_api_token_env_name_from_marketplace_config() {
+        let config = r#"{
+          "mcpServers": {
+            "Bright Data": {
+              "command": "npx",
+              "args": ["-y", "@brightdata/mcp"],
+              "env": {
+                "BRIGHTDATA_API_TOKEN": "<YOUR_TOKEN>"
+              }
+            }
+          }
+        }"#;
+
+        let server = parse_mcp_install_config(config, "Bright Data MCP").unwrap();
+
+        assert_eq!(
+            server,
+            json!({
+                "type": "stdio",
+                "command": "npx",
+                "args": ["-y", "@brightdata/mcp"],
+                "description": "Bright Data MCP",
+                "env": {
+                    "API_TOKEN": "<YOUR_TOKEN>"
+                }
+            })
+        );
+    }
+
+    #[test]
     fn writes_stdio_messages_with_content_length_header() {
         let mut output = Vec::new();
         write_mcp_stdio_message(
@@ -3973,5 +4098,15 @@ A comprehensive GitLab MCP server for AI clients. Manage projects, merge request
         assert!(should_retry_stdio_discovery_with_legacy_wire_format("MCP tools 探测超时"));
         assert!(should_retry_stdio_discovery_with_legacy_wire_format("读取 MCP 响应失败: eof"));
         assert!(!should_retry_stdio_discovery_with_legacy_wire_format("启动 MCP server 失败: missing binary"));
+    }
+
+    #[test]
+    fn extracts_missing_env_name_from_stderr() {
+        let stderr = "Error: Cannot run MCP server without API_TOKEN env";
+        assert_eq!(extract_missing_env_name(stderr).as_deref(), Some("API_TOKEN"));
+        assert_eq!(
+            format_stdio_discovery_error("MCP tools 探测超时", stderr),
+            "MCP server 启动失败：缺少环境变量 API_TOKEN"
+        );
     }
 }

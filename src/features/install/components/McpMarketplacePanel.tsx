@@ -14,6 +14,10 @@ import {
   getCachedInstalledServerIds,
   subscribeInstalledServerIdsChange,
 } from "@/features/skills/utils/mcp-installed-server-cache";
+import {
+  cacheMcpWorkspace,
+  getCachedMcpWorkspace,
+} from "@/features/skills/utils/mcp-workspace-cache";
 
 const MCP_MARKETPLACE_PAGE_SIZE = 24;
 const MCP_MARKETPLACE_SOURCE_SITE = "MCP.Directory";
@@ -223,9 +227,17 @@ async function ensureInstalledServerIdsLoaded() {
     return installedServerIds;
   }
 
+  const cachedWorkspace = getCachedMcpWorkspace();
+  if (cachedWorkspace) {
+    const cachedInstalledServerIds = new Set(cachedWorkspace.servers.map((server) => server.id));
+    cacheInstalledServerIds(cachedInstalledServerIds);
+    return cachedInstalledServerIds;
+  }
+
   if (!cache.workspacePromise) {
     cache.workspacePromise = fetchMcpWorkspace()
       .then((workspace) => {
+        cacheMcpWorkspace(workspace);
         const installedServerIds = new Set(workspace.servers.map((server) => server.id));
         cacheInstalledServerIds(installedServerIds);
         return installedServerIds;
@@ -467,6 +479,7 @@ export function McpMarketplacePanel(props: McpMarketplacePanelProps) {
     setInstallingServerIds((current) => new Set(current).add(server.id));
     try {
       const installedWorkspace = await installMcpServerFromMarketplace({ server });
+      cacheMcpWorkspace(installedWorkspace);
       const installedServerId = normalizeMcpServerId(server.name);
       const installedServer = installedWorkspace.servers.find((item) => item.id === installedServerId);
       const shouldRefreshTools = Boolean(
@@ -475,12 +488,15 @@ export function McpMarketplacePanel(props: McpMarketplacePanelProps) {
         && !installedServer.toolsDiscoveredAt,
       );
       const nextInstalledServerIds = new Set(installedWorkspace.servers.map((item) => item.id));
-      cacheInstalledServerIds(nextInstalledServerIds);
       setInstalledServerIds(nextInstalledServerIds);
       notify({ message: `MCP "${server.name}" 已安装，可到 MCP 页查看`, tone: "success" });
 
       if (shouldRefreshTools) {
-        void refreshMcpServerTools(installedServerId).catch(() => undefined);
+        void refreshMcpServerTools(installedServerId)
+          .then((workspace) => {
+            cacheMcpWorkspace(workspace);
+          })
+          .catch(() => undefined);
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : "安装 MCP 失败，请稍后重试。";

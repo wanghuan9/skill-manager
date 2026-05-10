@@ -367,6 +367,7 @@ export const mcpWorkspaceFixture: McpWorkspaceSnapshot = {
       apps: buildMcpFixtureServerApps(["claude-code", "codex"]),
       tools: buildMcpFixtureTools(["resolve-library-id", "get-library-docs"]),
       toolsDiscoveredAt: "2026/5/10 16:00:00",
+      toolsDiscoveryError: "",
       installedAt: "1778401800000",
     },
     {
@@ -391,6 +392,7 @@ export const mcpWorkspaceFixture: McpWorkspaceSnapshot = {
       apps: buildMcpFixtureServerApps(["gemini"]),
       tools: buildMcpFixtureTools(["list_issues", "get_issue", "create_issue", "update_issue"], ["update_issue"]),
       toolsDiscoveredAt: "2026/5/10 16:00:00",
+      toolsDiscoveryError: "",
       installedAt: "1778396400000",
     },
   ],

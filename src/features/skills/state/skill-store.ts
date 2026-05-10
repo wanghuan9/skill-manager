@@ -185,6 +185,7 @@ export type McpServerSummary = {
   apps: McpAppStatus[];
   tools: McpServerToolStatus[];
   toolsDiscoveredAt: string;
+  toolsDiscoveryError: string;
   installedAt: string;
 };
 
@@ -197,6 +198,7 @@ export type McpServerRecord = {
   enabledAppIds: string[];
   tools: McpServerToolStatus[];
   toolsDiscoveredAt: string;
+  toolsDiscoveryError: string;
   installedAt: string;
   updatedAt: string;
 };

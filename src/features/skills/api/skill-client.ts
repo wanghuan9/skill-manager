@@ -606,6 +606,7 @@ export async function installMcpServerFromMarketplace(
     })),
     tools: [],
     toolsDiscoveredAt: "",
+    toolsDiscoveryError: "",
   };
   const fallback = {
     ...mcpWorkspaceFixture,
@@ -726,6 +727,7 @@ export async function refreshMcpServerTools(serverId: string): Promise<McpWorksp
           })),
           tools: [],
           toolsDiscoveredAt: "2026/5/10 16:00:00",
+          toolsDiscoveryError: "",
           installedAt: "2026/5/10 16:00:00",
         }
       : undefined);

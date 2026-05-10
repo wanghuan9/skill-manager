@@ -189,3 +189,47 @@ test("tool toggles stay visually stable while updating", async () => {
 
   toggleSpy.mockRestore();
 });
+
+test("shows MCP tools discovery errors when refresh fails due to missing env", async () => {
+  window.localStorage.clear();
+  const workspace = await skillClient.fetchMcpWorkspace();
+  const failedWorkspace = {
+    ...workspace,
+    servers: [
+      {
+        id: "bright-data",
+        name: "bright data",
+        serverType: "stdio",
+        commandLabel: "npx -y @brightdata/mcp",
+        description: "Official Bright Data MCP server.",
+        sourceUrl: "https://mcp.directory/servers/bright-data",
+        serverJson: JSON.stringify({
+          command: "npx",
+          args: ["-y", "@brightdata/mcp"],
+          env: { BRIGHTDATA_API_TOKEN: "<YOUR_TOKEN>" },
+        }, null, 2),
+        enabledAppCount: 0,
+        apps: workspace.apps.map((app) => ({
+          appId: app.id,
+          appName: app.name,
+          configPath: app.configPath,
+          statusLabel: app.statusLabel,
+          isEnabled: false,
+        })),
+        tools: [],
+        toolsDiscoveredAt: "2026/5/10 22:39:32",
+        toolsDiscoveryError: "MCP server 启动失败：缺少环境变量 API_TOKEN",
+        installedAt: "2026/5/10 22:37:23",
+      },
+    ],
+  };
+  vi.spyOn(skillClient, "fetchMcpWorkspace").mockResolvedValueOnce(failedWorkspace);
+
+  render(<App />);
+
+  await userEvent.click(screen.getByRole("button", { name: "MCP" }));
+  await userEvent.click(await screen.findByRole("button", { name: "展开 bright data" }));
+
+  expect(screen.getByText("获取失败")).toBeInTheDocument();
+  expect(screen.getByText("获取 tools 失败：MCP server 启动失败：缺少环境变量 API_TOKEN")).toBeInTheDocument();
+});

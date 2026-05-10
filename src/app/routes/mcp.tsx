@@ -25,9 +25,10 @@ import { getMonogramLabel } from "@/features/skills/utils/monogram";
 import { formatSkillSourceLabel } from "@/features/skills/utils/skill-source";
 import { formatSkillUpdatedAt } from "@/features/skills/utils/skill-time";
 import {
-  cacheInstalledServerIds,
-  invalidateCachedInstalledServerIds,
-} from "@/features/skills/utils/mcp-installed-server-cache";
+  cacheMcpWorkspace,
+  getCachedMcpWorkspace,
+  subscribeMcpWorkspaceChange,
+} from "@/features/skills/utils/mcp-workspace-cache";
 
 type McpFormState = {
   id: string;
@@ -327,11 +328,7 @@ export function McpRoute() {
   const toolsRefreshRef = useRef<Set<string>>(new Set());
 
   function commitWorkspace(snapshot: McpWorkspaceSnapshot | null) {
-    if (snapshot) {
-      cacheInstalledServerIds(snapshot.servers.map((server) => server.id));
-    } else {
-      invalidateCachedInstalledServerIds();
-    }
+    cacheMcpWorkspace(snapshot);
     startTransition(() => {
       setWorkspace(snapshot);
     });
@@ -342,6 +339,10 @@ export function McpRoute() {
 
     async function loadWorkspace() {
       try {
+        const cachedWorkspace = getCachedMcpWorkspace();
+        if (active && cachedWorkspace) {
+          commitWorkspace(cachedWorkspace);
+        }
         const snapshot = await fetchMcpWorkspace();
         if (active) {
           commitWorkspace(snapshot);
@@ -359,6 +360,12 @@ export function McpRoute() {
       active = false;
     };
   }, []);
+
+  useEffect(() => subscribeMcpWorkspaceChange((snapshot) => {
+    startTransition(() => {
+      setWorkspace(snapshot);
+    });
+  }), []);
 
   useEffect(() => {
     setToolbarContainer(document.getElementById("mcp-header-toolbar-slot"));
@@ -726,7 +733,9 @@ export function McpRoute() {
             ? enabledToolCount === totalToolCount
               ? `${enabledToolCount} tools`
               : `${enabledToolCount}/${totalToolCount} tools`
-            : "未获取 tools";
+            : server.toolsDiscoveryError
+              ? "获取失败"
+              : "未获取 tools";
           const enabledAppSummaryLabel = enabledVisibleAppCount > 0
             ? `已启用 ${enabledVisibleAppCount}`
             : "未启用";
@@ -988,7 +997,11 @@ export function McpRoute() {
                         })}
                       </div>
                     ) : server.tools.length > 0 ? null : (
-                      <p className="mcp-server-card__tool-empty">暂未获取到该 MCP 的 tools。</p>
+                      <p className="mcp-server-card__tool-empty">
+                        {server.toolsDiscoveryError
+                          ? `获取 tools 失败：${server.toolsDiscoveryError}`
+                          : "暂未获取到该 MCP 的 tools。"}
+                      </p>
                     )}
                   </section>
                 </div>

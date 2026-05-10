@@ -4,10 +4,12 @@ import { vi } from "vitest";
 import { App } from "@/app/App";
 import * as skillClient from "@/features/skills/api/skill-client";
 import { mcpMarketplaceServerFixtures } from "@/features/skills/state/skill-fixtures";
+import { getCachedMcpWorkspace } from "@/features/skills/utils/mcp-workspace-cache";
 
 function resetMcpMarketplaceRuntimeCache() {
   delete (window as Window & { __SKILLM_MCP_MARKETPLACE_CACHE__?: unknown }).__SKILLM_MCP_MARKETPLACE_CACHE__;
   delete (window as Window & { __SKILLM_MCP_INSTALLED_SERVER_IDS__?: unknown }).__SKILLM_MCP_INSTALLED_SERVER_IDS__;
+  delete (window as Window & { __SKILLM_MCP_WORKSPACE__?: unknown }).__SKILLM_MCP_WORKSPACE__;
 }
 
 function scrollPageContentToBottom() {
@@ -133,6 +135,41 @@ test("refreshes marketplace MCP tools right after install when they are still un
   await waitFor(() => {
     expect(installSpy).toHaveBeenCalledTimes(1);
     expect(refreshSpy).toHaveBeenCalledTimes(1);
+  });
+
+  installSpy.mockRestore();
+  refreshSpy.mockRestore();
+});
+
+test("stores refreshed MCP workspace after async tools discovery finishes", async () => {
+  window.localStorage.clear();
+  resetMcpMarketplaceRuntimeCache();
+  const installResult = await skillClient.installMcpServerFromMarketplace({
+    server: mcpMarketplaceServerFixtures.find((server) => server.name === "playwright")!,
+  });
+  const refreshedWorkspace = await skillClient.refreshMcpServerTools("playwright");
+  const installSpy = vi.spyOn(skillClient, "installMcpServerFromMarketplace").mockResolvedValue(installResult);
+  const refreshSpy = vi.spyOn(skillClient, "refreshMcpServerTools").mockResolvedValue(refreshedWorkspace);
+
+  render(<App />);
+  await userEvent.click(screen.getByRole("button", { name: /安装/ }));
+  await userEvent.click(screen.getByRole("tab", { name: "MCP" }));
+
+  const playwrightHeading = await screen.findByRole("heading", { name: "playwright", level: 3 });
+  const playwrightCard = playwrightHeading.closest("article");
+  if (!playwrightCard) {
+    throw new Error("playwright marketplace card was not rendered");
+  }
+
+  await userEvent.click(within(playwrightCard).getByRole("button", { name: "安装" }));
+
+  await waitFor(() => {
+    expect(refreshSpy).toHaveBeenCalledWith("playwright");
+    expect(getCachedMcpWorkspace()?.servers.find((server) => server.id === "playwright")).toEqual(
+      expect.objectContaining(
+        refreshedWorkspace.servers.find((server) => server.id === "playwright") ?? {},
+      ),
+    );
   });
 
   installSpy.mockRestore();
