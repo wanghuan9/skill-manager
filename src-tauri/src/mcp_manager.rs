@@ -30,6 +30,12 @@ const APP_WINDSURF: &str = "windsurf";
 static MCP_NPM_METADATA_CACHE: OnceLock<Mutex<HashMap<String, McpResolvedMetadata>>> = OnceLock::new();
 static README_MARKDOWN_LINK_REGEX: OnceLock<Regex> = OnceLock::new();
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum McpStdioWireFormat {
+    ContentLength,
+    LineDelimitedJson,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct McpTargetApp {
@@ -327,7 +333,7 @@ pub async fn install_mcp_server_from_marketplace(
         id: server_id.clone(),
         name: server.name.trim().to_lowercase(),
         server: server_config,
-        description: String::new(),
+        description: server.description.trim().to_string(),
         source_url: git_repository_source_url(&server.source_url).unwrap_or_default(),
         enabled_app_ids: Vec::new(),
         tools: Vec::new(),
@@ -335,20 +341,8 @@ pub async fn install_mcp_server_from_marketplace(
         installed_at: now_label(),
         updated_at: now_label(),
     };
-    enrich_mcp_record_metadata(&mut record, mcp_metadata_client().as_ref()).await;
-    if record.description == fallback_mcp_description(&record)
-        && !server.description.trim().is_empty()
-    {
-        record.description = server.description.trim().to_string();
-    }
     if record.source_url.trim().is_empty() {
         record.source_url = server.source_url.trim().to_string();
-    }
-    if let Ok(discovered_tools) = discover_mcp_server_tools(&record.server) {
-        if !discovered_tools.is_empty() {
-            record.tools = merge_discovered_mcp_tools(&record.tools, discovered_tools);
-            record.tools_discovered_at = now_label();
-        }
     }
     if normalize_mcp_install_activation(&load_app_settings().mcp_install_activation)
         == "apply-all-tools"
@@ -1361,6 +1355,23 @@ fn discover_mcp_server_tools(server: &Value) -> Result<Vec<String>, String> {
 }
 
 fn discover_stdio_mcp_tools(server: &Value) -> Result<Vec<String>, String> {
+    match discover_stdio_mcp_tools_with_wire_format(server, McpStdioWireFormat::ContentLength) {
+        Ok(tools) => Ok(tools),
+        Err(error) if should_retry_stdio_discovery_with_legacy_wire_format(&error) => {
+            log::info!(
+                "使用标准 MCP stdio framing 探测失败，回退到逐行 JSON 重试: {}",
+                error
+            );
+            discover_stdio_mcp_tools_with_wire_format(server, McpStdioWireFormat::LineDelimitedJson)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn discover_stdio_mcp_tools_with_wire_format(
+    server: &Value,
+    wire_format: McpStdioWireFormat,
+) -> Result<Vec<String>, String> {
     let command = server
         .get("command")
         .and_then(Value::as_str)
@@ -1411,24 +1422,23 @@ fn discover_stdio_mcp_tools(server: &Value) -> Result<Vec<String>, String> {
         .ok_or_else(|| "无法读取 MCP server stdout".to_string())?;
     let (tx, rx) = mpsc::channel::<Value>();
     thread::spawn(move || {
-        let reader = BufReader::new(stdout);
-        for line in reader.lines().map_while(Result::ok) {
-            let trimmed = line.trim();
-            if trimmed.is_empty() {
-                continue;
-            }
-            if let Ok(value) = serde_json::from_str::<Value>(trimmed) {
-                if tx.send(value).is_err() {
-                    break;
+        let mut reader = BufReader::new(stdout);
+        loop {
+            match read_next_mcp_stdio_message(&mut reader) {
+                Ok(Some(value)) => {
+                    if tx.send(value).is_err() {
+                        break;
+                    }
                 }
+                Ok(None) | Err(_) => break,
             }
         }
     });
 
-    write_mcp_stdio_message(&mut stdin, mcp_initialize_request())?;
+    write_mcp_stdio_message(&mut stdin, mcp_initialize_request(), wire_format)?;
     let _ = read_mcp_response(&rx, 1)?;
-    write_mcp_stdio_message(&mut stdin, mcp_initialized_notification())?;
-    write_mcp_stdio_message(&mut stdin, mcp_tools_list_request())?;
+    write_mcp_stdio_message(&mut stdin, mcp_initialized_notification(), wire_format)?;
+    write_mcp_stdio_message(&mut stdin, mcp_tools_list_request(), wire_format)?;
     let response = read_mcp_response(&rx, 2)?;
     let _ = child.kill();
     let _ = child.wait();
@@ -1464,14 +1474,28 @@ fn discover_http_mcp_tools(server: &Value) -> Result<Vec<String>, String> {
     parse_mcp_tools_list_response(&response)
 }
 
-fn write_mcp_stdio_message(stdin: &mut impl Write, message: Value) -> Result<(), String> {
+fn write_mcp_stdio_message(
+    stdin: &mut impl Write,
+    message: Value,
+    wire_format: McpStdioWireFormat,
+) -> Result<(), String> {
     let payload = serde_json::to_string(&message)
         .map_err(|error| format!("序列化 MCP 消息失败: {error}"))?;
-    stdin
-        .write_all(payload.as_bytes())
-        .and_then(|_| stdin.write_all(b"\n"))
-        .and_then(|_| stdin.flush())
-        .map_err(|error| format!("写入 MCP 消息失败: {error}"))
+    match wire_format {
+        McpStdioWireFormat::ContentLength => {
+            let header = format!("Content-Length: {}\r\n\r\n", payload.len());
+            stdin
+                .write_all(header.as_bytes())
+                .and_then(|_| stdin.write_all(payload.as_bytes()))
+                .and_then(|_| stdin.flush())
+                .map_err(|error| format!("写入 MCP 消息失败: {error}"))
+        }
+        McpStdioWireFormat::LineDelimitedJson => stdin
+            .write_all(payload.as_bytes())
+            .and_then(|_| stdin.write_all(b"\n"))
+            .and_then(|_| stdin.flush())
+            .map_err(|error| format!("写入 MCP 消息失败: {error}")),
+    }
 }
 
 fn read_mcp_response(rx: &mpsc::Receiver<Value>, id: i64) -> Result<Value, String> {
@@ -1486,6 +1510,78 @@ fn read_mcp_response(rx: &mpsc::Receiver<Value>, id: i64) -> Result<Value, Strin
             return Ok(value);
         }
     }
+}
+
+fn read_next_mcp_stdio_message(reader: &mut impl BufRead) -> Result<Option<Value>, String> {
+    let mut line = String::new();
+
+    loop {
+        line.clear();
+        let bytes_read = reader
+            .read_line(&mut line)
+            .map_err(|error| format!("读取 MCP 响应失败: {error}"))?;
+        if bytes_read == 0 {
+            return Ok(None);
+        }
+
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        if trimmed.starts_with('{') || trimmed.starts_with('[') {
+            let value = serde_json::from_str::<Value>(trimmed)
+                .map_err(|error| format!("解析 MCP JSON 响应失败: {error}"))?;
+            return Ok(Some(value));
+        }
+
+        let Some(mut content_length) = parse_mcp_content_length_header(trimmed) else {
+            continue;
+        };
+
+        loop {
+            line.clear();
+            let header_bytes = reader
+                .read_line(&mut line)
+                .map_err(|error| format!("读取 MCP 响应头失败: {error}"))?;
+            if header_bytes == 0 {
+                return Err("MCP 响应头提前结束".to_string());
+            }
+
+            let header = line.trim();
+            if header.is_empty() {
+                break;
+            }
+            if let Some(value) = parse_mcp_content_length_header(header) {
+                content_length = value;
+            }
+        }
+
+        let mut payload = vec![0; content_length];
+        reader
+            .read_exact(&mut payload)
+            .map_err(|error| format!("读取 MCP 响应体失败: {error}"))?;
+        let payload = String::from_utf8(payload)
+            .map_err(|error| format!("MCP 响应体不是有效 UTF-8: {error}"))?;
+        let value = serde_json::from_str::<Value>(&payload)
+            .map_err(|error| format!("解析 MCP 响应体失败: {error}"))?;
+        return Ok(Some(value));
+    }
+}
+
+fn parse_mcp_content_length_header(header: &str) -> Option<usize> {
+    let (name, value) = header.split_once(':')?;
+    if !name.trim().eq_ignore_ascii_case("content-length") {
+        return None;
+    }
+    value.trim().parse::<usize>().ok()
+}
+
+fn should_retry_stdio_discovery_with_legacy_wire_format(error: &str) -> bool {
+    error.contains("MCP tools 探测超时")
+        || error.contains("读取 MCP")
+        || error.contains("解析 MCP")
+        || error.contains("MCP 返回错误")
 }
 
 fn post_mcp_http_message(
@@ -3795,5 +3891,87 @@ A comprehensive GitLab MCP server for AI clients. Manage projects, merge request
             python_package_from_mcp_server(&server),
             Some("easy-code-reader".to_string())
         );
+    }
+
+    #[test]
+    fn writes_stdio_messages_with_content_length_header() {
+        let mut output = Vec::new();
+        write_mcp_stdio_message(
+            &mut output,
+            mcp_tools_list_request(),
+            McpStdioWireFormat::ContentLength,
+        )
+        .unwrap();
+
+        let serialized = String::from_utf8(output).unwrap();
+        assert!(serialized.starts_with("Content-Length: "));
+        assert!(serialized.contains("\r\n\r\n"));
+        assert!(serialized.ends_with("{\"id\":2,\"jsonrpc\":\"2.0\",\"method\":\"tools/list\",\"params\":{}}"));
+    }
+
+    #[test]
+    fn reads_content_length_framed_stdio_messages() {
+        let payload = r#"{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"alpha"}]}}"#;
+        let framed = format!("Content-Length: {}\r\n\r\n{}", payload.len(), payload);
+        let mut reader = BufReader::new(framed.as_bytes());
+
+        let message = read_next_mcp_stdio_message(&mut reader).unwrap();
+
+        assert_eq!(
+            message,
+            Some(json!({
+                "jsonrpc": "2.0",
+                "id": 2,
+                "result": {
+                    "tools": [
+                        { "name": "alpha" }
+                    ]
+                }
+            }))
+        );
+    }
+
+    #[test]
+    fn reads_legacy_line_delimited_stdio_messages() {
+        let payload = b"{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{\"tools\":[{\"name\":\"alpha\"}]}}\n";
+        let mut reader = BufReader::new(&payload[..]);
+
+        let message = read_next_mcp_stdio_message(&mut reader).unwrap();
+
+        assert_eq!(
+            message,
+            Some(json!({
+                "jsonrpc": "2.0",
+                "id": 2,
+                "result": {
+                    "tools": [
+                        { "name": "alpha" }
+                    ]
+                }
+            }))
+        );
+    }
+
+    #[test]
+    fn writes_legacy_line_delimited_stdio_messages() {
+        let mut output = Vec::new();
+        write_mcp_stdio_message(
+            &mut output,
+            mcp_tools_list_request(),
+            McpStdioWireFormat::LineDelimitedJson,
+        )
+        .unwrap();
+
+        assert_eq!(
+            String::from_utf8(output).unwrap(),
+            "{\"id\":2,\"jsonrpc\":\"2.0\",\"method\":\"tools/list\",\"params\":{}}\n"
+        );
+    }
+
+    #[test]
+    fn retries_legacy_stdio_format_for_timeout_errors() {
+        assert!(should_retry_stdio_discovery_with_legacy_wire_format("MCP tools 探测超时"));
+        assert!(should_retry_stdio_discovery_with_legacy_wire_format("读取 MCP 响应失败: eof"));
+        assert!(!should_retry_stdio_discovery_with_legacy_wire_format("启动 MCP server 失败: missing binary"));
     }
 }

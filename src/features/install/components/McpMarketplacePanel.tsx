@@ -474,13 +474,14 @@ export function McpMarketplacePanel(props: McpMarketplacePanelProps) {
         && installedServer.tools.length === 0
         && !installedServer.toolsDiscoveredAt,
       );
-      const workspace = shouldRefreshTools
-        ? await refreshMcpServerTools(installedServerId)
-        : installedWorkspace;
-      const nextInstalledServerIds = new Set(workspace.servers.map((item) => item.id));
+      const nextInstalledServerIds = new Set(installedWorkspace.servers.map((item) => item.id));
       cacheInstalledServerIds(nextInstalledServerIds);
       setInstalledServerIds(nextInstalledServerIds);
       notify({ message: `MCP "${server.name}" 已安装，可到 MCP 页查看`, tone: "success" });
+
+      if (shouldRefreshTools) {
+        void refreshMcpServerTools(installedServerId).catch(() => undefined);
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : "安装 MCP 失败，请稍后重试。";
       notify({ message, tone: "error" });

@@ -13,6 +13,7 @@ export function SettingsRoute() {
     appSettings,
     defaultOpenToolId,
     gitAccount,
+    openPathInFinder,
     setMcpInstallActivation,
     setDefaultOpenToolId,
     setSkillInstallActivation,
@@ -27,16 +28,42 @@ export function SettingsRoute() {
     ? defaultOpenToolId
     : openToolOptions[0]?.id ?? "";
   const [isToolStatusExpanded, setIsToolStatusExpanded] = useState(false);
+  const [isOpeningStoragePath, setIsOpeningStoragePath] = useState(false);
   const toolStatusPanelClassName = `panel-card placeholder-panel settings-panel settings-panel--tool-status${
     isToolStatusExpanded ? "" : " is-clickable"
   }`;
+  const storagePath = appSettings.storagePath.trim();
+
+  async function handleOpenStoragePath() {
+    if (!storagePath || isOpeningStoragePath) {
+      return;
+    }
+
+    setIsOpeningStoragePath(true);
+    try {
+      await openPathInFinder(storagePath);
+    } finally {
+      setIsOpeningStoragePath(false);
+    }
+  }
+
   const generalSettingsItems = [
     {
       label: "配置文件存储路径",
       description: "应用设置会写入这个文件，便于你在本地查看或备份默认配置。",
       value: (
-        <div className="settings-form-item__value settings-form-item__value--path">
-          {appSettings.storagePath || "暂未检测到存储路径"}
+        <div className="settings-form-item__path-group">
+          <div className="settings-form-item__value settings-form-item__value--path">
+            {storagePath || "暂未检测到存储路径"}
+          </div>
+          <button
+            className="secondary-button secondary-button--compact settings-open-button"
+            type="button"
+            onClick={() => void handleOpenStoragePath()}
+            disabled={!storagePath || isOpeningStoragePath}
+          >
+            打开
+          </button>
         </div>
       ),
       readonly: true,

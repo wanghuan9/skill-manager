@@ -4211,6 +4211,15 @@ code {
   max-width: 100%;
 }
 
+.settings-form-item__path-group {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  width: min(620px, 100%);
+  max-width: 100%;
+}
+
 .settings-form-item__control select {
   width: 100%;
   min-height: 38px;
@@ -4242,6 +4251,7 @@ code {
 }
 
 .settings-form-item__value--path {
+  flex: 1;
   max-width: min(480px, 100%);
   justify-content: flex-start;
   overflow-wrap: anywhere;
@@ -4249,6 +4259,15 @@ code {
   white-space: normal;
   text-align: left;
   line-height: 1.35;
+}
+
+.settings-open-button {
+  flex: 0 0 auto;
+  min-width: 74px;
+  border-radius: 999px;
+  font-weight: 500;
+  background: #ffffff;
+  box-shadow: 0 4px 14px rgba(31, 41, 55, 0.08);
 }
 
 .settings-form-item--readonly .settings-form-item__value {
@@ -5324,8 +5343,19 @@ code {
   }
 
   .settings-form-item__control,
-  .settings-form-item__value {
+  .settings-form-item__value,
+  .settings-form-item__path-group {
     width: 100%;
+  }
+
+  .settings-form-item__path-group {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .settings-open-button {
+    width: 100%;
+    justify-content: center;
   }
 
   .settings-tool-grid {
