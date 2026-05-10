@@ -1,5 +1,6 @@
 import { useDeferredValue, useMemo, useState } from "react";
 import { waitForNextPaint } from "@/app/utils/wait-for-next-paint";
+import { openExternalLink } from "@/features/skills/api/skill-client";
 import { filterSkills } from "@/features/skills/state/skill-selectors";
 import { SkillCard } from "@/features/skills/components/SkillCard";
 import { useSkillWorkspace } from "@/features/skills/state/skill-workspace";
@@ -90,6 +91,15 @@ function formatGroupSourceUrl(sourceUrl: string) {
     return repositoryPath ? `${parsedUrl.origin}/${repositoryPath}` : parsedUrl.origin;
   } catch {
     return sourceUrl;
+  }
+}
+
+function isHttpUrl(value: string) {
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
+  } catch {
+    return false;
   }
 }
 
@@ -241,6 +251,7 @@ export function SkillListPage(props: SkillListPageProps) {
             const isCollapsed = isGroupCollapsed(group.id);
             const groupTone = resolveSkillGroupTone(group.skills[0]?.sourceType);
             const groupSourceUrl = formatGroupSourceUrl(group.skills[0]?.sourceUrl ?? group.label);
+            const isGroupSourceLinkable = isHttpUrl(groupSourceUrl);
 
             return (
               <section key={group.id} className={`skill-group-section skill-group-section--${groupTone}`}>
@@ -269,7 +280,23 @@ export function SkillListPage(props: SkillListPageProps) {
                         <span className="skill-group-section__count">{group.skills.length} 个技能</span>
                       </div>
                       <p className="skill-group-section__source">
-                        <span>来源于：{groupSourceUrl}</span>
+                        <span>
+                          来源于：
+                          {isGroupSourceLinkable ? (
+                            <a
+                              href={groupSourceUrl}
+                              onClick={(event) => {
+                                event.preventDefault();
+                                event.stopPropagation();
+                                void openExternalLink(groupSourceUrl);
+                              }}
+                            >
+                              {groupSourceUrl}
+                            </a>
+                          ) : (
+                            groupSourceUrl
+                          )}
+                        </span>
                       </p>
                     </div>
                   </div>

@@ -1,5 +1,6 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { vi } from "vitest";
 import { App } from "@/app/App";
 
 test("renders MCP toolbar in the page header and hides the app matrix", async () => {
@@ -71,4 +72,20 @@ test("creates MCP without asking the user for an ID", async () => {
     expect(screen.queryByRole("dialog", { name: "新增 MCP" })).not.toBeInTheDocument();
   });
   expect(screen.getByText("Playwright Tools")).toBeInTheDocument();
+});
+
+test("opens GitHub source url from MCP details", async () => {
+  window.localStorage.clear();
+  const openSpy = vi.spyOn(window, "open").mockImplementation(() => null);
+  render(<App />);
+
+  await userEvent.click(screen.getByRole("button", { name: "MCP" }));
+  await userEvent.click(await screen.findByRole("button", { name: "展开 context7" }));
+  await userEvent.click(screen.getByRole("link", { name: "https://github.com/upstash/context7" }));
+
+  expect(openSpy).toHaveBeenCalledWith(
+    "https://github.com/upstash/context7",
+    "_blank",
+    "noopener,noreferrer",
+  );
 });

@@ -391,6 +391,11 @@ export async function openSkillRepository(skillName: string): Promise<void> {
 }
 
 export async function openExternalLink(url: string): Promise<void> {
+  if (shouldUseFixtureData()) {
+    window.open(url, "_blank", "noopener,noreferrer");
+    return undefined;
+  }
+
   return invokeOrFallback("open_external_link", { url }, undefined);
 }
 

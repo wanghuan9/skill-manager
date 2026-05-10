@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { SkillStatusBadge } from "@/features/skills/components/SkillStatusBadge";
 import { SkillFileDialog } from "@/features/skills/components/SkillFileDialog";
 import { ToolSyncPanel } from "@/features/skills/components/ToolSyncPanel";
+import { openExternalLink } from "@/features/skills/api/skill-client";
 import { useSkillWorkspace } from "@/features/skills/state/skill-workspace";
 import type { SkillSummary } from "@/features/skills/state/skill-store";
 import { formatSkillDescription } from "@/features/skills/utils/skill-description";
@@ -22,6 +23,15 @@ function SkillMonogram({ name }: { name: string }) {
       <span className="link-badge__label">{getMonogramLabel(name)}</span>
     </div>
   );
+}
+
+function isHttpUrl(value: string) {
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
+  } catch {
+    return false;
+  }
 }
 
 function ViewFileIcon() {
@@ -320,7 +330,20 @@ export function SkillCard({ skill }: SkillCardProps) {
                 <div>
                   <dt>来源</dt>
                   <dd className="detail-grid__source-value">
-                    <span>{skill.sourceUrl}</span>
+                    {isHttpUrl(skill.sourceUrl) ? (
+                      <a
+                        className="detail-grid__source-link"
+                        href={skill.sourceUrl}
+                        onClick={(event) => {
+                          event.preventDefault();
+                          void openExternalLink(skill.sourceUrl);
+                        }}
+                      >
+                        {skill.sourceUrl}
+                      </a>
+                    ) : (
+                      <span>{skill.sourceUrl}</span>
+                    )}
                     <span className={`detail-git-badge${skill.gitLinked ? " is-linked" : " is-unlinked"}`}>
                       git
                     </span>

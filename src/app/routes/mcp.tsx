@@ -5,6 +5,7 @@ import {
   deleteMcpServer,
   fetchMcpWorkspace,
   importMcpServersFromApps,
+  openExternalLink,
   saveMcpServer,
   toggleMcpServerApp,
 } from "@/features/skills/api/skill-client";
@@ -564,7 +565,16 @@ export function McpRoute() {
                         <div>
                           <dt>来源</dt>
                           <dd className="detail-grid__source-value">
-                            <span>{server.sourceUrl}</span>
+                            <a
+                              className="detail-grid__source-link"
+                              href={server.sourceUrl}
+                              onClick={(event) => {
+                                event.preventDefault();
+                                void openExternalLink(server.sourceUrl);
+                              }}
+                            >
+                              {server.sourceUrl}
+                            </a>
                             <span className="detail-git-badge is-linked">git</span>
                           </dd>
                         </div>

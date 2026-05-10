@@ -1,5 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { vi } from "vitest";
 import { SkillCard } from "@/features/skills/components/SkillCard";
 import { installedSkillFixtures } from "@/features/skills/state/skill-fixtures";
 import { SkillWorkspaceProvider } from "@/features/skills/state/skill-workspace";
@@ -128,4 +129,27 @@ test("renders enabled tool with checkmark in tool sync panel", async () => {
 
   expect(screen.getAllByRole("button", { name: /取消启用/ }).length).toBeGreaterThan(0);
   expect(screen.queryByRole("button", { name: /IntelliJ IDEA/ })).not.toBeInTheDocument();
+});
+
+test("opens GitHub source url from skill card details", async () => {
+  const skill = installedSkillFixtures.find((item) => item.name === "excalidraw-diagram");
+  if (!skill) {
+    throw new Error("missing excalidraw-diagram fixture");
+  }
+  const openSpy = vi.spyOn(window, "open").mockImplementation(() => null);
+
+  render(
+    <SkillWorkspaceProvider>
+      <SkillCard skill={skill} />
+    </SkillWorkspaceProvider>,
+  );
+
+  await userEvent.click(screen.getByRole("button", { name: /展开 excalidraw-diagram/ }));
+  await userEvent.click(screen.getByRole("link", { name: "https://github.com/xstongxue/best-skills/tree/main" }));
+
+  expect(openSpy).toHaveBeenCalledWith(
+    "https://github.com/xstongxue/best-skills/tree/main",
+    "_blank",
+    "noopener,noreferrer",
+  );
 });

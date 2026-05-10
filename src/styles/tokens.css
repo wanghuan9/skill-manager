@@ -1109,6 +1109,15 @@ code {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.skill-group-section__source a {
+  color: color-mix(in srgb, var(--accent) 76%, var(--heading) 24%);
+  text-decoration: none;
+}
+
+.skill-group-section__source a:hover {
+  text-decoration: underline;
+}
+
 
 .skill-group-section__name-row,
 .skill-group-section__title h3,
@@ -1921,11 +1930,21 @@ code {
   min-width: 0;
 }
 
-.detail-grid__source-value > span:first-child {
+.detail-grid__source-value > span:first-child,
+.detail-grid__source-link {
   flex: 1 1 auto;
   min-width: 0;
   overflow-wrap: anywhere;
 }
+.detail-grid__source-link {
+  color: color-mix(in srgb, var(--accent) 82%, var(--heading) 18%);
+  text-decoration: none;
+}
+
+.detail-grid__source-link:hover {
+  text-decoration: underline;
+}
+
 
 .detail-git-badge {
   display: inline-flex;
