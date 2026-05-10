@@ -105,6 +105,15 @@ pub struct WorkspaceSnapshot {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct AppSettings {
+    pub storage_path: String,
+    pub default_open_tool_id: String,
+    pub skill_install_activation: String,
+    pub mcp_install_activation: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct WorkspacePersistence {
     pub installed_skills: Vec<SkillSummary>,
 }

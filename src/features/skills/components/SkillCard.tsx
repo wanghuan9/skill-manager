@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useNotifications } from "@/app/notifications";
 import { SkillStatusBadge } from "@/features/skills/components/SkillStatusBadge";
 import { SkillFileDialog } from "@/features/skills/components/SkillFileDialog";
 import { ToolSyncPanel } from "@/features/skills/components/ToolSyncPanel";
@@ -99,6 +100,7 @@ function DeleteIcon() {
 }
 
 export function SkillCard({ skill }: SkillCardProps) {
+  const { notify } = useNotifications();
   const { deleteSkill, openSkillWithDefaultTool, toolConfigs, updateSkill } = useSkillWorkspace();
   const [expanded, setExpanded] = useState(false);
   const [showFileDialog, setShowFileDialog] = useState(false);
@@ -183,6 +185,7 @@ export function SkillCard({ skill }: SkillCardProps) {
     setIsDeleting(true);
     try {
       await deleteSkill(skill.name);
+      notify({ tone: "success", message: `已删除 ${skill.name}` });
     } catch (error) {
       const message = error instanceof Error ? error.message : "删除 skill 失败";
       window.alert(message);

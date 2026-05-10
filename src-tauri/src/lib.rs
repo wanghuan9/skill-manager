@@ -29,6 +29,8 @@ pub fn run() {
             commands::list_local_skill_candidates,
             commands::list_tool_configs,
             commands::get_git_account_summary,
+            commands::get_app_settings,
+            commands::update_app_settings,
             commands::install_skill_from_market,
             commands::install_skill_from_repo,
             commands::discover_repo_skills,

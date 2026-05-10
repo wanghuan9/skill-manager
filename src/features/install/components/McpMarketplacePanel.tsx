@@ -8,6 +8,12 @@ import {
   refreshMcpServerTools,
 } from "@/features/skills/api/skill-client";
 import type { McpMarketplaceServer } from "@/features/skills/state/skill-store";
+import { useSkillWorkspace } from "@/features/skills/state/skill-workspace";
+import {
+  cacheInstalledServerIds,
+  getCachedInstalledServerIds,
+  subscribeInstalledServerIdsChange,
+} from "@/features/skills/utils/mcp-installed-server-cache";
 
 const MCP_MARKETPLACE_PAGE_SIZE = 24;
 const MCP_MARKETPLACE_SOURCE_SITE = "MCP.Directory";
@@ -26,7 +32,6 @@ type McpMarketplacePanelProps = {
 type McpMarketplaceRuntimeCache = {
   pageCache: Map<number, McpMarketplaceServer[]>;
   searchPageCache: Map<string, Map<number, McpMarketplaceServer[]>>;
-  installedServerIds: Set<string> | null;
   workspacePromise: Promise<Set<string>> | null;
 };
 
@@ -52,7 +57,6 @@ function createMcpMarketplaceRuntimeCache(): McpMarketplaceRuntimeCache {
   return {
     pageCache: new Map<number, McpMarketplaceServer[]>(),
     searchPageCache: new Map<string, Map<number, McpMarketplaceServer[]>>(),
-    installedServerIds: null,
     workspacePromise: null,
   };
 }
@@ -212,27 +216,19 @@ function readCachedMcpSnapshot(query: string): CachedMcpSnapshot | null {
   };
 }
 
-function getCachedInstalledServerIds() {
-  const installedServerIds = getMcpMarketplaceRuntimeCache().installedServerIds;
-  return installedServerIds ? new Set(installedServerIds) : new Set<string>();
-}
-
-function cacheInstalledServerIds(installedServerIds: Iterable<string>) {
-  getMcpMarketplaceRuntimeCache().installedServerIds = new Set(installedServerIds);
-}
-
 async function ensureInstalledServerIdsLoaded() {
   const cache = getMcpMarketplaceRuntimeCache();
-  if (cache.installedServerIds) {
-    return new Set(cache.installedServerIds);
+  const installedServerIds = getCachedInstalledServerIds();
+  if (installedServerIds.size > 0) {
+    return installedServerIds;
   }
 
   if (!cache.workspacePromise) {
     cache.workspacePromise = fetchMcpWorkspace()
       .then((workspace) => {
         const installedServerIds = new Set(workspace.servers.map((server) => server.id));
-        cache.installedServerIds = installedServerIds;
-        return new Set(installedServerIds);
+        cacheInstalledServerIds(installedServerIds);
+        return installedServerIds;
       })
       .finally(() => {
         cache.workspacePromise = null;
@@ -245,6 +241,7 @@ async function ensureInstalledServerIdsLoaded() {
 export function McpMarketplacePanel(props: McpMarketplacePanelProps) {
   const { searchQuery, onSearchQueryChange } = props;
   const { notify } = useNotifications();
+  const { appSettings } = useSkillWorkspace();
   const initialCachedSnapshot = readCachedMcpSnapshot(searchQuery);
   const [servers, setServers] = useState<McpMarketplaceServer[]>(() => initialCachedSnapshot?.servers ?? []);
   const [installedServerIds, setInstalledServerIds] = useState<Set<string>>(() => getCachedInstalledServerIds());
@@ -263,6 +260,10 @@ export function McpMarketplacePanel(props: McpMarketplacePanelProps) {
   const loadMoreRef = useRef<() => Promise<void>>(async () => undefined);
   const normalizedQuery = debouncedQuery.trim();
   const isSearching = normalizedQuery.length > 0;
+  const installHint =
+    appSettings.mcpInstallActivation === "apply-all-tools"
+      ? "安装后默认同步到所有已支持应用"
+      : "安装后默认不启用，稍后可按应用单独开启";
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -290,6 +291,10 @@ export function McpMarketplacePanel(props: McpMarketplacePanelProps) {
       active = false;
     };
   }, []);
+
+  useEffect(() => subscribeInstalledServerIdsChange(() => {
+    setInstalledServerIds(getCachedInstalledServerIds());
+  }), []);
 
   useEffect(() => {
     let active = true;
@@ -475,7 +480,7 @@ export function McpMarketplacePanel(props: McpMarketplacePanelProps) {
       const nextInstalledServerIds = new Set(workspace.servers.map((item) => item.id));
       cacheInstalledServerIds(nextInstalledServerIds);
       setInstalledServerIds(nextInstalledServerIds);
-      notify({ message: `MCP "${server.name}" 已安装，可到 MCP 页启用到工具`, tone: "success" });
+      notify({ message: `MCP "${server.name}" 已安装，可到 MCP 页查看`, tone: "success" });
     } catch (error) {
       const message = error instanceof Error ? error.message : "安装 MCP 失败，请稍后重试。";
       notify({ message, tone: "error" });
@@ -505,6 +510,7 @@ export function McpMarketplacePanel(props: McpMarketplacePanelProps) {
       <div className="market-source-bar">
         <div className="panel-header">
           <h2>安装源</h2>
+          <p>{installHint}</p>
         </div>
         <label className="market-search-field">
           <span className="sr-only">搜索 MCP</span>

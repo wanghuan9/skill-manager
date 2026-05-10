@@ -7,6 +7,7 @@ import { mcpMarketplaceServerFixtures } from "@/features/skills/state/skill-fixt
 
 function resetMcpMarketplaceRuntimeCache() {
   delete (window as Window & { __SKILLM_MCP_MARKETPLACE_CACHE__?: unknown }).__SKILLM_MCP_MARKETPLACE_CACHE__;
+  delete (window as Window & { __SKILLM_MCP_INSTALLED_SERVER_IDS__?: unknown }).__SKILLM_MCP_INSTALLED_SERVER_IDS__;
 }
 
 function scrollPageContentToBottom() {
@@ -30,6 +31,7 @@ test("renders install-source and repository install panels", async () => {
   expect(screen.getByRole("tab", { name: "市场安装" })).toBeInTheDocument();
   expect(screen.getByRole("tab", { name: "skills.sh" })).toBeInTheDocument();
   expect(screen.getByRole("tab", { name: "skillsmp" })).toBeInTheDocument();
+  expect(screen.getByText("安装后默认应用到所有已安装工具")).toBeInTheDocument();
   await userEvent.click(screen.getByRole("tab", { name: "Git 安装" }));
   expect(screen.getByRole("textbox", { name: "Git 仓库地址" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "识别仓库技能" })).toBeInTheDocument();
@@ -47,6 +49,7 @@ test("shows MCP marketplace separately from skill-only install methods", async (
   expect(screen.queryByRole("tab", { name: "本地安装" })).not.toBeInTheDocument();
   expect(screen.getByRole("heading", { name: "安装源", level: 2 })).toBeInTheDocument();
   expect(screen.getByRole("tab", { name: "mcp.directory" })).toBeInTheDocument();
+  expect(screen.getByText("安装后默认不启用，稍后可按应用单独开启")).toBeInTheDocument();
   expect(await screen.findByText("playwright")).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "加载更多" })).not.toBeInTheDocument();
 });
@@ -81,6 +84,7 @@ test("keeps MCP marketplace card and detail metadata consistent", async () => {
 test("installs MCP marketplace servers into the managed MCP list without enabling tools", async () => {
   window.localStorage.clear();
   resetMcpMarketplaceRuntimeCache();
+  const installSpy = vi.spyOn(skillClient, "installMcpServerFromMarketplace");
   render(<App />);
   await userEvent.click(screen.getByRole("button", { name: /安装/ }));
   await userEvent.click(screen.getByRole("tab", { name: "MCP" }));
@@ -94,6 +98,18 @@ test("installs MCP marketplace servers into the managed MCP list without enablin
   await userEvent.click(within(playwrightCard).getByRole("button", { name: "安装" }));
 
   expect(await within(playwrightCard).findByRole("button", { name: "已安装" })).toBeDisabled();
+  await waitFor(() => {
+    expect(installSpy).toHaveBeenCalledTimes(1);
+  });
+  await expect(installSpy.mock.results[0]?.value).resolves.toMatchObject({
+    servers: expect.arrayContaining([
+      expect.objectContaining({
+        id: "playwright",
+        name: "playwright",
+      }),
+    ]),
+  });
+  installSpy.mockRestore();
 });
 
 test("refreshes marketplace MCP tools right after install when they are still undiscovered", async () => {
@@ -121,6 +137,66 @@ test("refreshes marketplace MCP tools right after install when they are still un
 
   installSpy.mockRestore();
   refreshSpy.mockRestore();
+});
+
+test("clears installed MCP badge after the server is deleted from the MCP page", async () => {
+  window.localStorage.clear();
+  resetMcpMarketplaceRuntimeCache();
+  const baseWorkspace = await skillClient.fetchMcpWorkspace();
+  const playwrightServer = mcpMarketplaceServerFixtures.find((server) => server.name === "playwright");
+  if (!playwrightServer) {
+    throw new Error("missing playwright marketplace fixture");
+  }
+  const installedWorkspace = await skillClient.refreshMcpServerTools("playwright");
+  const deletedWorkspace = {
+    ...installedWorkspace,
+    servers: installedWorkspace.servers.filter((server) => server.id !== "playwright"),
+  };
+  const fetchWorkspaceSpy = vi.spyOn(skillClient, "fetchMcpWorkspace");
+  fetchWorkspaceSpy
+    .mockResolvedValueOnce(baseWorkspace)
+    .mockResolvedValueOnce(installedWorkspace);
+  const deleteMcpServerSpy = vi.spyOn(skillClient, "deleteMcpServer").mockResolvedValue(deletedWorkspace);
+
+  render(<App />);
+
+  await userEvent.click(screen.getByRole("button", { name: /安装/ }));
+  await userEvent.click(screen.getByRole("tab", { name: "MCP" }));
+
+  const playwrightHeading = await screen.findByRole("heading", { name: "playwright", level: 3 });
+  const playwrightCard = playwrightHeading.closest("article");
+  if (!playwrightCard) {
+    throw new Error("playwright marketplace card was not rendered");
+  }
+
+  await userEvent.click(within(playwrightCard).getByRole("button", { name: "安装" }));
+  expect(await within(playwrightCard).findByRole("button", { name: "已安装" })).toBeDisabled();
+
+  await userEvent.click(within(screen.getByLabelText("Primary")).getByRole("button", { name: "MCP" }));
+  const expandButton = await screen.findByRole("button", { name: "展开 playwright" });
+  await userEvent.click(expandButton);
+  await userEvent.click(screen.getByRole("button", { name: "删除 playwright" }));
+  await userEvent.click(screen.getByRole("button", { name: "确认删除 playwright" }));
+
+  await waitFor(() => {
+    expect(screen.queryByText("playwright")).not.toBeInTheDocument();
+  });
+
+  await userEvent.click(screen.getByRole("button", { name: /安装/ }));
+  await userEvent.click(screen.getByRole("tab", { name: "MCP" }));
+
+  const playwrightHeadingAfterDelete = await screen.findByRole("heading", { name: "playwright", level: 3 });
+  const playwrightCardAfterDelete = playwrightHeadingAfterDelete.closest("article");
+  if (!playwrightCardAfterDelete) {
+    throw new Error("playwright marketplace card was not rendered after delete");
+  }
+
+  await waitFor(() => {
+    expect(within(playwrightCardAfterDelete).getByRole("button", { name: "安装" })).toBeEnabled();
+  });
+
+  fetchWorkspaceSpy.mockRestore();
+  deleteMcpServerSpy.mockRestore();
 });
 
 test("searches MCP marketplace and restores browse pagination after clearing query", async () => {

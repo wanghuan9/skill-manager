@@ -2,13 +2,32 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::models::{SkillSummary, WorkspacePersistence};
+use serde::{Deserialize, Serialize};
+
+use crate::models::{AppSettings, SkillSummary, WorkspacePersistence};
 
 const STATE_DIR_NAME: &str = ".skillm";
 const STATE_FILE_NAME: &str = "state.json";
+const SETTINGS_FILE_NAME: &str = "settings.json";
 const EMPTY_DESCRIPTION_VALUES: [&str; 4] = ["", "---", "...", "未提供简介"];
 const RESERVED_WORKSPACE_DIR_NAMES: [&str; 5] =
     ["state.json", "skills", "repo-cache", "cache", "imports"];
+
+const SKILL_INSTALL_ACTIVATION_APPLY_ALL: &str = "apply-all-tools";
+const SKILL_INSTALL_ACTIVATION_DISABLE_ALL: &str = "disable-all-tools";
+const MCP_INSTALL_ACTIVATION_APPLY_ALL: &str = "apply-all-tools";
+const MCP_INSTALL_ACTIVATION_DISABLE_ALL: &str = "disable-all-tools";
+
+#[derive(Clone, Debug, Deserialize, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct SettingsPersistence {
+    #[serde(default)]
+    default_open_tool_id: String,
+    #[serde(default)]
+    skill_install_activation: String,
+    #[serde(default)]
+    mcp_install_activation: String,
+}
 
 pub fn load_installed_skills(default_skills: &[SkillSummary]) -> Vec<SkillSummary> {
     let contents = workspace_state_candidates()
@@ -55,6 +74,59 @@ pub fn save_installed_skills(skills: &[SkillSummary]) -> Result<(), String> {
         .map_err(|error| format!("序列化状态失败: {error}"))?;
 
     fs::write(state_file, payload).map_err(|error| format!("写入状态文件失败: {error}"))
+}
+
+pub fn load_app_settings() -> AppSettings {
+    let settings_path = settings_file_path()
+        .map(|path| path.to_string_lossy().to_string())
+        .unwrap_or_default();
+
+    let persisted = settings_file_path()
+        .and_then(|path| fs::read_to_string(path).ok())
+        .and_then(|content| serde_json::from_str::<SettingsPersistence>(&content).ok())
+        .unwrap_or_default();
+
+    AppSettings {
+        storage_path: settings_path,
+        default_open_tool_id: persisted.default_open_tool_id,
+        skill_install_activation: normalize_skill_install_activation(
+            &persisted.skill_install_activation,
+        )
+        .to_string(),
+        mcp_install_activation: normalize_mcp_install_activation(&persisted.mcp_install_activation)
+            .to_string(),
+    }
+}
+
+pub fn save_app_settings(input: AppSettings) -> Result<AppSettings, String> {
+    let settings_file =
+        settings_file_path().ok_or_else(|| "无法定位用户目录，不能保存设置".to_string())?;
+    let parent_dir = settings_file
+        .parent()
+        .ok_or_else(|| "设置文件目录无效".to_string())?;
+
+    fs::create_dir_all(parent_dir).map_err(|error| format!("创建设置目录失败: {error}"))?;
+
+    let normalized = AppSettings {
+        storage_path: settings_file.to_string_lossy().to_string(),
+        default_open_tool_id: input.default_open_tool_id.trim().to_string(),
+        skill_install_activation: normalize_skill_install_activation(
+            &input.skill_install_activation,
+        )
+        .to_string(),
+        mcp_install_activation: normalize_mcp_install_activation(&input.mcp_install_activation)
+            .to_string(),
+    };
+    let persistence = SettingsPersistence {
+        default_open_tool_id: normalized.default_open_tool_id.clone(),
+        skill_install_activation: normalized.skill_install_activation.clone(),
+        mcp_install_activation: normalized.mcp_install_activation.clone(),
+    };
+    let payload = serde_json::to_string_pretty(&persistence)
+        .map_err(|error| format!("序列化设置失败: {error}"))?;
+
+    fs::write(&settings_file, payload).map_err(|error| format!("写入设置文件失败: {error}"))?;
+    Ok(normalized)
 }
 
 pub fn scan_local_skill_candidates(installed_skills: &[SkillSummary]) -> Vec<(String, String)> {
@@ -172,8 +244,29 @@ fn workspace_state_candidates() -> Vec<PathBuf> {
     vec![home_dir.join(STATE_DIR_NAME).join(STATE_FILE_NAME)]
 }
 
+fn settings_file_path() -> Option<PathBuf> {
+    let home_dir = home_dir()?;
+    Some(home_dir.join(STATE_DIR_NAME).join(SETTINGS_FILE_NAME))
+}
+
 fn home_dir() -> Option<PathBuf> {
     env::var("HOME").ok().map(PathBuf::from)
+}
+
+pub fn normalize_skill_install_activation(value: &str) -> &'static str {
+    match value.trim() {
+        SKILL_INSTALL_ACTIVATION_APPLY_ALL => SKILL_INSTALL_ACTIVATION_APPLY_ALL,
+        SKILL_INSTALL_ACTIVATION_DISABLE_ALL => SKILL_INSTALL_ACTIVATION_DISABLE_ALL,
+        _ => SKILL_INSTALL_ACTIVATION_APPLY_ALL,
+    }
+}
+
+pub fn normalize_mcp_install_activation(value: &str) -> &'static str {
+    match value.trim() {
+        MCP_INSTALL_ACTIVATION_APPLY_ALL => MCP_INSTALL_ACTIVATION_APPLY_ALL,
+        MCP_INSTALL_ACTIVATION_DISABLE_ALL => MCP_INSTALL_ACTIVATION_DISABLE_ALL,
+        _ => MCP_INSTALL_ACTIVATION_DISABLE_ALL,
+    }
 }
 
 fn hydrate_skill_description(mut skill: SkillSummary) -> SkillSummary {

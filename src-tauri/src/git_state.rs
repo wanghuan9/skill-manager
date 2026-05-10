@@ -1,4 +1,5 @@
 use std::fs;
+use std::cmp::Ordering;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::mpsc;
@@ -46,9 +47,18 @@ pub fn enrich_skill_with_git_state(skill: &SkillSummary) -> SkillSummary {
     let skill_path = Path::new(&skill.local_path);
     if !skill_path.exists() || repo_root(skill_path).is_none() {
         let mut unlinked = skill.clone();
-        if let Some(updated_at) = latest_local_content_modified_at(skill_path) {
-            unlinked.local_updated_at = updated_at.clone();
-            unlinked.last_synced_at = updated_at;
+        let fallback_local_updated_at = if skill.local_updated_at.trim().is_empty() {
+            skill.last_synced_at.clone()
+        } else {
+            skill.local_updated_at.clone()
+        };
+        let local_updated_at = prefer_newer_local_updated_at(
+            &fallback_local_updated_at,
+            latest_local_content_modified_at(skill_path),
+        );
+        if !local_updated_at.trim().is_empty() {
+            unlinked.local_updated_at = local_updated_at.clone();
+            unlinked.last_synced_at = local_updated_at;
         }
         unlinked.git_linked = false;
         return unlinked;
@@ -85,15 +95,14 @@ pub fn enrich_skill_with_git_state(skill: &SkillSummary) -> SkillSummary {
     } else {
         skill.remote_updated_at.clone()
     };
-    let local_updated_at = if working_tree_dirty {
-        latest_local_content_modified_at(skill_path)
-            .or_else(|| latest_commit_time(skill_path))
-            .unwrap_or_else(|| fallback_local_updated_at.clone())
-    } else {
-        latest_commit_time(skill_path)
-            .or_else(|| latest_local_content_modified_at(skill_path))
-            .unwrap_or_else(|| fallback_local_updated_at.clone())
-    };
+    let local_updated_at = prefer_newer_local_updated_at(
+        &fallback_local_updated_at,
+        if working_tree_dirty {
+            latest_local_content_modified_at(skill_path).or_else(|| latest_commit_time(skill_path))
+        } else {
+            latest_commit_time(skill_path).or_else(|| latest_local_content_modified_at(skill_path))
+        },
+    );
     let remote_updated_at = latest_remote_commit_time(skill_path, &branch)
         .or_else(|| latest_commit_time(skill_path))
         .unwrap_or_else(|| fallback_remote_updated_at.clone());
@@ -119,9 +128,18 @@ pub fn enrich_newly_installed_skill_with_git_state(skill: &SkillSummary) -> Skil
     let skill_path = Path::new(&skill.local_path);
     if !skill_path.exists() || repo_root(skill_path).is_none() {
         let mut unlinked = skill.clone();
-        if let Some(updated_at) = latest_local_content_modified_at(skill_path) {
-            unlinked.local_updated_at = updated_at.clone();
-            unlinked.last_synced_at = updated_at;
+        let fallback_local_updated_at = if skill.local_updated_at.trim().is_empty() {
+            skill.last_synced_at.clone()
+        } else {
+            skill.local_updated_at.clone()
+        };
+        let local_updated_at = prefer_newer_local_updated_at(
+            &fallback_local_updated_at,
+            latest_local_content_modified_at(skill_path),
+        );
+        if !local_updated_at.trim().is_empty() {
+            unlinked.local_updated_at = local_updated_at.clone();
+            unlinked.last_synced_at = local_updated_at;
         }
         unlinked.git_linked = false;
         return unlinked;
@@ -145,9 +163,10 @@ pub fn enrich_newly_installed_skill_with_git_state(skill: &SkillSummary) -> Skil
     } else {
         skill.remote_updated_at.clone()
     };
-    let local_updated_at = latest_commit_time(skill_path)
-        .or_else(|| latest_local_content_modified_at(skill_path))
-        .unwrap_or_else(|| fallback_local_updated_at.clone());
+    let local_updated_at = prefer_newer_local_updated_at(
+        &fallback_local_updated_at,
+        latest_commit_time(skill_path).or_else(|| latest_local_content_modified_at(skill_path)),
+    );
     let remote_updated_at = latest_remote_commit_time(skill_path, &branch)
         .or_else(|| latest_commit_time(skill_path))
         .unwrap_or_else(|| fallback_remote_updated_at.clone());
@@ -177,9 +196,18 @@ pub fn enrich_skill_with_cached_update_state(skill: &SkillSummary) -> SkillSumma
 
     if repo_root(skill_path).is_none() {
         let mut enriched = skill.clone();
-        if let Some(updated_at) = latest_local_content_modified_at(skill_path) {
-            enriched.local_updated_at = updated_at.clone();
-            enriched.last_synced_at = updated_at;
+        let fallback_local_updated_at = if skill.local_updated_at.trim().is_empty() {
+            skill.last_synced_at.clone()
+        } else {
+            skill.local_updated_at.clone()
+        };
+        let local_updated_at = prefer_newer_local_updated_at(
+            &fallback_local_updated_at,
+            latest_local_content_modified_at(skill_path),
+        );
+        if !local_updated_at.trim().is_empty() {
+            enriched.local_updated_at = local_updated_at.clone();
+            enriched.last_synced_at = local_updated_at;
         }
         enriched.git_linked = false;
         return enriched;
@@ -198,15 +226,14 @@ pub fn enrich_skill_with_cached_update_state(skill: &SkillSummary) -> SkillSumma
     } else {
         skill.local_updated_at.clone()
     };
-    let local_updated_at = if working_tree_dirty {
-        latest_local_content_modified_at(skill_path)
-            .or_else(|| latest_commit_time(skill_path))
-            .unwrap_or_else(|| fallback_local_updated_at.clone())
-    } else {
-        latest_commit_time(skill_path)
-            .or_else(|| latest_local_content_modified_at(skill_path))
-            .unwrap_or_else(|| fallback_local_updated_at.clone())
-    };
+    let local_updated_at = prefer_newer_local_updated_at(
+        &fallback_local_updated_at,
+        if working_tree_dirty {
+            latest_local_content_modified_at(skill_path).or_else(|| latest_commit_time(skill_path))
+        } else {
+            latest_commit_time(skill_path).or_else(|| latest_local_content_modified_at(skill_path))
+        },
+    );
 
     if cached_pending_push_entry(skill, &branch, &head, &working_tree_signature).is_some() {
         let mut enriched = skill.clone();
@@ -683,6 +710,44 @@ fn format_system_time(value: SystemTime) -> Option<String> {
     }
 }
 
+fn prefer_newer_local_updated_at(
+    fallback_local_updated_at: &str,
+    candidate_local_updated_at: Option<String>,
+) -> String {
+    let Some(candidate_local_updated_at) =
+        candidate_local_updated_at.filter(|value| !value.trim().is_empty())
+    else {
+        return fallback_local_updated_at.to_string();
+    };
+    if fallback_local_updated_at.trim().is_empty() {
+        return candidate_local_updated_at;
+    }
+    match compare_skill_time_labels(fallback_local_updated_at, &candidate_local_updated_at) {
+        Some(Ordering::Greater) => fallback_local_updated_at.to_string(),
+        _ => candidate_local_updated_at,
+    }
+}
+
+fn compare_skill_time_labels(left: &str, right: &str) -> Option<Ordering> {
+    let left_parts = parse_skill_time_label(left)?;
+    let right_parts = parse_skill_time_label(right)?;
+    Some(left_parts.cmp(&right_parts))
+}
+
+fn parse_skill_time_label(value: &str) -> Option<(u32, u32, u32, u32, u32, u32)> {
+    let parts = value
+        .trim()
+        .split(['/', ' ', ':'])
+        .filter(|part| !part.is_empty())
+        .map(|part| part.parse::<u32>().ok())
+        .collect::<Option<Vec<_>>>()?;
+    if parts.len() != 6 {
+        return None;
+    }
+
+    Some((parts[0], parts[1], parts[2], parts[3], parts[4], parts[5]))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1018,6 +1083,57 @@ mod tests {
         let enriched = enrich_skill_with_cached_update_state(&skill);
 
         assert_ne!(enriched.local_updated_at, "2000/1/1 00:00:00");
+        assert_eq!(enriched.last_synced_at, enriched.local_updated_at);
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn newly_installed_skill_keeps_install_time_when_commit_is_older() {
+        let temp_dir = unique_temp_dir("new-install-keeps-install-time");
+        let repo_dir = temp_dir.join("repo");
+
+        fs::create_dir_all(&temp_dir).expect("create test temp dir");
+        run_git_test(["init", repo_dir.to_str().expect("repo path")]);
+        run_git_test([
+            "-C",
+            repo_dir.to_str().expect("repo path"),
+            "checkout",
+            "-b",
+            "main",
+        ]);
+        run_git_test([
+            "-C",
+            repo_dir.to_str().expect("repo path"),
+            "config",
+            "user.email",
+            "skillm@example.com",
+        ]);
+        run_git_test([
+            "-C",
+            repo_dir.to_str().expect("repo path"),
+            "config",
+            "user.name",
+            "Skill Manager",
+        ]);
+
+        fs::write(repo_dir.join("SKILL.md"), "# demo-skill\n").expect("write skill file");
+        run_git_test(["-C", repo_dir.to_str().expect("repo path"), "add", "."]);
+        run_git_test([
+            "-C",
+            repo_dir.to_str().expect("repo path"),
+            "commit",
+            "-m",
+            "initial skill",
+        ]);
+
+        let mut skill = skill_summary("demo-skill", &repo_dir);
+        skill.local_updated_at = "2099/1/1 00:00:00".into();
+        skill.last_synced_at = "2099/1/1 00:00:00".into();
+
+        let enriched = enrich_newly_installed_skill_with_git_state(&skill);
+
+        assert_eq!(enriched.local_updated_at, "2099/1/1 00:00:00");
         assert_eq!(enriched.last_synced_at, enriched.local_updated_at);
 
         let _ = fs::remove_dir_all(temp_dir);

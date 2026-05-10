@@ -184,12 +184,13 @@ code {
 
 .app-notification-stack {
   position: fixed;
-  top: 24px;
-  right: 24px;
+  top: 14px;
+  left: 50%;
   z-index: 1000;
   display: grid;
   gap: 10px;
-  width: min(360px, calc(100vw - 32px));
+  width: min(460px, calc(100vw - 32px));
+  transform: translateX(-50%);
   pointer-events: none;
 }
 
@@ -233,6 +234,10 @@ code {
   border-color: rgba(39, 179, 106, 0.38);
 }
 
+.app-notification--success .app-notification__message {
+  color: var(--success);
+}
+
 .app-notification--error {
   border-color: rgba(210, 90, 90, 0.42);
 }
@@ -260,12 +265,14 @@ code {
 }
 
 .app-notification__message {
-  min-width: 92px;
+  min-width: 0;
   color: var(--heading);
-  font-size: 0.9rem;
-  font-weight: 700;
-  line-height: 1.35;
-  overflow-wrap: anywhere;
+  font-size: 0.82rem;
+  font-weight: 500;
+  line-height: 1.25;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .app-notification__close {
@@ -4206,6 +4213,16 @@ code {
   color: #1f2937;
   font-size: 0.86rem;
   font-weight: 600;
+}
+
+.settings-form-item__value--path {
+  max-width: min(480px, 100%);
+  justify-content: flex-start;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  white-space: normal;
+  text-align: left;
+  line-height: 1.35;
 }
 
 .settings-form-item--readonly .settings-form-item__value {

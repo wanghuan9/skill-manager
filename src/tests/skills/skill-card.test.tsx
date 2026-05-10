@@ -1,9 +1,20 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
+import { NotificationProvider } from "@/app/notifications";
 import { SkillCard } from "@/features/skills/components/SkillCard";
 import { installedSkillFixtures } from "@/features/skills/state/skill-fixtures";
 import { SkillWorkspaceProvider } from "@/features/skills/state/skill-workspace";
+
+function renderSkillCardWithProviders(skill: (typeof installedSkillFixtures)[number]) {
+  return render(
+    <NotificationProvider>
+      <SkillWorkspaceProvider>
+        <SkillCard skill={skill} />
+      </SkillWorkspaceProvider>
+    </NotificationProvider>,
+  );
+}
 
 test("updates directly from list action when skill has remote update", async () => {
   const updateSkill = installedSkillFixtures.find((skill) => skill.name === "excalidraw-diagram");
@@ -11,11 +22,7 @@ test("updates directly from list action when skill has remote update", async () 
     throw new Error("missing excalidraw-diagram fixture");
   }
 
-  render(
-    <SkillWorkspaceProvider>
-      <SkillCard skill={updateSkill} />
-    </SkillWorkspaceProvider>,
-  );
+  renderSkillCardWithProviders(updateSkill);
   expect(screen.getByText("excalidraw-diagram")).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "更新" })).not.toBeInTheDocument();
   const updateButton = screen.getByRole("button", { name: /更新 excalidraw-diagram/ });
@@ -31,11 +38,7 @@ test("shows remote and local updated time on skill card", () => {
     throw new Error("missing drawio-diagram fixture");
   }
 
-  render(
-    <SkillWorkspaceProvider>
-      <SkillCard skill={skill} />
-    </SkillWorkspaceProvider>,
-  );
+  renderSkillCardWithProviders(skill);
 
   expect(screen.getByText("更新时间：")).toBeInTheDocument();
   expect(screen.queryByText("远端更新时间：")).not.toBeInTheDocument();
@@ -48,11 +51,7 @@ test("sanitizes trailing emoticon in remote updater", async () => {
     throw new Error("missing excalidraw-diagram fixture");
   }
 
-  render(
-    <SkillWorkspaceProvider>
-      <SkillCard skill={{ ...skill, lastEditor: "Agent Fitz ;-)" }} />
-    </SkillWorkspaceProvider>,
-  );
+  renderSkillCardWithProviders({ ...skill, lastEditor: "Agent Fitz ;-)" });
 
   await userEvent.click(screen.getByRole("button", { name: /展开 excalidraw-diagram/ }));
 
@@ -67,11 +66,7 @@ test("opens skill file dialog from fixed action button", async () => {
     throw new Error("missing drawio-diagram fixture");
   }
 
-  render(
-    <SkillWorkspaceProvider>
-      <SkillCard skill={skill} />
-    </SkillWorkspaceProvider>,
-  );
+  renderSkillCardWithProviders(skill);
 
   await userEvent.click(screen.getByRole("button", { name: /查看 drawio-diagram 文件/ }));
 
@@ -85,11 +80,7 @@ test("shows fixed open action button on skill card", () => {
     throw new Error("missing drawio-diagram fixture");
   }
 
-  render(
-    <SkillWorkspaceProvider>
-      <SkillCard skill={skill} />
-    </SkillWorkspaceProvider>,
-  );
+  renderSkillCardWithProviders(skill);
 
   expect(screen.getByRole("button", { name: /打开 drawio-diagram 目录/ })).toBeInTheDocument();
 });
@@ -100,11 +91,7 @@ test("uses inline confirmation before deleting a skill", async () => {
     throw new Error("missing drawio-diagram fixture");
   }
 
-  render(
-    <SkillWorkspaceProvider>
-      <SkillCard skill={skill} />
-    </SkillWorkspaceProvider>,
-  );
+  renderSkillCardWithProviders(skill);
 
   await userEvent.click(screen.getByRole("button", { name: /删除 drawio-diagram/ }));
 
@@ -119,11 +106,7 @@ test("renders enabled tool with checkmark in tool sync panel", async () => {
     throw new Error("missing drawio-diagram fixture");
   }
 
-  render(
-    <SkillWorkspaceProvider>
-      <SkillCard skill={skill} />
-    </SkillWorkspaceProvider>,
-  );
+  renderSkillCardWithProviders(skill);
 
   await userEvent.click(screen.getByRole("button", { name: /展开 drawio-diagram/ }));
 
@@ -138,11 +121,7 @@ test("opens GitHub source url from skill card details", async () => {
   }
   const openSpy = vi.spyOn(window, "open").mockImplementation(() => null);
 
-  render(
-    <SkillWorkspaceProvider>
-      <SkillCard skill={skill} />
-    </SkillWorkspaceProvider>,
-  );
+  renderSkillCardWithProviders(skill);
 
   await userEvent.click(screen.getByRole("button", { name: /展开 excalidraw-diagram/ }));
   await userEvent.click(screen.getByRole("link", { name: "https://github.com/xstongxue/best-skills/tree/main" }));

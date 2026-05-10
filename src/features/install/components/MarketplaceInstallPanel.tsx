@@ -38,9 +38,13 @@ export function MarketplaceInstallPanel(props: MarketplaceInstallPanelProps) {
     installedMarketplaceSkillIds,
     onLoadMore,
   } = props;
-  const { installingMarketplaceSkillIds, installFromMarket } = useSkillWorkspace();
+  const { appSettings, installingMarketplaceSkillIds, installFromMarket } = useSkillWorkspace();
   const { notify } = useNotifications();
   const [selectedSkill, setSelectedSkill] = useState<MarketplaceSkill | null>(null);
+  const installHint =
+    appSettings.skillInstallActivation === "apply-all-tools"
+      ? "安装后默认应用到所有已安装工具"
+      : "安装后默认不启用，稍后可按工具单独开启";
 
   async function handleInstallSkill(skill: MarketplaceSkill) {
     try {
@@ -68,6 +72,7 @@ export function MarketplaceInstallPanel(props: MarketplaceInstallPanelProps) {
       <div className="market-source-bar">
         <div className="panel-header">
           <h2>安装源</h2>
+          <p>{installHint}</p>
         </div>
         <label className="market-search-field">
           <span className="sr-only">搜索 skill</span>

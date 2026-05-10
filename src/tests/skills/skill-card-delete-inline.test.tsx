@@ -1,6 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, expect, test, vi } from "vitest";
+import { NotificationProvider } from "@/app/notifications";
 import { SkillCard } from "@/features/skills/components/SkillCard";
 import { installedSkillFixtures } from "@/features/skills/state/skill-fixtures";
 import { useSkillWorkspace } from "@/features/skills/state/skill-workspace";
@@ -23,13 +24,17 @@ beforeEach(() => {
   } as unknown as ReturnType<typeof useSkillWorkspace>);
 });
 
-test("calls delete only after the second click", async () => {
+test("calls delete only after the second click and shows success notification", async () => {
   const skill = installedSkillFixtures.find((item) => item.name === "drawio-diagram");
   if (!skill) {
     throw new Error("missing drawio-diagram fixture");
   }
 
-  render(<SkillCard skill={skill} />);
+  render(
+    <NotificationProvider>
+      <SkillCard skill={skill} />
+    </NotificationProvider>,
+  );
 
   await userEvent.click(screen.getByRole("button", { name: /删除 drawio-diagram/ }));
 
@@ -40,4 +45,5 @@ test("calls delete only after the second click", async () => {
 
   expect(deleteSkillMock).toHaveBeenCalledOnce();
   expect(deleteSkillMock).toHaveBeenCalledWith("drawio-diagram");
+  expect(await screen.findByRole("status")).toHaveTextContent("已删除 drawio-diagram");
 });

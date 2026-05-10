@@ -10,9 +10,12 @@ import { getToolLogoUrl } from "@/features/skills/utils/tool-logo";
 
 export function SettingsRoute() {
   const {
+    appSettings,
     defaultOpenToolId,
     gitAccount,
+    setMcpInstallActivation,
     setDefaultOpenToolId,
+    setSkillInstallActivation,
     toolConfigs,
   } = useSkillWorkspace();
   const openToolOptions = useMemo(() => buildOpenToolOptions(toolConfigs), [toolConfigs]);
@@ -32,6 +35,15 @@ export function SettingsRoute() {
     <div className="placeholder-grid settings-page">
       <section className="panel-card placeholder-panel settings-panel settings-panel--default-tool">
         <div className="settings-form-list">
+          <div className="settings-form-item settings-form-item--readonly">
+            <div className="settings-form-item__copy">
+              <strong>配置文件存储路径</strong>
+              <p>应用设置会写入这个文件，便于你在本地查看或备份默认配置。</p>
+            </div>
+            <div className="settings-form-item__value settings-form-item__value--path">
+              {appSettings.storagePath || "暂未检测到存储路径"}
+            </div>
+          </div>
           <div className="settings-form-item">
             <div className="settings-form-item__copy">
               <strong>默认编辑器</strong>
@@ -52,6 +64,46 @@ export function SettingsRoute() {
                     {tool.name}
                   </option>
                 ))}
+              </select>
+            </div>
+          </div>
+          <div className="settings-form-item">
+            <div className="settings-form-item__copy">
+              <strong>新增 Skill 默认启用</strong>
+              <p>控制从市场安装 skill 后，默认是立即应用到所有已安装工具，还是先保持未启用。</p>
+            </div>
+            <div className="settings-form-item__control">
+              <select
+                aria-label="新增 Skill 默认启用"
+                value={appSettings.skillInstallActivation}
+                onChange={(event) =>
+                  void setSkillInstallActivation(
+                    event.target.value as typeof appSettings.skillInstallActivation,
+                  )
+                }
+              >
+                <option value="apply-all-tools">应用到所有工具</option>
+                <option value="disable-all-tools">默认不启用</option>
+              </select>
+            </div>
+          </div>
+          <div className="settings-form-item">
+            <div className="settings-form-item__copy">
+              <strong>新增 MCP 默认启用</strong>
+              <p>控制从市场安装 MCP 后，默认是同步到所有已支持应用，还是先仅保存不启用。</p>
+            </div>
+            <div className="settings-form-item__control">
+              <select
+                aria-label="新增 MCP 默认启用"
+                value={appSettings.mcpInstallActivation}
+                onChange={(event) =>
+                  void setMcpInstallActivation(
+                    event.target.value as typeof appSettings.mcpInstallActivation,
+                  )
+                }
+              >
+                <option value="apply-all-tools">应用到所有工具</option>
+                <option value="disable-all-tools">默认不启用</option>
               </select>
             </div>
           </div>

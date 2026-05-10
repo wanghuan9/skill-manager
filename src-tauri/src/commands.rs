@@ -24,12 +24,15 @@ use crate::library::{
     remove_skill_symlinks_from_all_tools, sanitize_storage_name, skill_directory,
 };
 use crate::models::{
-    GitAccountSummary, GitChangeFile, LocalSkillCandidate, MarketplaceSkill, PushBranchOption,
-    PushPreviewSnapshot, PushTargetSnapshot, RepoSkillCandidate, SkillFileBrowserSnapshot,
-    SkillFileDocument, SkillFileEntry, SkillSummary, ToolConfig, ToolSyncStatus,
-    UpdatePreviewSnapshot, WorkspaceSnapshot,
+    AppSettings, GitAccountSummary, GitChangeFile, LocalSkillCandidate, MarketplaceSkill,
+    PushBranchOption, PushPreviewSnapshot, PushTargetSnapshot, RepoSkillCandidate,
+    SkillFileBrowserSnapshot, SkillFileDocument, SkillFileEntry, SkillSummary, ToolConfig,
+    ToolSyncStatus, UpdatePreviewSnapshot, WorkspaceSnapshot,
 };
-use crate::state::{load_installed_skills, save_installed_skills, scan_local_skill_candidates};
+use crate::state::{
+    load_app_settings, load_installed_skills, normalize_skill_install_activation,
+    save_app_settings, save_installed_skills, scan_local_skill_candidates,
+};
 
 fn default_installed_skills() -> Vec<SkillSummary> {
     Vec::new()
@@ -237,8 +240,7 @@ fn skills_sh_source_url(source: &str, skill_id: &str) -> String {
         if normalized_skill_id.is_empty() {
             return format!("https://github.com/{source}");
         }
-        // 始终生成包含 /tree/ 的 URL，以便使用 sparse checkout
-        return format!("https://github.com/{source}/tree/main/{normalized_skill_id}");
+        return format!("https://github.com/{source}/tree/HEAD/{normalized_skill_id}");
     }
 
     format!("https://skills.sh/")
@@ -988,6 +990,28 @@ fn normalize_repo_key_from_url(url: &str) -> String {
 
 fn persist_skill_timestamps(_skill: &SkillSummary) {
     // 预留钩子：后续可把安装/更新时间落盘到独立缓存文件。
+}
+
+fn now_timestamp_label() -> String {
+    format_system_time_label(SystemTime::now()).unwrap_or_else(|| "刚刚".into())
+}
+
+fn format_system_time_label(value: SystemTime) -> Option<String> {
+    let seconds = value.duration_since(UNIX_EPOCH).ok()?.as_secs().to_string();
+    let output = Command::new("date")
+        .args(["-r", &seconds, "+%Y/%-m/%-d %H:%M:%S"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    let formatted = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if formatted.is_empty() {
+        None
+    } else {
+        Some(formatted)
+    }
 }
 
 async fn fetch_skillsmp_marketplace(
@@ -1856,12 +1880,175 @@ fn normalize_skill_tools(skill: &SkillSummary) -> SkillSummary {
     normalize_skill_tools_with_entries(skill, &installed_tool_entries)
 }
 
+fn normalize_git_remote_repository_url(remote_url: &str) -> Option<String> {
+    let trimmed = remote_url.trim().trim_end_matches('/');
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    if let Some(rest) = trimmed.strip_prefix("git@") {
+        let (host, path) = rest.split_once(':')?;
+        return Some(format!(
+            "https://{}/{}",
+            host.trim_end_matches('/'),
+            path.trim_start_matches('/').trim_end_matches(".git")
+        ));
+    }
+
+    let parsed = url::Url::parse(trimmed).ok()?;
+    let host = parsed.host_str()?;
+    let segments = parsed
+        .path_segments()
+        .map(|items| items.filter(|item| !item.is_empty()).collect::<Vec<_>>())
+        .unwrap_or_default();
+    if segments.len() < 2 {
+        return None;
+    }
+
+    Some(format!(
+        "https://{host}/{}/{}",
+        segments[0],
+        segments[1].trim_end_matches(".git")
+    ))
+}
+
+fn build_tree_source_url(
+    repository_url: &str,
+    source_type: &str,
+    branch: Option<&str>,
+    relative_path: &str,
+) -> String {
+    let normalized_repository_url = repository_url.trim_end_matches('/');
+    let normalized_relative_path = relative_path.trim_matches('/');
+    if normalized_relative_path.is_empty() {
+        return normalized_repository_url.to_string();
+    }
+
+    let branch_segment = branch
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("HEAD");
+    match source_type {
+        "gitlab" => format!(
+            "{normalized_repository_url}/-/tree/{branch_segment}/{normalized_relative_path}"
+        ),
+        _ => format!("{normalized_repository_url}/tree/{branch_segment}/{normalized_relative_path}"),
+    }
+}
+
+fn git_repo_root(skill_path: &str) -> Option<PathBuf> {
+    Some(PathBuf::from(
+        run_git_command(skill_path, &["rev-parse", "--show-toplevel"]).ok()?,
+    ))
+}
+
+fn origin_default_branch_name(skill_path: &str) -> Option<String> {
+    let symbolic_ref =
+        run_git_command(skill_path, &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"])
+            .ok()?;
+    symbolic_ref
+        .trim()
+        .strip_prefix(REMOTE_PREFIX)
+        .map(ToOwned::to_owned)
+}
+
+fn source_branch_hint_from_url(source_url: &str) -> Option<String> {
+    let parsed = url::Url::parse(source_url.trim()).ok()?;
+    let segments = parsed
+        .path_segments()
+        .map(|items| items.filter(|item| !item.is_empty()).collect::<Vec<_>>())
+        .unwrap_or_default();
+    if segments.len() >= 4 && segments[2] == "tree" {
+        return Some(segments[3].to_string());
+    }
+    if segments.len() >= 5 && segments[2] == "-" && segments[3] == "tree" {
+        return Some(segments[4].to_string());
+    }
+    None
+}
+
+fn normalize_installed_skill_source_url(skill: &SkillSummary) -> SkillSummary {
+    if !skill.git_linked || skill.source_type == "local" {
+        return skill.clone();
+    }
+
+    let Some(repository_url) = run_git_command(&skill.local_path, &["config", "--get", "remote.origin.url"])
+        .ok()
+        .and_then(|remote_url| normalize_git_remote_repository_url(&remote_url))
+    else {
+        return skill.clone();
+    };
+
+    let Some(repo_root) = git_repo_root(&skill.local_path) else {
+        return skill.clone();
+    };
+    let skill_path =
+        fs::canonicalize(&skill.local_path).unwrap_or_else(|_| PathBuf::from(&skill.local_path));
+    let repo_root = fs::canonicalize(repo_root).unwrap_or_else(|_| PathBuf::from(&skill.local_path));
+    let relative_path = skill_path
+        .strip_prefix(&repo_root)
+        .ok()
+        .map(|path| path.to_string_lossy().replace('\\', "/"))
+        .unwrap_or_default();
+    let branch = origin_default_branch_name(&skill.local_path)
+        .or_else(|| source_branch_hint_from_url(&skill.source_url))
+        .or_else(|| current_branch_name(&skill.local_path).ok());
+
+    let mut normalized = skill.clone();
+    normalized.source_url = build_tree_source_url(
+        &repository_url,
+        &skill.source_type,
+        branch.as_deref(),
+        &relative_path,
+    );
+    normalized.source_type = source_type_for_url(&normalized.source_url).into();
+    normalized.source_label = source_label_for_type(&normalized.source_type).into();
+    normalized
+}
+
+fn enable_skill_for_all_installed_tools(skill: SkillSummary) -> Result<SkillSummary, String> {
+    let installed_tool_configs = build_tool_configs()
+        .into_iter()
+        .filter(|tool| tool.status_label == "已安装" && tool.id != "intellij")
+        .collect::<Vec<_>>();
+    if installed_tool_configs.is_empty() {
+        return Ok(skill);
+    }
+
+    let mut updated_skill = normalize_skill_tools(&skill);
+    for tool_config in installed_tool_configs {
+        if !updated_skill
+            .tools
+            .iter()
+            .any(|tool| tool.name == tool_config.name)
+        {
+            continue;
+        }
+
+        let tool_skills_path = get_tool_skills_path(&tool_config.id)?;
+        let _ = remove_reserved_workspace_entries(&tool_skills_path);
+        let skill_name = updated_skill.name.clone();
+        let tool_name = tool_config.name.clone();
+        set_skill_tool_enabled_status(
+            std::slice::from_mut(&mut updated_skill),
+            &skill_name,
+            &tool_name,
+            true,
+        )?;
+        let enabled_skills = vec![updated_skill.clone()];
+        reconcile_tool_skill_symlinks(&tool_skills_path, &enabled_skills)?;
+    }
+
+    Ok(updated_skill)
+}
+
 fn resolve_startup_installed_skills() -> Vec<SkillSummary> {
     let tool_configs = build_tool_configs();
     let installed_tool_entries = installed_tool_sync_entries_from_configs(&tool_configs);
     load_installed_skills(&default_installed_skills())
         .iter()
-        .map(|skill| normalize_skill_tools_with_entries(skill, &installed_tool_entries))
+        .map(normalize_installed_skill_source_url)
+        .map(|skill| normalize_skill_tools_with_entries(&skill, &installed_tool_entries))
         .map(|skill| enrich_skill_with_cached_update_state(&skill))
         .collect()
 }
@@ -2058,7 +2245,9 @@ struct RepoInstallSpec {
     clone_url: String,
     repo_key: String,
     source_type: String,
+    repository_url: String,
     source_url: String,
+    branch_hint: Option<String>,
     path_hint: Option<String>,
 }
 
@@ -2329,7 +2518,9 @@ fn collect_working_tree_changes(skill_path: &str) -> Result<Vec<GitChangeFile>, 
 
 fn refresh_and_persist_skill(skill_name: &str) -> Result<SkillSummary, String> {
     let (mut installed_skills, skill_index) = find_skill_by_name(skill_name)?;
-    let refreshed_skill = enrich_skill_with_git_state(&installed_skills[skill_index]);
+    let refreshed_skill = enrich_skill_with_git_state(&normalize_installed_skill_source_url(
+        &installed_skills[skill_index],
+    ));
     installed_skills[skill_index] = refreshed_skill.clone();
     save_installed_skills(&installed_skills)?;
     Ok(refreshed_skill)
@@ -2813,6 +3004,16 @@ fn parse_repo_install_spec(repo_input: &str) -> Result<RepoInstallSpec, String> 
 
     let owner = segments[0];
     let repo_name = segments[1].trim_end_matches(".git");
+    let branch_hint = if segments.get(2) == Some(&"tree") && segments.len() > 3 {
+        Some(segments[3].to_string())
+    } else if segments.get(2) == Some(&"-")
+        && segments.get(3) == Some(&"tree")
+        && segments.len() > 4
+    {
+        Some(segments[4].to_string())
+    } else {
+        None
+    };
     let path_hint = if segments.get(2) == Some(&"tree") && segments.len() > 4 {
         Some(segments[4..].join("/"))
     } else if segments.get(2) == Some(&"-")
@@ -2826,26 +3027,26 @@ fn parse_repo_install_spec(repo_input: &str) -> Result<RepoInstallSpec, String> 
     let clone_url = format!("https://{host}/{owner}/{repo_name}.git");
     let source_type = detect_repo_source_type(&normalized).to_string();
     let repo_key = sanitize_storage_name(&format!("{host}-{owner}-{repo_name}"));
+    let repository_url = format!("https://{host}/{owner}/{repo_name}");
 
     Ok(RepoInstallSpec {
         clone_url,
         repo_key,
         source_type,
+        repository_url,
         source_url: normalized,
+        branch_hint,
         path_hint,
     })
 }
 
 fn build_repo_skill_source_url(spec: &RepoInstallSpec, relative_path: &str) -> String {
-    if relative_path.is_empty() {
-        spec.source_url.clone()
-    } else {
-        format!(
-            "{}/tree/main/{}",
-            spec.source_url.trim_end_matches('/'),
-            relative_path
-        )
-    }
+    build_tree_source_url(
+        &spec.repository_url,
+        &spec.source_type,
+        spec.branch_hint.as_deref(),
+        relative_path,
+    )
 }
 
 fn scan_repo_skill_candidates(
@@ -3135,6 +3336,16 @@ pub fn get_git_account_summary() -> GitAccountSummary {
 }
 
 #[tauri::command]
+pub fn get_app_settings() -> AppSettings {
+    load_app_settings()
+}
+
+#[tauri::command]
+pub fn update_app_settings(settings: AppSettings) -> Result<AppSettings, String> {
+    save_app_settings(settings)
+}
+
+#[tauri::command]
 pub async fn refresh_git_states() -> Vec<SkillSummary> {
     let skills = load_installed_skills(&default_installed_skills());
     skills
@@ -3159,6 +3370,7 @@ fn install_skill_from_market_blocking(skill: MarketplaceSkill) -> Result<SkillSu
         return Err("安装来源地址无效，请刷新后重试".to_string());
     }
 
+    let installed_at = now_timestamp_label();
     let mut installed_skills = load_installed_skills(&default_installed_skills());
     let mut installed_skill = SkillSummary {
         name: skill.name.clone(),
@@ -3171,8 +3383,8 @@ fn install_skill_from_market_blocking(skill: MarketplaceSkill) -> Result<SkillSu
         collab_status: "clean".into(),
         status_text: "刚安装完成，建议同步到常用工具。".into(),
         remote_updated_at: skill.updated_at.clone(),
-        local_updated_at: "刚刚".into(),
-        last_synced_at: "刚刚".into(),
+        local_updated_at: installed_at.clone(),
+        last_synced_at: installed_at.clone(),
         last_checked_at: "刚刚".into(),
         synced_tool_count: 1,
         last_editor: skill.maintainer.clone(),
@@ -3209,6 +3421,13 @@ fn install_skill_from_market_blocking(skill: MarketplaceSkill) -> Result<SkillSu
     if let Ok(Some(description)) = description_handle.join() {
         installed_skill.description = description;
     }
+    let app_settings = load_app_settings();
+    if normalize_skill_install_activation(&app_settings.skill_install_activation)
+        == "apply-all-tools"
+    {
+        installed_skill = enable_skill_for_all_installed_tools(installed_skill)?;
+    }
+    persist_skill_timestamps(&installed_skill);
     installed_skills.retain(|skill| skill.name != installed_skill.name);
     installed_skills.insert(0, installed_skill.clone());
     save_installed_skills(&installed_skills)?;
@@ -3224,6 +3443,7 @@ pub fn install_skill_from_repo(repo_url: &str) -> Result<SkillSummary, String> {
         .last()
         .unwrap_or("custom-skill");
 
+    let installed_at = now_timestamp_label();
     let mut installed_skills = load_installed_skills(&default_installed_skills());
     let cloned_path = clone_repo_skill(repo_url, repo_name)?;
     let installed_skill = SkillSummary {
@@ -3237,8 +3457,8 @@ pub fn install_skill_from_repo(repo_url: &str) -> Result<SkillSummary, String> {
         collab_status: "clean".into(),
         status_text: "仓库已导入，可继续同步到目标工具。".into(),
         remote_updated_at: "刚刚".into(),
-        local_updated_at: "刚刚".into(),
-        last_synced_at: "刚刚".into(),
+        local_updated_at: installed_at.clone(),
+        last_synced_at: installed_at.clone(),
         last_checked_at: "刚刚".into(),
         synced_tool_count: 0,
         last_editor: "".into(),
@@ -3248,6 +3468,7 @@ pub fn install_skill_from_repo(repo_url: &str) -> Result<SkillSummary, String> {
     };
 
     let installed_skill = enrich_skill_with_git_state(&normalize_skill_tools(&installed_skill));
+    persist_skill_timestamps(&installed_skill);
     installed_skills.retain(|skill| skill.name != installed_skill.name);
     installed_skills.insert(0, installed_skill.clone());
     save_installed_skills(&installed_skills)?;
@@ -3321,6 +3542,7 @@ pub async fn install_selected_repo_skills(
         }
 
         let spec = parse_repo_install_spec(&repo_url)?;
+        let installed_at = now_timestamp_label();
         let mut installed_skills = load_installed_skills(&default_installed_skills());
         let mut installed_results = Vec::new();
 
@@ -3391,8 +3613,8 @@ pub async fn install_selected_repo_skills(
                 collab_status: "clean".into(),
                 status_text: "仓库技能已导入，可继续同步到目标工具。".into(),
                 remote_updated_at: "刚刚".into(),
-                local_updated_at: "刚刚".into(),
-                last_synced_at: "刚刚".into(),
+                local_updated_at: installed_at.clone(),
+                last_synced_at: installed_at.clone(),
                 last_checked_at: "刚刚".into(),
                 synced_tool_count: 0,
                 last_editor: "".into(),
@@ -3456,6 +3678,7 @@ fn install_local_skill_blocking(
         let _ = fs::remove_dir_all(dir);
     }
 
+    let installed_at = now_timestamp_label();
     let skill_file = Path::new(&installed_local_path).join("SKILL.md");
     let description = read_skill_description(&skill_file);
     let installed_skill = SkillSummary {
@@ -3469,8 +3692,8 @@ fn install_local_skill_blocking(
         collab_status: "clean".into(),
         status_text: "本地技能已安装，可继续同步到目标工具。".into(),
         remote_updated_at: String::new(),
-        local_updated_at: "刚刚".into(),
-        last_synced_at: "刚刚".into(),
+        local_updated_at: installed_at.clone(),
+        last_synced_at: installed_at.clone(),
         last_checked_at: "刚刚".into(),
         synced_tool_count: 0,
         last_editor: "".into(),
@@ -3691,6 +3914,7 @@ pub fn import_local_skill(local_path: &str) -> Result<SkillSummary, String> {
         .last()
         .unwrap_or("imported-skill");
 
+    let installed_at = now_timestamp_label();
     let mut installed_skills = load_installed_skills(&default_installed_skills());
     let installed_skill = SkillSummary {
         name: skill_name.into(),
@@ -3703,8 +3927,8 @@ pub fn import_local_skill(local_path: &str) -> Result<SkillSummary, String> {
         collab_status: "clean".into(),
         status_text: "本地技能已纳入统一管理。".into(),
         remote_updated_at: String::new(),
-        local_updated_at: "刚刚".into(),
-        last_synced_at: "刚刚".into(),
+        local_updated_at: installed_at.clone(),
+        last_synced_at: installed_at.clone(),
         last_checked_at: "刚刚".into(),
         synced_tool_count: 0,
         last_editor: "".into(),
@@ -4080,11 +4304,13 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        collect_local_skill_dirs, collect_skills_manager_cached_items, insert_trusted_project_path,
-        intellij_trusted_location_for_project, open_target_path_for_skill,
-        parse_skills_sh_homepage_items, scan_repo_skill_candidates,
+        build_repo_skill_source_url, collect_local_skill_dirs, collect_skills_manager_cached_items,
+        insert_trusted_project_path, intellij_trusted_location_for_project,
+        normalize_installed_skill_source_url, open_target_path_for_skill,
+        parse_repo_install_spec, parse_skills_sh_homepage_items, scan_repo_skill_candidates,
         should_use_skills_sh_homepage_page,
     };
+    use crate::models::SkillSummary;
     use std::env;
     use std::fs;
     use std::path::PathBuf;
@@ -4103,6 +4329,19 @@ mod tests {
         ));
         fs::create_dir_all(&temp_dir).expect("create temp test dir");
         temp_dir
+    }
+
+    fn run_git_test(current_dir: &PathBuf, args: &[&str]) {
+        let output = Command::new("git")
+            .current_dir(current_dir)
+            .args(args)
+            .output()
+            .expect("git should run");
+        assert!(
+            output.status.success(),
+            "git command failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 
     #[test]
@@ -4367,5 +4606,84 @@ mod tests {
         assert_eq!(skill_dirs, vec![nested_skill.clone()]);
 
         let _ = fs::remove_dir_all(local_root);
+    }
+
+    #[test]
+    fn repo_install_source_url_keeps_branch_hint_from_tree_url() {
+        let spec = parse_repo_install_spec(
+            "https://github.com/OthmanAdi/planning-with-files/tree/master/skills",
+        )
+        .expect("parse repo install spec");
+
+        assert_eq!(
+            build_repo_skill_source_url(&spec, "skills/planning-with-files-zh"),
+            "https://github.com/OthmanAdi/planning-with-files/tree/master/skills/planning-with-files-zh"
+        );
+    }
+
+    #[test]
+    fn normalizes_installed_skill_source_url_from_git_remote_and_relative_path() {
+        let temp_dir = temp_test_dir("normalize-source-url");
+        let repo_path = temp_dir.join("planning-with-files");
+        let skill_path = repo_path.join("skills/planning-with-files-zh");
+        fs::create_dir_all(&skill_path).expect("create skill path");
+        fs::write(skill_path.join("SKILL.md"), "# planning-with-files-zh")
+            .expect("write skill file");
+
+        run_git_test(&temp_dir, &["init", "--quiet", repo_path.to_str().expect("repo path")]);
+        run_git_test(&repo_path, &["checkout", "-b", "master"]);
+        run_git_test(
+            &repo_path,
+            &[
+                "remote",
+                "add",
+                "origin",
+                "git@github.com:OthmanAdi/planning-with-files.git",
+            ],
+        );
+
+        let output = Command::new("git")
+            .current_dir(&repo_path)
+            .args([
+                "symbolic-ref",
+                "refs/remotes/origin/HEAD",
+                "refs/remotes/origin/master",
+            ])
+            .output()
+            .expect("set origin head should run");
+        assert!(
+            output.status.success(),
+            "git symbolic-ref failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let skill = SkillSummary {
+            name: "planning-with-files-zh".into(),
+            source_label: "GitHub".into(),
+            source_type: "github".into(),
+            source_url: "https://github.com/OthmanAdi/planning-with-files/tree/main/skills/planning-with-files-zh".into(),
+            description: String::new(),
+            local_path: skill_path.to_string_lossy().to_string(),
+            branch: "master".into(),
+            collab_status: "clean".into(),
+            status_text: String::new(),
+            remote_updated_at: String::new(),
+            local_updated_at: String::new(),
+            last_synced_at: String::new(),
+            last_checked_at: String::new(),
+            synced_tool_count: 0,
+            last_editor: String::new(),
+            commit_label: String::new(),
+            git_linked: true,
+            tools: vec![],
+        };
+
+        let normalized = normalize_installed_skill_source_url(&skill);
+        assert_eq!(
+            normalized.source_url,
+            "https://github.com/OthmanAdi/planning-with-files/tree/master/skills/planning-with-files-zh"
+        );
+
+        let _ = fs::remove_dir_all(temp_dir);
     }
 }

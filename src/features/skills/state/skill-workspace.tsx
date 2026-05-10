@@ -8,6 +8,7 @@ import {
   type ReactNode,
 } from "react";
 import {
+  fetchAppSettings,
   deleteSkill,
   fetchGitAccount,
   fetchGitStates,
@@ -31,16 +32,19 @@ import {
   setToolSkillStatuses,
   shouldUseFixtureData,
   toggleSkillTool,
+  updateAppSettings,
   updateSkill,
 } from "@/features/skills/api/skill-client";
 import { waitForNextPaint } from "@/app/utils/wait-for-next-paint";
-import { workspaceSnapshotFixture } from "@/features/skills/state/skill-fixtures";
+import { appSettingsFixture, workspaceSnapshotFixture } from "@/features/skills/state/skill-fixtures";
 import {
   dedupeMarketplaceSkills,
   sortMarketplaceSkillsByPopularity,
 } from "@/features/skills/utils/marketplace-skills";
 import type {
+  AppSettings,
   GitAccountSummary,
+  InstallActivationMode,
   LocalSkillCandidate,
   MarketplaceSkill,
   MarketplaceSourceSite,
@@ -54,7 +58,6 @@ import type {
 } from "@/features/skills/state/skill-store";
 import { buildOpenToolOptions } from "@/features/skills/utils/open-tools";
 
-const DEFAULT_OPEN_TOOL_STORAGE_KEY = "skillm.defaultOpenToolId";
 const STARTUP_WORKSPACE_CACHE_KEY = "skillm.startupWorkspaceCache";
 const FALLBACK_OPEN_TOOL_ID = "finder";
 const MARKETPLACE_PAGE_SIZE = 18;
@@ -114,7 +117,10 @@ type SkillWorkspaceContextValue = {
   openSkillRepository: (skillName: string) => Promise<void>;
   openSkillInEditor: (input: { skillName: string; editorId: string }) => Promise<void>;
   defaultOpenToolId: string;
-  setDefaultOpenToolId: (toolId: string) => void;
+  setDefaultOpenToolId: (toolId: string) => Promise<void>;
+  appSettings: AppSettings;
+  setSkillInstallActivation: (mode: InstallActivationMode) => Promise<void>;
+  setMcpInstallActivation: (mode: InstallActivationMode) => Promise<void>;
   openSkillWithDefaultTool: (skillName: string) => Promise<void>;
 };
 
@@ -147,17 +153,6 @@ function removeImportedCandidate(
   importedSkill: SkillSummary,
 ) {
   return candidates.filter((candidate) => candidate.localPath !== importedSkill.localPath);
-}
-
-function getInitialDefaultOpenToolId() {
-  if (
-    typeof window === "undefined" ||
-    typeof window.localStorage?.getItem !== "function"
-  ) {
-    return "";
-  }
-
-  return window.localStorage.getItem(DEFAULT_OPEN_TOOL_STORAGE_KEY) ?? "";
 }
 
 function normalizeCachedSkillSummary(skill: CachedSkillSummary): SkillSummary {
@@ -307,6 +302,16 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       ? workspaceSnapshotFixture.gitAccount
       : startupCache?.gitAccount ?? null,
   );
+  const [appSettings, setAppSettings] = useState<AppSettings>(
+    usesFixtureData
+      ? appSettingsFixture
+      : {
+          storagePath: "",
+          defaultOpenToolId: "",
+          skillInstallActivation: "apply-all-tools",
+          mcpInstallActivation: "disable-all-tools",
+        },
+  );
   const [isLoading, setIsLoading] = useState(!usesFixtureData && startupCache === null);
   const [isMarketplaceLoadingBySource, setIsMarketplaceLoadingBySource] = useState<
     Record<MarketplaceSourceSite, boolean>
@@ -337,7 +342,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
     "skills.sh": true,
     skillsmp: true,
   });
-  const [defaultOpenToolId, setDefaultOpenToolIdState] = useState(getInitialDefaultOpenToolId);
+  const defaultOpenToolId = appSettings.defaultOpenToolId;
 
   useEffect(() => {
     if (toolConfigs.length === 0) {
@@ -350,7 +355,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       return;
     }
 
-    handleSetDefaultOpenToolId(availableTools[0]?.id ?? FALLBACK_OPEN_TOOL_ID);
+    void handleSetDefaultOpenToolId(availableTools[0]?.id ?? FALLBACK_OPEN_TOOL_ID);
   }, [defaultOpenToolId, toolConfigs]);
 
   useEffect(() => {
@@ -366,19 +371,27 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
     });
   }, [gitAccount, installedSkills, localCandidates, toolConfigs, usesFixtureData]);
 
-  function handleSetDefaultOpenToolId(toolId: string) {
-    setDefaultOpenToolIdState(toolId);
-    if (typeof window !== "undefined" && typeof window.localStorage?.setItem === "function") {
-      window.localStorage.setItem(DEFAULT_OPEN_TOOL_STORAGE_KEY, toolId);
-    }
+  async function persistAppSettings(nextSettings: AppSettings) {
+    const savedSettings = await updateAppSettings({ settings: nextSettings });
+    setAppSettings(savedSettings);
+    return savedSettings;
+  }
+
+  async function handleSetDefaultOpenToolId(toolId: string) {
+    const nextSettings = {
+      ...appSettings,
+      defaultOpenToolId: toolId,
+    };
+    await persistAppSettings(nextSettings);
   }
 
   async function loadWorkspaceCore() {
-    const [skills, candidates, tools, account] = await Promise.all([
+    const [skills, candidates, tools, account, settings] = await Promise.all([
       fetchInstalledSkills(),
       fetchLocalSkillCandidates(),
       fetchToolConfigs(),
       fetchGitAccount(),
+      fetchAppSettings(),
     ]);
 
     return {
@@ -386,6 +399,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       candidates,
       tools,
       account,
+      settings,
     };
   }
 
@@ -397,6 +411,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       setLocalCandidates(workspace.candidates);
       setToolConfigs(workspace.tools);
       setGitAccount(workspace.account);
+      setAppSettings(workspace.settings);
       void refreshGitStatesInBackground();
     } finally {
       setIsLoading(false);
@@ -442,10 +457,11 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
         setIsLoading(false);
         void refreshGitStatesInBackground(() => active);
 
-        const [candidatesResult, toolsResult, accountResult] = await Promise.allSettled([
+        const [candidatesResult, toolsResult, accountResult, settingsResult] = await Promise.allSettled([
           fetchLocalSkillCandidates(),
           fetchToolConfigs(),
           fetchGitAccount(),
+          fetchAppSettings(),
         ]);
         if (!active) {
           return;
@@ -467,6 +483,12 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
           setGitAccount(accountResult.value);
         } else {
           console.error("Failed to load git account:", accountResult.reason);
+        }
+
+        if (settingsResult.status === "fulfilled") {
+          setAppSettings(settingsResult.value);
+        } else {
+          console.error("Failed to load app settings:", settingsResult.reason);
         }
       } catch (error) {
         console.error("Failed to load startup workspace:", error);
@@ -707,6 +729,20 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
     });
   }
 
+  async function handleSetSkillInstallActivation(mode: InstallActivationMode) {
+    await persistAppSettings({
+      ...appSettings,
+      skillInstallActivation: mode,
+    });
+  }
+
+  async function handleSetMcpInstallActivation(mode: InstallActivationMode) {
+    await persistAppSettings({
+      ...appSettings,
+      mcpInstallActivation: mode,
+    });
+  }
+
   const value = useMemo<SkillWorkspaceContextValue>(
     () => ({
       installedSkills,
@@ -742,9 +778,13 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       openSkillInEditor,
       defaultOpenToolId,
       setDefaultOpenToolId: handleSetDefaultOpenToolId,
+      appSettings,
+      setSkillInstallActivation: handleSetSkillInstallActivation,
+      setMcpInstallActivation: handleSetMcpInstallActivation,
       openSkillWithDefaultTool: handleOpenSkillWithDefaultTool,
     }),
     [
+      appSettings,
       defaultOpenToolId,
       gitAccount,
       hasMoreMarketplaceSkillsBySource,
