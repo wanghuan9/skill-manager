@@ -1,13 +1,14 @@
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::env;
+use std::ffi::OsString;
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::mpsc;
+use std::sync::{mpsc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -22,6 +23,7 @@ const APP_OPENCODE: &str = "opencode";
 const APP_OPENCLAW: &str = "openclaw";
 const APP_CURSOR: &str = "cursor";
 const APP_WINDSURF: &str = "windsurf";
+static MCP_NPM_METADATA_CACHE: OnceLock<Mutex<HashMap<String, McpResolvedMetadata>>> = OnceLock::new();
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -113,6 +115,7 @@ struct NpmPackageMetadata {
     description: Option<String>,
     repository: Option<NpmRepository>,
     homepage: Option<String>,
+    readme: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -126,6 +129,21 @@ enum NpmRepository {
 struct GithubRepositoryMetadata {
     description: Option<String>,
     html_url: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PyPiPackageResponse {
+    info: PyPiPackageInfo,
+}
+
+#[derive(Debug, Deserialize)]
+struct PyPiPackageInfo {
+    summary: Option<String>,
+    description: Option<String>,
+    #[allow(dead_code)]
+    description_content_type: Option<String>,
+    home_page: Option<String>,
+    project_urls: Option<BTreeMap<String, String>>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -202,7 +220,7 @@ struct McpDirectoryInstallConfig {
 }
 
 #[tauri::command]
-pub fn list_mcp_workspace() -> Result<McpWorkspaceSnapshot, String> {
+pub async fn list_mcp_workspace() -> Result<McpWorkspaceSnapshot, String> {
     build_mcp_workspace_snapshot()
 }
 
@@ -339,7 +357,7 @@ pub async fn import_mcp_servers_from_apps() -> Result<usize, String> {
             validate_mcp_server(&id, &server)?;
             imported_count +=
                 upsert_imported_record(&mut records, &id, &app, server, metadata_client.as_ref())
-                    .await;
+                    .await?;
         }
     }
 
@@ -1133,38 +1151,92 @@ async fn upsert_imported_record(
     app: &McpTargetAppSpec,
     server: Value,
     metadata_client: Option<&Client>,
-) -> usize {
-    if let Some(record) = records.iter_mut().find(|item| item.id == id) {
-        let previous_description = record.description.clone();
-        let previous_source_url = record.source_url.clone();
-        enrich_mcp_record_metadata(record, metadata_client).await;
-        if !record.enabled_app_ids.iter().any(|item| item == app.id) {
-            record.enabled_app_ids.push(app.id.to_string());
-            record.enabled_app_ids.sort();
-            record.updated_at = now_label();
-            return 1;
+) -> Result<usize, String> {
+    let existing_index = records.iter().position(|item| item.id == id);
+    let previous_record = existing_index.and_then(|index| records.get(index).cloned());
+    let mut next_record = if let Some(previous) = previous_record.clone() {
+        let mut enabled_app_ids = previous.enabled_app_ids;
+        if !enabled_app_ids.iter().any(|item| item == app.id) {
+            enabled_app_ids.push(app.id.to_string());
         }
-        if record.description != previous_description || record.source_url != previous_source_url {
-            record.updated_at = now_label();
+        McpServerRecord {
+            id: previous.id,
+            name: previous.name,
+            server,
+            description: previous.description,
+            source_url: previous.source_url,
+            enabled_app_ids,
+            tools: previous.tools,
+            tools_discovered_at: previous.tools_discovered_at,
+            updated_at: previous.updated_at,
         }
-        return 0;
+    } else {
+        McpServerRecord {
+            id: id.to_string(),
+            name: id.to_string(),
+            server,
+            description: String::new(),
+            source_url: String::new(),
+            enabled_app_ids: vec![app.id.to_string()],
+            tools: Vec::new(),
+            tools_discovered_at: String::new(),
+            updated_at: now_label(),
+        }
+    };
+
+    next_record = normalize_record(next_record)?;
+    let should_refresh_tools = previous_record
+        .as_ref()
+        .map(|previous| previous.server != next_record.server || previous.tools.is_empty())
+        .unwrap_or(true);
+    hydrate_imported_record(&mut next_record, metadata_client, should_refresh_tools).await;
+
+    let has_changed = previous_record
+        .as_ref()
+        .map(|previous| {
+            previous.name != next_record.name
+                || previous.server != next_record.server
+                || previous.description != next_record.description
+                || previous.source_url != next_record.source_url
+                || previous.enabled_app_ids != next_record.enabled_app_ids
+                || previous.tools != next_record.tools
+                || previous.tools_discovered_at != next_record.tools_discovered_at
+        })
+        .unwrap_or(true);
+
+    if has_changed {
+        next_record.updated_at = now_label();
     }
 
-    let mut record = McpServerRecord {
-        id: id.to_string(),
-        name: id.to_string(),
-        server,
-        description: String::new(),
-        source_url: String::new(),
-        enabled_app_ids: vec![app.id.to_string()],
-        tools: Vec::new(),
-        tools_discovered_at: String::new(),
-        updated_at: now_label(),
-    };
-    enrich_mcp_record_metadata(&mut record, metadata_client).await;
-    records.push(record);
+    if let Some(index) = existing_index {
+        records[index] = next_record;
+    } else {
+        records.push(next_record);
+    }
     sort_records(records);
-    1
+    Ok(usize::from(has_changed))
+}
+
+async fn hydrate_imported_record(
+    record: &mut McpServerRecord,
+    metadata_client: Option<&Client>,
+    should_refresh_tools: bool,
+) {
+    enrich_mcp_record_metadata(record, metadata_client).await;
+    if !should_refresh_tools {
+        return;
+    }
+
+    match discover_mcp_server_tools(&record.server) {
+        Ok(discovered_tools) if !discovered_tools.is_empty() => {
+            record.tools = merge_discovered_mcp_tools(&record.tools, discovered_tools);
+            record.tools_discovered_at = now_label();
+        }
+        Ok(_) => {}
+        Err(error) => {
+            log::warn!("导入时探测 {} MCP tools 失败: {}", record.name, error);
+        }
+    }
 }
 
 fn normalize_record(mut record: McpServerRecord) -> Result<McpServerRecord, String> {
@@ -1264,12 +1336,14 @@ fn discover_stdio_mcp_tools(server: &Value) -> Result<Vec<String>, String> {
         })
         .unwrap_or_default();
 
-    let mut child_command = Command::new(command);
+    let resolved_command = resolve_executable_path(command).unwrap_or_else(|| PathBuf::from(command));
+    let mut child_command = Command::new(&resolved_command);
     child_command
         .args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
+    child_command.env("PATH", augmented_path_env());
     if let Some(cwd) = server.get("cwd").and_then(Value::as_str).map(str::trim).filter(|value| !value.is_empty()) {
         child_command.current_dir(cwd);
     }
@@ -1841,7 +1915,11 @@ fn stored_mcp_description(record: &McpServerRecord) -> String {
 }
 
 async fn enrich_mcp_record_metadata(record: &mut McpServerRecord, client: Option<&Client>) {
-    let needs_description = record.description.trim().is_empty();
+    let has_explicit_description = explicit_mcp_description(&record.server).is_some();
+    let needs_description = !has_explicit_description
+        && (record.description.trim().is_empty()
+            || record.description == fallback_mcp_description(record)
+            || npm_package_from_mcp_server(&record.server).is_some());
     let needs_source_url = record.source_url.trim().is_empty();
     if !needs_description && !needs_source_url {
         return;
@@ -1865,15 +1943,27 @@ async fn resolve_mcp_metadata(
         source_url: explicit_mcp_source_url(&record.server).unwrap_or_default(),
     };
 
-    if let (Some(client), Some(package_name)) =
-        (client, npm_package_from_mcp_server(&record.server))
-    {
-        let package_metadata = metadata_for_npm_package(client, &package_name).await;
-        if metadata.description.trim().is_empty() {
-            metadata.description = package_metadata.description;
+    if let Some(client) = client {
+        if let Some(package_name) = npm_package_from_mcp_server(&record.server) {
+            let package_metadata = metadata_for_npm_package(client, &package_name).await;
+            if metadata.description.trim().is_empty() {
+                metadata.description = package_metadata.description;
+            }
+            if metadata.source_url.trim().is_empty() {
+                metadata.source_url = package_metadata.source_url;
+            }
         }
-        if metadata.source_url.trim().is_empty() {
-            metadata.source_url = package_metadata.source_url;
+
+        if metadata.description.trim().is_empty() || metadata.source_url.trim().is_empty() {
+            if let Some(package_name) = python_package_from_mcp_server(&record.server) {
+                let package_metadata = metadata_for_python_package(client, &package_name).await;
+                if metadata.description.trim().is_empty() {
+                    metadata.description = package_metadata.description;
+                }
+                if metadata.source_url.trim().is_empty() {
+                    metadata.source_url = package_metadata.source_url;
+                }
+            }
         }
     }
 
@@ -1910,6 +2000,13 @@ fn mcp_metadata_client() -> Option<Client> {
 }
 
 async fn metadata_for_npm_package(client: &Client, package_name: &str) -> McpResolvedMetadata {
+    let metadata_cache = MCP_NPM_METADATA_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Ok(guard) = metadata_cache.lock() {
+        if let Some(cached) = guard.get(package_name) {
+            return cached.clone();
+        }
+    }
+
     let Some(metadata) = fetch_npm_package_metadata(client, package_name).await else {
         return McpResolvedMetadata::default();
     };
@@ -1919,20 +2016,76 @@ async fn metadata_for_npm_package(client: &Client, package_name: &str) -> McpRes
         .and_then(npm_repository_url)
         .or(metadata.homepage.as_deref())
         .and_then(git_repository_source_url);
+    let readme_description = metadata
+        .readme
+        .as_deref()
+        .and_then(parse_mcp_description_from_readme);
 
     let mut resolved = McpResolvedMetadata {
-        description: metadata.description.unwrap_or_default().trim().to_string(),
+        description: readme_description
+            .unwrap_or_else(|| metadata.description.unwrap_or_default().trim().to_string()),
         source_url: source_url.clone().unwrap_or_default(),
     };
 
     if let Some((owner, repo)) = source_url.as_deref().and_then(github_repo_from_url) {
         if let Some(repo_metadata) = fetch_github_repo_metadata(client, &owner, &repo).await {
-            if let Some(description) = repo_metadata
-                .description
+            if resolved.description.trim().is_empty() {
+                if let Some(description) = repo_metadata
+                    .description
+                    .map(|value| value.trim().to_string())
+                    .filter(|value| !value.is_empty())
+                {
+                    resolved.description = description;
+                }
+            }
+            if let Some(html_url) = repo_metadata
+                .html_url
                 .map(|value| value.trim().to_string())
                 .filter(|value| !value.is_empty())
             {
-                resolved.description = description;
+                resolved.source_url = html_url;
+            }
+        }
+    }
+
+    if let Ok(mut guard) = metadata_cache.lock() {
+        guard.insert(package_name.to_string(), resolved.clone());
+    }
+
+    resolved
+}
+
+async fn metadata_for_python_package(client: &Client, package_name: &str) -> McpResolvedMetadata {
+    let Some(metadata) = fetch_pypi_package_metadata(client, package_name).await else {
+        return McpResolvedMetadata::default();
+    };
+    let source_url = metadata
+        .project_urls
+        .as_ref()
+        .and_then(pypi_repository_url)
+        .or(metadata.home_page.as_deref())
+        .and_then(git_repository_source_url);
+
+    let long_description = metadata
+        .description
+        .as_deref()
+        .and_then(parse_mcp_description_from_readme);
+    let mut resolved = McpResolvedMetadata {
+        description: long_description
+            .unwrap_or_else(|| metadata.summary.unwrap_or_default().trim().to_string()),
+        source_url: source_url.clone().unwrap_or_default(),
+    };
+
+    if let Some((owner, repo)) = source_url.as_deref().and_then(github_repo_from_url) {
+        if let Some(repo_metadata) = fetch_github_repo_metadata(client, &owner, &repo).await {
+            if resolved.description.trim().is_empty() {
+                if let Some(description) = repo_metadata
+                    .description
+                    .map(|value| value.trim().to_string())
+                    .filter(|value| !value.is_empty())
+                {
+                    resolved.description = description;
+                }
             }
             if let Some(html_url) = repo_metadata
                 .html_url
@@ -1947,6 +2100,64 @@ async fn metadata_for_npm_package(client: &Client, package_name: &str) -> McpRes
     resolved
 }
 
+fn parse_mcp_description_from_readme(readme: &str) -> Option<String> {
+    let mut paragraph_lines = Vec::new();
+    let mut in_code_block = false;
+    let mut html_block_depth = 0usize;
+
+    for line in readme.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("```") {
+            in_code_block = !in_code_block;
+            if !paragraph_lines.is_empty() {
+                break;
+            }
+            continue;
+        }
+        if in_code_block {
+            continue;
+        }
+        if trimmed.starts_with("<div") || trimmed.starts_with("<picture") {
+            html_block_depth += 1;
+            continue;
+        }
+        if html_block_depth > 0 {
+            if trimmed.ends_with("</div>") || trimmed.ends_with("</picture>") {
+                html_block_depth = html_block_depth.saturating_sub(1);
+            }
+            continue;
+        }
+        if trimmed.is_empty() {
+            if !paragraph_lines.is_empty() {
+                break;
+            }
+            continue;
+        }
+        if paragraph_lines.is_empty()
+            && (trimmed.starts_with('#')
+                || trimmed.starts_with("![")
+                || trimmed.starts_with("[![")
+                || trimmed.starts_with("<img")
+                || trimmed.starts_with("<!--"))
+        {
+            continue;
+        }
+        if !paragraph_lines.is_empty() && trimmed.starts_with('#') {
+            break;
+        }
+
+        paragraph_lines.push(trimmed);
+    }
+
+    let description = paragraph_lines.join(" ");
+    let normalized = description.trim();
+    if normalized.is_empty() {
+        return None;
+    }
+
+    Some(normalized.to_string())
+}
+
 async fn fetch_npm_package_metadata(
     client: &Client,
     package_name: &str,
@@ -1959,6 +2170,26 @@ async fn fetch_npm_package_metadata(
     }
 
     response.json::<NpmPackageMetadata>().await.ok()
+}
+
+async fn fetch_pypi_package_metadata(
+    client: &Client,
+    package_name: &str,
+) -> Option<PyPiPackageInfo> {
+    let url = format!(
+        "https://pypi.org/pypi/{}/json",
+        encode_query_component(package_name)
+    );
+    let response = client.get(url).send().await.ok()?;
+    if !response.status().is_success() {
+        return None;
+    }
+
+    response
+        .json::<PyPiPackageResponse>()
+        .await
+        .ok()
+        .map(|payload| payload.info)
 }
 
 async fn fetch_github_repo_metadata(
@@ -1980,6 +2211,27 @@ fn npm_repository_url(repository: &NpmRepository) -> Option<&str> {
         NpmRepository::Object { url } => url.as_deref(),
         NpmRepository::String(url) => Some(url.as_str()),
     }
+}
+
+fn pypi_repository_url(project_urls: &BTreeMap<String, String>) -> Option<&str> {
+    const PREFERRED_KEYS: [&str; 5] = [
+        "repository",
+        "source",
+        "source code",
+        "homepage",
+        "home",
+    ];
+    for preferred_key in PREFERRED_KEYS {
+        if let Some(url) = project_urls
+            .iter()
+            .find(|(key, _)| key.trim().eq_ignore_ascii_case(preferred_key))
+            .map(|(_, value)| value.as_str())
+        {
+            return Some(url);
+        }
+    }
+
+    project_urls.values().next().map(String::as_str)
 }
 
 fn github_repo_from_url(value: &str) -> Option<(String, String)> {
@@ -2039,8 +2291,48 @@ fn npm_package_from_mcp_server(server: &Value) -> Option<String> {
         "npx" | "bunx" => npm_package_from_exec_args(&args),
         "npm" => npm_package_from_exec_args(strip_leading_exec_command(&args)),
         "pnpm" => npm_package_from_exec_args(strip_leading_pnpm_command(&args)),
-        _ => None,
+        _ => resolve_executable_path(command).and_then(|path| npm_package_from_executable_path(&path)),
     }
+}
+
+fn python_package_from_mcp_server(server: &Value) -> Option<String> {
+    if mcp_server_type(server) != "stdio" {
+        return None;
+    }
+
+    let command = server.get("command").and_then(Value::as_str)?;
+    let command_name = command_basename(command);
+    let args = server
+        .get("args")
+        .and_then(Value::as_array)
+        .map(|items| items.iter().filter_map(Value::as_str).collect::<Vec<_>>())
+        .unwrap_or_default();
+
+    if matches!(command_name, "python" | "python3" | "python3.10" | "python3.11" | "python3.12")
+    {
+        if let Some(module_name) = args
+            .windows(2)
+            .find(|pair| pair.first().copied() == Some("-m"))
+            .and_then(|pair| pair.get(1).copied())
+        {
+            let normalized = module_name.trim().replace('_', "-");
+            if is_python_package_candidate(&normalized) {
+                return Some(normalized);
+            }
+        }
+    }
+
+    if let Some(package_name) =
+        resolve_executable_path(command).and_then(|path| python_package_from_executable_path(&path))
+    {
+        return Some(package_name);
+    }
+
+    if is_python_package_candidate(command_name) {
+        return Some(command_name.to_string());
+    }
+
+    None
 }
 
 fn strip_leading_exec_command<'a>(args: &'a [&'a str]) -> &'a [&'a str] {
@@ -2117,6 +2409,129 @@ fn strip_npm_package_version(value: &str) -> String {
         .find('@')
         .map(|index| value[..index].to_string())
         .unwrap_or_else(|| value.to_string())
+}
+
+fn npm_package_from_executable_path(path: &Path) -> Option<String> {
+    let segments = path
+        .components()
+        .filter_map(|component| component.as_os_str().to_str())
+        .collect::<Vec<_>>();
+    for (index, segment) in segments.iter().enumerate() {
+        if *segment != "node_modules" {
+            continue;
+        }
+        let scope_or_name = segments.get(index + 1)?;
+        if scope_or_name.starts_with('@') {
+            let package_name = segments.get(index + 2)?;
+            return Some(format!("{scope_or_name}/{package_name}"));
+        }
+        return Some((*scope_or_name).to_string());
+    }
+    None
+}
+
+fn python_package_from_executable_path(path: &Path) -> Option<String> {
+    let segments = path
+        .components()
+        .filter_map(|component| component.as_os_str().to_str())
+        .collect::<Vec<_>>();
+    for window in segments.windows(4) {
+        if window[0] == ".local" && window[1] == "pipx" && window[2] == "venvs" {
+            let package_name = window[3].trim().replace('_', "-");
+            if is_python_package_candidate(&package_name) {
+                return Some(package_name);
+            }
+        }
+    }
+    None
+}
+
+fn command_basename(command: &str) -> &str {
+    Path::new(command)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or(command)
+}
+
+fn resolve_executable_path(command: &str) -> Option<PathBuf> {
+    let trimmed = command.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let command_path = Path::new(trimmed);
+    if command_path.components().count() > 1 || command_path.is_absolute() {
+        return fs::canonicalize(command_path).ok().or_else(|| {
+            if command_path.exists() {
+                Some(command_path.to_path_buf())
+            } else {
+                None
+            }
+        });
+    }
+
+    for search_dir in command_search_paths() {
+        let candidate = search_dir.join(trimmed);
+        if candidate.exists() {
+            return fs::canonicalize(&candidate).ok().or(Some(candidate));
+        }
+    }
+
+    None
+}
+
+fn command_search_paths() -> Vec<PathBuf> {
+    let mut paths = env::var_os("PATH")
+        .map(|value| env::split_paths(&value).collect::<Vec<_>>())
+        .unwrap_or_default();
+    for fallback in fallback_command_search_paths() {
+        if !paths.iter().any(|path| path == &fallback) {
+            paths.push(fallback);
+        }
+    }
+    paths
+}
+
+fn fallback_command_search_paths() -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    if let Ok(home_dir) = home_dir() {
+        paths.push(home_dir.join(".local/bin"));
+        paths.push(home_dir.join(".npm-global/bin"));
+        paths.push(home_dir.join(".cargo/bin"));
+    }
+    paths.push(PathBuf::from("/opt/homebrew/bin"));
+    paths.push(PathBuf::from("/usr/local/bin"));
+    paths.push(PathBuf::from("/usr/bin"));
+    paths.push(PathBuf::from("/bin"));
+    paths
+}
+
+fn augmented_path_env() -> OsString {
+    env::join_paths(command_search_paths()).unwrap_or_else(|_| env::var_os("PATH").unwrap_or_default())
+}
+
+fn is_python_package_candidate(value: &str) -> bool {
+    let trimmed = value.trim();
+    !trimmed.is_empty()
+        && trimmed
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.'))
+        && !matches!(
+            trimmed,
+            "bash"
+                | "bun"
+                | "java"
+                | "node"
+                | "npm"
+                | "npx"
+                | "pnpm"
+                | "python"
+                | "python3"
+                | "ruby"
+                | "sh"
+                | "uv"
+                | "uvx"
+        )
 }
 
 fn read_json_value(path: &Path, allow_json5: bool) -> Result<Value, String> {
@@ -2904,6 +3319,67 @@ mod tests {
     }
 
     #[test]
+    fn extracts_intro_paragraph_from_mcp_readme() {
+        let readme = r#"
+# Knowledge Graph Memory Server
+
+A basic implementation of persistent memory using a local knowledge graph. This lets Claude remember information about the user across chats.
+
+## Core Concepts
+
+Entities are the primary nodes in the knowledge graph.
+"#;
+
+        assert_eq!(
+            parse_mcp_description_from_readme(readme).as_deref(),
+            Some(
+                "A basic implementation of persistent memory using a local knowledge graph. This lets Claude remember information about the user across chats."
+            )
+        );
+    }
+
+    #[test]
+    fn skips_badges_before_mcp_readme_intro() {
+        let readme = r#"
+[![npm version](https://example.com/badge.svg)](https://example.com)
+
+# Memory
+
+Real intro paragraph for the MCP server.
+
+## Usage
+"#;
+
+        assert_eq!(
+            parse_mcp_description_from_readme(readme).as_deref(),
+            Some("Real intro paragraph for the MCP server.")
+        );
+    }
+
+    #[test]
+    fn skips_html_cover_block_before_mcp_readme_intro() {
+        let readme = r#"
+<div align="center">
+  <picture>
+    <source srcset="dark.png">
+    <img alt="Logo" src="light.png">
+  </picture>
+</div>
+
+# FastMCP
+
+The fast, Pythonic way to build MCP servers and clients.
+
+## Installation
+"#;
+
+        assert_eq!(
+            parse_mcp_description_from_readme(readme).as_deref(),
+            Some("The fast, Pythonic way to build MCP servers and clients.")
+        );
+    }
+
+    #[test]
     fn display_json_omits_default_stdio_type() {
         let server = json!({
             "type": "stdio",
@@ -3119,6 +3595,29 @@ mod tests {
                     "get-library-docs"
                 ]
             })
+        );
+    }
+
+    #[test]
+    fn derives_python_package_from_pipx_executable_path() {
+        let path = PathBuf::from("/Users/demo/.local/pipx/venvs/easy-code-reader/bin/easy-code-reader");
+        assert_eq!(
+            python_package_from_executable_path(&path),
+            Some("easy-code-reader".to_string())
+        );
+    }
+
+    #[test]
+    fn derives_python_package_from_stdio_command_name() {
+        let server = json!({
+            "type": "stdio",
+            "command": "easy-code-reader",
+            "args": ["--project-dir", "/tmp/project"]
+        });
+
+        assert_eq!(
+            python_package_from_mcp_server(&server),
+            Some("easy-code-reader".to_string())
         );
     }
 }
