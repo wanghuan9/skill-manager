@@ -1,6 +1,12 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { invoke } from "@tauri-apps/api/core";
+import { vi } from "vitest";
 import { App } from "@/app/App";
+
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke: vi.fn(),
+}));
 
 test("allows selecting default open tool in settings", async () => {
   window.localStorage.clear();
@@ -66,4 +72,25 @@ test("expands tool status when clicking the hint copy", async () => {
   await userEvent.click(toolStatusPanel);
 
   expect(screen.getByText("CodeBuddy")).toBeInTheDocument();
+});
+
+test("opens storage path in Finder from settings", async () => {
+  window.localStorage.clear();
+  const invokeMock = vi.mocked(invoke);
+  invokeMock.mockClear();
+
+  render(<App />);
+
+  await userEvent.click(screen.getByRole("button", { name: /设置/ }));
+  expect(screen.getByText("/Users/demo/.skillm/settings.json")).toBeInTheDocument();
+
+  (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
+  invokeMock.mockResolvedValue(undefined);
+  await userEvent.click(screen.getByRole("button", { name: "打开" }));
+
+  expect(invokeMock).toHaveBeenCalledWith("open_path_in_finder", {
+    path: "/Users/demo/.skillm/settings.json",
+  });
+
+  delete (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
 });

@@ -70,6 +70,10 @@ type OpenToolMcpConfigInput = {
   editorId?: string;
 };
 
+type OpenPathInFinderInput = {
+  path: string;
+};
+
 type UpdateSkillInput = {
   skillName: string;
 };
@@ -429,6 +433,10 @@ export async function openToolSkillsFolder(input: OpenToolSkillsFolderInput): Pr
 
 export async function openToolMcpConfig(input: OpenToolMcpConfigInput): Promise<void> {
   return invokeOrFallback("open_tool_mcp_config", input, undefined);
+}
+
+export async function openPathInFinder(input: OpenPathInFinderInput): Promise<void> {
+  return invokeOrFallback("open_path_in_finder", input, undefined);
 }
 
 export async function updateSkill(

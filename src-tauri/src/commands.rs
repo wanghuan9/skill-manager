@@ -4065,6 +4065,16 @@ pub fn open_tool_skills_folder(tool_id: &str) -> Result<(), String> {
 }
 
 #[tauri::command]
+pub fn open_path_in_finder(path: &str) -> Result<(), String> {
+    let normalized_path = path.trim();
+    if normalized_path.is_empty() {
+        return Err("路径不能为空。".into());
+    }
+
+    open_path_with_finder(normalized_path)
+}
+
+#[tauri::command]
 pub fn open_tool_mcp_config(tool_id: &str, editor_id: Option<String>) -> Result<(), String> {
     let home_dir = env::var("HOME").map_err(|error| format!("读取 HOME 失败: {error}"))?;
     let config_path = mcp_config_path_for_tool(tool_id, &PathBuf::from(home_dir));

@@ -27,6 +27,7 @@ import {
   installSkillFromRepo,
   installSelectedRepoSkills,
   openSkillInEditor,
+  openPathInFinder,
   openSkillRepository,
   saveSkillFileContent,
   setToolSkillStatuses,
@@ -122,6 +123,7 @@ type SkillWorkspaceContextValue = {
   setSkillInstallActivation: (mode: InstallActivationMode) => Promise<void>;
   setMcpInstallActivation: (mode: InstallActivationMode) => Promise<void>;
   openSkillWithDefaultTool: (skillName: string) => Promise<void>;
+  openPathInFinder: (path: string) => Promise<void>;
 };
 
 const SkillWorkspaceContext = createContext<SkillWorkspaceContextValue | null>(null);
@@ -743,6 +745,15 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
     });
   }
 
+  async function handleOpenPathInFinder(path: string) {
+    const normalizedPath = path.trim();
+    if (!normalizedPath) {
+      return;
+    }
+
+    await openPathInFinder({ path: normalizedPath });
+  }
+
   const value = useMemo<SkillWorkspaceContextValue>(
     () => ({
       installedSkills,
@@ -782,6 +793,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       setSkillInstallActivation: handleSetSkillInstallActivation,
       setMcpInstallActivation: handleSetMcpInstallActivation,
       openSkillWithDefaultTool: handleOpenSkillWithDefaultTool,
+      openPathInFinder: handleOpenPathInFinder,
     }),
     [
       appSettings,
