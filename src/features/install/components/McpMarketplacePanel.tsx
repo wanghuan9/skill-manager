@@ -275,7 +275,7 @@ export function McpMarketplacePanel(props: McpMarketplacePanelProps) {
   const installHint =
     appSettings.mcpInstallActivation === "apply-all-tools"
       ? "安装后默认同步到所有已支持应用"
-      : "安装后默认不启用，稍后可按应用单独开启";
+      : "";
 
   useEffect(() => {
     const timer = window.setTimeout(() => {

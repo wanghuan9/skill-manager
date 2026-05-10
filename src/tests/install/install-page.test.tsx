@@ -51,7 +51,6 @@ test("shows MCP marketplace separately from skill-only install methods", async (
   expect(screen.queryByRole("tab", { name: "本地安装" })).not.toBeInTheDocument();
   expect(screen.getByRole("heading", { name: "安装源", level: 2 })).toBeInTheDocument();
   expect(screen.getByRole("tab", { name: "mcp.directory" })).toBeInTheDocument();
-  expect(screen.getByText("安装后默认不启用，稍后可按应用单独开启")).toBeInTheDocument();
   expect(await screen.findByText("playwright")).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "加载更多" })).not.toBeInTheDocument();
 });
