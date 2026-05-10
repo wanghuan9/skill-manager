@@ -2059,6 +2059,10 @@ code {
   color: currentColor;
 }
 
+.mcp-app-toggle .tool-pill__name {
+  font-weight: 400;
+}
+
 .tool-chip {
   display: flex;
   align-items: center;
@@ -4770,12 +4774,15 @@ code {
   white-space: nowrap;
 }
 
-.mcp-server-card code {
-  display: block;
-  max-width: 100%;
-  color: #475569;
-  font-size: 0.8rem;
+.mcp-server-card__subtitle {
+  min-width: 0;
+  width: 100%;
+  max-width: min(100%, 60ch);
   overflow: hidden;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 400;
+  line-height: 1.25;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -4797,6 +4804,49 @@ code {
   align-items: center;
   gap: 10px;
   min-width: 0;
+}
+
+.mcp-server-card__tool-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  flex-wrap: wrap;
+}
+
+.mcp-server-card__tool-collapse-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition:
+    color 140ms ease,
+    transform 140ms ease;
+}
+
+.mcp-server-card__tool-collapse-button:hover {
+  color: var(--heading);
+}
+
+.mcp-server-card__tool-collapse-button:focus-visible {
+  outline: none;
+  color: var(--heading);
+}
+
+.mcp-server-card__tool-collapse-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 10px;
+  height: 14px;
 }
 
 .mcp-server-card__tool-actions {
@@ -5057,6 +5107,10 @@ code {
 
   .mcp-server-card__actions {
     justify-content: flex-start;
+  }
+
+  .mcp-server-card__tool-header-row {
+    align-items: flex-start;
   }
 
   .mcp-toolbar {

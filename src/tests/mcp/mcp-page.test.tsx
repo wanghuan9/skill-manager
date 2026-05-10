@@ -17,6 +17,24 @@ test("renders MCP toolbar in the page header and hides the app matrix", async ()
   expect(toolbar).not.toHaveTextContent("个 MCP");
   expect(toolbar).not.toHaveTextContent("工具可同步");
   expect(screen.getByRole("searchbox", { name: "搜索 MCP" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "刷新" })).toBeInTheDocument();
+});
+
+test("refreshes MCP workspace from the toolbar", async () => {
+  window.localStorage.clear();
+  const fetchSpy = vi.spyOn(skillClient, "fetchMcpWorkspace");
+  render(<App />);
+
+  await userEvent.click(screen.getByRole("button", { name: "MCP" }));
+  await screen.findByText("context7");
+
+  fetchSpy.mockClear();
+  const refreshButton = screen.getByRole("button", { name: "刷新" });
+  await userEvent.click(refreshButton);
+
+  await waitFor(() => {
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
 });
 
 test("shows only installed MCP-ready apps in enable-to-tool controls", async () => {
@@ -49,9 +67,15 @@ test("shows only installed MCP-ready apps in enable-to-tool controls", async () 
   expect(screen.getAllByRole("button", { name: "Codex" })[0]).toHaveClass("tool-pill");
   expect(screen.getByText("Tools")).toBeInTheDocument();
   expect(screen.getByText("2/2 已启用")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "收起 context7 Tools" })).toHaveAttribute("aria-expanded", "true");
   expect(screen.getByRole("button", { name: "全部开启" })).toBeDisabled();
   expect(screen.getByRole("button", { name: "全部关闭" })).toBeEnabled();
   expect(screen.getByRole("button", { name: "resolve-library-id" })).toHaveAttribute("aria-pressed", "true");
+  await userEvent.click(screen.getByRole("button", { name: "收起 context7 Tools" }));
+  expect(screen.getByRole("button", { name: "展开 context7 Tools" })).toHaveAttribute("aria-expanded", "false");
+  expect(screen.queryByRole("button", { name: "resolve-library-id" })).not.toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "展开 context7 Tools" }));
+  expect(screen.getByRole("button", { name: "收起 context7 Tools" })).toHaveAttribute("aria-expanded", "true");
   await userEvent.click(screen.getByRole("button", { name: "resolve-library-id" }));
   expect(screen.getByText("1/2 tools")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "resolve-library-id" })).toHaveAttribute("aria-pressed", "false");

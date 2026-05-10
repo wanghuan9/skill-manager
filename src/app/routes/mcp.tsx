@@ -1,6 +1,7 @@
 import { startTransition, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useNotifications } from "@/app/notifications";
+import { waitForNextPaint } from "@/app/utils/wait-for-next-paint";
 import {
   deleteMcpServer,
   fetchMcpWorkspace,
@@ -198,6 +199,17 @@ function ImportIcon({ isSpinning = false }: { isSpinning?: boolean }) {
   );
 }
 
+function RefreshIcon({ isSpinning = false }: { isSpinning?: boolean }) {
+  return (
+    <svg className={isSpinning ? "skills-toolbar-button__svg is-spinning" : "skills-toolbar-button__svg"} viewBox="0 0 20 20" fill="none" aria-hidden="true">
+      <path d="M16.2 9.1a6.2 6.2 0 0 0-10.7-3.6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M3.7 3.9v3.7h3.7" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M3.8 10.9a6.2 6.2 0 0 0 10.7 3.6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M16.3 16.1v-3.7h-3.7" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
 function AddIcon() {
   return (
     <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
@@ -231,6 +243,29 @@ function DeleteIcon() {
         strokeLinecap="round"
         strokeLinejoin="round"
       />
+    </svg>
+  );
+}
+
+function CollapseToolsIcon({ collapsed }: { collapsed: boolean }) {
+  return (
+    <svg
+      className="mcp-server-card__tool-collapse-icon"
+      viewBox="0 0 10 14"
+      fill="none"
+      aria-hidden="true"
+    >
+      {collapsed ? (
+        <>
+          <path d="M2 5 5 2l3 3" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round" strokeLinejoin="round" />
+          <path d="m2 9 3 3 3-3" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round" strokeLinejoin="round" />
+        </>
+      ) : (
+        <>
+          <path d="m2 4 3 3 3-3" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round" strokeLinejoin="round" />
+          <path d="M2 8 5 11l3-3" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round" strokeLinejoin="round" />
+        </>
+      )}
     </svg>
   );
 }
@@ -275,9 +310,11 @@ export function McpRoute() {
   const [pendingAppKey, setPendingAppKey] = useState("");
   const [pendingToolKey, setPendingToolKey] = useState("");
   const [isImporting, setIsImporting] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
   const [toolbarContainer, setToolbarContainer] = useState<HTMLElement | null>(null);
   const [expandedServerIds, setExpandedServerIds] = useState<Record<string, boolean>>({});
+  const [collapsedToolSectionIds, setCollapsedToolSectionIds] = useState<Record<string, boolean>>({});
   const [deleteConfirmingServerId, setDeleteConfirmingServerId] = useState("");
   const [deletingServerId, setDeletingServerId] = useState("");
   const deleteActionRef = useRef<HTMLButtonElement | null>(null);
@@ -408,6 +445,25 @@ export function McpRoute() {
       notify({ tone: "error", message });
     } finally {
       setIsImporting(false);
+    }
+  }
+
+  async function handleRefreshWorkspace() {
+    if (isRefreshing) {
+      return;
+    }
+
+    setDeleteConfirmingServerId("");
+    setIsRefreshing(true);
+    await waitForNextPaint();
+    try {
+      const snapshot = await fetchMcpWorkspace();
+      commitWorkspace(snapshot);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "刷新 MCP 配置失败";
+      notify({ tone: "error", message });
+    } finally {
+      setIsRefreshing(false);
     }
   }
 
@@ -572,6 +628,13 @@ export function McpRoute() {
     }));
   }
 
+  function toggleToolSectionCollapsed(serverId: string) {
+    setCollapsedToolSectionIds((current) => ({
+      ...current,
+      [serverId]: !(current[serverId] ?? false),
+    }));
+  }
+
   const apps = workspace?.apps ?? [];
   const installedApps = apps.filter(isMcpAppReady);
   const installedAppIdSet = useMemo(
@@ -597,6 +660,17 @@ export function McpRoute() {
           onChange={(event) => setQuery(event.target.value)}
         />
       </label>
+      <button
+        className={`secondary-button secondary-button--compact skills-toolbar-button skills-toolbar-button--refresh${isRefreshing ? " is-loading" : ""}`}
+        type="button"
+        onClick={() => void handleRefreshWorkspace()}
+        disabled={isRefreshing}
+      >
+        <span aria-hidden="true" className="skills-toolbar-button__icon">
+          <RefreshIcon isSpinning={isRefreshing} />
+        </span>
+        <span>刷新</span>
+      </button>
       <button
         className="secondary-button secondary-button--compact skills-toolbar-button"
         type="button"
@@ -630,6 +704,7 @@ export function McpRoute() {
       <section className="mcp-server-list card-list">
         {filteredServers.map((server) => {
           const isExpanded = expandedServerIds[server.id] ?? false;
+          const isToolSectionCollapsed = collapsedToolSectionIds[server.id] ?? false;
           const visibleApps = server.apps.filter((app) => installedAppIdSet.has(app.appId));
           const enabledToolCount = server.tools.filter((tool) => tool.isEnabled).length;
           const totalToolCount = server.tools.length;
@@ -664,7 +739,9 @@ export function McpRoute() {
                             {toolSummaryLabel}
                           </span>
                         </div>
-                        <code title={server.commandLabel}>{server.commandLabel || server.id}</code>
+                        <div className="mcp-server-card__subtitle" title={server.commandLabel || server.id}>
+                          {server.commandLabel || server.id}
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -776,35 +853,54 @@ export function McpRoute() {
                   </section>
                   <section>
                     <div className="skill-card__section-header">
-                      <div className="mcp-server-card__tool-header">
-                        <h4>Tools</h4>
+                      <div className="mcp-server-card__tool-header-row">
+                        <div className="mcp-server-card__tool-header">
+                          <h4>Tools</h4>
+                          {totalToolCount > 0 ? (
+                            <span className="mcp-server-card__tool-count">{enabledToolCount}/{totalToolCount} 已启用</span>
+                          ) : null}
+                          {totalToolCount > 0 ? (
+                            <button
+                              className="mcp-server-card__tool-collapse-button"
+                              type="button"
+                              onClick={() => toggleToolSectionCollapsed(server.id)}
+                              aria-expanded={!isToolSectionCollapsed}
+                              aria-controls={`mcp-tools-${server.id}`}
+                              aria-label={`${isToolSectionCollapsed ? "展开" : "收起"} ${server.name} Tools`}
+                              title={isToolSectionCollapsed ? "展开 Tools" : "收起 Tools"}
+                            >
+                              <CollapseToolsIcon collapsed={isToolSectionCollapsed} />
+                            </button>
+                          ) : null}
+                        </div>
                         {totalToolCount > 0 ? (
-                          <span className="mcp-server-card__tool-count">{enabledToolCount}/{totalToolCount} 已启用</span>
+                          <div className="mcp-server-card__tool-actions">
+                            <button
+                              className="secondary-button secondary-button--compact"
+                              type="button"
+                              onClick={() => void handleToggleAllTools(server, true)}
+                              disabled={Boolean(pendingToolKey) || disabledToolCount === 0}
+                            >
+                              全部开启
+                            </button>
+                            <button
+                              className="secondary-button secondary-button--compact"
+                              type="button"
+                              onClick={() => void handleToggleAllTools(server, false)}
+                              disabled={Boolean(pendingToolKey) || enabledToolCount === 0}
+                            >
+                              全部关闭
+                            </button>
+                          </div>
                         ) : null}
                       </div>
-                      {totalToolCount > 0 ? (
-                        <div className="mcp-server-card__tool-actions">
-                          <button
-                            className="secondary-button secondary-button--compact"
-                            type="button"
-                            onClick={() => void handleToggleAllTools(server, true)}
-                            disabled={Boolean(pendingToolKey) || disabledToolCount === 0}
-                          >
-                            全部开启
-                          </button>
-                          <button
-                            className="secondary-button secondary-button--compact"
-                            type="button"
-                            onClick={() => void handleToggleAllTools(server, false)}
-                            disabled={Boolean(pendingToolKey) || enabledToolCount === 0}
-                          >
-                            全部关闭
-                          </button>
-                        </div>
-                      ) : null}
                     </div>
-                    {server.tools.length > 0 ? (
-                      <div className="mcp-server-card__tool-list" aria-label={`${server.name} tools`}>
+                    {server.tools.length > 0 && !isToolSectionCollapsed ? (
+                      <div
+                        id={`mcp-tools-${server.id}`}
+                        className="mcp-server-card__tool-list"
+                        aria-label={`${server.name} tools`}
+                      >
                         {server.tools.map((tool) => {
                           const isUpdating = pendingToolKey === `${server.id}:tool:${tool.name}`;
 
@@ -823,7 +919,7 @@ export function McpRoute() {
                           );
                         })}
                       </div>
-                    ) : (
+                    ) : server.tools.length > 0 ? null : (
                       <p className="mcp-server-card__tool-empty">暂未获取到该 MCP 的 tools。</p>
                     )}
                   </section>
