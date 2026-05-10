@@ -131,6 +131,57 @@ pub struct McpMarketplaceServer {
     pub server: Option<Value>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct McpDirectoryServersResponse {
+    #[serde(default)]
+    servers: Vec<McpDirectoryServer>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct McpDirectoryServer {
+    id: String,
+    fastmcp_id: Option<u64>,
+    name: String,
+    slug: String,
+    #[serde(default)]
+    short_description: String,
+    #[serde(default)]
+    classification: String,
+    #[serde(default)]
+    transport_type: Vec<String>,
+    #[serde(default)]
+    stars: u64,
+    github_stars: Option<u64>,
+    npm_weekly_downloads: Option<u64>,
+    #[serde(default)]
+    publisher: McpDirectoryPublisher,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct McpDirectoryPublisher {
+    #[serde(default)]
+    name: String,
+    avatar_url: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct McpDirectoryInstallConfigsResponse {
+    #[serde(default)]
+    install_configs: Vec<McpDirectoryInstallConfig>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct McpDirectoryInstallConfig {
+    #[serde(default)]
+    client_slug: String,
+    config_json: String,
+}
+
 #[tauri::command]
 pub fn list_mcp_workspace() -> Result<McpWorkspaceSnapshot, String> {
     build_mcp_workspace_snapshot()
@@ -142,22 +193,51 @@ pub async fn list_mcp_marketplace_servers(
     page: Option<usize>,
     limit: Option<usize>,
     query: Option<String>,
-    _refresh: Option<bool>,
+    refresh: Option<bool>,
 ) -> Result<Vec<McpMarketplaceServer>, String> {
     let safe_page = page.unwrap_or(1).max(1);
     let safe_limit = limit.unwrap_or(24).max(1);
     let normalized_query = query.unwrap_or_default().trim().to_string();
-    let client = mcp_http_client()?;
-    let mut servers = if normalized_query.is_empty() {
-        default_mcp_marketplace_servers()
-    } else {
-        fetch_mcp_directory_query(&client, &normalized_query)
-            .await
-            .unwrap_or_default()
+    let is_searching = !normalized_query.is_empty();
+
+    if !refresh.unwrap_or(false) && !is_searching {
+        if let Some(cached_page) = load_mcp_marketplace_cache_page(safe_page) {
+            return Ok(cached_page);
+        }
+    }
+
+    let client = match mcp_http_client() {
+        Ok(client) => client,
+        Err(error) => {
+            if safe_page == 1 {
+                return Ok(default_mcp_marketplace_servers());
+            }
+            return Err(error);
+        }
     };
+    let mut servers = fetch_mcp_directory_servers_page(
+        &client,
+        safe_page,
+        safe_limit,
+        if is_searching {
+            Some(normalized_query.as_str())
+        } else {
+            None
+        },
+    )
+    .await
+    .unwrap_or_default();
 
     if servers.is_empty() {
-        servers = default_mcp_marketplace_servers();
+        servers = if is_searching {
+            fetch_mcp_directory_query(&client, &normalized_query)
+                .await
+                .unwrap_or_default()
+        } else if safe_page == 1 {
+            default_mcp_marketplace_servers()
+        } else {
+            Vec::new()
+        };
     }
 
     if !normalized_query.is_empty() {
@@ -172,16 +252,22 @@ pub async fn list_mcp_marketplace_servers(
         });
     }
 
-    let start = (safe_page - 1) * safe_limit;
-    Ok(servers.into_iter().skip(start).take(safe_limit).collect())
+    if !is_searching && !servers.is_empty() {
+        save_mcp_marketplace_cache_page(safe_page, &servers);
+    }
+
+    Ok(servers)
 }
 
 #[tauri::command]
 pub async fn install_mcp_server_from_marketplace(
     server: McpMarketplaceServer,
 ) -> Result<McpWorkspaceSnapshot, String> {
-    let Some(server_config) = server.server.clone() else {
-        return Err(format!("{} 暂未提供可自动安装的 MCP 配置", server.name));
+    let server_config = match server.server.clone() {
+        Some(config) => config,
+        None => fetch_mcp_marketplace_install_config(&server)
+            .await?
+            .ok_or_else(|| format!("{} 暂未提供可自动安装的 MCP 配置", server.name))?,
     };
 
     let server_id = normalize_mcp_marketplace_server_id(&server.name);
@@ -1586,6 +1672,287 @@ fn mcp_http_client() -> Result<Client, String> {
         .timeout(Duration::from_secs(14))
         .build()
         .map_err(|error| format!("创建 MCP 市场请求客户端失败: {error}"))
+}
+
+fn mcp_marketplace_cache_file() -> Option<PathBuf> {
+    let home_dir = env::var("HOME").ok()?;
+    Some(
+        PathBuf::from(home_dir)
+            .join(".skillm")
+            .join("cache")
+            .join("mcp-marketplace.json"),
+    )
+}
+
+fn load_mcp_marketplace_cache_page(page: usize) -> Option<Vec<McpMarketplaceServer>> {
+    let cache_path = mcp_marketplace_cache_file()?;
+    let content = fs::read_to_string(cache_path).ok()?;
+    let cached: Value = serde_json::from_str(&content).ok()?;
+    let version = cached
+        .get("version")
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
+    if version < 1 {
+        return None;
+    }
+
+    let timestamp = cached
+        .get("timestamp")
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_secs();
+    if now.saturating_sub(timestamp) > 3600 {
+        return None;
+    }
+
+    let page_key = page.to_string();
+    let page_value = cached
+        .get("sources")
+        .and_then(Value::as_object)?
+        .get("mcp.directory")?
+        .get("pages")
+        .and_then(Value::as_object)?
+        .get(&page_key)?;
+
+    serde_json::from_value(page_value.clone()).ok()
+}
+
+fn save_mcp_marketplace_cache_page(page: usize, servers: &[McpMarketplaceServer]) {
+    let Some(cache_path) = mcp_marketplace_cache_file() else {
+        return;
+    };
+    let Some(parent_dir) = cache_path.parent() else {
+        return;
+    };
+    let _ = fs::create_dir_all(parent_dir);
+
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or_default();
+    let mut cache_data = fs::read_to_string(&cache_path)
+        .ok()
+        .and_then(|content| serde_json::from_str::<Value>(&content).ok())
+        .unwrap_or_else(|| json!({}));
+    let Some(cache_object) = cache_data.as_object_mut() else {
+        return;
+    };
+    cache_object.insert("version".into(), json!(1_u64));
+    cache_object.insert("timestamp".into(), json!(timestamp));
+    let sources_value = cache_object.entry("sources").or_insert_with(|| json!({}));
+    let Some(sources_object) = sources_value.as_object_mut() else {
+        return;
+    };
+    let source_value = sources_object
+        .entry("mcp.directory")
+        .or_insert_with(|| json!({ "pages": {} }));
+    let Some(source_object) = source_value.as_object_mut() else {
+        return;
+    };
+    source_object.insert("timestamp".into(), json!(timestamp));
+    let pages_value = source_object.entry("pages").or_insert_with(|| json!({}));
+    let Some(pages_object) = pages_value.as_object_mut() else {
+        return;
+    };
+    pages_object.insert(page.to_string(), json!(servers));
+
+    let _ = fs::write(
+        cache_path,
+        serde_json::to_string_pretty(&cache_data).unwrap_or_default(),
+    );
+}
+
+async fn fetch_mcp_directory_servers_page(
+    client: &Client,
+    page: usize,
+    limit: usize,
+    query: Option<&str>,
+) -> Result<Vec<McpMarketplaceServer>, String> {
+    let offset = (page.saturating_sub(1)) * limit;
+    let mut params = vec![
+        ("limit", limit.to_string()),
+        ("offset", offset.to_string()),
+        ("sort", "trending".to_string()),
+    ];
+    if let Some(query) = query {
+        let trimmed = query.trim();
+        if !trimmed.is_empty() {
+            params.push(("q", trimmed.to_string()));
+        }
+    }
+
+    let payload = client
+        .get("https://mcp.directory/api/v1/servers")
+        .query(&params)
+        .send()
+        .await
+        .map_err(|error| format!("请求 MCP.Directory 服务列表失败: {error}"))?
+        .error_for_status()
+        .map_err(|error| format!("MCP.Directory 服务列表返回异常状态: {error}"))?
+        .json::<McpDirectoryServersResponse>()
+        .await
+        .map_err(|error| format!("解析 MCP.Directory 服务列表失败: {error}"))?;
+
+    Ok(payload
+        .servers
+        .into_iter()
+        .map(map_mcp_directory_server)
+        .collect())
+}
+
+fn map_mcp_directory_server(server: McpDirectoryServer) -> McpMarketplaceServer {
+    let slug = server.slug.trim().to_string();
+    let name = server.name.trim().to_string();
+    let source_url = if slug.is_empty() {
+        "https://mcp.directory/servers".to_string()
+    } else {
+        format!("https://mcp.directory/servers/{slug}")
+    };
+    let publisher = if server.publisher.name.trim().is_empty() {
+        "MCP.Directory".to_string()
+    } else {
+        server.publisher.name.trim().to_string()
+    };
+    let transport_label = if server.transport_type.is_empty() {
+        "需补全".to_string()
+    } else {
+        server
+            .transport_type
+            .iter()
+            .map(|transport| match transport.as_str() {
+                "streamable-http" => "HTTP".to_string(),
+                value => value.to_string(),
+            })
+            .collect::<Vec<_>>()
+            .join(" / ")
+    };
+    let popularity = server
+        .github_stars
+        .or(Some(server.stars))
+        .filter(|value| *value > 0)
+        .or(server.npm_weekly_downloads)
+        .unwrap_or_default();
+    let category = match server.classification.as_str() {
+        "official" => "Official",
+        "reference" => "Reference",
+        "community" => "Community",
+        value if !value.trim().is_empty() => value,
+        _ => "MCP",
+    }
+    .to_string();
+    let id_suffix = if !slug.is_empty() {
+        slug
+    } else if let Some(fastmcp_id) = server.fastmcp_id {
+        fastmcp_id.to_string()
+    } else if !server.id.trim().is_empty() {
+        server.id
+    } else {
+        normalize_mcp_marketplace_server_id(&name)
+    };
+
+    McpMarketplaceServer {
+        id: format!("mcp-directory-{id_suffix}"),
+        name,
+        source_site: "MCP.Directory".to_string(),
+        description: server.short_description.trim().to_string(),
+        publisher,
+        category,
+        transport_label,
+        source_url,
+        popularity_label: if popularity > 0 {
+            format_compact_count(popularity)
+        } else {
+            "MCP.Directory".to_string()
+        },
+        avatar_url: server.publisher.avatar_url,
+        server: None,
+    }
+}
+
+async fn fetch_mcp_marketplace_install_config(
+    server: &McpMarketplaceServer,
+) -> Result<Option<Value>, String> {
+    let slug = server
+        .source_url
+        .trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .unwrap_or_default()
+        .trim();
+    if slug.is_empty() || server.source_url.trim().is_empty() {
+        return Ok(None);
+    }
+
+    let client = mcp_http_client()?;
+    let endpoint = format!(
+        "https://mcp.directory/api/v1/servers/{}/install-configs",
+        encode_query_component(slug)
+    );
+    let payload = client
+        .get(endpoint)
+        .send()
+        .await
+        .map_err(|error| format!("请求 MCP 安装配置失败: {error}"))?
+        .error_for_status()
+        .map_err(|error| format!("MCP 安装配置返回异常状态: {error}"))?
+        .json::<McpDirectoryInstallConfigsResponse>()
+        .await
+        .map_err(|error| format!("解析 MCP 安装配置失败: {error}"))?;
+
+    Ok(select_mcp_install_config(
+        &payload.install_configs,
+        &server.description,
+    ))
+}
+
+fn select_mcp_install_config(
+    configs: &[McpDirectoryInstallConfig],
+    description: &str,
+) -> Option<Value> {
+    const PREFERRED_CLIENTS: [&str; 4] = ["claude-desktop", "cursor", "vscode", "codex"];
+    for preferred_client in PREFERRED_CLIENTS {
+        if let Some(config) = configs
+            .iter()
+            .find(|item| item.client_slug == preferred_client)
+            .and_then(|item| parse_mcp_install_config(&item.config_json, description))
+        {
+            return Some(config);
+        }
+    }
+
+    configs
+        .iter()
+        .find_map(|item| parse_mcp_install_config(&item.config_json, description))
+}
+
+fn parse_mcp_install_config(config_json: &str, description: &str) -> Option<Value> {
+    let value = serde_json::from_str::<Value>(config_json).ok()?;
+    let server_value = value
+        .get("mcpServers")
+        .or_else(|| value.get("mcp").and_then(|mcp| mcp.get("servers")))
+        .and_then(Value::as_object)
+        .and_then(|servers| servers.values().next())
+        .cloned()?;
+    normalize_mcp_install_config(server_value, description)
+}
+
+fn normalize_mcp_install_config(mut server: Value, description: &str) -> Option<Value> {
+    let obj = server.as_object_mut()?;
+    if !obj.contains_key("type") {
+        if obj.get("url").and_then(Value::as_str).is_some() {
+            obj.insert("type".into(), Value::String("http".into()));
+        } else if obj.get("command").and_then(Value::as_str).is_some() {
+            obj.insert("type".into(), Value::String("stdio".into()));
+        }
+    }
+    if obj.get("type").and_then(Value::as_str) == Some("streamable-http") {
+        obj.insert("type".into(), Value::String("http".into()));
+    }
+    if !description.trim().is_empty() {
+        obj.entry("description")
+            .or_insert_with(|| Value::String(description.trim().to_string()));
+    }
+    Some(server)
 }
 
 async fn fetch_mcp_directory_query(

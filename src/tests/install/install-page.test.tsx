@@ -1,6 +1,18 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { App } from "@/app/App";
+
+function scrollPageContentToBottom() {
+  const scrollContainer = document.querySelector(".page-content");
+  if (!(scrollContainer instanceof HTMLElement)) {
+    throw new Error("missing page content scroll container");
+  }
+
+  Object.defineProperty(scrollContainer, "scrollHeight", { configurable: true, value: 1000 });
+  Object.defineProperty(scrollContainer, "clientHeight", { configurable: true, value: 700 });
+  Object.defineProperty(scrollContainer, "scrollTop", { configurable: true, value: 260 });
+  fireEvent.scroll(scrollContainer);
+}
 
 test("renders install-source and repository install panels", async () => {
   render(<App />);
@@ -27,7 +39,7 @@ test("shows MCP marketplace separately from skill-only install methods", async (
   expect(screen.getByRole("heading", { name: "安装源", level: 2 })).toBeInTheDocument();
   expect(screen.getByRole("tab", { name: "mcp.directory" })).toBeInTheDocument();
   expect(await screen.findByText("playwright")).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "加载更多" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "加载更多" })).not.toBeInTheDocument();
 });
 
 test("keeps MCP marketplace card and detail metadata consistent", async () => {
@@ -63,7 +75,7 @@ test("installs MCP marketplace servers into the managed MCP list without enablin
   const installButtons = await screen.findAllByRole("button", { name: "安装" });
   await userEvent.click(installButtons[0]);
 
-  expect(await screen.findByRole("button", { name: "已加入" })).toBeDisabled();
+  expect(await screen.findByRole("button", { name: "已安装" })).toBeDisabled();
 });
 
 test("searches MCP marketplace and restores browse pagination after clearing query", async () => {
@@ -72,7 +84,7 @@ test("searches MCP marketplace and restores browse pagination after clearing que
   await userEvent.click(screen.getByRole("tab", { name: "MCP" }));
 
   expect(await screen.findByText("context7")).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "加载更多" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "加载更多" })).not.toBeInTheDocument();
 
   const searchInput = screen.getByRole("searchbox", { name: "搜索 MCP" });
   await userEvent.type(searchInput, "playwright");
@@ -86,8 +98,12 @@ test("searches MCP marketplace and restores browse pagination after clearing que
   await userEvent.clear(searchInput);
 
   await waitFor(() => {
-    expect(screen.getByRole("button", { name: "加载更多" })).toBeInTheDocument();
+    expect(screen.getByText("context7")).toBeInTheDocument();
   });
+
+  scrollPageContentToBottom();
+
+  expect(await screen.findByText("已加载全部 MCP")).toBeInTheDocument();
 });
 
 test("discovers repo skills and allows multi-select install", async () => {

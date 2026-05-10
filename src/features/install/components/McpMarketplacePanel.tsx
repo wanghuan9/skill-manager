@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { useNotifications } from "@/app/notifications";
 import {
   fetchMcpMarketplaceServers,
@@ -11,6 +11,7 @@ import type { McpMarketplaceServer } from "@/features/skills/state/skill-store";
 const MCP_MARKETPLACE_PAGE_SIZE = 24;
 const MCP_MARKETPLACE_SOURCE_SITE = "MCP.Directory";
 const MCP_MARKETPLACE_SOURCE_LABEL = "mcp.directory";
+const MCP_AVATAR_PRIORITY_COUNT = 12;
 
 type McpMarketplacePanelProps = {
   searchQuery: string;
@@ -30,9 +31,14 @@ export function McpMarketplacePanel(props: McpMarketplacePanelProps) {
   const [page, setPage] = useState(0);
   const [errorMessage, setErrorMessage] = useState("");
   const [debouncedQuery, setDebouncedQuery] = useState("");
-  const searchCacheRef = useRef(new Map<string, McpMarketplaceServer[]>());
   const pageCacheRef = useRef(new Map<number, McpMarketplaceServer[]>());
+  const searchPageCacheRef = useRef(new Map<string, Map<number, McpMarketplaceServer[]>>());
   const workspaceLoadedRef = useRef(false);
+  const isLoadingRef = useRef(isLoading);
+  const isLoadingMoreRef = useRef(isLoadingMore);
+  const hasMoreRef = useRef(hasMore);
+  const loadingMoreRef = useRef(false);
+  const loadMoreRef = useRef<() => Promise<void>>(async () => undefined);
   const normalizedQuery = debouncedQuery.trim();
   const isSearching = normalizedQuery.length > 0;
 
@@ -68,17 +74,22 @@ export function McpMarketplacePanel(props: McpMarketplacePanelProps) {
       try {
         await ensureWorkspaceLoaded();
         const cacheKey = normalizedQuery.toLowerCase();
-        const cachedSearch = cacheKey ? searchCacheRef.current.get(cacheKey) : undefined;
-        const cachedPage = cacheKey ? undefined : pageCacheRef.current.get(1);
-        const cachedServers = cachedSearch ?? cachedPage;
+        const cachedPages = cacheKey ? searchPageCacheRef.current.get(cacheKey) : pageCacheRef.current;
+        const cachedFirstPage = cachedPages?.get(1);
         if (!active) {
           return;
         }
 
-        if (cachedServers) {
-          setServers(cachedServers);
-          setPage(cacheKey ? 1 : Math.max(pageCacheRef.current.size, 1));
-          setHasMore(cacheKey ? cachedServers.length >= MCP_MARKETPLACE_PAGE_SIZE : cachedServers.length > 0);
+        if (cachedFirstPage) {
+          const cachedPageEntries = Array.from((cachedPages ?? new Map()).entries())
+            .filter(([cachedPage]) => cachedPage >= 1)
+            .sort(([leftPage], [rightPage]) => leftPage - rightPage);
+          const lastCachedEntry = cachedPageEntries[cachedPageEntries.length - 1];
+          const lastCachedPage = lastCachedEntry?.[0] ?? 1;
+          const lastCachedServers = lastCachedEntry?.[1] ?? cachedFirstPage;
+          setServers(cachedPageEntries.flatMap(([, cachedServers]) => cachedServers));
+          setPage(lastCachedPage);
+          setHasMore(cacheKey ? lastCachedServers.length >= MCP_MARKETPLACE_PAGE_SIZE : lastCachedServers.length > 0);
           setIsLoading(false);
           return;
         }
@@ -94,7 +105,8 @@ export function McpMarketplacePanel(props: McpMarketplacePanelProps) {
         }
 
         if (cacheKey) {
-          searchCacheRef.current.set(cacheKey, marketplaceServers);
+          const searchPages = new Map<number, McpMarketplaceServer[]>([[1, marketplaceServers]]);
+          searchPageCacheRef.current.set(cacheKey, searchPages);
         } else {
           pageCacheRef.current.set(1, marketplaceServers);
         }
@@ -124,13 +136,43 @@ export function McpMarketplacePanel(props: McpMarketplacePanelProps) {
     };
   }, [normalizedQuery]);
 
+  useEffect(() => {
+    isLoadingRef.current = isLoading;
+  }, [isLoading]);
+
+  useEffect(() => {
+    isLoadingMoreRef.current = isLoadingMore;
+  }, [isLoadingMore]);
+
+  useEffect(() => {
+    hasMoreRef.current = hasMore;
+  }, [hasMore]);
+
+  useEffect(() => {
+    const avatarUrls = servers
+      .map((server) => getOptimizedMcpAvatarUrl(server.avatarUrl))
+      .filter((url): url is string => Boolean(url));
+
+    for (const avatarUrl of avatarUrls) {
+      if (prefetchedAvatarUrls.has(avatarUrl)) {
+        continue;
+      }
+      prefetchedAvatarUrls.add(avatarUrl);
+      const image = new Image();
+      image.decoding = "async";
+      image.src = avatarUrl;
+    }
+  }, [servers]);
+
   async function handleLoadMore() {
-    if (isSearching || isLoading || isLoadingMore || !hasMore) {
+    if (isLoading || isLoadingMore || !hasMore) {
       return;
     }
 
     const nextPage = page + 1;
-    const cachedPage = pageCacheRef.current.get(nextPage);
+    const cacheKey = normalizedQuery.toLowerCase();
+    const searchPages = cacheKey ? searchPageCacheRef.current.get(cacheKey) : undefined;
+    const cachedPage = cacheKey ? searchPages?.get(nextPage) : pageCacheRef.current.get(nextPage);
     if (cachedPage) {
       setServers((current) => [...current, ...cachedPage]);
       setPage(nextPage);
@@ -145,8 +187,15 @@ export function McpMarketplacePanel(props: McpMarketplacePanelProps) {
         sourceSite: MCP_MARKETPLACE_SOURCE_SITE,
         page: nextPage,
         limit: MCP_MARKETPLACE_PAGE_SIZE,
+        query: normalizedQuery,
       });
-      pageCacheRef.current.set(nextPage, nextServers);
+      if (cacheKey) {
+        const nextSearchPages = searchPages ?? new Map<number, McpMarketplaceServer[]>();
+        nextSearchPages.set(nextPage, nextServers);
+        searchPageCacheRef.current.set(cacheKey, nextSearchPages);
+      } else {
+        pageCacheRef.current.set(nextPage, nextServers);
+      }
       setServers((current) => [...current, ...nextServers]);
       setPage(nextPage);
       setHasMore(nextServers.length >= MCP_MARKETPLACE_PAGE_SIZE);
@@ -159,17 +208,54 @@ export function McpMarketplacePanel(props: McpMarketplacePanelProps) {
     }
   }
 
-  async function handleInstall(server: McpMarketplaceServer) {
-    if (!server.server) {
-      notify({ message: `${server.name} 暂未提供可自动安装的 MCP 配置`, tone: "error" });
+  useEffect(() => {
+    loadMoreRef.current = handleLoadMore;
+  });
+
+  const handleScroll = useCallback(() => {
+    if (
+      loadingMoreRef.current ||
+      isLoadingRef.current ||
+      isLoadingMoreRef.current ||
+      !hasMoreRef.current
+    ) {
       return;
     }
 
+    const scrollContainer = document.querySelector(".page-content");
+    if (!(scrollContainer instanceof HTMLElement)) {
+      return;
+    }
+
+    const remain = scrollContainer.scrollHeight - scrollContainer.scrollTop - scrollContainer.clientHeight;
+    if (remain > 140) {
+      return;
+    }
+
+    loadingMoreRef.current = true;
+    void loadMoreRef.current().finally(() => {
+      loadingMoreRef.current = false;
+    });
+  }, []);
+
+  useEffect(() => {
+    const scrollContainer = document.querySelector(".page-content");
+    if (!(scrollContainer instanceof HTMLElement)) {
+      return;
+    }
+
+    scrollContainer.addEventListener("scroll", handleScroll, { passive: true });
+    return () => {
+      scrollContainer.removeEventListener("scroll", handleScroll);
+    };
+  }, [handleScroll]);
+
+  async function handleInstall(server: McpMarketplaceServer) {
     setInstallingServerIds((current) => new Set(current).add(server.id));
     try {
       const workspace = await installMcpServerFromMarketplace({ server });
       setInstalledServerIds(new Set(workspace.servers.map((item) => item.id)));
-      notify({ message: `MCP "${server.name}" 已加入管理列表，可到 MCP 页启用到工具`, tone: "success" });
+      notify({ message: `MCP "${server.name}" 已安装，可到 MCP 页启用到工具`, tone: "success" });
     } catch (error) {
       const message = error instanceof Error ? error.message : "安装 MCP 失败，请稍后重试。";
       notify({ message, tone: "error" });
@@ -230,11 +316,11 @@ export function McpMarketplacePanel(props: McpMarketplacePanelProps) {
           </section>
         ) : servers.length > 0 ? (
           <>
-            {servers.map((server) => {
+            {servers.map((server, index) => {
               const resolvedId = normalizeMcpServerId(server.name);
               const isInstalled = installedServerIds.has(resolvedId);
               const isInstalling = installingServerIds.has(server.id);
-              const canInstall = Boolean(server.server);
+              const canInstall = Boolean(server.sourceUrl);
 
               return (
                 <article key={server.id} className="placeholder-card install-card mcp-market-card">
@@ -247,9 +333,7 @@ export function McpMarketplacePanel(props: McpMarketplacePanelProps) {
                   >
                     <div className="install-card__header">
                       <div className="install-card__lead">
-                        <div className="install-card__avatar install-card__avatar--sky">
-                          {server.avatarUrl ? <img src={server.avatarUrl} alt="" loading="lazy" /> : <McpIcon />}
-                        </div>
+                        <McpMarketplaceAvatar server={server} priority={index < MCP_AVATAR_PRIORITY_COUNT} />
                         <div className="install-card__title-group">
                           <div className="install-card__title-row">
                             <h3 title={server.name}>{server.name}</h3>
@@ -278,7 +362,7 @@ export function McpMarketplacePanel(props: McpMarketplacePanelProps) {
                           void handleInstall(server);
                         }}
                       >
-                        {isInstalled ? "已加入" : isInstalling ? "安装中..." : canInstall ? "安装" : "需补全"}
+                        {isInstalled ? "已安装" : isInstalling ? "安装中..." : canInstall ? "安装" : "需补全"}
                       </button>
                     </div>
                     <div className="install-card__chips">
@@ -294,15 +378,10 @@ export function McpMarketplacePanel(props: McpMarketplacePanelProps) {
             {errorMessage ? (
               <p className="install-loading-text" role="status">{errorMessage}</p>
             ) : null}
-            {!isSearching && isLoadingMore ? (
+            {isLoadingMore ? (
               <p className="install-loading-text">加载中...</p>
             ) : null}
-            {!isSearching && hasMore ? (
-              <button className="secondary-button" type="button" onClick={() => void handleLoadMore()} disabled={isLoadingMore}>
-                {isLoadingMore ? "加载中..." : "加载更多"}
-              </button>
-            ) : null}
-            {!isSearching && !hasMore ? (
+            {!hasMore ? (
               <p className="install-loading-text">已加载全部 MCP</p>
             ) : null}
           </>
@@ -335,7 +414,7 @@ type McpServerDetailModalProps = {
 function McpServerDetailModal(props: McpServerDetailModalProps) {
   const { server, onClose } = props;
   const serverJson = useMemo(
-    () => (server.server ? JSON.stringify(server.server, null, 2) : "暂无可自动安装配置"),
+    () => (server.server ? JSON.stringify(server.server, null, 2) : "安装时将从 MCP.Directory 自动拉取配置"),
     [server.server],
   );
 
@@ -408,11 +487,98 @@ function normalizeMcpServerId(name: string) {
   return normalized || "mcp-server";
 }
 
+const prefetchedAvatarUrls = new Set<string>();
+
+function McpMarketplaceAvatar(props: { server: McpMarketplaceServer; priority: boolean }) {
+  const { server, priority } = props;
+  const [isLoaded, setIsLoaded] = useState(false);
+  const [hasFailed, setHasFailed] = useState(false);
+  const avatarUrl = getOptimizedMcpAvatarUrl(server.avatarUrl);
+  const shouldLoadImage = Boolean(avatarUrl) && !hasFailed;
+
+  useEffect(() => {
+    setIsLoaded(false);
+    setHasFailed(false);
+  }, [avatarUrl]);
+
+  const avatarClassName = [
+    "install-card__avatar",
+    `install-card__avatar--${buildMcpAvatarTone(server)}`,
+    isLoaded ? "install-card__avatar--image-loaded" : "",
+  ].filter(Boolean).join(" ");
+
+  return (
+    <div className={avatarClassName}>
+      <McpIcon />
+      {shouldLoadImage ? (
+        <img
+          className={`install-card__avatar-image${isLoaded ? " is-loaded" : ""}`}
+          src={avatarUrl}
+          alt=""
+          loading={priority ? "eager" : "lazy"}
+          decoding="async"
+          {...{ fetchpriority: priority ? "high" : "auto" }}
+          onLoad={(event) => {
+            setIsLoaded(event.currentTarget.naturalWidth > 0);
+          }}
+          onError={() => setHasFailed(true)}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function getOptimizedMcpAvatarUrl(avatarUrl?: string | null) {
+  if (!avatarUrl) {
+    return "";
+  }
+
+  try {
+    const parsed = new URL(avatarUrl);
+    const hostname = parsed.hostname.toLowerCase();
+    if (hostname === "github.com" && parsed.pathname.endsWith(".png")) {
+      parsed.searchParams.set("size", "80");
+      return parsed.toString();
+    }
+    if (hostname === "avatars.githubusercontent.com") {
+      parsed.searchParams.set("s", "80");
+      return parsed.toString();
+    }
+    return parsed.toString();
+  } catch {
+    return avatarUrl;
+  }
+}
+
+function buildMcpAvatarTone(server: McpMarketplaceServer) {
+  const tones = ["pink", "gold", "sky", "mint", "violet"];
+  let hash = 0;
+  const seed = `${server.sourceSite}:${server.publisher}:${server.name}`;
+  for (const character of seed) {
+    hash = (hash * 31 + character.charCodeAt(0)) % tones.length;
+  }
+  return tones[hash];
+}
+
 function McpIcon() {
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true">
-      <path d="M5 7h14v10H5z" fill="none" stroke="currentColor" strokeWidth="1.8" />
-      <path d="M8 10h8M8 14h5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+      <path
+        d="M7.2 8.2a3 3 0 0 1 4.2 0l4.4 4.4a3 3 0 0 1-4.2 4.2l-1.1-1.1"
+        fill="none"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="2"
+      />
+      <path
+        d="M16.8 15.8a3 3 0 0 1-4.2 0L8.2 11.4a3 3 0 0 1 4.2-4.2l1.1 1.1"
+        fill="none"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="2"
+      />
     </svg>
   );
 }
