@@ -736,7 +736,41 @@ code {
 .page-content {
   min-height: 0;
   overflow: auto;
-  padding-right: 4px;
+  padding-right: 10px;
+  scrollbar-gutter: stable;
+}
+
+.page-content::-webkit-scrollbar,
+.sidebar::-webkit-scrollbar,
+.mcp-edit-dialog__body::-webkit-scrollbar,
+.mcp-market-config-preview::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.page-content::-webkit-scrollbar-track,
+.sidebar::-webkit-scrollbar-track,
+.mcp-edit-dialog__body::-webkit-scrollbar-track,
+.mcp-market-config-preview::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.page-content::-webkit-scrollbar-thumb,
+.sidebar::-webkit-scrollbar-thumb,
+.mcp-edit-dialog__body::-webkit-scrollbar-thumb,
+.mcp-market-config-preview::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.58);
+  background-clip: padding-box;
+}
+
+.page-content::-webkit-scrollbar-thumb:hover,
+.sidebar::-webkit-scrollbar-thumb:hover,
+.mcp-edit-dialog__body::-webkit-scrollbar-thumb:hover,
+.mcp-market-config-preview::-webkit-scrollbar-thumb:hover {
+  background: rgba(100, 116, 139, 0.66);
+  background-clip: padding-box;
 }
 
 .panel-card,
@@ -4764,6 +4798,7 @@ code {
 .mcp-route {
   display: grid;
   gap: 12px;
+  padding-right: 4px;
   padding-bottom: 28px;
 }
 
