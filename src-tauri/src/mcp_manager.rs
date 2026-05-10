@@ -1,3 +1,4 @@
+use regex::Regex;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
@@ -24,6 +25,7 @@ const APP_OPENCLAW: &str = "openclaw";
 const APP_CURSOR: &str = "cursor";
 const APP_WINDSURF: &str = "windsurf";
 static MCP_NPM_METADATA_CACHE: OnceLock<Mutex<HashMap<String, McpResolvedMetadata>>> = OnceLock::new();
+static README_MARKDOWN_LINK_REGEX: OnceLock<Regex> = OnceLock::new();
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -2102,6 +2104,7 @@ async fn metadata_for_python_package(client: &Client, package_name: &str) -> Mcp
 
 fn parse_mcp_description_from_readme(readme: &str) -> Option<String> {
     let mut paragraph_lines = Vec::new();
+    let mut fallback_description = None;
     let mut in_code_block = false;
     let mut html_block_depth = 0usize;
 
@@ -2109,8 +2112,10 @@ fn parse_mcp_description_from_readme(readme: &str) -> Option<String> {
         let trimmed = line.trim();
         if trimmed.starts_with("```") {
             in_code_block = !in_code_block;
-            if !paragraph_lines.is_empty() {
-                break;
+            if let Some(description) =
+                finalize_mcp_readme_paragraph(&mut paragraph_lines, &mut fallback_description)
+            {
+                return Some(description);
             }
             continue;
         }
@@ -2128,8 +2133,10 @@ fn parse_mcp_description_from_readme(readme: &str) -> Option<String> {
             continue;
         }
         if trimmed.is_empty() {
-            if !paragraph_lines.is_empty() {
-                break;
+            if let Some(description) =
+                finalize_mcp_readme_paragraph(&mut paragraph_lines, &mut fallback_description)
+            {
+                return Some(description);
             }
             continue;
         }
@@ -2143,19 +2150,68 @@ fn parse_mcp_description_from_readme(readme: &str) -> Option<String> {
             continue;
         }
         if !paragraph_lines.is_empty() && trimmed.starts_with('#') {
-            break;
+            if let Some(description) =
+                finalize_mcp_readme_paragraph(&mut paragraph_lines, &mut fallback_description)
+            {
+                return Some(description);
+            }
+            continue;
         }
 
         paragraph_lines.push(trimmed);
     }
 
-    let description = paragraph_lines.join(" ");
+    finalize_mcp_readme_paragraph(&mut paragraph_lines, &mut fallback_description)
+        .or(fallback_description)
+}
+
+fn finalize_mcp_readme_paragraph(
+    paragraph_lines: &mut Vec<&str>,
+    fallback_description: &mut Option<String>,
+) -> Option<String> {
+    if paragraph_lines.is_empty() {
+        return None;
+    }
+
+    let lines = std::mem::take(paragraph_lines);
+
+    if is_mcp_readme_blockquote(&lines) {
+        let description = lines
+            .iter()
+            .map(|line| line.trim_start_matches('>').trim())
+            .filter(|line| !line.is_empty())
+            .collect::<Vec<_>>()
+            .join(" ");
+        let normalized = description.trim();
+        if !normalized.is_empty() && fallback_description.is_none() {
+            *fallback_description = Some(normalized.to_string());
+        }
+        return None;
+    }
+
+    let description = lines.join(" ");
     let normalized = description.trim();
-    if normalized.is_empty() {
+    if normalized.is_empty() || is_mcp_readme_link_navigation(normalized) {
         return None;
     }
 
     Some(normalized.to_string())
+}
+
+fn is_mcp_readme_blockquote(lines: &[&str]) -> bool {
+    !lines.is_empty() && lines.iter().all(|line| line.starts_with('>'))
+}
+
+fn is_mcp_readme_link_navigation(text: &str) -> bool {
+    let regex = README_MARKDOWN_LINK_REGEX.get_or_init(|| {
+        Regex::new(r"\[[^\]]+\]\([^)]+\)").expect("markdown link regex should compile")
+    });
+    let without_links = regex.replace_all(text, "");
+    let remainder = without_links.trim();
+    !remainder.is_empty()
+        && remainder
+            .chars()
+            .all(|ch| ch.is_whitespace() || matches!(ch, '|' | '/' | '·' | '•' | '-'))
 }
 
 async fn fetch_npm_package_metadata(
@@ -3376,6 +3432,44 @@ The fast, Pythonic way to build MCP servers and clients.
         assert_eq!(
             parse_mcp_description_from_readme(readme).as_deref(),
             Some("The fast, Pythonic way to build MCP servers and clients.")
+        );
+    }
+
+    #[test]
+    fn skips_language_navigation_and_promotional_callout_before_intro() {
+        let readme = r#"
+# GitLab MCP Server
+
+[English](./README.md) | [한국어](./README.ko.md) | [简体中文](./README.zh-CN.md)
+
+> **New Feature**: Dynamic GitLab API URL support with connection pooling! See [Dynamic API URL Documentation](docs/dynamic-api-url.md) for details.
+
+[![Star History Chart](https://api.star-history.com/svg?repos=zereight/gitlab-mcp&type=Date)](https://www.star-history.com/#zereight/gitlab-mcp&Date)
+
+## @zereight/mcp-gitlab
+
+A comprehensive GitLab MCP server for AI clients. Manage projects, merge requests, issues, pipelines, wiki, releases, tags, milestones, and more through stdio, SSE, and Streamable HTTP.
+"#;
+
+        assert_eq!(
+            parse_mcp_description_from_readme(readme).as_deref(),
+            Some(
+                "A comprehensive GitLab MCP server for AI clients. Manage projects, merge requests, issues, pipelines, wiki, releases, tags, milestones, and more through stdio, SSE, and Streamable HTTP."
+            )
+        );
+    }
+
+    #[test]
+    fn falls_back_to_blockquote_when_readme_has_no_plain_intro_paragraph() {
+        let readme = r#"
+# MCP Server
+
+> Lightweight server for internal automation workflows.
+"#;
+
+        assert_eq!(
+            parse_mcp_description_from_readme(readme).as_deref(),
+            Some("Lightweight server for internal automation workflows.")
         );
     }
 
