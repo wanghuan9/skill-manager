@@ -43,6 +43,7 @@ test("shows only installed MCP-ready apps in enable-to-tool controls", async () 
 
   await userEvent.click(screen.getByRole("button", { name: "MCP" }));
   expect(await screen.findByText("context7")).toBeInTheDocument();
+  expect(screen.getByText("已启用 2")).toBeInTheDocument();
   expect(screen.getByText("2 tools")).toBeInTheDocument();
   expect(screen.queryByText("stdio")).not.toBeInTheDocument();
   expect(screen.queryByText("未获取 tools")).not.toBeInTheDocument();
@@ -61,6 +62,7 @@ test("shows only installed MCP-ready apps in enable-to-tool controls", async () 
   expect(screen.getByText("Up-to-date code documentation for LLMs and AI code editors")).toBeInTheDocument();
   expect(screen.getByText("来源类型")).toBeInTheDocument();
   expect(screen.getByText("GitHub")).toBeInTheDocument();
+  expect(screen.getByText("来源")).toBeInTheDocument();
   expect(screen.getByText("https://github.com/upstash/context7")).toBeInTheDocument();
   expect(screen.getByText("启用到工具")).toBeInTheDocument();
   expect(screen.getAllByRole("button", { name: "Claude Code" })[0]).toHaveClass("tool-pill");
@@ -77,6 +79,7 @@ test("shows only installed MCP-ready apps in enable-to-tool controls", async () 
   await userEvent.click(screen.getByRole("button", { name: "展开 context7 Tools" }));
   expect(screen.getByRole("button", { name: "收起 context7 Tools" })).toHaveAttribute("aria-expanded", "true");
   await userEvent.click(screen.getByRole("button", { name: "resolve-library-id" }));
+  expect(screen.getByText("已启用 2")).toBeInTheDocument();
   expect(screen.getByText("1/2 tools")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "resolve-library-id" })).toHaveAttribute("aria-pressed", "false");
   expect(screen.getByRole("button", { name: "全部开启" })).toBeEnabled();

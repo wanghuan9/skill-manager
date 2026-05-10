@@ -128,6 +128,24 @@ code {
   transform: translate(-50%, 0) rotate(45deg);
 }
 
+.mcp-server-card__subtitle[data-tooltip]::before,
+.mcp-server-card__subtitle[data-tooltip]::after,
+.detail-grid__single-line--tooltip[data-tooltip]::before,
+.detail-grid__single-line--tooltip[data-tooltip]::after,
+.detail-grid__source-link[data-tooltip]::before,
+.detail-grid__source-link[data-tooltip]::after {
+  pointer-events: auto;
+}
+
+.mcp-server-card__subtitle[data-tooltip]::before,
+.detail-grid__single-line--tooltip[data-tooltip]::before,
+.detail-grid__source-link[data-tooltip]::before {
+  max-width: min(520px, calc(100vw - 48px));
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-align: left;
+}
+
 .skill-card__list-actions [data-tooltip]::before {
   top: calc(100% + 8px);
   bottom: auto;
@@ -1923,6 +1941,12 @@ code {
   font-size: 0.84rem;
 }
 
+.detail-grid__single-line {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .detail-grid__source-value {
   display: flex;
   align-items: center;
@@ -1934,7 +1958,6 @@ code {
 .detail-grid__source-link {
   flex: 1 1 auto;
   min-width: 0;
-  overflow-wrap: anywhere;
 }
 
 .detail-grid__source-link {
@@ -4677,6 +4700,8 @@ code {
 .mcp-server-card {
   display: grid;
   gap: 0;
+  position: relative;
+  overflow: visible;
   padding: 12px 14px;
   border: 1px solid var(--line);
   border-radius: 12px;
@@ -4691,6 +4716,8 @@ code {
   gap: 8px;
   min-width: 0;
   padding: 0;
+  position: relative;
+  overflow: visible;
 }
 
 .mcp-server-card__summary-button {
@@ -4702,10 +4729,23 @@ code {
   color: inherit;
   text-align: left;
   cursor: pointer;
+  position: relative;
+  overflow: visible;
+  z-index: 0;
 }
 
 .mcp-server-card__summary-button:focus-visible {
   outline: none;
+}
+
+.mcp-server-card:hover,
+.mcp-server-card:focus-within {
+  z-index: 6;
+}
+
+.mcp-server-card:hover .mcp-server-card__summary-button,
+.mcp-server-card:focus-within .mcp-server-card__summary-button {
+  z-index: 7;
 }
 
 .mcp-server-card__summary-button:focus-visible .mcp-server-card__main {
@@ -4736,6 +4776,8 @@ code {
 .mcp-server-card__main {
   display: grid;
   min-width: 0;
+  position: relative;
+  overflow: visible;
 }
 
 .mcp-server-card__identity {
@@ -4750,6 +4792,8 @@ code {
   display: grid;
   gap: 6px;
   min-width: 0;
+  position: relative;
+  overflow: visible;
 }
 
 .mcp-server-card__title-row,
@@ -4785,6 +4829,8 @@ code {
   line-height: 1.25;
   text-overflow: ellipsis;
   white-space: nowrap;
+  position: relative;
+  z-index: 1;
 }
 
 .mcp-server-card__apps {
