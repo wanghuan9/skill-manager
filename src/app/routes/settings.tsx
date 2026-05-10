@@ -8,6 +8,26 @@ import {
 } from "@/features/skills/utils/open-tools";
 import { getToolLogoUrl } from "@/features/skills/utils/tool-logo";
 
+function FolderOpenIcon() {
+  return (
+    <svg viewBox="0 0 18 18" fill="none" aria-hidden="true">
+      <path
+        d="M2.75 5.25A1.5 1.5 0 0 1 4.25 3.75h3.1l1.2 1.35h4.95A1.5 1.5 0 0 1 15 6.6v1.15"
+        stroke="currentColor"
+        strokeWidth="1.35"
+        strokeLinecap="round"
+      />
+      <path
+        d="M3.15 7.75h11.7l-.7 4.7a1.5 1.5 0 0 1-1.48 1.28H4.98a1.5 1.5 0 0 1-1.48-1.28l-.35-2.35"
+        stroke="currentColor"
+        strokeWidth="1.35"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 export function SettingsRoute() {
   const {
     appSettings,
@@ -62,6 +82,7 @@ export function SettingsRoute() {
             onClick={() => void handleOpenStoragePath()}
             disabled={!storagePath || isOpeningStoragePath}
           >
+            <FolderOpenIcon />
             打开
           </button>
         </div>
@@ -93,39 +114,53 @@ export function SettingsRoute() {
   const installBehaviorItems = [
     {
       label: "新增 Skill 默认启用",
-      description: "控制从市场安装 skill 后，默认是立即应用到所有已安装工具，还是先保持未启用。",
+      description: "开启后会在安装 skill 时默认应用到所有已安装工具；关闭后先保持未启用。",
       value: (
-        <div className="settings-form-item__control">
-          <select
-            aria-label="新增 Skill 默认启用"
-            value={appSettings.skillInstallActivation}
-            onChange={(event) =>
+        <div className="settings-toggle-control">
+          <span className="settings-toggle-control__state">
+            {appSettings.skillInstallActivation === "apply-all-tools" ? "已开启" : "已关闭"}
+          </span>
+          <button
+            className={`switch-button${appSettings.skillInstallActivation === "apply-all-tools" ? " is-enabled" : ""}`}
+            type="button"
+            onClick={() =>
               void setSkillInstallActivation(
-                event.target.value as typeof appSettings.skillInstallActivation,
+                appSettings.skillInstallActivation === "apply-all-tools"
+                  ? "disable-all-tools"
+                  : "apply-all-tools",
               )
             }
+            aria-pressed={appSettings.skillInstallActivation === "apply-all-tools"}
+            aria-label="新增 Skill 默认启用"
           >
-            <option value="apply-all-tools">应用到所有工具</option>
-            <option value="disable-all-tools">默认不启用</option>
-          </select>
+            <span className="switch-button__thumb" />
+          </button>
         </div>
       ),
     },
     {
       label: "新增 MCP 默认启用",
-      description: "控制从市场安装 MCP 后，默认是同步到所有已支持应用，还是先仅保存不启用。",
+      description: "开启后会在安装 MCP 时默认同步到所有已支持应用；关闭后先仅保存不启用。",
       value: (
-        <div className="settings-form-item__control">
-          <select
-            aria-label="新增 MCP 默认启用"
-            value={appSettings.mcpInstallActivation}
-            onChange={(event) =>
-              void setMcpInstallActivation(event.target.value as typeof appSettings.mcpInstallActivation)
+        <div className="settings-toggle-control">
+          <span className="settings-toggle-control__state">
+            {appSettings.mcpInstallActivation === "apply-all-tools" ? "已开启" : "已关闭"}
+          </span>
+          <button
+            className={`switch-button${appSettings.mcpInstallActivation === "apply-all-tools" ? " is-enabled" : ""}`}
+            type="button"
+            onClick={() =>
+              void setMcpInstallActivation(
+                appSettings.mcpInstallActivation === "apply-all-tools"
+                  ? "disable-all-tools"
+                  : "apply-all-tools",
+              )
             }
+            aria-pressed={appSettings.mcpInstallActivation === "apply-all-tools"}
+            aria-label="新增 MCP 默认启用"
           >
-            <option value="apply-all-tools">应用到所有工具</option>
-            <option value="disable-all-tools">默认不启用</option>
-          </select>
+            <span className="switch-button__thumb" />
+          </button>
         </div>
       ),
     },
@@ -133,115 +168,123 @@ export function SettingsRoute() {
 
   return (
     <div className="placeholder-grid settings-page">
-      <section className="panel-card placeholder-panel settings-panel settings-panel--module">
-        <div className="panel-header settings-panel__header">
-          <span className="settings-panel__eyebrow">通用设置</span>
-          <h2>应用偏好</h2>
-          <p>把基础配置单独收拢，常用入口和本地文件信息会更容易找到。</p>
+      <section className="settings-group">
+        <div className="settings-group__heading">
+          <span className="settings-group__bar" aria-hidden="true" />
+          <h2 className="settings-group__title">应用偏好</h2>
         </div>
-        <div className="settings-form-list">
-          {generalSettingsItems.map((item) => (
-            <div
-              key={item.label}
-              className={`settings-form-item${item.readonly ? " settings-form-item--readonly" : ""}`}
-            >
-              <div className="settings-form-item__copy">
-                <span className="settings-form-item__title">{item.label}</span>
-                <p>{item.description}</p>
+        <div className="panel-card placeholder-panel settings-panel settings-panel--module">
+          <div className="settings-form-list">
+            {generalSettingsItems.map((item) => (
+              <div
+                key={item.label}
+                className={`settings-form-item${item.readonly ? " settings-form-item--readonly" : ""}`}
+              >
+                <div className="settings-form-item__copy">
+                  <span className="settings-form-item__title">{item.label}</span>
+                  <p>{item.description}</p>
+                </div>
+                {item.value}
               </div>
-              {item.value}
-            </div>
-          ))}
+            ))}
+          </div>
         </div>
       </section>
 
-      <section className="panel-card placeholder-panel settings-panel settings-panel--module">
-        <div className="panel-header settings-panel__header">
-          <span className="settings-panel__eyebrow">安装行为</span>
-          <h2>新增内容默认策略</h2>
-          <p>把 Skill 和 MCP 的默认启用逻辑放在同一组，方便统一调整安装后的行为。</p>
+      <section className="settings-group">
+        <div className="settings-group__heading">
+          <span className="settings-group__bar" aria-hidden="true" />
+          <h2 className="settings-group__title">安装行为</h2>
         </div>
-        <div className="settings-form-list">
-          {installBehaviorItems.map((item) => (
-            <div key={item.label} className="settings-form-item">
-              <div className="settings-form-item__copy">
-                <span className="settings-form-item__title">{item.label}</span>
-                <p>{item.description}</p>
+        <div className="panel-card placeholder-panel settings-panel settings-panel--module">
+          <div className="settings-form-list">
+            {installBehaviorItems.map((item) => (
+              <div key={item.label} className="settings-form-item">
+                <div className="settings-form-item__copy">
+                  <span className="settings-form-item__title">{item.label}</span>
+                  <p>{item.description}</p>
+                </div>
+                {item.value}
               </div>
-              {item.value}
-            </div>
-          ))}
+            ))}
+          </div>
         </div>
       </section>
 
-      <section
-        className={toolStatusPanelClassName}
-        onClick={() => {
-          if (!isToolStatusExpanded) {
-            setIsToolStatusExpanded(true);
-          }
-        }}
-      >
-        <button
-          className="settings-section-toggle"
-          type="button"
-          onClick={() => setIsToolStatusExpanded((current) => !current)}
-          aria-expanded={isToolStatusExpanded}
-          aria-label="工具状态"
+      <section className="settings-group">
+        <div className="settings-group__heading">
+          <span className="settings-group__bar" aria-hidden="true" />
+          <h2 className="settings-group__title">工具状态</h2>
+        </div>
+        <section
+          className={toolStatusPanelClassName}
+          onClick={() => {
+            if (!isToolStatusExpanded) {
+              setIsToolStatusExpanded(true);
+            }
+          }}
         >
-          <span className="settings-section-toggle__copy">
-            <span className="settings-section-toggle__title">工具状态</span>
-            <span className="settings-section-hint">展示当前支持的软件列表以及各软件的安装状态。</span>
-          </span>
-          <span className="settings-section-toggle__chevron" aria-hidden="true">
-            {isToolStatusExpanded ? "⌄" : "›"}
-          </span>
-        </button>
-        {isToolStatusExpanded ? (
-          <div className="settings-tool-grid">
-            {supportedToolCards.map((tool) => {
-              const logoUrl = getToolLogoUrl(tool.id);
+          <button
+            className="settings-section-toggle"
+            type="button"
+            onClick={() => setIsToolStatusExpanded((current) => !current)}
+            aria-expanded={isToolStatusExpanded}
+            aria-label="工具状态"
+          >
+            <span className="settings-section-toggle__copy">
+              <span className="settings-section-hint">展示当前支持的软件列表以及各软件的安装状态。</span>
+            </span>
+            <span className="settings-section-toggle__chevron" aria-hidden="true">
+              {isToolStatusExpanded ? "⌄" : "›"}
+            </span>
+          </button>
+          {isToolStatusExpanded ? (
+            <div className="settings-tool-grid">
+              {supportedToolCards.map((tool) => {
+                const logoUrl = getToolLogoUrl(tool.id);
 
-              return (
-                <article
-                  key={tool.id}
-                  className={`settings-tool-card${tool.isInstalled ? " is-installed" : ""}`}
-                >
-                  <span className="settings-tool-card__status-row">
-                    <span
-                      className={`settings-tool-card__status-badge${tool.isInstalled ? " is-installed" : ""}`}
-                    >
-                      {tool.statusLabel}
-                    </span>
-                  </span>
-                  <span className="settings-tool-card__content-row">
-                    <span className="settings-tool-card__logo" aria-hidden="true">
-                      {logoUrl ? <img src={logoUrl} alt="" /> : <span>{tool.name.slice(0, 1)}</span>}
-                    </span>
-                    <span className="settings-tool-card__copy">
-                      <span className="settings-tool-card__title">{tool.name}</span>
-                      <span className="settings-tool-card__surface">
-                        {tool.surfaceTypes.map((surface) => TOOL_SURFACE_LABELS[surface]).join(" / ")}
+                return (
+                  <article
+                    key={tool.id}
+                    className={`settings-tool-card${tool.isInstalled ? " is-installed" : ""}`}
+                  >
+                    <span className="settings-tool-card__status-row">
+                      <span
+                        className={`settings-tool-card__status-badge${tool.isInstalled ? " is-installed" : ""}`}
+                      >
+                        {tool.statusLabel}
                       </span>
                     </span>
-                  </span>
-                </article>
-              );
-            })}
-          </div>
-        ) : null}
+                    <span className="settings-tool-card__content-row">
+                      <span className="settings-tool-card__logo" aria-hidden="true">
+                        {logoUrl ? <img src={logoUrl} alt="" /> : <span>{tool.name.slice(0, 1)}</span>}
+                      </span>
+                      <span className="settings-tool-card__copy">
+                        <span className="settings-tool-card__title">{tool.name}</span>
+                        <span className="settings-tool-card__surface">
+                          {tool.surfaceTypes.map((surface) => TOOL_SURFACE_LABELS[surface]).join(" / ")}
+                        </span>
+                      </span>
+                    </span>
+                  </article>
+                );
+              })}
+            </div>
+          ) : null}
+        </section>
       </section>
 
-      <section className="panel-card placeholder-panel settings-panel settings-panel--git-account">
-        <div className="panel-header settings-panel__header">
-          <span className="settings-panel__eyebrow">仓库身份</span>
-          <h2>Git 账号</h2>
-          <p>这里保留仓库身份信息，后续再补更完整的仓库联动能力。</p>
+      <section className="settings-group">
+        <div className="settings-group__heading">
+          <span className="settings-group__bar" aria-hidden="true" />
+          <h2 className="settings-group__title">Git 账号</h2>
         </div>
-        <div className="settings-row settings-row--account">
-          <span className="settings-row__title">{gitAccount?.provider ?? "未连接"}</span>
-          <span>{gitAccount?.accountName ?? "请连接代码仓库账号"}</span>
-          <span className="status-badge tone-info">{gitAccount?.statusLabel ?? "待连接"}</span>
+        <div className="panel-card placeholder-panel settings-panel settings-panel--git-account">
+          <div className="settings-row settings-row--account">
+            <span className="settings-row__title">{gitAccount?.provider ?? "未连接"}</span>
+            <span>{gitAccount?.accountName ?? "请连接代码仓库账号"}</span>
+            <span className="status-badge tone-info">{gitAccount?.statusLabel ?? "待连接"}</span>
+          </div>
         </div>
       </section>
     </div>

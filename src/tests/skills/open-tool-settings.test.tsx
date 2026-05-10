@@ -17,8 +17,8 @@ test("allows selecting default open tool in settings", async () => {
   expect(screen.getByText("/Users/demo/.skillm/settings.json")).toBeInTheDocument();
   const select = screen.getByLabelText("默认编辑器");
   expect(select).toBeInTheDocument();
-  expect(screen.getByLabelText("新增 Skill 默认启用")).toHaveDisplayValue("应用到所有工具");
-  expect(screen.getByLabelText("新增 MCP 默认启用")).toHaveDisplayValue("默认不启用");
+  expect(screen.getByLabelText("新增 Skill 默认启用")).toHaveAttribute("aria-pressed", "true");
+  expect(screen.getByLabelText("新增 MCP 默认启用")).toHaveAttribute("aria-pressed", "false");
   expect(screen.getByText("工具状态")).toBeInTheDocument();
 
   expect(screen.getByRole("option", { name: "Cursor" })).toBeInTheDocument();
@@ -35,11 +35,11 @@ test("allows selecting default open tool in settings", async () => {
 
   expect(screen.getByDisplayValue("访达")).toBeInTheDocument();
 
-  await userEvent.selectOptions(screen.getByLabelText("新增 Skill 默认启用"), "disable-all-tools");
-  expect(screen.getByLabelText("新增 Skill 默认启用")).toHaveDisplayValue("默认不启用");
+  await userEvent.click(screen.getByLabelText("新增 Skill 默认启用"));
+  expect(screen.getByLabelText("新增 Skill 默认启用")).toHaveAttribute("aria-pressed", "false");
 
-  await userEvent.selectOptions(screen.getByLabelText("新增 MCP 默认启用"), "apply-all-tools");
-  expect(screen.getByLabelText("新增 MCP 默认启用")).toHaveDisplayValue("应用到所有工具");
+  await userEvent.click(screen.getByLabelText("新增 MCP 默认启用"));
+  expect(screen.getByLabelText("新增 MCP 默认启用")).toHaveAttribute("aria-pressed", "true");
 
   await userEvent.click(screen.getByRole("button", { name: "工具状态" }));
   const toolStatusPanel = screen.getByText("展示当前支持的软件列表以及各软件的安装状态。").closest("section");

@@ -4064,7 +4064,7 @@ code {
 
 .settings-page {
   display: grid;
-  gap: 16px;
+  gap: 26px;
 }
 
 .settings-grid {
@@ -4116,41 +4116,32 @@ code {
     0 1px 0 rgba(255, 255, 255, 0.7) inset;
 }
 
-.settings-panel__header {
+.settings-group {
   display: grid;
-  gap: 6px;
-  padding: 18px 20px 14px;
-  border-bottom: 1px solid rgba(220, 228, 240, 0.72);
-  background: linear-gradient(180deg, rgba(249, 251, 255, 0.92), rgba(255, 255, 255, 0.88));
+  gap: 12px;
 }
 
-.settings-panel__header h2 {
+.settings-group__heading {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding-left: 8px;
+}
+
+.settings-group__bar {
+  width: 8px;
+  height: 22px;
+  border-radius: 999px;
+  background: linear-gradient(180deg, #2f6bff 0%, #214ed1 100%);
+  box-shadow: 0 6px 14px rgba(47, 107, 255, 0.24);
+}
+
+.settings-group__title {
   margin: 0;
-  font-size: 1rem;
+  color: #1f2940;
+  font-size: 0.98rem;
   font-weight: 650;
   line-height: 1.2;
-}
-
-.settings-panel__header p {
-  margin: 0;
-  max-width: 56ch;
-  font-size: 0.83rem;
-  line-height: 1.45;
-  color: #6b7280;
-}
-
-.settings-panel__eyebrow {
-  display: inline-flex;
-  width: fit-content;
-  align-items: center;
-  min-height: 20px;
-  padding: 0 8px;
-  border-radius: 999px;
-  background: rgba(107, 114, 128, 0.12);
-  color: var(--muted);
-  font-size: 0.68rem;
-  font-weight: 650;
-  letter-spacing: 0.03em;
 }
 
 .settings-field {
@@ -4185,6 +4176,11 @@ code {
   gap: 18px;
   padding: 14px 20px;
   border-top: 1px solid rgba(220, 228, 240, 0.78);
+  transition: background-color 140ms ease;
+}
+
+.settings-form-item:hover {
+  background: rgba(244, 247, 252, 0.88);
 }
 
 .settings-form-item__copy {
@@ -4193,22 +4189,37 @@ code {
 }
 
 .settings-form-item__title {
-  font-size: 0.95rem;
+  font-size: 0.96rem;
   color: #1f2937;
-  line-height: 1.2;
-  font-weight: 600;
+  line-height: 1.22;
+  font-weight: 550;
 }
 
 .settings-form-item__copy p {
   margin: 0;
-  font-size: 0.83rem;
+  font-size: 0.86rem;
   color: #6b7280;
-  line-height: 1.35;
+  line-height: 1.42;
 }
 
 .settings-form-item__control {
   width: 220px;
   max-width: 100%;
+}
+
+.settings-toggle-control {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  width: fit-content;
+  min-width: 126px;
+}
+
+.settings-toggle-control__state {
+  color: #6b7280;
+  font-size: 0.8rem;
+  font-weight: 500;
 }
 
 .settings-form-item__path-group {
@@ -4262,12 +4273,21 @@ code {
 }
 
 .settings-open-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
   flex: 0 0 auto;
   min-width: 74px;
   border-radius: 999px;
   font-weight: 500;
   background: #ffffff;
   box-shadow: 0 4px 14px rgba(31, 41, 55, 0.08);
+}
+
+.settings-open-button svg {
+  width: 18px;
+  height: 18px;
 }
 
 .settings-form-item--readonly .settings-form-item__value {
@@ -4282,7 +4302,7 @@ code {
 }
 
 .settings-panel--tool-status {
-  padding-top: 8px;
+  padding-top: 2px;
   padding-bottom: 10px;
 }
 
@@ -4480,7 +4500,7 @@ code {
   align-items: stretch;
   justify-content: space-between;
   width: 100%;
-  padding: 8px 20px 8px;
+  padding: 12px 20px 8px;
   border: 0;
   background: transparent;
   color: var(--heading);
@@ -4508,8 +4528,8 @@ code {
 .settings-section-hint {
   margin: 0;
   color: var(--muted);
-  font-size: 0.82rem;
-  line-height: 1.35;
+  font-size: 0.84rem;
+  line-height: 1.4;
 }
 
 .tool-manage-dialog {
@@ -5344,13 +5364,18 @@ code {
 
   .settings-form-item__control,
   .settings-form-item__value,
-  .settings-form-item__path-group {
+  .settings-form-item__path-group,
+  .settings-toggle-control {
     width: 100%;
   }
 
   .settings-form-item__path-group {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .settings-toggle-control {
+    justify-content: space-between;
   }
 
   .settings-open-button {
@@ -5369,6 +5394,19 @@ code {
   .settings-row {
     padding-left: 14px;
     padding-right: 14px;
+  }
+
+  .settings-group__heading {
+    padding-left: 2px;
+  }
+
+  .settings-group__bar {
+    width: 7px;
+    height: 20px;
+  }
+
+  .settings-group__title {
+    font-size: 0.92rem;
   }
 
   .settings-grid {
