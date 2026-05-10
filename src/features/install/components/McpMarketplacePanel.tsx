@@ -12,28 +12,249 @@ const MCP_MARKETPLACE_PAGE_SIZE = 24;
 const MCP_MARKETPLACE_SOURCE_SITE = "MCP.Directory";
 const MCP_MARKETPLACE_SOURCE_LABEL = "mcp.directory";
 const MCP_AVATAR_PRIORITY_COUNT = 12;
+const MCP_MARKETPLACE_RUNTIME_CACHE_KEY = "__SKILLM_MCP_MARKETPLACE_CACHE__";
+const MCP_MARKETPLACE_PERSISTED_CACHE_KEY = "skillm.mcpMarketplaceCache";
+const MCP_MARKETPLACE_PERSISTED_CACHE_VERSION = 1;
+const MCP_MARKETPLACE_PERSISTED_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 type McpMarketplacePanelProps = {
   searchQuery: string;
   onSearchQueryChange: (value: string) => void;
 };
 
+type McpMarketplaceRuntimeCache = {
+  pageCache: Map<number, McpMarketplaceServer[]>;
+  searchPageCache: Map<string, Map<number, McpMarketplaceServer[]>>;
+  installedServerIds: Set<string> | null;
+  workspacePromise: Promise<Set<string>> | null;
+};
+
+type CachedMcpSnapshot = {
+  servers: McpMarketplaceServer[];
+  page: number;
+  hasMore: boolean;
+};
+
+type PersistedMcpMarketplaceCache = {
+  version: number;
+  timestamp: number;
+  pages: Record<string, McpMarketplaceServer[]>;
+};
+
+declare global {
+  interface Window {
+    __SKILLM_MCP_MARKETPLACE_CACHE__?: McpMarketplaceRuntimeCache;
+  }
+}
+
+function createMcpMarketplaceRuntimeCache(): McpMarketplaceRuntimeCache {
+  return {
+    pageCache: new Map<number, McpMarketplaceServer[]>(),
+    searchPageCache: new Map<string, Map<number, McpMarketplaceServer[]>>(),
+    installedServerIds: null,
+    workspacePromise: null,
+  };
+}
+
+const fallbackMcpMarketplaceRuntimeCache = createMcpMarketplaceRuntimeCache();
+
+function getMcpMarketplaceRuntimeCache() {
+  if (typeof window === "undefined") {
+    return fallbackMcpMarketplaceRuntimeCache;
+  }
+
+  if (!window[MCP_MARKETPLACE_RUNTIME_CACHE_KEY]) {
+    window[MCP_MARKETPLACE_RUNTIME_CACHE_KEY] = createMcpMarketplaceRuntimeCache();
+  }
+
+  return window[MCP_MARKETPLACE_RUNTIME_CACHE_KEY]!;
+}
+
+function normalizeMcpCacheKey(query: string) {
+  return query.trim().toLowerCase();
+}
+
+function readPersistedMcpMarketplaceCache(): PersistedMcpMarketplaceCache | null {
+  if (
+    typeof window === "undefined" ||
+    typeof window.localStorage?.getItem !== "function"
+  ) {
+    return null;
+  }
+
+  const payload = window.localStorage.getItem(MCP_MARKETPLACE_PERSISTED_CACHE_KEY);
+  if (!payload) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(payload) as Partial<PersistedMcpMarketplaceCache>;
+    if (
+      parsed.version !== MCP_MARKETPLACE_PERSISTED_CACHE_VERSION ||
+      typeof parsed.timestamp !== "number" ||
+      !parsed.pages ||
+      typeof parsed.pages !== "object"
+    ) {
+      return null;
+    }
+
+    if (Date.now() - parsed.timestamp > MCP_MARKETPLACE_PERSISTED_CACHE_TTL_MS) {
+      return null;
+    }
+
+    return {
+      version: parsed.version,
+      timestamp: parsed.timestamp,
+      pages: parsed.pages,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function writePersistedMcpMarketplaceCache(pageCache: Map<number, McpMarketplaceServer[]>) {
+  if (
+    typeof window === "undefined" ||
+    typeof window.localStorage?.setItem !== "function"
+  ) {
+    return;
+  }
+
+  const pages = Object.fromEntries(
+    Array.from(pageCache.entries()).map(([page, servers]) => [String(page), servers]),
+  );
+  const payload: PersistedMcpMarketplaceCache = {
+    version: MCP_MARKETPLACE_PERSISTED_CACHE_VERSION,
+    timestamp: Date.now(),
+    pages,
+  };
+  window.localStorage.setItem(MCP_MARKETPLACE_PERSISTED_CACHE_KEY, JSON.stringify(payload));
+}
+
+function hydrateRuntimeCacheFromPersistence() {
+  const cache = getMcpMarketplaceRuntimeCache();
+  if (cache.pageCache.size > 0) {
+    return;
+  }
+
+  const persistedCache = readPersistedMcpMarketplaceCache();
+  if (!persistedCache) {
+    return;
+  }
+
+  for (const [page, servers] of Object.entries(persistedCache.pages)) {
+    const pageNumber = Number(page);
+    if (!Number.isInteger(pageNumber) || pageNumber < 1 || !Array.isArray(servers)) {
+      continue;
+    }
+    cache.pageCache.set(pageNumber, servers);
+  }
+}
+
+function getCachedMcpPageMap(query: string) {
+  const cache = getMcpMarketplaceRuntimeCache();
+  const cacheKey = normalizeMcpCacheKey(query);
+  if (!cacheKey) {
+    hydrateRuntimeCacheFromPersistence();
+  }
+  return cacheKey ? cache.searchPageCache.get(cacheKey) : cache.pageCache;
+}
+
+function getOrCreateCachedMcpPageMap(query: string) {
+  const cache = getMcpMarketplaceRuntimeCache();
+  const cacheKey = normalizeMcpCacheKey(query);
+  if (!cacheKey) {
+    return cache.pageCache;
+  }
+
+  const cachedSearchPages = cache.searchPageCache.get(cacheKey);
+  if (cachedSearchPages) {
+    return cachedSearchPages;
+  }
+
+  const nextSearchPages = new Map<number, McpMarketplaceServer[]>();
+  cache.searchPageCache.set(cacheKey, nextSearchPages);
+  return nextSearchPages;
+}
+
+function writeCachedMcpPage(query: string, page: number, servers: McpMarketplaceServer[]) {
+  const cachedPages = getOrCreateCachedMcpPageMap(query);
+  cachedPages.set(page, servers);
+  if (!normalizeMcpCacheKey(query)) {
+    writePersistedMcpMarketplaceCache(cachedPages);
+  }
+}
+
+function readCachedMcpSnapshot(query: string): CachedMcpSnapshot | null {
+  const cacheKey = normalizeMcpCacheKey(query);
+  const cachedPages = getCachedMcpPageMap(cacheKey);
+  if (!cachedPages) {
+    return null;
+  }
+
+  const cachedFirstPage = cachedPages.get(1);
+  if (!cachedFirstPage) {
+    return null;
+  }
+
+  const cachedPageEntries = Array.from(cachedPages.entries())
+    .filter(([cachedPage]) => cachedPage >= 1)
+    .sort(([leftPage], [rightPage]) => leftPage - rightPage);
+  const lastCachedEntry = cachedPageEntries[cachedPageEntries.length - 1];
+  const lastCachedPage = lastCachedEntry?.[0] ?? 1;
+  const lastCachedServers = lastCachedEntry?.[1] ?? cachedFirstPage;
+
+  return {
+    servers: cachedPageEntries.flatMap(([, pageServers]) => pageServers),
+    page: lastCachedPage,
+    hasMore: cacheKey ? lastCachedServers.length >= MCP_MARKETPLACE_PAGE_SIZE : lastCachedServers.length > 0,
+  };
+}
+
+function getCachedInstalledServerIds() {
+  const installedServerIds = getMcpMarketplaceRuntimeCache().installedServerIds;
+  return installedServerIds ? new Set(installedServerIds) : new Set<string>();
+}
+
+function cacheInstalledServerIds(installedServerIds: Iterable<string>) {
+  getMcpMarketplaceRuntimeCache().installedServerIds = new Set(installedServerIds);
+}
+
+async function ensureInstalledServerIdsLoaded() {
+  const cache = getMcpMarketplaceRuntimeCache();
+  if (cache.installedServerIds) {
+    return new Set(cache.installedServerIds);
+  }
+
+  if (!cache.workspacePromise) {
+    cache.workspacePromise = fetchMcpWorkspace()
+      .then((workspace) => {
+        const installedServerIds = new Set(workspace.servers.map((server) => server.id));
+        cache.installedServerIds = installedServerIds;
+        return new Set(installedServerIds);
+      })
+      .finally(() => {
+        cache.workspacePromise = null;
+      });
+  }
+
+  return cache.workspacePromise.then((installedServerIds) => new Set(installedServerIds));
+}
+
 export function McpMarketplacePanel(props: McpMarketplacePanelProps) {
   const { searchQuery, onSearchQueryChange } = props;
   const { notify } = useNotifications();
-  const [servers, setServers] = useState<McpMarketplaceServer[]>([]);
-  const [installedServerIds, setInstalledServerIds] = useState<Set<string>>(new Set());
+  const initialCachedSnapshot = readCachedMcpSnapshot(searchQuery);
+  const [servers, setServers] = useState<McpMarketplaceServer[]>(() => initialCachedSnapshot?.servers ?? []);
+  const [installedServerIds, setInstalledServerIds] = useState<Set<string>>(() => getCachedInstalledServerIds());
   const [installingServerIds, setInstallingServerIds] = useState<Set<string>>(new Set());
   const [selectedServer, setSelectedServer] = useState<McpMarketplaceServer | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState(() => initialCachedSnapshot == null);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
-  const [hasMore, setHasMore] = useState(true);
-  const [page, setPage] = useState(0);
+  const [hasMore, setHasMore] = useState(() => initialCachedSnapshot?.hasMore ?? true);
+  const [page, setPage] = useState(() => initialCachedSnapshot?.page ?? 0);
   const [errorMessage, setErrorMessage] = useState("");
-  const [debouncedQuery, setDebouncedQuery] = useState("");
-  const pageCacheRef = useRef(new Map<number, McpMarketplaceServer[]>());
-  const searchPageCacheRef = useRef(new Map<string, Map<number, McpMarketplaceServer[]>>());
-  const workspaceLoadedRef = useRef(false);
+  const [debouncedQuery, setDebouncedQuery] = useState(searchQuery);
   const isLoadingRef = useRef(isLoading);
   const isLoadingMoreRef = useRef(isLoadingMore);
   const hasMoreRef = useRef(hasMore);
@@ -55,61 +276,55 @@ export function McpMarketplacePanel(props: McpMarketplacePanelProps) {
   useEffect(() => {
     let active = true;
 
-    async function ensureWorkspaceLoaded() {
-      if (workspaceLoadedRef.current) {
-        return;
-      }
-
-      const workspace = await fetchMcpWorkspace();
-      if (!active) {
-        return;
-      }
-      setInstalledServerIds(new Set(workspace.servers.map((server) => server.id)));
-      workspaceLoadedRef.current = true;
-    }
-
-    async function loadFirstPage() {
-      setIsLoading(true);
-      setErrorMessage("");
-      try {
-        await ensureWorkspaceLoaded();
-        const cacheKey = normalizedQuery.toLowerCase();
-        const cachedPages = cacheKey ? searchPageCacheRef.current.get(cacheKey) : pageCacheRef.current;
-        const cachedFirstPage = cachedPages?.get(1);
+    void ensureInstalledServerIdsLoaded()
+      .then((nextInstalledServerIds) => {
         if (!active) {
           return;
         }
+        setInstalledServerIds(nextInstalledServerIds);
+      })
+      .catch(() => undefined);
 
-        if (cachedFirstPage) {
-          const cachedPageEntries = Array.from((cachedPages ?? new Map()).entries())
-            .filter(([cachedPage]) => cachedPage >= 1)
-            .sort(([leftPage], [rightPage]) => leftPage - rightPage);
-          const lastCachedEntry = cachedPageEntries[cachedPageEntries.length - 1];
-          const lastCachedPage = lastCachedEntry?.[0] ?? 1;
-          const lastCachedServers = lastCachedEntry?.[1] ?? cachedFirstPage;
-          setServers(cachedPageEntries.flatMap(([, cachedServers]) => cachedServers));
-          setPage(lastCachedPage);
-          setHasMore(cacheKey ? lastCachedServers.length >= MCP_MARKETPLACE_PAGE_SIZE : lastCachedServers.length > 0);
-          setIsLoading(false);
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+
+    async function loadFirstPage() {
+      setErrorMessage("");
+      const cachedSnapshot = readCachedMcpSnapshot(normalizedQuery);
+      if (cachedSnapshot) {
+        if (!active) {
           return;
         }
+        setServers(cachedSnapshot.servers);
+        setPage(cachedSnapshot.page);
+        setHasMore(cachedSnapshot.hasMore);
+        setIsLoading(false);
+        if (normalizedQuery.length > 0) {
+          return;
+        }
+      }
 
+      if (!cachedSnapshot) {
+        setIsLoading(true);
+      }
+      try {
         const marketplaceServers = await fetchMcpMarketplaceServers({
           sourceSite: MCP_MARKETPLACE_SOURCE_SITE,
           page: 1,
           limit: MCP_MARKETPLACE_PAGE_SIZE,
           query: normalizedQuery,
+          refresh: normalizedQuery.length === 0 && cachedSnapshot != null,
         });
         if (!active) {
           return;
         }
 
-        if (cacheKey) {
-          const searchPages = new Map<number, McpMarketplaceServer[]>([[1, marketplaceServers]]);
-          searchPageCacheRef.current.set(cacheKey, searchPages);
-        } else {
-          pageCacheRef.current.set(1, marketplaceServers);
-        }
+        writeCachedMcpPage(normalizedQuery, 1, marketplaceServers);
         setServers(marketplaceServers);
         setPage(1);
         setHasMore(isSearching ? marketplaceServers.length >= MCP_MARKETPLACE_PAGE_SIZE : marketplaceServers.length > 0);
@@ -170,13 +385,11 @@ export function McpMarketplacePanel(props: McpMarketplacePanelProps) {
     }
 
     const nextPage = page + 1;
-    const cacheKey = normalizedQuery.toLowerCase();
-    const searchPages = cacheKey ? searchPageCacheRef.current.get(cacheKey) : undefined;
-    const cachedPage = cacheKey ? searchPages?.get(nextPage) : pageCacheRef.current.get(nextPage);
+    const cachedPage = getCachedMcpPageMap(normalizedQuery)?.get(nextPage);
     if (cachedPage) {
       setServers((current) => [...current, ...cachedPage]);
       setPage(nextPage);
-      setHasMore(cachedPage.length >= MCP_MARKETPLACE_PAGE_SIZE);
+      setHasMore(isSearching ? cachedPage.length >= MCP_MARKETPLACE_PAGE_SIZE : cachedPage.length > 0);
       return;
     }
 
@@ -186,19 +399,13 @@ export function McpMarketplacePanel(props: McpMarketplacePanelProps) {
       const nextServers = await fetchMcpMarketplaceServers({
         sourceSite: MCP_MARKETPLACE_SOURCE_SITE,
         page: nextPage,
-        limit: MCP_MARKETPLACE_PAGE_SIZE,
-        query: normalizedQuery,
+          limit: MCP_MARKETPLACE_PAGE_SIZE,
+          query: normalizedQuery,
       });
-      if (cacheKey) {
-        const nextSearchPages = searchPages ?? new Map<number, McpMarketplaceServer[]>();
-        nextSearchPages.set(nextPage, nextServers);
-        searchPageCacheRef.current.set(cacheKey, nextSearchPages);
-      } else {
-        pageCacheRef.current.set(nextPage, nextServers);
-      }
+      writeCachedMcpPage(normalizedQuery, nextPage, nextServers);
       setServers((current) => [...current, ...nextServers]);
       setPage(nextPage);
-      setHasMore(nextServers.length >= MCP_MARKETPLACE_PAGE_SIZE);
+      setHasMore(isSearching ? nextServers.length >= MCP_MARKETPLACE_PAGE_SIZE : nextServers.length > 0);
     } catch (error) {
       const message = error instanceof Error ? error.message : "加载更多 MCP 失败，请稍后重试。";
       setErrorMessage(message);
@@ -254,7 +461,9 @@ export function McpMarketplacePanel(props: McpMarketplacePanelProps) {
     setInstallingServerIds((current) => new Set(current).add(server.id));
     try {
       const workspace = await installMcpServerFromMarketplace({ server });
-      setInstalledServerIds(new Set(workspace.servers.map((item) => item.id)));
+      const nextInstalledServerIds = new Set(workspace.servers.map((item) => item.id));
+      cacheInstalledServerIds(nextInstalledServerIds);
+      setInstalledServerIds(nextInstalledServerIds);
       notify({ message: `MCP "${server.name}" 已安装，可到 MCP 页启用到工具`, tone: "success" });
     } catch (error) {
       const message = error instanceof Error ? error.message : "安装 MCP 失败，请稍后重试。";

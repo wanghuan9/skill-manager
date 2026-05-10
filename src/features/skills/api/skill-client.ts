@@ -98,6 +98,12 @@ type ToggleMcpAppInput = {
   enabled: boolean;
 };
 
+type ToggleMcpToolInput = {
+  serverId: string;
+  toolName: string;
+  enabled: boolean;
+};
+
 type InstallMcpMarketplaceServerInput = {
   server: McpMarketplaceServer;
 };
@@ -575,6 +581,8 @@ export async function installMcpServerFromMarketplace(
       statusLabel: app.statusLabel,
       isEnabled: false,
     })),
+    tools: [],
+    toolsDiscoveredAt: "",
   };
   const fallback = {
     ...mcpWorkspaceFixture,
@@ -597,6 +605,7 @@ export async function saveMcpServer(server: McpServerRecord): Promise<McpWorkspa
       ? [server.server.command, ...(Array.isArray(server.server.args) ? server.server.args : [])].join(" ")
       : String(server.server.url ?? "");
   const serverType = String(server.server.type ?? "stdio");
+  const displayServer = omitDefaultStdioType(server.server);
   const nextServer = {
     id: server.id,
     name: server.name || server.id,
@@ -604,7 +613,7 @@ export async function saveMcpServer(server: McpServerRecord): Promise<McpWorkspa
     commandLabel,
     description: explicitDescription || `用于向已安装工具同步 ${server.name || server.id} MCP 配置。`,
     sourceUrl: server.sourceUrl,
-    serverJson: JSON.stringify(server.server, null, 2),
+    serverJson: JSON.stringify(displayServer, null, 2),
     enabledAppCount: server.enabledAppIds.length,
     apps: mcpWorkspaceFixture.apps.map((app) => ({
       appId: app.id,
@@ -613,6 +622,8 @@ export async function saveMcpServer(server: McpServerRecord): Promise<McpWorkspa
       statusLabel: app.statusLabel,
       isEnabled: server.enabledAppIds.includes(app.id),
     })),
+    tools: server.tools,
+    toolsDiscoveredAt: server.toolsDiscoveredAt,
   };
   const fallback = {
     ...mcpWorkspaceFixture,
@@ -649,6 +660,27 @@ export async function toggleMcpServerApp(input: ToggleMcpAppInput): Promise<McpW
   return invokeOrFallback("toggle_mcp_server_app", input, fallback);
 }
 
+export async function toggleMcpServerTool(input: ToggleMcpToolInput): Promise<McpWorkspaceSnapshot> {
+  const fallback = {
+    ...mcpWorkspaceFixture,
+    servers: mcpWorkspaceFixture.servers.map((server) => (
+      server.id === input.serverId
+        ? {
+            ...server,
+            tools: server.tools.map((tool) =>
+              tool.name === input.toolName ? { ...tool, isEnabled: input.enabled } : tool,
+            ),
+          }
+        : server
+    )),
+  };
+  return invokeOrFallback("toggle_mcp_server_tool", input, fallback);
+}
+
+export async function refreshMcpServerTools(serverId: string): Promise<McpWorkspaceSnapshot> {
+  return invokeOrFallback("refresh_mcp_server_tools", { serverId }, mcpWorkspaceFixture);
+}
+
 function normalizeMcpServerId(name: string) {
   const normalized = name
     .trim()
@@ -669,4 +701,13 @@ function buildMcpCommandLabel(server: Record<string, unknown> | null) {
     return [server.command, ...args].join(" ");
   }
   return typeof server.url === "string" ? server.url : "";
+}
+
+function omitDefaultStdioType(server: Record<string, unknown>) {
+  if (server.type !== "stdio") {
+    return server;
+  }
+
+  const { type: _type, ...serverWithoutDefaultType } = server;
+  return serverWithoutDefaultType;
 }

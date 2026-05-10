@@ -159,6 +159,11 @@ export type McpAppStatus = {
   isEnabled: boolean;
 };
 
+export type McpServerToolStatus = {
+  name: string;
+  isEnabled: boolean;
+};
+
 export type McpServerSummary = {
   id: string;
   name: string;
@@ -169,6 +174,8 @@ export type McpServerSummary = {
   serverJson: string;
   enabledAppCount: number;
   apps: McpAppStatus[];
+  tools: McpServerToolStatus[];
+  toolsDiscoveredAt: string;
 };
 
 export type McpServerRecord = {
@@ -178,6 +185,8 @@ export type McpServerRecord = {
   description: string;
   sourceUrl: string;
   enabledAppIds: string[];
+  tools: McpServerToolStatus[];
+  toolsDiscoveredAt: string;
   updatedAt: string;
 };
 

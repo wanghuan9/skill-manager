@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { App } from "@/app/App";
+import { mcpMarketplaceServerFixtures } from "@/features/skills/state/skill-fixtures";
 
 function scrollPageContentToBottom() {
   const scrollContainer = document.querySelector(".page-content");
@@ -104,6 +105,47 @@ test("searches MCP marketplace and restores browse pagination after clearing que
   scrollPageContentToBottom();
 
   expect(await screen.findByText("已加载全部 MCP")).toBeInTheDocument();
+});
+
+test("reuses cached MCP marketplace results when switching away and back", async () => {
+  render(<App />);
+  await userEvent.click(screen.getByRole("button", { name: /安装/ }));
+  await userEvent.click(screen.getByRole("tab", { name: "MCP" }));
+
+  expect(await screen.findByText("context7")).toBeInTheDocument();
+
+  await userEvent.click(screen.getByRole("tab", { name: "Skill" }));
+  expect(screen.getByRole("searchbox", { name: "搜索 skill" })).toBeInTheDocument();
+
+  await userEvent.click(screen.getByRole("tab", { name: "MCP" }));
+
+  expect(screen.getByText("context7")).toBeInTheDocument();
+  expect(screen.queryByText("正在搜索 MCP")).not.toBeInTheDocument();
+});
+
+test("hydrates MCP marketplace from persisted cache on first open", async () => {
+  window.localStorage.clear();
+  window.localStorage.setItem(
+    "skillm.mcpMarketplaceCache",
+    JSON.stringify({
+      version: 1,
+      timestamp: Date.now(),
+      pages: {
+        "1": mcpMarketplaceServerFixtures,
+      },
+    }),
+  );
+
+  render(<App />);
+  await userEvent.click(screen.getByRole("button", { name: /安装/ }));
+  await userEvent.click(screen.getByRole("tab", { name: "MCP" }));
+
+  expect(screen.getByText("context7")).toBeInTheDocument();
+  expect(screen.queryByText("正在搜索 MCP")).not.toBeInTheDocument();
+
+  await waitFor(() => {
+    expect(screen.getByRole("tab", { name: "mcp.directory" })).toBeInTheDocument();
+  });
 });
 
 test("discovers repo skills and allows multi-select install", async () => {

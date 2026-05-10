@@ -334,6 +334,15 @@ function buildMcpFixtureServerApps(enabledAppIds: string[]) {
   }));
 }
 
+function buildMcpFixtureTools(toolNames: string[], disabledToolNames: string[] = []) {
+  const disabledToolNameSet = new Set(disabledToolNames);
+
+  return toolNames.map((name) => ({
+    name,
+    isEnabled: !disabledToolNameSet.has(name),
+  }));
+}
+
 export const mcpWorkspaceFixture: McpWorkspaceSnapshot = {
   storagePath: "/Users/demo/.skillm/mcp-servers.json",
   apps: mcpFixtureApps,
@@ -347,7 +356,6 @@ export const mcpWorkspaceFixture: McpWorkspaceSnapshot = {
       sourceUrl: "https://github.com/upstash/context7",
       serverJson: JSON.stringify(
         {
-          type: "stdio",
           command: "npx",
           args: ["-y", "@upstash/context7-mcp"],
         },
@@ -356,6 +364,8 @@ export const mcpWorkspaceFixture: McpWorkspaceSnapshot = {
       ),
       enabledAppCount: 2,
       apps: buildMcpFixtureServerApps(["claude-code", "codex"]),
+      tools: buildMcpFixtureTools(["resolve-library-id", "get-library-docs"]),
+      toolsDiscoveredAt: "2026/5/10 16:00:00",
     },
     {
       id: "linear",
@@ -377,6 +387,8 @@ export const mcpWorkspaceFixture: McpWorkspaceSnapshot = {
       ),
       enabledAppCount: 1,
       apps: buildMcpFixtureServerApps(["gemini"]),
+      tools: buildMcpFixtureTools(["list_issues", "get_issue", "create_issue", "update_issue"], ["update_issue"]),
+      toolsDiscoveredAt: "2026/5/10 16:00:00",
     },
   ],
 };

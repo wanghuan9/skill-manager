@@ -2,6 +2,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 import { App } from "@/app/App";
+import * as skillClient from "@/features/skills/api/skill-client";
 
 test("renders MCP toolbar in the page header and hides the app matrix", async () => {
   window.localStorage.clear();
@@ -24,6 +25,9 @@ test("shows only installed MCP-ready apps in enable-to-tool controls", async () 
 
   await userEvent.click(screen.getByRole("button", { name: "MCP" }));
   expect(await screen.findByText("context7")).toBeInTheDocument();
+  expect(screen.getByText("2 tools")).toBeInTheDocument();
+  expect(screen.queryByText("stdio")).not.toBeInTheDocument();
+  expect(screen.queryByText("未获取 tools")).not.toBeInTheDocument();
 
   const expandContext7Button = screen.getByRole("button", { name: "展开 context7" });
   expect(expandContext7Button).toHaveAttribute("aria-expanded", "false");
@@ -43,6 +47,19 @@ test("shows only installed MCP-ready apps in enable-to-tool controls", async () 
   expect(screen.getByText("启用到工具")).toBeInTheDocument();
   expect(screen.getAllByRole("button", { name: "Claude Code" })[0]).toHaveClass("tool-pill");
   expect(screen.getAllByRole("button", { name: "Codex" })[0]).toHaveClass("tool-pill");
+  expect(screen.getByText("Tools")).toBeInTheDocument();
+  expect(screen.getByText("2/2 已启用")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "全部开启" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "全部关闭" })).toBeEnabled();
+  expect(screen.getByRole("button", { name: "resolve-library-id" })).toHaveAttribute("aria-pressed", "true");
+  await userEvent.click(screen.getByRole("button", { name: "resolve-library-id" }));
+  expect(screen.getByText("1/2 tools")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "resolve-library-id" })).toHaveAttribute("aria-pressed", "false");
+  expect(screen.getByRole("button", { name: "全部开启" })).toBeEnabled();
+  expect(screen.getByRole("button", { name: "全部关闭" })).toBeEnabled();
+  await userEvent.click(screen.getByRole("button", { name: "全部开启" }));
+  expect(screen.getByText("2 tools")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "全部开启" })).toBeDisabled();
   expect(screen.queryByText("Antigravity")).not.toBeInTheDocument();
   expect(screen.queryByText("CodeBuddy")).not.toBeInTheDocument();
 
@@ -51,6 +68,7 @@ test("shows only installed MCP-ready apps in enable-to-tool controls", async () 
   await waitFor(() => {
     expect(screen.getByRole("dialog", { name: "新增 MCP" })).toBeInTheDocument();
   });
+  expect((screen.getByLabelText("JSON 配置") as HTMLTextAreaElement).value).not.toContain("\"type\": \"stdio\"");
   expect(screen.queryByText("Antigravity")).not.toBeInTheDocument();
   expect(screen.queryByText("CodeBuddy")).not.toBeInTheDocument();
 });
@@ -88,4 +106,54 @@ test("opens GitHub source url from MCP details", async () => {
     "_blank",
     "noopener,noreferrer",
   );
+});
+
+test("tool toggles stay visually stable while updating", async () => {
+  window.localStorage.clear();
+  const initialSnapshot = await skillClient.fetchMcpWorkspace();
+  const nextSnapshot = {
+    ...initialSnapshot,
+    servers: initialSnapshot.servers.map((server) => (
+      server.id === "context7"
+        ? {
+            ...server,
+            tools: server.tools.map((tool) => (
+              tool.name === "resolve-library-id"
+                ? { ...tool, isEnabled: false }
+                : tool
+            )),
+          }
+        : server
+    )),
+  };
+  let resolveToggle: ((value: typeof nextSnapshot) => void) | undefined;
+  const toggleSpy = vi.spyOn(skillClient, "toggleMcpServerTool").mockImplementation(
+    () =>
+      new Promise((resolve) => {
+        resolveToggle = resolve;
+      }),
+  );
+
+  render(<App />);
+
+  await userEvent.click(screen.getByRole("button", { name: "MCP" }));
+  await userEvent.click(await screen.findByRole("button", { name: "展开 context7" }));
+  await userEvent.click(screen.getByRole("button", { name: "resolve-library-id" }));
+
+  expect(screen.getByRole("button", { name: "resolve-library-id" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "get-library-docs" })).toBeEnabled();
+  expect(screen.queryByText("处理中")).not.toBeInTheDocument();
+  expect(screen.getByText("1/2 tools")).toBeInTheDocument();
+
+  const finishToggle = resolveToggle;
+  if (!finishToggle) {
+    throw new Error("toggle handler was not called");
+  }
+  finishToggle(nextSnapshot);
+
+  await waitFor(() => {
+    expect(screen.getByRole("button", { name: "resolve-library-id" })).toHaveAttribute("aria-pressed", "false");
+  });
+
+  toggleSpy.mockRestore();
 });

@@ -4,11 +4,17 @@ use serde_json::{json, Map, Value};
 use std::collections::BTreeSet;
 use std::env;
 use std::fs;
+use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::sync::mpsc;
+use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const STATE_DIR_NAME: &str = ".skillm";
 const MCP_STATE_FILE_NAME: &str = "mcp-servers.json";
+const MCP_PROTOCOL_VERSION: &str = "2024-11-05";
+const MCP_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(12);
 const APP_CLAUDE_CODE: &str = "claude-code";
 const APP_CODEX: &str = "codex";
 const APP_GEMINI: &str = "gemini";
@@ -36,6 +42,13 @@ pub struct McpAppStatus {
     pub is_enabled: bool,
 }
 
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpServerToolStatus {
+    pub name: String,
+    pub is_enabled: bool,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct McpServerRecord {
@@ -48,6 +61,10 @@ pub struct McpServerRecord {
     pub source_url: String,
     #[serde(default)]
     pub enabled_app_ids: Vec<String>,
+    #[serde(default)]
+    pub tools: Vec<McpServerToolStatus>,
+    #[serde(default)]
+    pub tools_discovered_at: String,
     pub updated_at: String,
 }
 
@@ -63,6 +80,8 @@ pub struct McpServerSummary {
     pub server_json: String,
     pub enabled_app_count: usize,
     pub apps: Vec<McpAppStatus>,
+    pub tools: Vec<McpServerToolStatus>,
+    pub tools_discovered_at: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -279,12 +298,14 @@ pub async fn install_mcp_server_from_marketplace(
     }
 
     let mut record = McpServerRecord {
-        id: server_id,
+        id: server_id.clone(),
         name: server.name.trim().to_string(),
         server: server_config,
         description: String::new(),
         source_url: git_repository_source_url(&server.source_url).unwrap_or_default(),
         enabled_app_ids: Vec::new(),
+        tools: Vec::new(),
+        tools_discovered_at: String::new(),
         updated_at: now_label(),
     };
     enrich_mcp_record_metadata(&mut record, mcp_metadata_client().as_ref()).await;
@@ -338,11 +359,14 @@ pub async fn upsert_mcp_server(server: McpServerRecord) -> Result<McpWorkspaceSn
         if normalized.source_url.trim().is_empty() {
             normalized.source_url = previous.source_url.clone();
         }
+        if normalized.tools.is_empty() {
+            normalized.tools = previous.tools.clone();
+        }
     }
     enrich_mcp_record_metadata(&mut normalized, mcp_metadata_client().as_ref()).await;
 
     for app_id in &normalized.enabled_app_ids {
-        sync_server_to_app(app_id, &normalized.id, &normalized.server)?;
+        sync_record_to_app(app_id, &normalized)?;
     }
 
     let enabled_ids = normalized
@@ -394,7 +418,7 @@ pub async fn toggle_mcp_server_app(
         .ok_or_else(|| format!("未找到 MCP 服务器：{server_id}"))?;
 
     if enabled {
-        sync_server_to_app(app_id, &record.id, &record.server)?;
+        sync_record_to_app(app_id, record)?;
         if !record.enabled_app_ids.iter().any(|item| item == app_id) {
             record.enabled_app_ids.push(app_id.to_string());
             record.enabled_app_ids.sort();
@@ -405,6 +429,72 @@ pub async fn toggle_mcp_server_app(
     }
     record.updated_at = now_label();
 
+    save_mcp_records(&records)?;
+    build_mcp_workspace_snapshot()
+}
+
+#[tauri::command]
+pub async fn toggle_mcp_server_tool(
+    server_id: &str,
+    tool_name: &str,
+    enabled: bool,
+) -> Result<McpWorkspaceSnapshot, String> {
+    let normalized_tool_name = tool_name.trim();
+    if normalized_tool_name.is_empty() {
+        return Err("MCP tool 名称不能为空".to_string());
+    }
+
+    let mut records = load_mcp_records()?;
+    let record = records
+        .iter_mut()
+        .find(|item| item.id == server_id)
+        .ok_or_else(|| format!("未找到 MCP 服务器：{server_id}"))?;
+
+    let mut tools = normalized_mcp_tools(record);
+    if let Some(tool) = tools
+        .iter_mut()
+        .find(|item| item.name == normalized_tool_name)
+    {
+        tool.is_enabled = enabled;
+    } else {
+        tools.push(McpServerToolStatus {
+            name: normalized_tool_name.to_string(),
+            is_enabled: enabled,
+        });
+    }
+    normalize_mcp_tool_statuses(&mut tools);
+    record.tools = tools;
+    for app_id in &record.enabled_app_ids {
+        sync_record_to_app(app_id, record)?;
+    }
+    record.updated_at = now_label();
+
+    save_mcp_records(&records)?;
+    build_mcp_workspace_snapshot()
+}
+
+#[tauri::command]
+pub async fn refresh_mcp_server_tools(server_id: &str) -> Result<McpWorkspaceSnapshot, String> {
+    let mut records = load_mcp_records()?;
+    let record = records
+        .iter_mut()
+        .find(|item| item.id == server_id)
+        .ok_or_else(|| format!("未找到 MCP 服务器：{server_id}"))?;
+
+    match discover_mcp_server_tools(&record.server) {
+        Ok(discovered_tools) if !discovered_tools.is_empty() => {
+            record.tools = merge_discovered_mcp_tools(&record.tools, discovered_tools);
+            for app_id in &record.enabled_app_ids {
+                sync_record_to_app(app_id, record)?;
+            }
+        }
+        Ok(_) => {}
+        Err(error) => {
+            log::warn!("探测 {} MCP tools 失败: {}", record.name, error);
+        }
+    }
+    record.tools_discovered_at = now_label();
+    record.updated_at = now_label();
     save_mcp_records(&records)?;
     build_mcp_workspace_snapshot()
 }
@@ -444,7 +534,8 @@ fn to_server_summary(
         })
         .collect::<Vec<_>>();
     let server_type = mcp_server_type(&record.server);
-    let server_json = serde_json::to_string_pretty(&record.server)
+    let display_server = mcp_server_for_display(&record.server);
+    let server_json = serde_json::to_string_pretty(&display_server)
         .map_err(|error| format!("序列化 MCP 配置失败: {error}"))?;
 
     Ok(McpServerSummary {
@@ -457,6 +548,8 @@ fn to_server_summary(
         server_json,
         enabled_app_count: record.enabled_app_ids.len(),
         apps: app_statuses,
+        tools: normalized_mcp_tools(record),
+        tools_discovered_at: record.tools_discovered_at.trim().to_string(),
     })
 }
 
@@ -624,6 +717,11 @@ fn sync_server_to_app(app_id: &str, server_id: &str, server: &Value) -> Result<(
         APP_OPENCLAW => upsert_agent_json_mcp_server(&spec.config_path, server_id, server),
         _ => Err(format!("不支持的 MCP 应用：{app_id}")),
     }
+}
+
+fn sync_record_to_app(app_id: &str, record: &McpServerRecord) -> Result<(), String> {
+    let synced_server = build_synced_server_config(&record.server, &record.tools)?;
+    sync_server_to_app(app_id, &record.id, &synced_server)
 }
 
 fn remove_server_from_app(app_id: &str, server_id: &str) -> Result<(), String> {
@@ -1059,6 +1157,8 @@ async fn upsert_imported_record(
         description: String::new(),
         source_url: String::new(),
         enabled_app_ids: vec![app.id.to_string()],
+        tools: Vec::new(),
+        tools_discovered_at: String::new(),
         updated_at: now_label(),
     };
     enrich_mcp_record_metadata(&mut record, metadata_client).await;
@@ -1079,6 +1179,13 @@ fn normalize_record(mut record: McpServerRecord) -> Result<McpServerRecord, Stri
     }
     record.description = record.description.trim().to_string();
     record.source_url = record.source_url.trim().to_string();
+    record.tools_discovered_at = record.tools_discovered_at.trim().to_string();
+    if let Some(included_tool_names) = mcp_filter_included_tools(&record.server) {
+        sync_mcp_tools_from_included_names(&mut record.tools, included_tool_names);
+    }
+    if let Some(unwrapped_server) = unwrap_mcp_filter_server(&record.server) {
+        record.server = unwrapped_server;
+    }
     let supported_app_ids = target_app_specs()?
         .into_iter()
         .map(|app| app.id.to_string())
@@ -1088,6 +1195,10 @@ fn normalize_record(mut record: McpServerRecord) -> Result<McpServerRecord, Stri
         .retain(|app_id| supported_app_ids.contains(app_id));
     record.enabled_app_ids.sort();
     record.enabled_app_ids.dedup();
+    normalize_mcp_tool_statuses(&mut record.tools);
+    if record.tools.is_empty() {
+        record.tools_discovered_at.clear();
+    }
     record.updated_at = now_label();
     Ok(record)
 }
@@ -1123,6 +1234,523 @@ fn validate_mcp_server(id: &str, server: &Value) -> Result<(), String> {
         _ => return Err("MCP 服务器 type 必须是 stdio、http 或 sse".to_string()),
     }
     Ok(())
+}
+
+fn discover_mcp_server_tools(server: &Value) -> Result<Vec<String>, String> {
+    match mcp_server_type(server).as_str() {
+        "stdio" => discover_stdio_mcp_tools(server),
+        "http" => discover_http_mcp_tools(server),
+        "sse" => Err("SSE MCP tools 探测暂未支持".to_string()),
+        other => Err(format!("不支持的 MCP 类型：{other}")),
+    }
+}
+
+fn discover_stdio_mcp_tools(server: &Value) -> Result<Vec<String>, String> {
+    let command = server
+        .get("command")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "stdio MCP 缺少 command".to_string())?;
+    let args = server
+        .get("args")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    let mut child_command = Command::new(command);
+    child_command
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    if let Some(cwd) = server.get("cwd").and_then(Value::as_str).map(str::trim).filter(|value| !value.is_empty()) {
+        child_command.current_dir(cwd);
+    }
+    if let Some(env) = server.get("env").and_then(Value::as_object) {
+        for (key, value) in env {
+            if let Some(value) = value.as_str() {
+                child_command.env(key, value);
+            }
+        }
+    }
+
+    let mut child = child_command
+        .spawn()
+        .map_err(|error| format!("启动 MCP server 失败: {error}"))?;
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| "无法写入 MCP server stdin".to_string())?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "无法读取 MCP server stdout".to_string())?;
+    let (tx, rx) = mpsc::channel::<Value>();
+    thread::spawn(move || {
+        let reader = BufReader::new(stdout);
+        for line in reader.lines().map_while(Result::ok) {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            if let Ok(value) = serde_json::from_str::<Value>(trimmed) {
+                if tx.send(value).is_err() {
+                    break;
+                }
+            }
+        }
+    });
+
+    write_mcp_stdio_message(&mut stdin, mcp_initialize_request())?;
+    let _ = read_mcp_response(&rx, 1)?;
+    write_mcp_stdio_message(&mut stdin, mcp_initialized_notification())?;
+    write_mcp_stdio_message(&mut stdin, mcp_tools_list_request())?;
+    let response = read_mcp_response(&rx, 2)?;
+    let _ = child.kill();
+    let _ = child.wait();
+    parse_mcp_tools_list_response(&response)
+}
+
+fn discover_http_mcp_tools(server: &Value) -> Result<Vec<String>, String> {
+    let url = server
+        .get("url")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "HTTP MCP 缺少 url".to_string())?;
+    let client = reqwest::blocking::Client::builder()
+        .timeout(MCP_DISCOVERY_TIMEOUT)
+        .user_agent("skillm/0.1 MCP tools discovery")
+        .build()
+        .map_err(|error| format!("创建 MCP tools 探测客户端失败: {error}"))?;
+
+    let mut session_id = String::new();
+    let initialize_response = post_mcp_http_message(&client, url, server, &session_id, mcp_initialize_request())?;
+    if let Some(value) = initialize_response
+        .headers()
+        .get("mcp-session-id")
+        .and_then(|value| value.to_str().ok())
+    {
+        session_id = value.to_string();
+    }
+    let _ = parse_mcp_http_json_response(initialize_response)?;
+    let _ = post_mcp_http_message(&client, url, server, &session_id, mcp_initialized_notification())?;
+    let tools_response = post_mcp_http_message(&client, url, server, &session_id, mcp_tools_list_request())?;
+    let response = parse_mcp_http_json_response(tools_response)?;
+    parse_mcp_tools_list_response(&response)
+}
+
+fn write_mcp_stdio_message(stdin: &mut impl Write, message: Value) -> Result<(), String> {
+    let payload = serde_json::to_string(&message)
+        .map_err(|error| format!("序列化 MCP 消息失败: {error}"))?;
+    stdin
+        .write_all(payload.as_bytes())
+        .and_then(|_| stdin.write_all(b"\n"))
+        .and_then(|_| stdin.flush())
+        .map_err(|error| format!("写入 MCP 消息失败: {error}"))
+}
+
+fn read_mcp_response(rx: &mpsc::Receiver<Value>, id: i64) -> Result<Value, String> {
+    loop {
+        let value = rx
+            .recv_timeout(MCP_DISCOVERY_TIMEOUT)
+            .map_err(|_| "MCP tools 探测超时".to_string())?;
+        if value.get("id").and_then(Value::as_i64) == Some(id) {
+            if let Some(error) = value.get("error") {
+                return Err(format!("MCP 返回错误: {error}"));
+            }
+            return Ok(value);
+        }
+    }
+}
+
+fn post_mcp_http_message(
+    client: &reqwest::blocking::Client,
+    url: &str,
+    server: &Value,
+    session_id: &str,
+    message: Value,
+) -> Result<reqwest::blocking::Response, String> {
+    let mut request = client
+        .post(url)
+        .header("accept", "application/json, text/event-stream")
+        .header("content-type", "application/json")
+        .json(&message);
+    if !session_id.is_empty() {
+        request = request.header("mcp-session-id", session_id);
+    }
+    if let Some(headers) = server.get("headers").and_then(Value::as_object) {
+        for (key, value) in headers {
+            if let Some(value) = value.as_str() {
+                request = request.header(key, value);
+            }
+        }
+    }
+    request
+        .send()
+        .map_err(|error| format!("请求 MCP tools 失败: {error}"))?
+        .error_for_status()
+        .map_err(|error| format!("MCP tools 响应异常: {error}"))
+}
+
+fn parse_mcp_http_json_response(response: reqwest::blocking::Response) -> Result<Value, String> {
+    let text = response
+        .text()
+        .map_err(|error| format!("读取 MCP tools 响应失败: {error}"))?;
+    if let Ok(value) = serde_json::from_str::<Value>(&text) {
+        return Ok(value);
+    }
+    for line in text.lines() {
+        if let Some(data) = line.trim().strip_prefix("data:") {
+            let data = data.trim();
+            if data == "[DONE]" || data.is_empty() {
+                continue;
+            }
+            if let Ok(value) = serde_json::from_str::<Value>(data) {
+                return Ok(value);
+            }
+        }
+    }
+    Err("无法解析 MCP tools 响应".to_string())
+}
+
+fn mcp_initialize_request() -> Value {
+    json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": MCP_PROTOCOL_VERSION,
+            "capabilities": {},
+            "clientInfo": {
+                "name": "skillm",
+                "version": "0.1.0"
+            }
+        }
+    })
+}
+
+fn mcp_initialized_notification() -> Value {
+    json!({
+        "jsonrpc": "2.0",
+        "method": "notifications/initialized"
+    })
+}
+
+fn mcp_tools_list_request() -> Value {
+    json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/list",
+        "params": {}
+    })
+}
+
+fn parse_mcp_tools_list_response(response: &Value) -> Result<Vec<String>, String> {
+    let tools = response
+        .get("result")
+        .and_then(|result| result.get("tools"))
+        .and_then(Value::as_array)
+        .ok_or_else(|| "MCP tools/list 响应缺少 tools".to_string())?;
+    let mut names = tools
+        .iter()
+        .filter_map(|tool| tool.get("name").and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(ToString::to_string)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    names.sort();
+    Ok(names)
+}
+
+fn merge_discovered_mcp_tools(
+    existing_tools: &[McpServerToolStatus],
+    discovered_tool_names: Vec<String>,
+) -> Vec<McpServerToolStatus> {
+    let discovered_tool_names = discovered_tool_names.into_iter().collect::<BTreeSet<_>>();
+    let mut tools = discovered_tool_names
+        .iter()
+        .map(|name| {
+            let is_enabled = existing_tools
+                .iter()
+                .find(|tool| tool.name == *name)
+                .map(|tool| tool.is_enabled)
+                .unwrap_or(true);
+            McpServerToolStatus {
+                name: name.clone(),
+                is_enabled,
+            }
+        })
+        .collect::<Vec<_>>();
+    for tool in existing_tools {
+        if !discovered_tool_names.contains(&tool.name) {
+            tools.push(tool.clone());
+        }
+    }
+    normalize_mcp_tool_statuses(&mut tools);
+    tools
+}
+
+fn mcp_server_for_display(server: &Value) -> Value {
+    let mut display_server = server.clone();
+    if let Some(obj) = display_server.as_object_mut() {
+        if obj.get("type").and_then(Value::as_str).unwrap_or("stdio") == "stdio" {
+            obj.remove("type");
+        }
+    }
+    display_server
+}
+
+fn normalized_mcp_tools(record: &McpServerRecord) -> Vec<McpServerToolStatus> {
+    let mut tools = record.tools.clone();
+    normalize_mcp_tool_statuses(&mut tools);
+    tools
+}
+
+fn sync_mcp_tools_from_included_names(
+    tools: &mut Vec<McpServerToolStatus>,
+    included_tool_names: BTreeSet<String>,
+) {
+    if included_tool_names.is_empty() && tools.is_empty() {
+        return;
+    }
+
+    for tool in tools.iter_mut() {
+        tool.is_enabled = included_tool_names.contains(&tool.name);
+    }
+    for tool_name in included_tool_names {
+        if !tools.iter().any(|tool| tool.name == tool_name) {
+            tools.push(McpServerToolStatus {
+                name: tool_name,
+                is_enabled: true,
+            });
+        }
+    }
+    normalize_mcp_tool_statuses(tools);
+}
+
+fn mcp_filter_included_tools(server: &Value) -> Option<BTreeSet<String>> {
+    let args = server.get("args").and_then(Value::as_array)?;
+    let filter_index = args.iter().position(|item| {
+        item.as_str()
+            .map(|value| value == "mcp-filter" || value.ends_with("/mcp-filter"))
+            .unwrap_or(false)
+    })?;
+    let delimiter_index = args
+        .iter()
+        .position(|item| item.as_str() == Some("--"))
+        .unwrap_or(args.len());
+
+    let mut included_tool_names = BTreeSet::new();
+    let mut index = filter_index + 1;
+    while index < delimiter_index {
+        if args[index].as_str() == Some("--include") {
+            if let Some(tool_name) = args.get(index + 1).and_then(Value::as_str) {
+                let trimmed = tool_name.trim();
+                if !trimmed.is_empty() {
+                    included_tool_names.insert(trimmed.to_string());
+                }
+            }
+            index += 2;
+            continue;
+        }
+        index += 1;
+    }
+
+    Some(included_tool_names)
+}
+
+fn unwrap_mcp_filter_server(server: &Value) -> Option<Value> {
+    let obj = server.as_object()?;
+    let args = obj.get("args")?.as_array()?;
+    let filter_index = args.iter().position(|item| {
+        item.as_str()
+            .map(|value| value == "mcp-filter" || value.ends_with("/mcp-filter"))
+            .unwrap_or(false)
+    })?;
+    let delimiter_index = args
+        .iter()
+        .position(|item| item.as_str() == Some("--"))?;
+    if filter_index >= delimiter_index || delimiter_index + 1 >= args.len() {
+        return None;
+    }
+
+    let inner_command = args.get(delimiter_index + 1)?.as_str()?.trim();
+    if inner_command.is_empty() {
+        return None;
+    }
+
+    let mut base = obj.clone();
+    base.insert(
+        "command".to_string(),
+        Value::String(inner_command.to_string()),
+    );
+    let inner_args = args[(delimiter_index + 2)..].to_vec();
+    if inner_args.is_empty() {
+        base.remove("args");
+    } else {
+        base.insert("args".to_string(), Value::Array(inner_args));
+    }
+    base.insert("type".to_string(), Value::String("stdio".to_string()));
+    Some(Value::Object(base))
+}
+
+fn build_synced_server_config(
+    server: &Value,
+    tools: &[McpServerToolStatus],
+) -> Result<Value, String> {
+    let normalized_tools = tools
+        .iter()
+        .map(|tool| McpServerToolStatus {
+            name: tool.name.trim().to_string(),
+            is_enabled: tool.is_enabled,
+        })
+        .filter(|tool| !tool.name.is_empty())
+        .collect::<Vec<_>>();
+    let has_disabled_tools = normalized_tools.iter().any(|tool| !tool.is_enabled);
+    if !has_disabled_tools {
+        return Ok(server.clone());
+    }
+
+    match mcp_server_type(server).as_str() {
+        "stdio" => build_stdio_synced_server_config(server, &normalized_tools),
+        "http" | "sse" => build_remote_synced_server_config(server, &normalized_tools),
+        other => Err(format!("当前暂不支持为 {other} MCP 同步 tools 级开关")),
+    }
+}
+
+fn build_stdio_synced_server_config(
+    server: &Value,
+    normalized_tools: &[McpServerToolStatus],
+) -> Result<Value, String> {
+    let obj = server
+        .as_object()
+        .ok_or_else(|| "MCP 服务器定义必须为 JSON 对象".to_string())?;
+    let command = obj
+        .get("command")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "stdio 类型 MCP 服务器缺少 command".to_string())?;
+    let mut wrapped = obj.clone();
+    wrapped.insert("command".to_string(), Value::String("npx".to_string()));
+
+    let enabled_tool_names = normalized_tools
+        .iter()
+        .filter(|tool| tool.is_enabled)
+        .map(|tool| tool.name.clone())
+        .collect::<BTreeSet<_>>();
+    let original_args = obj
+        .get("args")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+
+    let mut wrapper_args = vec![
+        Value::String("-y".to_string()),
+        Value::String("mcp-filter".to_string()),
+    ];
+    for tool_name in enabled_tool_names {
+        wrapper_args.push(Value::String("--include".to_string()));
+        wrapper_args.push(Value::String(tool_name));
+    }
+    wrapper_args.push(Value::String("--".to_string()));
+    wrapper_args.push(Value::String(command.to_string()));
+    wrapper_args.extend(original_args);
+    wrapped.insert("args".to_string(), Value::Array(wrapper_args));
+    wrapped.insert("type".to_string(), Value::String("stdio".to_string()));
+    Ok(Value::Object(wrapped))
+}
+
+fn build_remote_synced_server_config(
+    server: &Value,
+    normalized_tools: &[McpServerToolStatus],
+) -> Result<Value, String> {
+    let obj = server
+        .as_object()
+        .ok_or_else(|| "MCP 服务器定义必须为 JSON 对象".to_string())?;
+    let server_type = mcp_server_type(server);
+    let url = obj
+        .get("url")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| format!("{server_type} 类型 MCP 服务器缺少 url"))?;
+
+    let mut wrapper_args = vec![
+        Value::String("-y".to_string()),
+        Value::String("mcp-remote@latest".to_string()),
+        Value::String(url.to_string()),
+    ];
+    match server_type.as_str() {
+        "http" => {
+            wrapper_args.push(Value::String("--transport".to_string()));
+            wrapper_args.push(Value::String("http-only".to_string()));
+        }
+        "sse" => {
+            wrapper_args.push(Value::String("--transport".to_string()));
+            wrapper_args.push(Value::String("sse-only".to_string()));
+        }
+        _ => {}
+    }
+    if url.starts_with("http://") {
+        wrapper_args.push(Value::String("--allow-http".to_string()));
+    }
+    if let Some(headers) = obj.get("headers").and_then(Value::as_object) {
+        for (name, value) in headers {
+            let Some(value) = value.as_str().map(str::trim) else {
+                continue;
+            };
+            if value.is_empty() {
+                continue;
+            }
+            wrapper_args.push(Value::String("--header".to_string()));
+            wrapper_args.push(Value::String(format!("{name}:{value}")));
+        }
+    }
+    for tool_name in normalized_tools
+        .iter()
+        .filter(|tool| !tool.is_enabled)
+        .map(|tool| tool.name.trim())
+        .filter(|name| !name.is_empty())
+    {
+        wrapper_args.push(Value::String("--ignore-tool".to_string()));
+        wrapper_args.push(Value::String(tool_name.to_string()));
+    }
+
+    let mut wrapped = Map::new();
+    wrapped.insert("type".to_string(), Value::String("stdio".to_string()));
+    wrapped.insert("command".to_string(), Value::String("npx".to_string()));
+    wrapped.insert("args".to_string(), Value::Array(wrapper_args));
+    if let Some(env) = obj.get("env").and_then(Value::as_object) {
+        wrapped.insert("env".to_string(), Value::Object(env.clone()));
+    }
+    Ok(Value::Object(wrapped))
+}
+
+fn normalize_mcp_tool_statuses(tools: &mut Vec<McpServerToolStatus>) {
+    for tool in tools.iter_mut() {
+        tool.name = tool.name.trim().to_string();
+    }
+    tools.retain(|tool| !tool.name.is_empty());
+    tools.sort_by(|a, b| a.name.cmp(&b.name));
+    tools.dedup_by(|a, b| {
+        if a.name == b.name {
+            a.is_enabled = a.is_enabled || b.is_enabled;
+            true
+        } else {
+            false
+        }
+    });
 }
 
 fn mcp_server_type(server: &Value) -> String {
@@ -1532,7 +2160,11 @@ fn load_mcp_records() -> Result<Vec<McpServerRecord>, String> {
         fs::read_to_string(&state_file).map_err(|error| format!("读取 MCP 状态失败: {error}"))?;
     let persistence = serde_json::from_str::<McpPersistence>(&content)
         .map_err(|error| format!("解析 MCP 状态失败: {error}"))?;
-    Ok(persistence.servers)
+    persistence
+        .servers
+        .into_iter()
+        .map(normalize_record)
+        .collect()
 }
 
 fn save_mcp_records(records: &[McpServerRecord]) -> Result<(), String> {
@@ -2268,6 +2900,225 @@ mod tests {
         assert_eq!(
             explicit_mcp_source_url(&server),
             Some("https://github.com/upstash/context7".to_string())
+        );
+    }
+
+    #[test]
+    fn display_json_omits_default_stdio_type() {
+        let server = json!({
+            "type": "stdio",
+            "command": "npx",
+            "args": ["-y", "@playwright/mcp"]
+        });
+
+        assert_eq!(
+            mcp_server_for_display(&server),
+            json!({
+                "command": "npx",
+                "args": ["-y", "@playwright/mcp"]
+            })
+        );
+    }
+
+    #[test]
+    fn syncs_mcp_filter_includes_from_tool_statuses() {
+        let server = json!({
+            "command": "/opt/homebrew/bin/npx",
+            "args": [
+                "-y",
+                "@zereight/mcp-gitlab"
+            ]
+        });
+        let tools = vec![
+            McpServerToolStatus {
+                name: "search_projects".to_string(),
+                is_enabled: true,
+            },
+            McpServerToolStatus {
+                name: "list_projects".to_string(),
+                is_enabled: false,
+            },
+            McpServerToolStatus {
+                name: "get_project".to_string(),
+                is_enabled: true,
+            },
+        ];
+
+        assert_eq!(
+            build_synced_server_config(&server, &tools).unwrap()["args"],
+            json!([
+                "-y",
+                "mcp-filter",
+                "--include",
+                "get_project",
+                "--include",
+                "search_projects",
+                "--",
+                "/opt/homebrew/bin/npx",
+                "-y",
+                "@zereight/mcp-gitlab"
+            ])
+        );
+    }
+
+    #[test]
+    fn derives_tool_statuses_from_mcp_filter_includes() {
+        let server = json!({
+            "command": "/opt/homebrew/bin/npx",
+            "args": [
+                "-y",
+                "mcp-filter",
+                "--include",
+                "search_projects",
+                "--",
+                "/opt/homebrew/bin/npx",
+                "-y",
+                "@zereight/mcp-gitlab"
+            ]
+        });
+        let mut tools = vec![
+            McpServerToolStatus {
+                name: "search_projects".to_string(),
+                is_enabled: false,
+            },
+            McpServerToolStatus {
+                name: "list_projects".to_string(),
+                is_enabled: true,
+            },
+        ];
+
+        let included_tool_names = mcp_filter_included_tools(&server).unwrap();
+        sync_mcp_tools_from_included_names(&mut tools, included_tool_names);
+
+        assert_eq!(
+            tools,
+            vec![
+                McpServerToolStatus {
+                    name: "list_projects".to_string(),
+                    is_enabled: false,
+                },
+                McpServerToolStatus {
+                    name: "search_projects".to_string(),
+                    is_enabled: true,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn unwraps_mcp_filter_server_to_original_command() {
+        let server = json!({
+            "command": "npx",
+            "args": [
+                "-y",
+                "mcp-filter",
+                "--include",
+                "resolve-library-id",
+                "--",
+                "npx",
+                "-y",
+                "@upstash/context7-mcp"
+            ]
+        });
+
+        assert_eq!(
+            unwrap_mcp_filter_server(&server),
+            Some(json!({
+                "type": "stdio",
+                "command": "npx",
+                "args": ["-y", "@upstash/context7-mcp"]
+            }))
+        );
+    }
+
+    #[test]
+    fn wraps_stdio_server_with_mcp_filter_when_some_tools_are_disabled() {
+        let server = json!({
+            "command": "npx",
+            "args": ["-y", "@upstash/context7-mcp"]
+        });
+        let tools = vec![
+            McpServerToolStatus {
+                name: "resolve-library-id".to_string(),
+                is_enabled: true,
+            },
+            McpServerToolStatus {
+                name: "get-library-docs".to_string(),
+                is_enabled: false,
+            },
+        ];
+
+        assert_eq!(
+            build_synced_server_config(&server, &tools).unwrap(),
+            json!({
+                "type": "stdio",
+                "command": "npx",
+                "args": [
+                    "-y",
+                    "mcp-filter",
+                    "--include",
+                    "resolve-library-id",
+                    "--",
+                    "npx",
+                    "-y",
+                    "@upstash/context7-mcp"
+                ]
+            })
+        );
+    }
+
+    #[test]
+    fn keeps_original_server_when_all_tools_are_enabled() {
+        let server = json!({
+            "command": "npx",
+            "args": ["-y", "@upstash/context7-mcp"]
+        });
+        let tools = vec![
+            McpServerToolStatus {
+                name: "resolve-library-id".to_string(),
+                is_enabled: true,
+            },
+            McpServerToolStatus {
+                name: "get-library-docs".to_string(),
+                is_enabled: true,
+            },
+        ];
+
+        assert_eq!(build_synced_server_config(&server, &tools).unwrap(), server);
+    }
+
+    #[test]
+    fn wraps_remote_http_server_when_some_tools_are_disabled() {
+        let server = json!({
+            "type": "http",
+            "url": "https://mcp.context7.com/mcp"
+        });
+        let tools = vec![
+            McpServerToolStatus {
+                name: "resolve-library-id".to_string(),
+                is_enabled: true,
+            },
+            McpServerToolStatus {
+                name: "get-library-docs".to_string(),
+                is_enabled: false,
+            },
+        ];
+
+        assert_eq!(
+            build_synced_server_config(&server, &tools).unwrap(),
+            json!({
+                "type": "stdio",
+                "command": "npx",
+                "args": [
+                    "-y",
+                    "mcp-remote@latest",
+                    "https://mcp.context7.com/mcp",
+                    "--transport",
+                    "http-only",
+                    "--ignore-tool",
+                    "get-library-docs"
+                ]
+            })
         );
     }
 }

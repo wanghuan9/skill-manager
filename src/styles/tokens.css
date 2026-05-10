@@ -1109,6 +1109,7 @@ code {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
 .skill-group-section__source a {
   color: color-mix(in srgb, var(--accent) 76%, var(--heading) 24%);
   text-decoration: none;
@@ -1117,7 +1118,6 @@ code {
 .skill-group-section__source a:hover {
   text-decoration: underline;
 }
-
 
 .skill-group-section__name-row,
 .skill-group-section__title h3,
@@ -1936,6 +1936,7 @@ code {
   min-width: 0;
   overflow-wrap: anywhere;
 }
+
 .detail-grid__source-link {
   color: color-mix(in srgb, var(--accent) 82%, var(--heading) 18%);
   text-decoration: none;
@@ -1944,7 +1945,6 @@ code {
 .detail-grid__source-link:hover {
   text-decoration: underline;
 }
-
 
 .detail-git-badge {
   display: inline-flex;
@@ -4784,6 +4784,95 @@ code {
   gap: 8px;
   flex-wrap: wrap;
   min-width: 0;
+}
+
+.mcp-server-card__tool-count {
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+
+.mcp-server-card__tool-header {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.mcp-server-card__tool-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.mcp-server-card__tool-actions .secondary-button--compact {
+  min-height: 30px;
+  padding: 0 10px;
+  font-size: 0.76rem;
+  font-weight: 500;
+}
+
+.mcp-server-card__tool-list {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.mcp-server-card__tool-chip {
+  min-height: 28px;
+  max-width: 240px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f5f7fb;
+  color: #64748b;
+  font-family:
+    "SF Mono",
+    "JetBrains Mono",
+    monospace;
+  font-size: 0.72rem;
+  font-weight: 400;
+  line-height: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mcp-server-card__tool-chip:hover:not(:disabled) {
+  border-color: rgba(148, 163, 184, 0.48);
+  background: #eef3f9;
+  color: #475569;
+}
+
+.mcp-server-card__tool-chip:focus-visible {
+  outline: 3px solid rgba(47, 120, 255, 0.18);
+  outline-offset: 2px;
+}
+
+.mcp-server-card__tool-chip.is-enabled {
+  border-color: rgba(47, 120, 255, 0.26);
+  background: rgba(47, 120, 255, 0.08);
+  color: #2563eb;
+}
+
+.mcp-server-card__tool-chip.is-enabled:hover:not(:disabled) {
+  border-color: rgba(37, 99, 235, 0.34);
+  background: rgba(37, 99, 235, 0.14);
+  color: #1d4ed8;
+}
+
+.mcp-server-card__tool-chip:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.mcp-server-card__tool-empty {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.82rem;
 }
 
 .mcp-app-toggle {

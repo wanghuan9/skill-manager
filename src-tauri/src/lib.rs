@@ -58,6 +58,8 @@ pub fn run() {
             mcp_manager::upsert_mcp_server,
             mcp_manager::delete_mcp_server,
             mcp_manager::toggle_mcp_server_app,
+            mcp_manager::toggle_mcp_server_tool,
+            mcp_manager::refresh_mcp_server_tools,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

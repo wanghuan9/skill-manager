@@ -1,4 +1,4 @@
-import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { startTransition, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useNotifications } from "@/app/notifications";
 import {
@@ -6,8 +6,11 @@ import {
   fetchMcpWorkspace,
   importMcpServersFromApps,
   openExternalLink,
+  refreshMcpServerTools,
   saveMcpServer,
+  shouldUseFixtureData,
   toggleMcpServerApp,
+  toggleMcpServerTool,
 } from "@/features/skills/api/skill-client";
 import type {
   McpAppStatus,
@@ -29,7 +32,7 @@ type McpFormState = {
 const EMPTY_FORM_STATE: McpFormState = {
   id: "",
   name: "",
-  serverJson: "{\n  \"type\": \"stdio\",\n  \"command\": \"npx\",\n  \"args\": []\n}",
+  serverJson: "{\n  \"command\": \"npx\",\n  \"args\": []\n}",
   enabledAppIds: [],
 };
 
@@ -49,6 +52,16 @@ function parseServerJson(value: string): Record<string, unknown> {
   }
 
   return parsed as Record<string, unknown>;
+}
+
+function normalizeServerJsonForSave(value: string): Record<string, unknown> {
+  const server = parseServerJson(value);
+  if (typeof server.type === "string" && server.type.trim() === "stdio") {
+    const { type: _type, ...serverWithoutDefaultType } = server;
+    return serverWithoutDefaultType;
+  }
+
+  return server;
 }
 
 function normalizeMcpServerId(value: string) {
@@ -117,6 +130,34 @@ function sourceLabelForMcpSource(sourceUrl: string) {
     return "Gitee";
   }
   return "仓库";
+}
+
+function patchWorkspaceToolState(
+  current: McpWorkspaceSnapshot | null,
+  serverId: string,
+  toolNames: string[],
+  enabled: boolean,
+) {
+  if (!current || toolNames.length === 0) {
+    return current;
+  }
+
+  const targetToolNames = new Set(toolNames);
+  return {
+    ...current,
+    servers: current.servers.map((server) => (
+      server.id === serverId
+        ? {
+            ...server,
+            tools: server.tools.map((tool) => (
+              targetToolNames.has(tool.name)
+                ? { ...tool, isEnabled: enabled }
+                : tool
+            )),
+          }
+        : server
+    )),
+  };
 }
 
 function McpServerMonogram({ server }: { server: McpServerSummary }) {
@@ -231,7 +272,8 @@ export function McpRoute() {
   const deferredQuery = useDeferredValue(query);
   const [editingServer, setEditingServer] = useState<McpServerSummary | null>(null);
   const [isCreating, setIsCreating] = useState(false);
-  const [updatingKey, setUpdatingKey] = useState("");
+  const [pendingAppKey, setPendingAppKey] = useState("");
+  const [pendingToolKey, setPendingToolKey] = useState("");
   const [isImporting, setIsImporting] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
   const [toolbarContainer, setToolbarContainer] = useState<HTMLElement | null>(null);
@@ -239,6 +281,13 @@ export function McpRoute() {
   const [deleteConfirmingServerId, setDeleteConfirmingServerId] = useState("");
   const [deletingServerId, setDeletingServerId] = useState("");
   const deleteActionRef = useRef<HTMLButtonElement | null>(null);
+  const toolsRefreshRef = useRef<Set<string>>(new Set());
+
+  function commitWorkspace(snapshot: McpWorkspaceSnapshot | null) {
+    startTransition(() => {
+      setWorkspace(snapshot);
+    });
+  }
 
   useEffect(() => {
     let active = true;
@@ -247,7 +296,7 @@ export function McpRoute() {
       try {
         const snapshot = await fetchMcpWorkspace();
         if (active) {
-          setWorkspace(snapshot);
+          commitWorkspace(snapshot);
         }
       } catch (error) {
         if (active) {
@@ -306,6 +355,39 @@ export function McpRoute() {
     });
   }, [deferredQuery, workspace?.servers]);
 
+  useEffect(() => {
+    if (shouldUseFixtureData()) {
+      return;
+    }
+    const serverIds = (workspace?.servers ?? [])
+      .filter((item) => item.tools.length === 0 && !item.toolsDiscoveredAt && !toolsRefreshRef.current.has(item.id))
+      .map((item) => item.id);
+    if (serverIds.length === 0) {
+      return;
+    }
+    serverIds.forEach((serverId) => toolsRefreshRef.current.add(serverId));
+
+    let active = true;
+    async function refreshTools() {
+      for (const serverId of serverIds) {
+        try {
+          const snapshot = await refreshMcpServerTools(serverId);
+          if (!active) {
+            return;
+          }
+          commitWorkspace(snapshot);
+        } catch (error) {
+          console.warn(`Failed to refresh MCP tools for ${serverId}`, error);
+        }
+      }
+    }
+
+    void refreshTools();
+    return () => {
+      active = false;
+    };
+  }, [workspace?.servers]);
+
   async function handleImport() {
     if (isImporting) {
       return;
@@ -316,7 +398,7 @@ export function McpRoute() {
     try {
       const count = await importMcpServersFromApps();
       const snapshot = await fetchMcpWorkspace();
-      setWorkspace(snapshot);
+      commitWorkspace(snapshot);
       notify({
         tone: "success",
         message: count > 0 ? `已导入 ${count} 项 MCP 启用状态` : "没有发现新的 MCP 配置",
@@ -331,24 +413,90 @@ export function McpRoute() {
 
   async function handleToggle(server: McpServerSummary, appId: string, enabled: boolean) {
     const key = `${server.id}:${appId}`;
-    if (updatingKey) {
+    if (pendingAppKey || pendingToolKey) {
       return;
     }
 
     setDeleteConfirmingServerId("");
-    setUpdatingKey(key);
+    setPendingAppKey(key);
     try {
       const snapshot = await toggleMcpServerApp({
         serverId: server.id,
         appId,
         enabled,
       });
-      setWorkspace(snapshot);
+      commitWorkspace(snapshot);
     } catch (error) {
       const message = error instanceof Error ? error.message : "更新 MCP 启用状态失败";
       notify({ tone: "error", message });
     } finally {
-      setUpdatingKey("");
+      setPendingAppKey("");
+    }
+  }
+
+  async function handleToggleTool(server: McpServerSummary, toolName: string, enabled: boolean) {
+    const key = `${server.id}:tool:${toolName}`;
+    if (pendingToolKey || pendingAppKey) {
+      return;
+    }
+
+    const previousWorkspace = workspace;
+    setDeleteConfirmingServerId("");
+    setPendingToolKey(key);
+    commitWorkspace(patchWorkspaceToolState(previousWorkspace, server.id, [toolName], enabled));
+    try {
+      const snapshot = await toggleMcpServerTool({
+        serverId: server.id,
+        toolName,
+        enabled,
+      });
+      commitWorkspace(snapshot);
+    } catch (error) {
+      commitWorkspace(previousWorkspace);
+      const message = error instanceof Error ? error.message : "更新 MCP tool 启用状态失败";
+      notify({ tone: "error", message });
+    } finally {
+      setPendingToolKey("");
+    }
+  }
+
+  async function handleToggleAllTools(server: McpServerSummary, enabled: boolean) {
+    if (pendingToolKey || pendingAppKey) {
+      return;
+    }
+
+    const targetTools = server.tools.filter((tool) => tool.isEnabled !== enabled);
+    if (targetTools.length === 0) {
+      return;
+    }
+
+    const previousWorkspace = workspace;
+    setDeleteConfirmingServerId("");
+    setPendingToolKey(`${server.id}:tools:all`);
+    commitWorkspace(
+      patchWorkspaceToolState(
+        previousWorkspace,
+        server.id,
+        targetTools.map((tool) => tool.name),
+        enabled,
+      ),
+    );
+    try {
+      let snapshot = workspace;
+      for (const tool of targetTools) {
+        snapshot = await toggleMcpServerTool({
+          serverId: server.id,
+          toolName: tool.name,
+          enabled,
+        });
+      }
+      commitWorkspace(snapshot);
+    } catch (error) {
+      commitWorkspace(previousWorkspace);
+      const message = error instanceof Error ? error.message : "批量更新 MCP tools 启用状态失败";
+      notify({ tone: "error", message });
+    } finally {
+      setPendingToolKey("");
     }
   }
 
@@ -366,7 +514,7 @@ export function McpRoute() {
     setDeletingServerId(server.id);
     try {
       const snapshot = await deleteMcpServer(server.id);
-      setWorkspace(snapshot);
+      commitWorkspace(snapshot);
       notify({ tone: "success", message: `已删除 ${server.name}` });
     } catch (error) {
       const message = error instanceof Error ? error.message : "删除 MCP 失败";
@@ -378,18 +526,20 @@ export function McpRoute() {
 
   async function handleSave(formState: McpFormState) {
     const name = formState.name.trim();
-    const serverId = editingServer?.id ?? buildUniqueMcpServerId(name, workspace?.servers ?? []);
+    const serverId = activeEditingServer?.id ?? buildUniqueMcpServerId(name, workspace?.servers ?? []);
     const serverRecord: McpServerRecord = {
       id: serverId,
       name,
-      server: parseServerJson(formState.serverJson),
-      description: editingServer?.description ?? "",
-      sourceUrl: editingServer?.sourceUrl ?? "",
+      server: normalizeServerJsonForSave(formState.serverJson),
+      description: activeEditingServer?.description ?? "",
+      sourceUrl: activeEditingServer?.sourceUrl ?? "",
       enabledAppIds: formState.enabledAppIds,
+      tools: activeEditingServer?.tools ?? [],
+      toolsDiscoveredAt: activeEditingServer?.toolsDiscoveredAt ?? "",
       updatedAt: "",
     };
     const snapshot = await saveMcpServer(serverRecord);
-    setWorkspace(snapshot);
+    commitWorkspace(snapshot);
     setIsCreating(false);
     setEditingServer(null);
     setDeleteConfirmingServerId("");
@@ -429,7 +579,13 @@ export function McpRoute() {
     [installedApps],
   );
   const isDialogOpen = isCreating || editingServer !== null;
-  const formInitialState = editingServer ? buildFormState(editingServer) : EMPTY_FORM_STATE;
+  const activeEditingServer = editingServer
+    ? workspace?.servers.find((server) => server.id === editingServer.id) ?? editingServer
+    : null;
+  const formInitialState = useMemo(
+    () => (activeEditingServer ? buildFormState(activeEditingServer) : EMPTY_FORM_STATE),
+    [activeEditingServer],
+  );
   const toolbar = (
     <section className="mcp-toolbar skills-header-bar__tools" aria-label="MCP 工具栏">
       <label className="search-field search-field--header mcp-toolbar__search">
@@ -475,6 +631,14 @@ export function McpRoute() {
         {filteredServers.map((server) => {
           const isExpanded = expandedServerIds[server.id] ?? false;
           const visibleApps = server.apps.filter((app) => installedAppIdSet.has(app.appId));
+          const enabledToolCount = server.tools.filter((tool) => tool.isEnabled).length;
+          const totalToolCount = server.tools.length;
+          const disabledToolCount = totalToolCount - enabledToolCount;
+          const toolSummaryLabel = totalToolCount > 0
+            ? enabledToolCount === totalToolCount
+              ? `${enabledToolCount} tools`
+              : `${enabledToolCount}/${totalToolCount} tools`
+            : "未获取 tools";
           const serverDescription = formatMcpDescription(server);
           const isDeleteConfirming = deleteConfirmingServerId === server.id;
           const isDeleting = deletingServerId === server.id;
@@ -496,8 +660,9 @@ export function McpRoute() {
                       <div className="mcp-server-card__title-stack">
                         <div className="mcp-server-card__title-row">
                           <strong>{server.name}</strong>
-                          <span className="status-badge tone-neutral">{server.serverType}</span>
-                          <span className="status-badge tone-info">已启用 {server.enabledAppCount}</span>
+                          <span className={`status-badge ${totalToolCount > 0 ? "tone-info" : "tone-neutral"}`}>
+                            {toolSummaryLabel}
+                          </span>
                         </div>
                         <code title={server.commandLabel}>{server.commandLabel || server.id}</code>
                       </div>
@@ -587,7 +752,7 @@ export function McpRoute() {
                     </div>
                     <div className="mcp-server-card__apps">
                       {visibleApps.map((app) => {
-                        const isUpdating = updatingKey === `${server.id}:${app.appId}`;
+                        const isUpdating = pendingAppKey === `${server.id}:${app.appId}`;
                         const appTitle = app.configPath || "暂未识别 MCP 配置路径";
 
                         return (
@@ -596,7 +761,7 @@ export function McpRoute() {
                             className={`tool-pill mcp-app-toggle${app.isEnabled ? " is-enabled" : ""}`}
                             type="button"
                             onClick={() => void handleToggle(server, app.appId, !app.isEnabled)}
-                            disabled={Boolean(updatingKey)}
+                            disabled={isUpdating}
                             aria-pressed={app.isEnabled}
                             title={appTitle}
                           >
@@ -608,6 +773,59 @@ export function McpRoute() {
                         );
                       })}
                     </div>
+                  </section>
+                  <section>
+                    <div className="skill-card__section-header">
+                      <div className="mcp-server-card__tool-header">
+                        <h4>Tools</h4>
+                        {totalToolCount > 0 ? (
+                          <span className="mcp-server-card__tool-count">{enabledToolCount}/{totalToolCount} 已启用</span>
+                        ) : null}
+                      </div>
+                      {totalToolCount > 0 ? (
+                        <div className="mcp-server-card__tool-actions">
+                          <button
+                            className="secondary-button secondary-button--compact"
+                            type="button"
+                            onClick={() => void handleToggleAllTools(server, true)}
+                            disabled={Boolean(pendingToolKey) || disabledToolCount === 0}
+                          >
+                            全部开启
+                          </button>
+                          <button
+                            className="secondary-button secondary-button--compact"
+                            type="button"
+                            onClick={() => void handleToggleAllTools(server, false)}
+                            disabled={Boolean(pendingToolKey) || enabledToolCount === 0}
+                          >
+                            全部关闭
+                          </button>
+                        </div>
+                      ) : null}
+                    </div>
+                    {server.tools.length > 0 ? (
+                      <div className="mcp-server-card__tool-list" aria-label={`${server.name} tools`}>
+                        {server.tools.map((tool) => {
+                          const isUpdating = pendingToolKey === `${server.id}:tool:${tool.name}`;
+
+                          return (
+                            <button
+                              key={tool.name}
+                              className={`mcp-server-card__tool-chip${tool.isEnabled ? " is-enabled" : ""}`}
+                              type="button"
+                              onClick={() => void handleToggleTool(server, tool.name, !tool.isEnabled)}
+                              disabled={isUpdating || pendingToolKey === `${server.id}:tools:all`}
+                              aria-pressed={tool.isEnabled}
+                              title={tool.isEnabled ? "点击关闭" : "点击开启"}
+                            >
+                              {tool.name}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <p className="mcp-server-card__tool-empty">暂未获取到该 MCP 的 tools。</p>
+                    )}
                   </section>
                 </div>
               ) : null}
@@ -648,6 +866,11 @@ function McpEditDialog(props: McpEditDialogProps) {
   const [formState, setFormState] = useState(initialState);
   const [errorMessage, setErrorMessage] = useState("");
   const [isSaving, setIsSaving] = useState(false);
+
+  useEffect(() => {
+    setFormState(initialState);
+    setErrorMessage("");
+  }, [initialState]);
 
   function setEnabledApp(appId: string, enabled: boolean) {
     setFormState((current) => {
