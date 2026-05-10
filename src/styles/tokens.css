@@ -3772,10 +3772,13 @@ code {
 }
 
 .tool-card__status-badges .status-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   min-height: 20px;
   padding: 3px 7px;
   font-size: 0.68rem;
-  line-height: 1;
+  line-height: 1.15;
 }
 
 .tool-card__status {
