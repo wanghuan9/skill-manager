@@ -31,3 +31,4 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 json5 = "0.4"
 toml_edit = "0.22"
 base64 = "0.22"
+chrono = { version = "0.4", default-features = false, features = ["std"] }

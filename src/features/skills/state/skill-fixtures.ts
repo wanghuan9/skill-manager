@@ -1,4 +1,5 @@
 import type {
+  AppSettings,
   GitAccountSummary,
   LocalSkillCandidate,
   MarketplaceSkill,
@@ -366,6 +367,7 @@ export const mcpWorkspaceFixture: McpWorkspaceSnapshot = {
       apps: buildMcpFixtureServerApps(["claude-code", "codex"]),
       tools: buildMcpFixtureTools(["resolve-library-id", "get-library-docs"]),
       toolsDiscoveredAt: "2026/5/10 16:00:00",
+      installedAt: "1778401800000",
     },
     {
       id: "linear",
@@ -389,6 +391,7 @@ export const mcpWorkspaceFixture: McpWorkspaceSnapshot = {
       apps: buildMcpFixtureServerApps(["gemini"]),
       tools: buildMcpFixtureTools(["list_issues", "get_issue", "create_issue", "update_issue"], ["update_issue"]),
       toolsDiscoveredAt: "2026/5/10 16:00:00",
+      installedAt: "1778396400000",
     },
   ],
 };
@@ -397,6 +400,13 @@ export const gitAccountFixture: GitAccountSummary = {
   provider: "GitHub",
   accountName: "wanghuan",
   statusLabel: "已连接，可发起 PR",
+};
+
+export const appSettingsFixture: AppSettings = {
+  storagePath: "/Users/demo/.skillm/settings.json",
+  defaultOpenToolId: "",
+  skillInstallActivation: "apply-all-tools",
+  mcpInstallActivation: "disable-all-tools",
 };
 
 export const pushTargetFixtures: Record<string, PushTargetSnapshot> = {

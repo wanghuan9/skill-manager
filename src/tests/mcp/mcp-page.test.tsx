@@ -43,6 +43,9 @@ test("shows only installed MCP-ready apps in enable-to-tool controls", async () 
 
   await userEvent.click(screen.getByRole("button", { name: "MCP" }));
   expect(await screen.findByText("context7")).toBeInTheDocument();
+  const summaryButtons = await screen.findAllByRole("button", { name: /展开 / });
+  expect(summaryButtons[0]).toHaveAccessibleName("展开 context7");
+  expect(summaryButtons[1]).toHaveAccessibleName("展开 linear");
   expect(screen.getByText("已启用 2")).toBeInTheDocument();
   expect(screen.getByText("2 tools")).toBeInTheDocument();
   expect(screen.queryByText("stdio")).not.toBeInTheDocument();
@@ -60,6 +63,8 @@ test("shows only installed MCP-ready apps in enable-to-tool controls", async () 
   expect(screen.getByText("基本信息")).toBeInTheDocument();
   expect(screen.getByText("简介")).toBeInTheDocument();
   expect(screen.getByText("Up-to-date code documentation for LLMs and AI code editors")).toBeInTheDocument();
+  expect(screen.getByText("安装时间")).toBeInTheDocument();
+  expect(screen.getByText("2026/5/10 16:30:00")).toBeInTheDocument();
   expect(screen.getByText("来源类型")).toBeInTheDocument();
   expect(screen.getByText("GitHub")).toBeInTheDocument();
   expect(screen.getByText("来源")).toBeInTheDocument();
@@ -116,7 +121,7 @@ test("creates MCP without asking the user for an ID", async () => {
   await waitFor(() => {
     expect(screen.queryByRole("dialog", { name: "新增 MCP" })).not.toBeInTheDocument();
   });
-  expect(screen.getByText("Playwright Tools")).toBeInTheDocument();
+  expect(screen.getByText("playwright tools")).toBeInTheDocument();
 });
 
 test("opens GitHub source url from MCP details", async () => {

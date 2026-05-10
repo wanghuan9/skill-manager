@@ -11,6 +11,19 @@ function formatDate(date: Date) {
   return `${date.getFullYear()}/${date.getMonth() + 1}/${date.getDate()} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
 }
 
+function parseUnixTimestampLabel(value: string) {
+  if (!/^\d{10,13}$/.test(value)) {
+    return null;
+  }
+
+  const numericValue = Number(value);
+  if (Number.isNaN(numericValue)) {
+    return null;
+  }
+
+  return value.length === 13 ? numericValue : numericValue * 1000;
+}
+
 function withTime(baseDate: Date, timeText: string) {
   const [hourText, minuteText] = timeText.split(":");
   const hour = Number(hourText);
@@ -28,6 +41,10 @@ export function parseSkillTimestamp(value: string) {
   const trimmedValue = value.trim();
   if (trimmedValue.length === 0) {
     return Number.NEGATIVE_INFINITY;
+  }
+  const unixTimestamp = parseUnixTimestampLabel(trimmedValue);
+  if (unixTimestamp !== null) {
+    return unixTimestamp;
   }
   if (trimmedValue === JUST_NOW || trimmedValue === JUST_CHECKED) {
     return Date.now();
@@ -49,6 +66,10 @@ export function formatSkillUpdatedAt(value: string) {
   const trimmedValue = value.trim();
   if (trimmedValue.length === 0) {
     return trimmedValue;
+  }
+  const unixTimestamp = parseUnixTimestampLabel(trimmedValue);
+  if (unixTimestamp !== null) {
+    return formatDate(new Date(unixTimestamp));
   }
   if (trimmedValue === JUST_NOW || trimmedValue === JUST_CHECKED) {
     return formatDate(new Date());

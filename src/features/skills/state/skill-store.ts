@@ -136,6 +136,15 @@ export type GitAccountSummary = {
   statusLabel: string;
 };
 
+export type InstallActivationMode = "apply-all-tools" | "disable-all-tools";
+
+export type AppSettings = {
+  storagePath: string;
+  defaultOpenToolId: string;
+  skillInstallActivation: InstallActivationMode;
+  mcpInstallActivation: InstallActivationMode;
+};
+
 export type WorkspaceSnapshot = {
   installedSkills: SkillSummary[];
   marketplaceSkills: MarketplaceSkill[];
@@ -176,6 +185,7 @@ export type McpServerSummary = {
   apps: McpAppStatus[];
   tools: McpServerToolStatus[];
   toolsDiscoveredAt: string;
+  installedAt: string;
 };
 
 export type McpServerRecord = {
@@ -187,6 +197,7 @@ export type McpServerRecord = {
   enabledAppIds: string[];
   tools: McpServerToolStatus[];
   toolsDiscoveredAt: string;
+  installedAt: string;
   updatedAt: string;
 };
 

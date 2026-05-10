@@ -1,3 +1,4 @@
+use chrono::NaiveDateTime;
 use regex::Regex;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -12,6 +13,8 @@ use std::process::{Command, Stdio};
 use std::sync::{mpsc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use crate::state::{load_app_settings, normalize_mcp_install_activation};
 
 const STATE_DIR_NAME: &str = ".skillm";
 const MCP_STATE_FILE_NAME: &str = "mcp-servers.json";
@@ -69,6 +72,8 @@ pub struct McpServerRecord {
     pub tools: Vec<McpServerToolStatus>,
     #[serde(default)]
     pub tools_discovered_at: String,
+    #[serde(default)]
+    pub installed_at: String,
     pub updated_at: String,
 }
 
@@ -86,6 +91,7 @@ pub struct McpServerSummary {
     pub apps: Vec<McpAppStatus>,
     pub tools: Vec<McpServerToolStatus>,
     pub tools_discovered_at: String,
+    pub installed_at: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -319,13 +325,14 @@ pub async fn install_mcp_server_from_marketplace(
 
     let mut record = McpServerRecord {
         id: server_id.clone(),
-        name: server.name.trim().to_string(),
+        name: server.name.trim().to_lowercase(),
         server: server_config,
         description: String::new(),
         source_url: git_repository_source_url(&server.source_url).unwrap_or_default(),
         enabled_app_ids: Vec::new(),
         tools: Vec::new(),
         tools_discovered_at: String::new(),
+        installed_at: now_label(),
         updated_at: now_label(),
     };
     enrich_mcp_record_metadata(&mut record, mcp_metadata_client().as_ref()).await;
@@ -342,6 +349,20 @@ pub async fn install_mcp_server_from_marketplace(
             record.tools = merge_discovered_mcp_tools(&record.tools, discovered_tools);
             record.tools_discovered_at = now_label();
         }
+    }
+    if normalize_mcp_install_activation(&load_app_settings().mcp_install_activation)
+        == "apply-all-tools"
+    {
+        let app_specs = target_app_specs()?;
+        let supported_app_ids = app_specs
+            .into_iter()
+            .filter(|app| app.is_mcp_supported && validate_app_is_ready(app).is_ok())
+            .map(|app| app.id.to_string())
+            .collect::<Vec<_>>();
+        for app_id in &supported_app_ids {
+            sync_record_to_app(app_id, &record)?;
+        }
+        record.enabled_app_ids = supported_app_ids;
     }
     records.push(record);
     sort_records(&mut records);
@@ -579,6 +600,7 @@ fn to_server_summary(
         apps: app_statuses,
         tools: normalized_mcp_tools(record),
         tools_discovered_at: record.tools_discovered_at.trim().to_string(),
+        installed_at: record.installed_at.trim().to_string(),
     })
 }
 
@@ -1179,6 +1201,7 @@ async fn upsert_imported_record(
             enabled_app_ids,
             tools: previous.tools,
             tools_discovered_at: previous.tools_discovered_at,
+            installed_at: previous.installed_at,
             updated_at: previous.updated_at,
         }
     } else {
@@ -1191,6 +1214,7 @@ async fn upsert_imported_record(
             enabled_app_ids: vec![app.id.to_string()],
             tools: Vec::new(),
             tools_discovered_at: String::new(),
+            installed_at: now_label(),
             updated_at: now_label(),
         }
     };
@@ -1256,13 +1280,14 @@ fn normalize_record(mut record: McpServerRecord) -> Result<McpServerRecord, Stri
         return Err("MCP 服务器 ID 不能为空".to_string());
     }
     record.id = normalized_id;
-    record.name = record.name.trim().to_string();
+    record.name = record.name.trim().to_lowercase();
     if record.name.is_empty() {
         record.name = record.id.clone();
     }
     record.description = record.description.trim().to_string();
     record.source_url = record.source_url.trim().to_string();
     record.tools_discovered_at = record.tools_discovered_at.trim().to_string();
+    record.installed_at = record.installed_at.trim().to_string();
     if let Some(included_tool_names) = mcp_filter_included_tools(&record.server) {
         sync_mcp_tools_from_included_names(&mut record.tools, included_tool_names);
     }
@@ -1281,6 +1306,13 @@ fn normalize_record(mut record: McpServerRecord) -> Result<McpServerRecord, Stri
     normalize_mcp_tool_statuses(&mut record.tools);
     if record.tools.is_empty() {
         record.tools_discovered_at.clear();
+    }
+    if record.installed_at.is_empty() {
+        record.installed_at = if record.updated_at.trim().is_empty() {
+            now_label()
+        } else {
+            record.updated_at.trim().to_string()
+        };
     }
     record.updated_at = now_label();
     Ok(record)
@@ -2672,11 +2704,16 @@ fn home_dir() -> Result<PathBuf, String> {
 }
 
 fn sort_records(records: &mut [McpServerRecord]) {
-    records.sort_by(|left, right| left.name.cmp(&right.name).then(left.id.cmp(&right.id)));
+    records.sort_by(|left, right| {
+        parse_mcp_time_label(&right.installed_at)
+            .cmp(&parse_mcp_time_label(&left.installed_at))
+            .then(left.name.cmp(&right.name))
+            .then(left.id.cmp(&right.id))
+    });
 }
 
 fn now_label() -> String {
-    unix_millis().to_string()
+    format_system_time_label(SystemTime::now()).unwrap_or_else(|| unix_millis().to_string())
 }
 
 fn unix_millis() -> u128 {
@@ -2684,6 +2721,42 @@ fn unix_millis() -> u128 {
         .duration_since(UNIX_EPOCH)
         .map(|value| value.as_millis())
         .unwrap_or_default()
+}
+
+fn parse_mcp_time_label(value: &str) -> i64 {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return i64::MIN;
+    }
+    if let Ok(timestamp) = trimmed.parse::<i64>() {
+        return if trimmed.len() >= 13 {
+            timestamp
+        } else {
+            timestamp.saturating_mul(1000)
+        };
+    }
+
+    NaiveDateTime::parse_from_str(trimmed, "%Y/%-m/%-d %H:%M:%S")
+        .map(|date_time| date_time.and_utc().timestamp_millis())
+        .unwrap_or(i64::MIN)
+}
+
+fn format_system_time_label(value: SystemTime) -> Option<String> {
+    let seconds = value.duration_since(UNIX_EPOCH).ok()?.as_secs().to_string();
+    let output = Command::new("date")
+        .args(["-r", &seconds, "+%Y/%-m/%-d %H:%M:%S"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    let formatted = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if formatted.is_empty() {
+        None
+    } else {
+        Some(formatted)
+    }
 }
 
 fn json_string_map_to_toml_table(map: &Map<String, Value>) -> toml_edit::Table {

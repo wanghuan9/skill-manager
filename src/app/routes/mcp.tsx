@@ -23,6 +23,11 @@ import type {
 import { getToolLogoUrl } from "@/features/skills/utils/tool-logo";
 import { getMonogramLabel } from "@/features/skills/utils/monogram";
 import { formatSkillSourceLabel } from "@/features/skills/utils/skill-source";
+import { formatSkillUpdatedAt } from "@/features/skills/utils/skill-time";
+import {
+  cacheInstalledServerIds,
+  invalidateCachedInstalledServerIds,
+} from "@/features/skills/utils/mcp-installed-server-cache";
 
 type McpFormState = {
   id: string;
@@ -73,6 +78,10 @@ function normalizeMcpServerId(value: string) {
     .replace(/[^a-z0-9_.-]+/g, "-")
     .replace(/^-+|-+$/g, "");
   return normalized || "mcp-server";
+}
+
+function normalizeMcpServerName(value: string) {
+  return value.trim().toLowerCase();
 }
 
 function buildUniqueMcpServerId(value: string, servers: McpServerSummary[]) {
@@ -318,6 +327,11 @@ export function McpRoute() {
   const toolsRefreshRef = useRef<Set<string>>(new Set());
 
   function commitWorkspace(snapshot: McpWorkspaceSnapshot | null) {
+    if (snapshot) {
+      cacheInstalledServerIds(snapshot.servers.map((server) => server.id));
+    } else {
+      invalidateCachedInstalledServerIds();
+    }
     startTransition(() => {
       setWorkspace(snapshot);
     });
@@ -578,7 +592,7 @@ export function McpRoute() {
   }
 
   async function handleSave(formState: McpFormState) {
-    const name = formState.name.trim();
+    const name = normalizeMcpServerName(formState.name);
     const serverId = activeEditingServer?.id ?? buildUniqueMcpServerId(name, workspace?.servers ?? []);
     const serverRecord: McpServerRecord = {
       id: serverId,
@@ -589,6 +603,7 @@ export function McpRoute() {
       enabledAppIds: formState.enabledAppIds,
       tools: activeEditingServer?.tools ?? [],
       toolsDiscoveredAt: activeEditingServer?.toolsDiscoveredAt ?? "",
+      installedAt: activeEditingServer?.installedAt ?? "",
       updatedAt: "",
     };
     const snapshot = await saveMcpServer(serverRecord);
@@ -846,6 +861,31 @@ export function McpRoute() {
                               </span>
                             )}
                             <span className="detail-git-badge is-linked">git</span>
+                          </dd>
+                        </div>
+                      </dl>
+                    ) : server.installedAt ? (
+                      <dl className="detail-grid detail-grid--single">
+                        <div>
+                          <dt>安装时间</dt>
+                          <dd
+                            className="detail-grid__single-line detail-grid__single-line--tooltip"
+                            data-tooltip={formatSkillUpdatedAt(server.installedAt)}
+                          >
+                            {formatSkillUpdatedAt(server.installedAt)}
+                          </dd>
+                        </div>
+                      </dl>
+                    ) : null}
+                    {server.sourceUrl && server.installedAt ? (
+                      <dl className="detail-grid detail-grid--single">
+                        <div>
+                          <dt>安装时间</dt>
+                          <dd
+                            className="detail-grid__single-line detail-grid__single-line--tooltip"
+                            data-tooltip={formatSkillUpdatedAt(server.installedAt)}
+                          >
+                            {formatSkillUpdatedAt(server.installedAt)}
                           </dd>
                         </div>
                       </dl>

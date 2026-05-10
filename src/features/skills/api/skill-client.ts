@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import {
+  appSettingsFixture,
   gitAccountFixture,
   installedSkillFixtures,
   localSkillFixtures,
@@ -15,6 +16,7 @@ import {
   workspaceSnapshotFixture,
 } from "@/features/skills/state/skill-fixtures";
 import type {
+  AppSettings,
   GitAccountSummary,
   LocalSkillCandidate,
   MarketplaceSkill,
@@ -106,6 +108,10 @@ type ToggleMcpToolInput = {
 
 type InstallMcpMarketplaceServerInput = {
   server: McpMarketplaceServer;
+};
+
+type UpdateAppSettingsInput = {
+  settings: AppSettings;
 };
 
 type LegacySkillSummary = Partial<SkillSummary> & {
@@ -253,6 +259,14 @@ export async function fetchToolConfigs(): Promise<ToolConfig[]> {
 
 export async function fetchGitAccount(): Promise<GitAccountSummary> {
   return invokeOrFallback("get_git_account_summary", {}, gitAccountFixture);
+}
+
+export async function fetchAppSettings(): Promise<AppSettings> {
+  return invokeOrFallback("get_app_settings", {}, appSettingsFixture);
+}
+
+export async function updateAppSettings(input: UpdateAppSettingsInput): Promise<AppSettings> {
+  return invokeOrFallback("update_app_settings", input, input.settings);
 }
 
 export async function installSkillFromMarket(skill: MarketplaceSkill): Promise<SkillSummary> {
@@ -565,9 +579,10 @@ export async function fetchMcpMarketplaceServers(input: {
 export async function installMcpServerFromMarketplace(
   input: InstallMcpMarketplaceServerInput,
 ): Promise<McpWorkspaceSnapshot> {
+  const normalizedName = input.server.name.trim().toLowerCase();
   const installedServer = {
     id: normalizeMcpServerId(input.server.name),
-    name: input.server.name,
+    name: normalizedName,
     serverType: String(input.server.server?.type ?? "stdio"),
     commandLabel: buildMcpCommandLabel(input.server.server),
     description: input.server.description,
@@ -597,6 +612,7 @@ export async function importMcpServersFromApps(): Promise<number> {
 }
 
 export async function saveMcpServer(server: McpServerRecord): Promise<McpWorkspaceSnapshot> {
+  const normalizedName = server.name.trim().toLowerCase() || server.id;
   const explicitDescription = typeof server.server.description === "string"
     ? server.server.description.trim()
     : "";
@@ -608,10 +624,10 @@ export async function saveMcpServer(server: McpServerRecord): Promise<McpWorkspa
   const displayServer = omitDefaultStdioType(server.server);
   const nextServer = {
     id: server.id,
-    name: server.name || server.id,
+    name: normalizedName,
     serverType,
     commandLabel,
-    description: explicitDescription || `用于向已安装工具同步 ${server.name || server.id} MCP 配置。`,
+    description: explicitDescription || `用于向已安装工具同步 ${normalizedName} MCP 配置。`,
     sourceUrl: server.sourceUrl,
     serverJson: JSON.stringify(displayServer, null, 2),
     enabledAppCount: server.enabledAppIds.length,
@@ -624,6 +640,7 @@ export async function saveMcpServer(server: McpServerRecord): Promise<McpWorkspa
     })),
     tools: server.tools,
     toolsDiscoveredAt: server.toolsDiscoveredAt,
+    installedAt: server.installedAt,
   };
   const fallback = {
     ...mcpWorkspaceFixture,
@@ -701,6 +718,7 @@ export async function refreshMcpServerTools(serverId: string): Promise<McpWorksp
           })),
           tools: [],
           toolsDiscoveredAt: "2026/5/10 16:00:00",
+          installedAt: "2026/5/10 16:00:00",
         }
       : undefined);
   const fallback = fallbackServer
