@@ -352,6 +352,20 @@ code {
   z-index: 2;
 }
 
+.window-topbar {
+  height: 38px;
+  flex: 0 0 38px;
+  user-select: none;
+}
+
+.window-topbar--sidebar {
+  margin: 0 -12px 6px;
+}
+
+.window-topbar--main {
+  margin: 0 -22px 10px;
+}
+
 .brand-block {
   display: flex;
   align-items: center;
@@ -570,6 +584,19 @@ code {
   height: 100vh;
   overflow: hidden;
   position: relative;
+}
+
+.app-shell.is-macos-window .sidebar {
+  padding-top: 0;
+}
+
+.app-shell.is-macos-window .main-panel {
+  padding-top: 0;
+  grid-template-rows: auto auto auto minmax(0, 1fr);
+}
+
+.app-shell.is-macos-window .brand-block {
+  padding-top: 6px;
 }
 
 .main-panel::before {

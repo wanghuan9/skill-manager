@@ -32,6 +32,16 @@ const routes: RouteDefinition[] = [
   { key: "feedback", label: "反馈", description: "提交问题、建议和工具适配需求" },
 ];
 
+function isMacOSWindow() {
+  if (typeof window === "undefined") {
+    return false;
+  }
+
+  const platform = window.navigator.platform || "";
+  const userAgent = window.navigator.userAgent || "";
+  return /mac|iphone|ipad|ipod/i.test(`${platform} ${userAgent}`);
+}
+
 function NavRouteIcon(props: { route: RouteKey }) {
   const { route } = props;
   if (route === "tools") {
@@ -163,6 +173,7 @@ function McpNavIcon() {
 function AppContent() {
   const { installedSkills, refreshWorkspace, toolConfigs } = useSkillWorkspace();
   const initialSkillViewMode = readSkillViewModePreference();
+  const isMacOS = isMacOSWindow();
   const [activeRoute, setActiveRoute] = useState<RouteKey>("skills");
   const [activeSkillsSection, setActiveSkillsSection] = useState<SkillsSectionKey>("skills");
   const [skillQuery, setSkillQuery] = useState("");
@@ -220,8 +231,11 @@ function AppContent() {
   }
 
   return (
-    <div className={`app-shell${isSidebarCollapsed ? " is-sidebar-collapsed" : ""}`}>
+    <div
+      className={`app-shell${isSidebarCollapsed ? " is-sidebar-collapsed" : ""}${isMacOS ? " is-macos-window" : ""}`}
+    >
       <aside className="sidebar">
+        {isMacOS ? <div className="window-topbar window-topbar--sidebar" data-tauri-drag-region aria-hidden="true" /> : null}
         <div className="brand-block">
           <div className="brand-icon" aria-hidden="true">
             <svg viewBox="0 0 24 24" role="img">
@@ -311,6 +325,7 @@ function AppContent() {
         </nav>
       </aside>
       <main className="main-panel">
+        {isMacOS ? <div className="window-topbar window-topbar--main" data-tauri-drag-region aria-hidden="true" /> : null}
         <header className="page-header">
           {activeRoute === "skills" ? (
             <div className="page-header--split">
