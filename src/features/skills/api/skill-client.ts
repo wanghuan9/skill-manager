@@ -678,7 +678,38 @@ export async function toggleMcpServerTool(input: ToggleMcpToolInput): Promise<Mc
 }
 
 export async function refreshMcpServerTools(serverId: string): Promise<McpWorkspaceSnapshot> {
-  return invokeOrFallback("refresh_mcp_server_tools", { serverId }, mcpWorkspaceFixture);
+  const fallbackMarketplaceServer = mcpMarketplaceServerFixtures.find(
+    (server) => normalizeMcpServerId(server.name) === serverId,
+  );
+  const fallbackServer = mcpWorkspaceFixture.servers.find((server) => server.id === serverId)
+    ?? (fallbackMarketplaceServer
+      ? {
+          id: serverId,
+          name: fallbackMarketplaceServer.name,
+          serverType: String(fallbackMarketplaceServer.server?.type ?? "stdio"),
+          commandLabel: buildMcpCommandLabel(fallbackMarketplaceServer.server),
+          description: fallbackMarketplaceServer.description,
+          sourceUrl: fallbackMarketplaceServer.sourceUrl,
+          serverJson: JSON.stringify(fallbackMarketplaceServer.server ?? {}, null, 2),
+          enabledAppCount: 0,
+          apps: mcpWorkspaceFixture.apps.map((app) => ({
+            appId: app.id,
+            appName: app.name,
+            configPath: app.configPath,
+            statusLabel: app.statusLabel,
+            isEnabled: false,
+          })),
+          tools: [],
+          toolsDiscoveredAt: "2026/5/10 16:00:00",
+        }
+      : undefined);
+  const fallback = fallbackServer
+    ? {
+        ...mcpWorkspaceFixture,
+        servers: [fallbackServer, ...mcpWorkspaceFixture.servers.filter((server) => server.id !== serverId)],
+      }
+    : mcpWorkspaceFixture;
+  return invokeOrFallback("refresh_mcp_server_tools", { serverId }, fallback);
 }
 
 function normalizeMcpServerId(name: string) {

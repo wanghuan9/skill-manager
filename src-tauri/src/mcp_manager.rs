@@ -334,6 +334,15 @@ pub async fn install_mcp_server_from_marketplace(
     {
         record.description = server.description.trim().to_string();
     }
+    if record.source_url.trim().is_empty() {
+        record.source_url = server.source_url.trim().to_string();
+    }
+    if let Ok(discovered_tools) = discover_mcp_server_tools(&record.server) {
+        if !discovered_tools.is_empty() {
+            record.tools = merge_discovered_mcp_tools(&record.tools, discovered_tools);
+            record.tools_discovered_at = now_label();
+        }
+    }
     records.push(record);
     sort_records(&mut records);
     save_mcp_records(&records)?;

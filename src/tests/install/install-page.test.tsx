@@ -1,7 +1,13 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { vi } from "vitest";
 import { App } from "@/app/App";
+import * as skillClient from "@/features/skills/api/skill-client";
 import { mcpMarketplaceServerFixtures } from "@/features/skills/state/skill-fixtures";
+
+function resetMcpMarketplaceRuntimeCache() {
+  delete (window as Window & { __SKILLM_MCP_MARKETPLACE_CACHE__?: unknown }).__SKILLM_MCP_MARKETPLACE_CACHE__;
+}
 
 function scrollPageContentToBottom() {
   const scrollContainer = document.querySelector(".page-content");
@@ -30,6 +36,8 @@ test("renders install-source and repository install panels", async () => {
 });
 
 test("shows MCP marketplace separately from skill-only install methods", async () => {
+  window.localStorage.clear();
+  resetMcpMarketplaceRuntimeCache();
   render(<App />);
   await userEvent.click(screen.getByRole("button", { name: /安装/ }));
   await userEvent.click(screen.getByRole("tab", { name: "MCP" }));
@@ -44,6 +52,8 @@ test("shows MCP marketplace separately from skill-only install methods", async (
 });
 
 test("keeps MCP marketplace card and detail metadata consistent", async () => {
+  window.localStorage.clear();
+  resetMcpMarketplaceRuntimeCache();
   render(<App />);
   await userEvent.click(screen.getByRole("button", { name: /安装/ }));
   await userEvent.click(screen.getByRole("tab", { name: "MCP" }));
@@ -69,17 +79,53 @@ test("keeps MCP marketplace card and detail metadata consistent", async () => {
 });
 
 test("installs MCP marketplace servers into the managed MCP list without enabling tools", async () => {
+  window.localStorage.clear();
+  resetMcpMarketplaceRuntimeCache();
   render(<App />);
   await userEvent.click(screen.getByRole("button", { name: /安装/ }));
   await userEvent.click(screen.getByRole("tab", { name: "MCP" }));
 
-  const installButtons = await screen.findAllByRole("button", { name: "安装" });
-  await userEvent.click(installButtons[0]);
+  const playwrightHeading = await screen.findByRole("heading", { name: "playwright", level: 3 });
+  const playwrightCard = playwrightHeading.closest("article");
+  if (!playwrightCard) {
+    throw new Error("playwright marketplace card was not rendered");
+  }
 
-  expect(await screen.findByRole("button", { name: "已安装" })).toBeDisabled();
+  await userEvent.click(within(playwrightCard).getByRole("button", { name: "安装" }));
+
+  expect(await within(playwrightCard).findByRole("button", { name: "已安装" })).toBeDisabled();
+});
+
+test("refreshes marketplace MCP tools right after install when they are still undiscovered", async () => {
+  window.localStorage.clear();
+  resetMcpMarketplaceRuntimeCache();
+  const installSpy = vi.spyOn(skillClient, "installMcpServerFromMarketplace");
+  const refreshSpy = vi.spyOn(skillClient, "refreshMcpServerTools");
+
+  render(<App />);
+  await userEvent.click(screen.getByRole("button", { name: /安装/ }));
+  await userEvent.click(screen.getByRole("tab", { name: "MCP" }));
+
+  const playwrightHeading = await screen.findByRole("heading", { name: "playwright", level: 3 });
+  const playwrightCard = playwrightHeading.closest("article");
+  if (!playwrightCard) {
+    throw new Error("playwright marketplace card was not rendered");
+  }
+
+  await userEvent.click(within(playwrightCard).getByRole("button", { name: "安装" }));
+
+  await waitFor(() => {
+    expect(installSpy).toHaveBeenCalledTimes(1);
+    expect(refreshSpy).toHaveBeenCalledTimes(1);
+  });
+
+  installSpy.mockRestore();
+  refreshSpy.mockRestore();
 });
 
 test("searches MCP marketplace and restores browse pagination after clearing query", async () => {
+  window.localStorage.clear();
+  resetMcpMarketplaceRuntimeCache();
   render(<App />);
   await userEvent.click(screen.getByRole("button", { name: /安装/ }));
   await userEvent.click(screen.getByRole("tab", { name: "MCP" }));
@@ -108,6 +154,8 @@ test("searches MCP marketplace and restores browse pagination after clearing que
 });
 
 test("reuses cached MCP marketplace results when switching away and back", async () => {
+  window.localStorage.clear();
+  resetMcpMarketplaceRuntimeCache();
   render(<App />);
   await userEvent.click(screen.getByRole("button", { name: /安装/ }));
   await userEvent.click(screen.getByRole("tab", { name: "MCP" }));

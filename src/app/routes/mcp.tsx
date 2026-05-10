@@ -23,7 +23,6 @@ import type {
 import { getToolLogoUrl } from "@/features/skills/utils/tool-logo";
 import { getMonogramLabel } from "@/features/skills/utils/monogram";
 import { formatSkillSourceLabel } from "@/features/skills/utils/skill-source";
-import { formatSkillSourceLabel } from "@/features/skills/utils/skill-source";
 
 type McpFormState = {
   id: string;
@@ -720,9 +719,6 @@ export function McpRoute() {
           const isDeleteConfirming = deleteConfirmingServerId === server.id;
           const isDeleting = deletingServerId === server.id;
           const deleteConfirmTooltipLabel = isDeleting ? "正在删除" : "再次点击删除";
-          const sourceTypeLabel = formatSkillSourceLabel("自定义仓库", {
-            sourceUrl: server.sourceUrl,
-          });
           const sourceTypeLabel = formatSkillSourceLabel("自定义仓库", {
             sourceUrl: server.sourceUrl,
           });

@@ -5,6 +5,7 @@ import {
   fetchMcpWorkspace,
   installMcpServerFromMarketplace,
   openExternalLink,
+  refreshMcpServerTools,
 } from "@/features/skills/api/skill-client";
 import type { McpMarketplaceServer } from "@/features/skills/state/skill-store";
 
@@ -460,7 +461,17 @@ export function McpMarketplacePanel(props: McpMarketplacePanelProps) {
   async function handleInstall(server: McpMarketplaceServer) {
     setInstallingServerIds((current) => new Set(current).add(server.id));
     try {
-      const workspace = await installMcpServerFromMarketplace({ server });
+      const installedWorkspace = await installMcpServerFromMarketplace({ server });
+      const installedServerId = normalizeMcpServerId(server.name);
+      const installedServer = installedWorkspace.servers.find((item) => item.id === installedServerId);
+      const shouldRefreshTools = Boolean(
+        installedServer
+        && installedServer.tools.length === 0
+        && !installedServer.toolsDiscoveredAt,
+      );
+      const workspace = shouldRefreshTools
+        ? await refreshMcpServerTools(installedServerId)
+        : installedWorkspace;
       const nextInstalledServerIds = new Set(workspace.servers.map((item) => item.id));
       cacheInstalledServerIds(nextInstalledServerIds);
       setInstalledServerIds(nextInstalledServerIds);

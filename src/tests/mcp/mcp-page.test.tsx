@@ -63,7 +63,6 @@ test("shows only installed MCP-ready apps in enable-to-tool controls", async () 
   expect(screen.getByText("来源类型")).toBeInTheDocument();
   expect(screen.getByText("GitHub")).toBeInTheDocument();
   expect(screen.getByText("来源")).toBeInTheDocument();
-  expect(screen.getByText("来源")).toBeInTheDocument();
   expect(screen.getByText("https://github.com/upstash/context7")).toBeInTheDocument();
   expect(screen.getByText("启用到工具")).toBeInTheDocument();
   expect(screen.getAllByRole("button", { name: "Claude Code" })[0]).toHaveClass("tool-pill");
