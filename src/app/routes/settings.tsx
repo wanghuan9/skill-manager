@@ -30,83 +30,120 @@ export function SettingsRoute() {
   const toolStatusPanelClassName = `panel-card placeholder-panel settings-panel settings-panel--tool-status${
     isToolStatusExpanded ? "" : " is-clickable"
   }`;
+  const generalSettingsItems = [
+    {
+      label: "配置文件存储路径",
+      description: "应用设置会写入这个文件，便于你在本地查看或备份默认配置。",
+      value: (
+        <div className="settings-form-item__value settings-form-item__value--path">
+          {appSettings.storagePath || "暂未检测到存储路径"}
+        </div>
+      ),
+      readonly: true,
+    },
+    {
+      label: "默认编辑器",
+      description: "当你点击“打开目录”或需要在本地查看/对比改动时会使用该编辑器。",
+      value: (
+        <div className="settings-form-item__control">
+          <select
+            aria-label="默认编辑器"
+            value={selectedDefaultToolId}
+            onChange={(event) => setDefaultOpenToolId(event.target.value)}
+            disabled={openToolOptions.length === 0}
+          >
+            {openToolOptions.length === 0 ? <option value="">未检测到可用编辑器</option> : null}
+            {openToolOptions.map((tool) => (
+              <option key={tool.id} value={tool.id}>
+                {tool.name}
+              </option>
+            ))}
+          </select>
+        </div>
+      ),
+    },
+  ];
+  const installBehaviorItems = [
+    {
+      label: "新增 Skill 默认启用",
+      description: "控制从市场安装 skill 后，默认是立即应用到所有已安装工具，还是先保持未启用。",
+      value: (
+        <div className="settings-form-item__control">
+          <select
+            aria-label="新增 Skill 默认启用"
+            value={appSettings.skillInstallActivation}
+            onChange={(event) =>
+              void setSkillInstallActivation(
+                event.target.value as typeof appSettings.skillInstallActivation,
+              )
+            }
+          >
+            <option value="apply-all-tools">应用到所有工具</option>
+            <option value="disable-all-tools">默认不启用</option>
+          </select>
+        </div>
+      ),
+    },
+    {
+      label: "新增 MCP 默认启用",
+      description: "控制从市场安装 MCP 后，默认是同步到所有已支持应用，还是先仅保存不启用。",
+      value: (
+        <div className="settings-form-item__control">
+          <select
+            aria-label="新增 MCP 默认启用"
+            value={appSettings.mcpInstallActivation}
+            onChange={(event) =>
+              void setMcpInstallActivation(event.target.value as typeof appSettings.mcpInstallActivation)
+            }
+          >
+            <option value="apply-all-tools">应用到所有工具</option>
+            <option value="disable-all-tools">默认不启用</option>
+          </select>
+        </div>
+      ),
+    },
+  ];
 
   return (
     <div className="placeholder-grid settings-page">
-      <section className="panel-card placeholder-panel settings-panel settings-panel--default-tool">
+      <section className="panel-card placeholder-panel settings-panel settings-panel--module">
+        <div className="panel-header settings-panel__header">
+          <span className="settings-panel__eyebrow">通用设置</span>
+          <h2>应用偏好</h2>
+          <p>把基础配置单独收拢，常用入口和本地文件信息会更容易找到。</p>
+        </div>
         <div className="settings-form-list">
-          <div className="settings-form-item settings-form-item--readonly">
-            <div className="settings-form-item__copy">
-              <strong>配置文件存储路径</strong>
-              <p>应用设置会写入这个文件，便于你在本地查看或备份默认配置。</p>
+          {generalSettingsItems.map((item) => (
+            <div
+              key={item.label}
+              className={`settings-form-item${item.readonly ? " settings-form-item--readonly" : ""}`}
+            >
+              <div className="settings-form-item__copy">
+                <span className="settings-form-item__title">{item.label}</span>
+                <p>{item.description}</p>
+              </div>
+              {item.value}
             </div>
-            <div className="settings-form-item__value settings-form-item__value--path">
-              {appSettings.storagePath || "暂未检测到存储路径"}
+          ))}
+        </div>
+      </section>
+
+      <section className="panel-card placeholder-panel settings-panel settings-panel--module">
+        <div className="panel-header settings-panel__header">
+          <span className="settings-panel__eyebrow">安装行为</span>
+          <h2>新增内容默认策略</h2>
+          <p>把 Skill 和 MCP 的默认启用逻辑放在同一组，方便统一调整安装后的行为。</p>
+        </div>
+        <div className="settings-form-list">
+          {installBehaviorItems.map((item) => (
+            <div key={item.label} className="settings-form-item">
+              <div className="settings-form-item__copy">
+                <span className="settings-form-item__title">{item.label}</span>
+                <p>{item.description}</p>
+              </div>
+              {item.value}
             </div>
-          </div>
-          <div className="settings-form-item">
-            <div className="settings-form-item__copy">
-              <strong>默认编辑器</strong>
-              <p>当你点击“打开目录”或需要在本地查看/对比改动时会使用该编辑器。</p>
-            </div>
-            <div className="settings-form-item__control">
-              <select
-                aria-label="默认编辑器"
-                value={selectedDefaultToolId}
-                onChange={(event) => setDefaultOpenToolId(event.target.value)}
-                disabled={openToolOptions.length === 0}
-              >
-                {openToolOptions.length === 0 ? (
-                  <option value="">未检测到可用编辑器</option>
-                ) : null}
-                {openToolOptions.map((tool) => (
-                  <option key={tool.id} value={tool.id}>
-                    {tool.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
-          <div className="settings-form-item">
-            <div className="settings-form-item__copy">
-              <strong>新增 Skill 默认启用</strong>
-              <p>控制从市场安装 skill 后，默认是立即应用到所有已安装工具，还是先保持未启用。</p>
-            </div>
-            <div className="settings-form-item__control">
-              <select
-                aria-label="新增 Skill 默认启用"
-                value={appSettings.skillInstallActivation}
-                onChange={(event) =>
-                  void setSkillInstallActivation(
-                    event.target.value as typeof appSettings.skillInstallActivation,
-                  )
-                }
-              >
-                <option value="apply-all-tools">应用到所有工具</option>
-                <option value="disable-all-tools">默认不启用</option>
-              </select>
-            </div>
-          </div>
-          <div className="settings-form-item">
-            <div className="settings-form-item__copy">
-              <strong>新增 MCP 默认启用</strong>
-              <p>控制从市场安装 MCP 后，默认是同步到所有已支持应用，还是先仅保存不启用。</p>
-            </div>
-            <div className="settings-form-item__control">
-              <select
-                aria-label="新增 MCP 默认启用"
-                value={appSettings.mcpInstallActivation}
-                onChange={(event) =>
-                  void setMcpInstallActivation(
-                    event.target.value as typeof appSettings.mcpInstallActivation,
-                  )
-                }
-              >
-                <option value="apply-all-tools">应用到所有工具</option>
-                <option value="disable-all-tools">默认不启用</option>
-              </select>
-            </div>
-          </div>
+          ))}
         </div>
       </section>
 
@@ -155,7 +192,7 @@ export function SettingsRoute() {
                       {logoUrl ? <img src={logoUrl} alt="" /> : <span>{tool.name.slice(0, 1)}</span>}
                     </span>
                     <span className="settings-tool-card__copy">
-                      <strong>{tool.name}</strong>
+                      <span className="settings-tool-card__title">{tool.name}</span>
                       <span className="settings-tool-card__surface">
                         {tool.surfaceTypes.map((surface) => TOOL_SURFACE_LABELS[surface]).join(" / ")}
                       </span>
@@ -170,11 +207,12 @@ export function SettingsRoute() {
 
       <section className="panel-card placeholder-panel settings-panel settings-panel--git-account">
         <div className="panel-header settings-panel__header">
+          <span className="settings-panel__eyebrow">仓库身份</span>
           <h2>Git 账号</h2>
           <p>这里保留仓库身份信息，后续再补更完整的仓库联动能力。</p>
         </div>
         <div className="settings-row settings-row--account">
-          <strong>{gitAccount?.provider ?? "未连接"}</strong>
+          <span className="settings-row__title">{gitAccount?.provider ?? "未连接"}</span>
           <span>{gitAccount?.accountName ?? "请连接代码仓库账号"}</span>
           <span className="status-badge tone-info">{gitAccount?.statusLabel ?? "待连接"}</span>
         </div>

@@ -4064,7 +4064,7 @@ code {
 
 .settings-page {
   display: grid;
-  gap: 12px;
+  gap: 16px;
 }
 
 .settings-grid {
@@ -4101,17 +4101,42 @@ code {
 
 .settings-panel {
   display: grid;
-  gap: 14px;
+  gap: 0;
   padding: 0;
   border-color: rgba(201, 214, 234, 0.82);
   background: rgba(255, 255, 255, 0.95);
   overflow: hidden;
 }
 
+.settings-panel--module,
+.settings-panel--git-account,
+.settings-panel--tool-status {
+  box-shadow:
+    0 18px 36px rgba(23, 35, 63, 0.06),
+    0 1px 0 rgba(255, 255, 255, 0.7) inset;
+}
+
 .settings-panel__header {
   display: grid;
-  gap: 8px;
-  padding: 18px 20px 0;
+  gap: 6px;
+  padding: 18px 20px 14px;
+  border-bottom: 1px solid rgba(220, 228, 240, 0.72);
+  background: linear-gradient(180deg, rgba(249, 251, 255, 0.92), rgba(255, 255, 255, 0.88));
+}
+
+.settings-panel__header h2 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 650;
+  line-height: 1.2;
+}
+
+.settings-panel__header p {
+  margin: 0;
+  max-width: 56ch;
+  font-size: 0.83rem;
+  line-height: 1.45;
+  color: #6b7280;
 }
 
 .settings-panel__eyebrow {
@@ -4167,10 +4192,11 @@ code {
   gap: 6px;
 }
 
-.settings-form-item__copy strong {
+.settings-form-item__title {
   font-size: 0.95rem;
   color: #1f2937;
   line-height: 1.2;
+  font-weight: 600;
 }
 
 .settings-form-item__copy p {
@@ -4212,7 +4238,7 @@ code {
   background: #f4f7fc;
   color: #1f2937;
   font-size: 0.86rem;
-  font-weight: 600;
+  font-weight: 500;
 }
 
 .settings-form-item__value--path {
@@ -4278,14 +4304,14 @@ code {
     0 10px 18px rgba(24, 40, 72, 0.08);
 }
 
-.settings-tool-card strong {
+.settings-tool-card__title {
   max-width: 100%;
   min-width: 0;
   display: block;
   color: var(--heading);
   font-size: 0.8rem;
   line-height: 1.12;
-  font-weight: 650;
+  font-weight: 600;
   letter-spacing: 0;
   overflow-wrap: anywhere;
   white-space: normal;
@@ -4357,7 +4383,7 @@ code {
   background: transparent;
   color: #748196;
   font-size: 0.56rem;
-  font-weight: 700;
+  font-weight: 600;
   line-height: 1.05;
   letter-spacing: 0;
   white-space: nowrap;
@@ -4416,7 +4442,7 @@ code {
     border-radius: 8px;
   }
 
-  .settings-tool-card strong {
+  .settings-tool-card__title {
     font-size: 0.76rem;
     line-height: 1.08;
   }
@@ -4451,7 +4477,7 @@ code {
 
 .settings-section-toggle__title {
   font-size: 1rem;
-  font-weight: 700;
+  font-weight: 650;
 }
 
 .settings-section-toggle__chevron {
@@ -5258,6 +5284,11 @@ code {
 
 .settings-row--account {
   background: transparent;
+}
+
+.settings-row__title {
+  font-weight: 600;
+  color: var(--heading);
 }
 
 .placeholder-note {
