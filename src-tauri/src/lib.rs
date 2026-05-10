@@ -43,6 +43,7 @@ pub fn run() {
             commands::open_skill_repository,
             commands::open_external_link,
             commands::open_tool_skills_folder,
+            commands::open_path_in_finder,
             commands::open_tool_mcp_config,
             commands::open_skill_in_editor,
             commands::update_skill,
