@@ -600,7 +600,9 @@ export function McpRoute() {
       commitWorkspace(snapshot);
     } catch (error) {
       commitWorkspace(previousWorkspace);
-      const message = error instanceof Error ? error.message : "更新 MCP 启用状态失败";
+      const message = error instanceof Error
+        ? error.message
+        : String(error || "更新 MCP 启用状态失败");
       notify({ tone: "error", message });
     } finally {
       setPendingAppKey("");

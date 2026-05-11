@@ -27,7 +27,9 @@ const APP_OPENCODE: &str = "opencode";
 const APP_OPENCLAW: &str = "openclaw";
 const APP_CURSOR: &str = "cursor";
 const APP_WINDSURF: &str = "windsurf";
-static MCP_NPM_METADATA_CACHE: OnceLock<Mutex<HashMap<String, McpResolvedMetadata>>> = OnceLock::new();
+const APP_CONTINUE: &str = "continue";
+static MCP_NPM_METADATA_CACHE: OnceLock<Mutex<HashMap<String, McpResolvedMetadata>>> =
+    OnceLock::new();
 static README_MARKDOWN_LINK_REGEX: OnceLock<Regex> = OnceLock::new();
 static MCP_DIRECTORY_GITHUB_URL_REGEX: OnceLock<Regex> = OnceLock::new();
 
@@ -703,7 +705,7 @@ fn target_app_specs() -> Result<Vec<McpTargetAppSpec>, String> {
             home_dir.join(".openclaw"),
         ),
         supported_app_spec(
-            "continue",
+            APP_CONTINUE,
             "Continue",
             home_dir.join(".continue/config.yaml"),
             home_dir.join(".continue"),
@@ -772,6 +774,7 @@ fn read_servers_from_app(app: &McpTargetAppSpec) -> Result<Vec<(String, Value)>,
         APP_OPENCODE => read_agent_json_mcp_servers(&app.config_path),
         APP_WINDSURF => read_json_mcp_servers(&app.config_path, "mcpServers", false),
         APP_OPENCLAW => read_agent_json_mcp_servers(&app.config_path),
+        APP_CONTINUE => read_continue_mcp_servers(&app.config_path),
         _ => Ok(Vec::new()),
     }
 }
@@ -789,6 +792,7 @@ fn sync_server_to_app(app_id: &str, server_id: &str, server: &Value) -> Result<(
         APP_OPENCODE => upsert_agent_json_mcp_server(&spec.config_path, server_id, server),
         APP_WINDSURF => upsert_json_mcp_server(&spec.config_path, "mcpServers", server_id, server),
         APP_OPENCLAW => upsert_agent_json_mcp_server(&spec.config_path, server_id, server),
+        APP_CONTINUE => upsert_continue_mcp_server(&spec.config_path, server_id, server),
         _ => Err(format!("不支持的 MCP 应用：{app_id}")),
     }
 }
@@ -808,6 +812,7 @@ fn remove_server_from_app(app_id: &str, server_id: &str) -> Result<(), String> {
         APP_OPENCODE => remove_agent_json_mcp_server(&spec.config_path, server_id),
         APP_WINDSURF => remove_json_mcp_server(&spec.config_path, "mcpServers", server_id),
         APP_OPENCLAW => remove_agent_json_mcp_server(&spec.config_path, server_id),
+        APP_CONTINUE => remove_continue_mcp_server(&spec.config_path, server_id),
         _ => Err(format!("不支持的 MCP 应用：{app_id}")),
     }
 }
@@ -1121,6 +1126,138 @@ fn remove_agent_json_mcp_server(path: &Path, server_id: &str) -> Result<(), Stri
     remove_json_mcp_server(path, "mcp", server_id)
 }
 
+fn read_continue_mcp_servers(path: &Path) -> Result<Vec<(String, Value)>, String> {
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+
+    let root = read_yaml_value(path)?;
+    let servers = root
+        .get("mcpServers")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut out = Vec::new();
+    for server in servers {
+        let Some(server_name) = server
+            .get("name")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            continue;
+        };
+        let server_id = normalize_mcp_marketplace_server_id(server_name);
+        out.push((server_id, continue_mcp_server_to_unified(&server)?));
+    }
+    Ok(out)
+}
+
+fn upsert_continue_mcp_server(path: &Path, server_id: &str, server: &Value) -> Result<(), String> {
+    let mut root = read_yaml_object_or_default(path)?;
+    let next_server = unified_to_continue_mcp_server(server_id, server)?;
+    let entry = root
+        .entry("mcpServers".to_string())
+        .or_insert_with(|| Value::Array(Vec::new()));
+    let servers = entry
+        .as_array_mut()
+        .ok_or_else(|| "mcpServers 必须是 YAML 数组".to_string())?;
+
+    if let Some(existing) = servers
+        .iter_mut()
+        .find(|item| continue_server_name_matches(item, server_id))
+    {
+        *existing = next_server;
+    } else {
+        servers.push(next_server);
+    }
+
+    write_yaml_value(path, &Value::Object(root))
+}
+
+fn remove_continue_mcp_server(path: &Path, server_id: &str) -> Result<(), String> {
+    if !path.exists() {
+        return Ok(());
+    }
+
+    let mut root = read_yaml_object_or_default(path)?;
+    if let Some(servers) = root.get_mut("mcpServers").and_then(Value::as_array_mut) {
+        servers.retain(|item| !continue_server_name_matches(item, server_id));
+    }
+    write_yaml_value(path, &Value::Object(root))
+}
+
+fn continue_server_name_matches(server: &Value, server_id: &str) -> bool {
+    server
+        .get("name")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value == server_id || normalize_mcp_marketplace_server_id(value) == server_id)
+        .unwrap_or(false)
+}
+
+fn continue_mcp_server_to_unified(server: &Value) -> Result<Value, String> {
+    let mut obj = server
+        .as_object()
+        .cloned()
+        .ok_or_else(|| "Continue MCP 服务器定义必须为 YAML 对象".to_string())?;
+    obj.remove("name");
+    if obj.get("type").is_none() {
+        if let Some(transport) = obj
+            .remove("transport")
+            .and_then(|item| item.as_str().map(ToString::to_string))
+        {
+            obj.insert(
+                "type".to_string(),
+                Value::String(continue_transport_to_mcp_type(&transport).to_string()),
+            );
+        } else if obj.contains_key("command") {
+            obj.insert("type".to_string(), Value::String("stdio".to_string()));
+        } else if obj.contains_key("url") {
+            obj.insert("type".to_string(), Value::String("sse".to_string()));
+        }
+    }
+    Ok(Value::Object(obj))
+}
+
+fn unified_to_continue_mcp_server(server_id: &str, server: &Value) -> Result<Value, String> {
+    let mut obj = server
+        .as_object()
+        .cloned()
+        .ok_or_else(|| "MCP 服务器定义必须为 JSON 对象".to_string())?;
+    let server_type = obj
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or("stdio")
+        .to_string();
+    obj.remove("type");
+    if server_type != "stdio" {
+        obj.insert(
+            "transport".to_string(),
+            Value::String(mcp_type_to_continue_transport(&server_type)?.to_string()),
+        );
+    }
+    obj.insert("name".to_string(), Value::String(server_id.to_string()));
+    Ok(Value::Object(obj))
+}
+
+fn continue_transport_to_mcp_type(transport: &str) -> &str {
+    match transport {
+        "http" | "streamable-http" => "http",
+        "sse" => "sse",
+        _ => "stdio",
+    }
+}
+
+fn mcp_type_to_continue_transport(server_type: &str) -> Result<&'static str, String> {
+    match server_type {
+        "http" => Ok("http"),
+        "sse" => Ok("sse"),
+        other => Err(format!("不支持的 MCP 类型：{other}")),
+    }
+}
+
 fn unified_to_agent_json(server: &Value) -> Result<Value, String> {
     let obj = server
         .as_object()
@@ -1431,7 +1568,8 @@ fn discover_stdio_mcp_tools_with_wire_format(
         })
         .unwrap_or_default();
 
-    let resolved_command = resolve_executable_path(command).unwrap_or_else(|| PathBuf::from(command));
+    let resolved_command =
+        resolve_executable_path(command).unwrap_or_else(|| PathBuf::from(command));
     let mut child_command = Command::new(&resolved_command);
     child_command
         .args(args)
@@ -1439,7 +1577,12 @@ fn discover_stdio_mcp_tools_with_wire_format(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     child_command.env("PATH", augmented_path_env());
-    if let Some(cwd) = server.get("cwd").and_then(Value::as_str).map(str::trim).filter(|value| !value.is_empty()) {
+    if let Some(cwd) = server
+        .get("cwd")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
         child_command.current_dir(cwd);
     }
     if let Some(env) = server.get("env").and_then(Value::as_object) {
@@ -1532,7 +1675,8 @@ fn discover_http_mcp_tools(server: &Value) -> Result<Vec<String>, String> {
         .map_err(|error| format!("创建 MCP tools 探测客户端失败: {error}"))?;
 
     let mut session_id = String::new();
-    let initialize_response = post_mcp_http_message(&client, url, server, &session_id, mcp_initialize_request())?;
+    let initialize_response =
+        post_mcp_http_message(&client, url, server, &session_id, mcp_initialize_request())?;
     if let Some(value) = initialize_response
         .headers()
         .get("mcp-session-id")
@@ -1541,8 +1685,15 @@ fn discover_http_mcp_tools(server: &Value) -> Result<Vec<String>, String> {
         session_id = value.to_string();
     }
     let _ = parse_mcp_http_json_response(initialize_response)?;
-    let _ = post_mcp_http_message(&client, url, server, &session_id, mcp_initialized_notification())?;
-    let tools_response = post_mcp_http_message(&client, url, server, &session_id, mcp_tools_list_request())?;
+    let _ = post_mcp_http_message(
+        &client,
+        url,
+        server,
+        &session_id,
+        mcp_initialized_notification(),
+    )?;
+    let tools_response =
+        post_mcp_http_message(&client, url, server, &session_id, mcp_tools_list_request())?;
     let response = parse_mcp_http_json_response(tools_response)?;
     parse_mcp_tools_list_response(&response)
 }
@@ -1552,8 +1703,8 @@ fn write_mcp_stdio_message(
     message: Value,
     wire_format: McpStdioWireFormat,
 ) -> Result<(), String> {
-    let payload = serde_json::to_string(&message)
-        .map_err(|error| format!("序列化 MCP 消息失败: {error}"))?;
+    let payload =
+        serde_json::to_string(&message).map_err(|error| format!("序列化 MCP 消息失败: {error}"))?;
     match wire_format {
         McpStdioWireFormat::ContentLength => {
             let header = format!("Content-Length: {}\r\n\r\n", payload.len());
@@ -1662,7 +1813,11 @@ fn format_stdio_discovery_error(error: &str, stderr: &str) -> String {
         return format!("MCP server 启动失败：缺少环境变量 {env_name}");
     }
     if !stderr.trim().is_empty() {
-        let summary = stderr.lines().find(|line| !line.trim().is_empty()).unwrap_or(stderr).trim();
+        let summary = stderr
+            .lines()
+            .find(|line| !line.trim().is_empty())
+            .unwrap_or(stderr)
+            .trim();
         return format!("{error}；stderr: {summary}");
     }
     error.to_string()
@@ -1673,8 +1828,15 @@ fn extract_missing_env_name(stderr: &str) -> Option<String> {
     let marker = "without ";
     let index = normalized.find(marker)?;
     let suffix = &normalized[index + marker.len()..];
-    let env_name = suffix.split_whitespace().next()?.trim_matches(|ch: char| !ch.is_ascii_alphanumeric() && ch != '_');
-    if env_name.is_empty() || !env_name.chars().all(|ch| ch.is_ascii_uppercase() || ch.is_ascii_digit() || ch == '_') {
+    let env_name = suffix
+        .split_whitespace()
+        .next()?
+        .trim_matches(|ch: char| !ch.is_ascii_alphanumeric() && ch != '_');
+    if env_name.is_empty()
+        || !env_name
+            .chars()
+            .all(|ch| ch.is_ascii_uppercase() || ch.is_ascii_digit() || ch == '_')
+    {
         return None;
     }
     Some(env_name.to_string())
@@ -1886,9 +2048,7 @@ fn unwrap_mcp_filter_server(server: &Value) -> Option<Value> {
             .map(|value| value == "mcp-filter" || value.ends_with("/mcp-filter"))
             .unwrap_or(false)
     })?;
-    let delimiter_index = args
-        .iter()
-        .position(|item| item.as_str() == Some("--"))?;
+    let delimiter_index = args.iter().position(|item| item.as_str() == Some("--"))?;
     if filter_index >= delimiter_index || delimiter_index + 1 >= args.len() {
         return None;
     }
@@ -2583,13 +2743,7 @@ fn npm_repository_url(repository: &NpmRepository) -> Option<&str> {
 }
 
 fn pypi_repository_url(project_urls: &BTreeMap<String, String>) -> Option<&str> {
-    const PREFERRED_KEYS: [&str; 5] = [
-        "repository",
-        "source",
-        "source code",
-        "homepage",
-        "home",
-    ];
+    const PREFERRED_KEYS: [&str; 5] = ["repository", "source", "source code", "homepage", "home"];
     for preferred_key in PREFERRED_KEYS {
         if let Some(url) = project_urls
             .iter()
@@ -2633,7 +2787,8 @@ fn npm_package_from_mcp_server(server: &Value) -> Option<String> {
         "npx" | "bunx" => npm_package_from_exec_args(&args),
         "npm" => npm_package_from_exec_args(strip_leading_exec_command(&args)),
         "pnpm" => npm_package_from_exec_args(strip_leading_pnpm_command(&args)),
-        _ => resolve_executable_path(command).and_then(|path| npm_package_from_executable_path(&path)),
+        _ => resolve_executable_path(command)
+            .and_then(|path| npm_package_from_executable_path(&path)),
     }
 }
 
@@ -2650,8 +2805,10 @@ fn python_package_from_mcp_server(server: &Value) -> Option<String> {
         .map(|items| items.iter().filter_map(Value::as_str).collect::<Vec<_>>())
         .unwrap_or_default();
 
-    if matches!(command_name, "python" | "python3" | "python3.10" | "python3.11" | "python3.12")
-    {
+    if matches!(
+        command_name,
+        "python" | "python3" | "python3.10" | "python3.11" | "python3.12"
+    ) {
         if let Some(module_name) = args
             .windows(2)
             .find(|pair| pair.first().copied() == Some("-m"))
@@ -2849,15 +3006,16 @@ fn fallback_command_search_paths() -> Vec<PathBuf> {
 }
 
 fn augmented_path_env() -> OsString {
-    env::join_paths(command_search_paths()).unwrap_or_else(|_| env::var_os("PATH").unwrap_or_default())
+    env::join_paths(command_search_paths())
+        .unwrap_or_else(|_| env::var_os("PATH").unwrap_or_default())
 }
 
 fn is_python_package_candidate(value: &str) -> bool {
     let trimmed = value.trim();
     !trimmed.is_empty()
-        && trimmed
-            .chars()
-            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.'))
+        && trimmed.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.')
+        })
         && !matches!(
             trimmed,
             "bash"
@@ -2891,9 +3049,41 @@ fn read_json_value(path: &Path, allow_json5: bool) -> Result<Value, String> {
     }
 }
 
+fn read_yaml_value(path: &Path) -> Result<Value, String> {
+    let content = fs::read_to_string(path)
+        .map_err(|error| format!("读取 YAML 配置失败（{}）：{error}", path.display()))?;
+    if content.trim().is_empty() {
+        return Ok(json!({}));
+    }
+    serde_yml::from_str(&content)
+        .map_err(|error| format!("解析 YAML 配置失败（{}）：{error}", path.display()))
+}
+
+fn read_yaml_object_or_default(path: &Path) -> Result<Map<String, Value>, String> {
+    let root = if path.exists() {
+        read_yaml_value(path)?
+    } else {
+        json!({})
+    };
+    match root {
+        Value::Null => Ok(Map::new()),
+        Value::Object(obj) => Ok(obj),
+        _ => Err(format!("{} 根节点必须是 YAML 对象", path.display())),
+    }
+}
+
 fn write_json_value(path: &Path, value: &Value) -> Result<(), String> {
     let payload = serde_json::to_string_pretty(value)
         .map_err(|error| format!("序列化 JSON 配置失败: {error}"))?;
+    write_text_value(path, &payload)
+}
+
+fn write_yaml_value(path: &Path, value: &Value) -> Result<(), String> {
+    let mut payload =
+        serde_yml::to_string(value).map_err(|error| format!("序列化 YAML 配置失败: {error}"))?;
+    if !payload.ends_with('\n') {
+        payload.push('\n');
+    }
     write_text_value(path, &payload)
 }
 
@@ -3949,6 +4139,101 @@ A comprehensive GitLab MCP server for AI clients. Manage projects, merge request
     }
 
     #[test]
+    fn writes_and_reads_continue_yaml_mcp_server() {
+        let dir = unique_continue_test_dir("write-read");
+        let path = dir.join("config.yaml");
+        let server = json!({
+            "type": "stdio",
+            "command": "npx",
+            "args": ["-y", "@mem0/mcp"],
+            "env": {
+                "API_TOKEN": "demo"
+            }
+        });
+
+        upsert_continue_mcp_server(&path, "mem0", &server).unwrap();
+
+        let content = fs::read_to_string(&path).unwrap();
+        assert!(content.contains("mcpServers:"));
+        assert!(content.contains("name: mem0"));
+        assert!(content.contains("command: npx"));
+        let servers = read_continue_mcp_servers(&path).unwrap();
+        assert_eq!(
+            servers,
+            vec![(
+                "mem0".to_string(),
+                json!({
+                    "type": "stdio",
+                    "command": "npx",
+                    "args": ["-y", "@mem0/mcp"],
+                    "env": {
+                        "API_TOKEN": "demo"
+                    }
+                })
+            )]
+        );
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn removes_continue_yaml_mcp_server() {
+        let dir = unique_continue_test_dir("remove");
+        let path = dir.join("config.yaml");
+        write_text_value(
+            &path,
+            r#"name: Local Config
+version: 1.0.0
+schema: v1
+models: []
+mcpServers:
+  - name: mem0
+    command: npx
+    args:
+      - "-y"
+      - "@mem0/mcp"
+  - name: playwright
+    command: npx
+    args:
+      - "@playwright/mcp@latest"
+  - name: Context 7
+    transport: http
+    url: https://mcp.context7.com/mcp
+"#,
+        )
+        .unwrap();
+
+        remove_continue_mcp_server(&path, "context-7").unwrap();
+        remove_continue_mcp_server(&path, "mem0").unwrap();
+
+        let servers = read_continue_mcp_servers(&path).unwrap();
+        assert_eq!(
+            servers,
+            vec![(
+                "playwright".to_string(),
+                json!({
+                    "type": "stdio",
+                    "command": "npx",
+                    "args": ["@playwright/mcp@latest"]
+                })
+            )]
+        );
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    fn unique_continue_test_dir(label: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or_default();
+        env::temp_dir().join(format!(
+            "skillm-continue-test-{label}-{}-{nanos}",
+            std::process::id()
+        ))
+    }
+
+    #[test]
     fn syncs_mcp_filter_includes_from_tool_statuses() {
         let server = json!({
             "command": "/opt/homebrew/bin/npx",
@@ -4152,7 +4437,8 @@ A comprehensive GitLab MCP server for AI clients. Manage projects, merge request
 
     #[test]
     fn derives_python_package_from_pipx_executable_path() {
-        let path = PathBuf::from("/Users/demo/.local/pipx/venvs/easy-code-reader/bin/easy-code-reader");
+        let path =
+            PathBuf::from("/Users/demo/.local/pipx/venvs/easy-code-reader/bin/easy-code-reader");
         assert_eq!(
             python_package_from_executable_path(&path),
             Some("easy-code-reader".to_string())
@@ -4216,7 +4502,8 @@ A comprehensive GitLab MCP server for AI clients. Manage projects, merge request
         let serialized = String::from_utf8(output).unwrap();
         assert!(serialized.starts_with("Content-Length: "));
         assert!(serialized.contains("\r\n\r\n"));
-        assert!(serialized.ends_with("{\"id\":2,\"jsonrpc\":\"2.0\",\"method\":\"tools/list\",\"params\":{}}"));
+        assert!(serialized
+            .ends_with("{\"id\":2,\"jsonrpc\":\"2.0\",\"method\":\"tools/list\",\"params\":{}}"));
     }
 
     #[test]
@@ -4243,7 +4530,8 @@ A comprehensive GitLab MCP server for AI clients. Manage projects, merge request
 
     #[test]
     fn reads_legacy_line_delimited_stdio_messages() {
-        let payload = b"{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{\"tools\":[{\"name\":\"alpha\"}]}}\n";
+        let payload =
+            b"{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{\"tools\":[{\"name\":\"alpha\"}]}}\n";
         let mut reader = BufReader::new(&payload[..]);
 
         let message = read_next_mcp_stdio_message(&mut reader).unwrap();
@@ -4280,15 +4568,24 @@ A comprehensive GitLab MCP server for AI clients. Manage projects, merge request
 
     #[test]
     fn retries_legacy_stdio_format_for_timeout_errors() {
-        assert!(should_retry_stdio_discovery_with_legacy_wire_format("MCP tools 探测超时"));
-        assert!(should_retry_stdio_discovery_with_legacy_wire_format("读取 MCP 响应失败: eof"));
-        assert!(!should_retry_stdio_discovery_with_legacy_wire_format("启动 MCP server 失败: missing binary"));
+        assert!(should_retry_stdio_discovery_with_legacy_wire_format(
+            "MCP tools 探测超时"
+        ));
+        assert!(should_retry_stdio_discovery_with_legacy_wire_format(
+            "读取 MCP 响应失败: eof"
+        ));
+        assert!(!should_retry_stdio_discovery_with_legacy_wire_format(
+            "启动 MCP server 失败: missing binary"
+        ));
     }
 
     #[test]
     fn extracts_missing_env_name_from_stderr() {
         let stderr = "Error: Cannot run MCP server without API_TOKEN env";
-        assert_eq!(extract_missing_env_name(stderr).as_deref(), Some("API_TOKEN"));
+        assert_eq!(
+            extract_missing_env_name(stderr).as_deref(),
+            Some("API_TOKEN")
+        );
         assert_eq!(
             format_stdio_discovery_error("MCP tools 探测超时", stderr),
             "MCP server 启动失败：缺少环境变量 API_TOKEN"
