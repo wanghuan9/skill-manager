@@ -334,14 +334,19 @@ code {
 }
 
 .app-shell {
+  --sidebar-width-expanded: 188px;
+  --sidebar-width-collapsed: 86px;
+  --sidebar-handle-width: 18px;
+  --sidebar-handle-height: 30px;
+  --sidebar-handle-top: 74px;
   display: grid;
-  grid-template-columns: 188px minmax(0, 1fr);
+  grid-template-columns: var(--sidebar-width-expanded) minmax(0, 1fr);
   height: 100vh;
   overflow: hidden;
 }
 
 .app-shell.is-sidebar-collapsed {
-  grid-template-columns: 86px minmax(0, 1fr);
+  grid-template-columns: var(--sidebar-width-collapsed) minmax(0, 1fr);
 }
 
 .sidebar {
@@ -459,13 +464,13 @@ code {
 
 .sidebar-toggle--macos {
   position: fixed;
-  top: 74px;
+  top: var(--sidebar-handle-top);
   left: 0;
   right: auto;
-  transform: translate(78px, -50%);
+  transform: translate(var(--sidebar-width-expanded), -50%);
   z-index: 20;
-  width: 18px;
-  height: 30px;
+  width: var(--sidebar-handle-width);
+  height: var(--sidebar-handle-height);
   border: 1px solid rgba(206, 217, 233, 0.85);
   border-left: none;
   border-radius: 0 10px 10px 0;
@@ -630,6 +635,7 @@ code {
 }
 
 .app-shell.is-macos-window.is-sidebar-collapsed .window-topbar--sidebar {
+  display: none;
   height: 0;
   flex-basis: 0;
   margin-bottom: 0;
@@ -641,7 +647,7 @@ code {
 }
 
 .app-shell.is-macos-window.is-sidebar-collapsed .sidebar-toggle--macos {
-  transform: translate(78px, -50%);
+  transform: translate(var(--sidebar-width-collapsed), -50%);
 }
 
 .app-shell.is-sidebar-collapsed .sidebar-divider {
@@ -682,7 +688,6 @@ code {
 }
 
 .app-shell.is-macos-window .brand-block {
-  gap: 30px;
   padding-top: 6px;
 }
 

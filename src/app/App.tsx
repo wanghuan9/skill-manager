@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 import { SkillsRoute } from "@/app/routes/skills";
 import { ToolsRoute } from "@/app/routes/tools";
 import { McpRoute } from "@/app/routes/mcp";
@@ -174,8 +174,9 @@ function SidebarToggleButton(props: {
   isSidebarCollapsed: boolean;
   onToggle: () => void;
   className?: string;
+  style?: CSSProperties;
 }) {
-  const { className, isSidebarCollapsed, onToggle } = props;
+  const { className, isSidebarCollapsed, onToggle, style } = props;
   const buttonClassName = `sidebar-toggle${className ? ` ${className}` : ""}`;
 
   return (
@@ -185,24 +186,18 @@ function SidebarToggleButton(props: {
       aria-label={isSidebarCollapsed ? "展开侧边栏" : "收起侧边栏"}
       title={isSidebarCollapsed ? "展开侧边栏" : "收起侧边栏"}
       onClick={onToggle}
+      style={style}
     >
-      <svg viewBox="0 0 16 16" aria-hidden="true">
-        <rect
-          x="3"
-          y="3"
-          width="10"
-          height="10"
-          rx="2"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="1.3"
-        />
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <rect x="3" y="3" width="18" height="18" rx="2" fill="none" stroke="currentColor" strokeWidth="2" />
+        <path d="M9 3v18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
         <path
-          d={isSidebarCollapsed ? "M6.7 3.6v8.8" : "M9.3 3.6v8.8"}
+          d={isSidebarCollapsed ? "m14 9 3 3-3 3" : "m16 15-3-3 3-3"}
           fill="none"
           stroke="currentColor"
-          strokeWidth="1.3"
+          strokeWidth="2"
           strokeLinecap="round"
+          strokeLinejoin="round"
         />
       </svg>
     </button>
@@ -213,6 +208,7 @@ function AppContent() {
   const { installedSkills, refreshWorkspace, toolConfigs } = useSkillWorkspace();
   const initialSkillViewMode = readSkillViewModePreference();
   const isMacOS = isMacOSWindow();
+  const brandIconRef = useRef<HTMLDivElement | null>(null);
   const [activeRoute, setActiveRoute] = useState<RouteKey>("skills");
   const [activeSkillsSection, setActiveSkillsSection] = useState<SkillsSectionKey>("skills");
   const [skillQuery, setSkillQuery] = useState("");
@@ -222,6 +218,7 @@ function AppContent() {
   const [hasSavedSkillViewPreference, setHasSavedSkillViewPreference] = useState(initialSkillViewMode !== null);
   const [activeInstallTab, setActiveInstallTab] = useState<InstallTab>("market");
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const [sidebarHandleTop, setSidebarHandleTop] = useState<number | null>(null);
   const [isToolsRefreshing, setIsToolsRefreshing] = useState(false);
   const activeDefinition = routes.find((route) => route.key === activeRoute) ?? routes[0];
   const updatableSkillCount = installedSkills.filter((skill) => skill.collabStatus === "update-available").length;
@@ -245,6 +242,40 @@ function AppContent() {
     const defaultSkillViewMode = resolveSkillViewModePreference(null, installedSkills.length);
     setShowGroupView(defaultSkillViewMode === "grouped");
   }, [hasSavedSkillViewPreference, installedSkills.length]);
+
+  useLayoutEffect(() => {
+    if (!isMacOS || typeof window === "undefined") {
+      setSidebarHandleTop(null);
+      return;
+    }
+
+    const updateSidebarHandleTop = () => {
+      const rect = brandIconRef.current?.getBoundingClientRect();
+      if (!rect) {
+        return;
+      }
+      setSidebarHandleTop(rect.top + rect.height / 2);
+    };
+
+    updateSidebarHandleTop();
+    const frameId = window.requestAnimationFrame(updateSidebarHandleTop);
+    const resizeObserver =
+      typeof ResizeObserver !== "undefined" && brandIconRef.current
+        ? new ResizeObserver(updateSidebarHandleTop)
+        : null;
+
+    if (resizeObserver && brandIconRef.current) {
+      resizeObserver.observe(brandIconRef.current);
+    }
+
+    window.addEventListener("resize", updateSidebarHandleTop);
+
+    return () => {
+      window.cancelAnimationFrame(frameId);
+      window.removeEventListener("resize", updateSidebarHandleTop);
+      resizeObserver?.disconnect();
+    };
+  }, [isMacOS, isSidebarCollapsed]);
 
   async function handleToolsRefresh() {
     if (isToolsRefreshing) {
@@ -278,6 +309,7 @@ function AppContent() {
           className="sidebar-toggle--macos"
           isSidebarCollapsed={isSidebarCollapsed}
           onToggle={() => setIsSidebarCollapsed((current) => !current)}
+          style={sidebarHandleTop == null ? undefined : { top: sidebarHandleTop + "px" }}
         />
       ) : null}
       <aside className="sidebar">
@@ -287,7 +319,7 @@ function AppContent() {
           </div>
         ) : null}
         <div className="brand-block">
-          <div className="brand-icon" aria-hidden="true">
+          <div ref={brandIconRef} className="brand-icon" aria-hidden="true">
             <svg viewBox="0 0 24 24" role="img">
               <defs>
                 <linearGradient id="brand-gradient" x1="2" y1="2" x2="22" y2="22" gradientUnits="userSpaceOnUse">
