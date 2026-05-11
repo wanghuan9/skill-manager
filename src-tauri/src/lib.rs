@@ -53,6 +53,7 @@ pub fn run() {
             commands::delete_skill,
             commands::toggle_skill_tool_status,
             commands::set_tool_skill_statuses,
+            commands::set_skill_all_tool_statuses,
             commands::refresh_git_states,
             mcp_manager::list_mcp_workspace,
             mcp_manager::list_mcp_marketplace_servers,

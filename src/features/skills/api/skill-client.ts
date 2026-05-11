@@ -90,12 +90,20 @@ type SaveSkillFileInput = SkillFileInput & {
 type ToggleSkillToolInput = {
   skillName: string;
   toolName: string;
+  toolNames: string[];
 };
 
 type SetToolSkillStatusesInput = {
   toolName: string;
   skillNames: string[];
   enabled: boolean;
+  toolNames: string[];
+};
+
+type SetSkillAllToolStatusesInput = {
+  skillName: string;
+  enabled: boolean;
+  toolNames: string[];
 };
 
 type ToggleMcpAppInput = {
@@ -548,6 +556,30 @@ export async function setToolSkillStatuses(
     fallback,
   );
   return normalizeSkillSummaryList(updatedSkills);
+}
+
+export async function setSkillAllToolStatuses(
+  input: SetSkillAllToolStatusesInput,
+): Promise<SkillSummary> {
+  const fallbackSource =
+    installedSkillFixtures.find((skill) => skill.name === input.skillName) ??
+    installedSkillFixtures[0];
+  const mergedTools = mergeSkillToolsWithInstalledTools(fallbackSource.tools, toolConfigFixtures);
+  const fallback = {
+    ...fallbackSource,
+    name: input.skillName,
+    tools: mergedTools.map((tool) => ({
+      ...tool,
+      statusLabel: input.enabled ? "已启用" : "未启用",
+    })),
+  };
+
+  const updatedSkill = await invokeOrFallback<LegacySkillSummary>(
+    "set_skill_all_tool_statuses",
+    input,
+    fallback,
+  );
+  return normalizeSkillSummary(updatedSkill);
 }
 
 export async function fetchMcpWorkspace(): Promise<McpWorkspaceSnapshot> {

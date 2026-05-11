@@ -18,6 +18,7 @@ use crate::git_state::{
 };
 use crate::library::{
     clone_repo_for_discovery, clone_repo_for_discovery_with_sparse_paths, clone_repo_skill,
+    create_skill_symlink,
     ensure_repo_skill_with_sparse_paths, get_tool_skills_path, install_market_skill_from_source,
     parse_market_source_url, reconcile_tool_skill_symlinks, remove_reserved_workspace_entries,
     remove_reserved_workspace_symlinks_from_all_tools, remove_skill_symlink,
@@ -2056,6 +2057,10 @@ fn resolve_installed_skills() -> Vec<SkillSummary> {
     resolve_startup_installed_skills()
 }
 
+fn load_interactive_installed_skills() -> Vec<SkillSummary> {
+    load_installed_skills(&default_installed_skills())
+}
+
 const GIT_BINARY: &str = "git";
 const ORIGIN_REMOTE: &str = "origin";
 const REMOTE_PREFIX: &str = "origin/";
@@ -2099,6 +2104,83 @@ fn set_skill_tool_enabled_status(
         .count();
 
     Ok(skill.clone())
+}
+
+fn normalize_known_tool_names(tool_names: &[String]) -> Vec<String> {
+    let mut known_tool_names = Vec::new();
+    let mut seen_tool_names = BTreeSet::new();
+
+    for tool_name in tool_names {
+        let normalized_tool_name = tool_name.trim();
+        if normalized_tool_name.is_empty() || !seen_tool_names.insert(normalized_tool_name.to_string())
+        {
+            continue;
+        }
+        known_tool_names.push(normalized_tool_name.to_string());
+    }
+
+    known_tool_names
+}
+
+fn align_skill_tools_with_known_names(skill: &mut SkillSummary, tool_names: &[String]) {
+    let known_tool_names = normalize_known_tool_names(tool_names);
+    if known_tool_names.is_empty() {
+        skill.synced_tool_count = skill
+            .tools
+            .iter()
+            .filter(|tool| tool_status_is_enabled(&tool.status_label))
+            .count();
+        return;
+    }
+
+    let known_tool_name_set = known_tool_names.iter().cloned().collect::<BTreeSet<_>>();
+    let mut existing_status_by_name = skill
+        .tools
+        .iter()
+        .cloned()
+        .map(|tool| (tool.name, tool.status_label))
+        .collect::<BTreeMap<_, _>>();
+    let mut merged_tools = known_tool_names
+        .into_iter()
+        .map(|tool_name| ToolSyncStatus {
+            status_label: existing_status_by_name
+                .remove(&tool_name)
+                .unwrap_or_else(|| "未启用".into()),
+            name: tool_name,
+        })
+        .collect::<Vec<_>>();
+
+    merged_tools.extend(
+        skill
+            .tools
+            .iter()
+            .filter(|tool| !known_tool_name_set.contains(&tool.name))
+            .cloned(),
+    );
+
+    skill.synced_tool_count = merged_tools
+        .iter()
+        .filter(|tool| tool_status_is_enabled(&tool.status_label))
+        .count();
+    skill.tools = merged_tools;
+}
+
+fn align_installed_skills_with_known_tools(
+    installed_skills: &mut [SkillSummary],
+    skill_names: &[String],
+    tool_names: &[String],
+) {
+    let target_skill_names = skill_names.iter().map(|name| name.trim()).collect::<BTreeSet<_>>();
+    if target_skill_names.is_empty() {
+        return;
+    }
+
+    for skill in installed_skills
+        .iter_mut()
+        .filter(|skill| target_skill_names.contains(skill.name.as_str()))
+    {
+        align_skill_tools_with_known_names(skill, tool_names);
+    }
 }
 
 fn enabled_skills_for_tool(
@@ -4208,9 +4290,10 @@ pub fn delete_skill(skill_name: &str) -> Result<(), String> {
 pub async fn toggle_skill_tool_status(
     skill_name: String,
     tool_name: String,
+    tool_names: Vec<String>,
 ) -> Result<SkillSummary, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        toggle_skill_tool_status_blocking(&skill_name, &tool_name)
+        toggle_skill_tool_status_blocking(&skill_name, &tool_name, &tool_names)
     })
     .await
     .map_err(|error| format!("切换 skill 工具状态失败: {error}"))?
@@ -4219,20 +4302,25 @@ pub async fn toggle_skill_tool_status(
 fn toggle_skill_tool_status_blocking(
     skill_name: &str,
     tool_name: &str,
+    tool_names: &[String],
 ) -> Result<SkillSummary, String> {
     if sync_trace_enabled() {
         eprintln!(
             "[sync-trace] command toggle_skill_tool_status skill_name={skill_name} tool_name={tool_name}"
         );
     }
-    let mut installed_skills = resolve_startup_installed_skills();
+    let mut installed_skills = load_interactive_installed_skills();
+    align_installed_skills_with_known_tools(
+        &mut installed_skills,
+        &[skill_name.to_string()],
+        tool_names,
+    );
     let skill_index = installed_skills
         .iter()
         .position(|skill| skill.name == skill_name)
         .ok_or_else(|| format!("未找到技能 {skill_name}"))?;
     let tool_id = tool_name_to_id(tool_name)?;
     let tool_skills_path = get_tool_skills_path(&tool_id)?;
-    let _ = remove_reserved_workspace_entries(&tool_skills_path);
     let is_enabling = installed_skills[skill_index]
         .tools
         .iter()
@@ -4241,7 +4329,9 @@ fn toggle_skill_tool_status_blocking(
 
     let updated_skill =
         set_skill_tool_enabled_status(&mut installed_skills, skill_name, tool_name, is_enabling)?;
-    if !is_enabling {
+    if is_enabling {
+        create_skill_symlink(&updated_skill.local_path, skill_name, &tool_skills_path)?;
+    } else {
         remove_skill_symlink(&tool_skills_path, skill_name)?;
         let skill_path = PathBuf::from(&updated_skill.local_path);
         if let Some(legacy_skill_dir_name) = skill_path.file_name().and_then(|name| name.to_str()) {
@@ -4250,9 +4340,6 @@ fn toggle_skill_tool_status_blocking(
             }
         }
     }
-
-    let enabled_skills = enabled_skills_for_tool(&installed_skills, tool_name);
-    reconcile_tool_skill_symlinks(&tool_skills_path, &enabled_skills)?;
 
     save_installed_skills(&installed_skills)?;
     Ok(installed_skills[skill_index].clone())
@@ -4263,9 +4350,10 @@ pub async fn set_tool_skill_statuses(
     tool_name: String,
     skill_names: Vec<String>,
     enabled: bool,
+    tool_names: Vec<String>,
 ) -> Result<Vec<SkillSummary>, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        set_tool_skill_statuses_blocking(&tool_name, skill_names, enabled)
+        set_tool_skill_statuses_blocking(&tool_name, skill_names, enabled, &tool_names)
     })
     .await
     .map_err(|error| format!("批量切换 skill 工具状态失败: {error}"))?
@@ -4275,6 +4363,7 @@ fn set_tool_skill_statuses_blocking(
     tool_name: &str,
     skill_names: Vec<String>,
     enabled: bool,
+    tool_names: &[String],
 ) -> Result<Vec<SkillSummary>, String> {
     if sync_trace_enabled() {
         eprintln!(
@@ -4283,7 +4372,6 @@ fn set_tool_skill_statuses_blocking(
     }
     let tool_id = tool_name_to_id(tool_name)?;
     let tool_skills_path = get_tool_skills_path(&tool_id)?;
-    let _ = remove_reserved_workspace_entries(&tool_skills_path);
     let target_skill_names = skill_names
         .into_iter()
         .map(|name| name.trim().to_string())
@@ -4293,7 +4381,13 @@ fn set_tool_skill_statuses_blocking(
         return Ok(resolve_installed_skills());
     }
 
-    let mut installed_skills = resolve_startup_installed_skills();
+    let mut installed_skills = load_interactive_installed_skills();
+    let target_skill_name_list = target_skill_names.iter().cloned().collect::<Vec<_>>();
+    align_installed_skills_with_known_tools(
+        &mut installed_skills,
+        &target_skill_name_list,
+        tool_names,
+    );
     let mut updated_skill_names = BTreeSet::new();
     for skill_name in &target_skill_names {
         let updated =
@@ -4315,12 +4409,88 @@ fn set_tool_skill_statuses_blocking(
     let enabled_skills = enabled_skills_for_tool(&installed_skills, tool_name);
     reconcile_tool_skill_symlinks(&tool_skills_path, &enabled_skills)?;
     save_installed_skills(&installed_skills)?;
-    let _ = remove_reserved_workspace_symlinks_from_all_tools();
 
     Ok(installed_skills
         .into_iter()
         .filter(|skill| updated_skill_names.contains(&skill.name))
         .collect())
+}
+
+#[tauri::command]
+pub async fn set_skill_all_tool_statuses(
+    skill_name: String,
+    enabled: bool,
+    tool_names: Vec<String>,
+) -> Result<SkillSummary, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        set_skill_all_tool_statuses_blocking(&skill_name, enabled, &tool_names)
+    })
+    .await
+    .map_err(|error| format!("批量切换 skill 全部工具状态失败: {error}"))?
+}
+
+fn set_skill_all_tool_statuses_blocking(
+    skill_name: &str,
+    enabled: bool,
+    tool_names: &[String],
+) -> Result<SkillSummary, String> {
+    if sync_trace_enabled() {
+        eprintln!(
+            "[sync-trace] command set_skill_all_tool_statuses skill_name={skill_name} enabled={enabled}"
+        );
+    }
+
+    let mut installed_skills = load_interactive_installed_skills();
+    align_installed_skills_with_known_tools(
+        &mut installed_skills,
+        &[skill_name.to_string()],
+        tool_names,
+    );
+    let skill_index = installed_skills
+        .iter()
+        .position(|skill| skill.name == skill_name)
+        .ok_or_else(|| format!("未找到技能 {skill_name}"))?;
+    let target_tool_name_set = normalize_known_tool_names(tool_names)
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    let target_tool_names = installed_skills[skill_index]
+        .tools
+        .iter()
+        .filter(|tool| {
+            target_tool_name_set.contains(&tool.name)
+                && tool_status_is_enabled(&tool.status_label) != enabled
+        })
+        .map(|tool| tool.name.clone())
+        .collect::<Vec<_>>();
+
+    if target_tool_names.is_empty() {
+        return Ok(installed_skills[skill_index].clone());
+    }
+
+    for tool_name in &target_tool_names {
+        let tool_id = tool_name_to_id(tool_name)?;
+        let tool_skills_path = get_tool_skills_path(&tool_id)?;
+        let updated_skill =
+            set_skill_tool_enabled_status(&mut installed_skills, skill_name, tool_name, enabled)?;
+
+        if enabled {
+            create_skill_symlink(&updated_skill.local_path, skill_name, &tool_skills_path)?;
+        } else {
+            remove_skill_symlink(&tool_skills_path, skill_name)?;
+            let skill_path = PathBuf::from(&updated_skill.local_path);
+            if let Some(legacy_skill_dir_name) = skill_path.file_name().and_then(|name| name.to_str())
+            {
+                if legacy_skill_dir_name != skill_name {
+                    remove_skill_symlink(&tool_skills_path, legacy_skill_dir_name)?;
+                }
+            }
+        }
+
+    }
+
+    save_installed_skills(&installed_skills)?;
+
+    Ok(installed_skills[skill_index].clone())
 }
 
 fn detect_repo_source_type(repo_url: &str) -> &'static str {

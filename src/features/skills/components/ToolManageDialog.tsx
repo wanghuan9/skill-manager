@@ -143,6 +143,10 @@ export function ToolManageDialog({ isOpen, onClose, tool }: ToolManageDialogProp
     }).length,
     [installedSkills, tool.name],
   );
+  const knownSkillToolNames = useMemo(
+    () => Array.from(new Set(installedSkills.flatMap((skill) => skill.tools.map((item) => item.name)))),
+    [installedSkills],
+  );
 
   const mcpRows = useMemo(() => {
     if (!supportsMcp || !mcpWorkspace) {
@@ -182,7 +186,11 @@ export function ToolManageDialog({ isOpen, onClose, tool }: ToolManageDialogProp
 
   async function handleToggleSkill(skillName: string) {
     try {
-      await toggleSkillTool({ skillName, toolName: tool.name });
+      await toggleSkillTool({
+        skillName,
+        toolName: tool.name,
+        toolNames: knownSkillToolNames,
+      });
     } catch (error) {
       const message = error instanceof Error ? error.message : "切换 Skill 启用状态失败";
       window.alert(message);
@@ -222,6 +230,7 @@ export function ToolManageDialog({ isOpen, onClose, tool }: ToolManageDialogProp
           toolName: tool.name,
           skillNames: disabledSkillNames,
           enabled: true,
+          toolNames: knownSkillToolNames,
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : "批量启用 Skills 失败";
@@ -275,6 +284,7 @@ export function ToolManageDialog({ isOpen, onClose, tool }: ToolManageDialogProp
           toolName: tool.name,
           skillNames: enabledSkillNames,
           enabled: false,
+          toolNames: knownSkillToolNames,
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : "批量关闭 Skills 失败";

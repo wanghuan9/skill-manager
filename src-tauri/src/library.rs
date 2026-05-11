@@ -1533,8 +1533,6 @@ pub fn reconcile_tool_skill_symlinks(
             .map_err(|error| format!("创建工具 skills 目录失败: {error}"))?;
     }
 
-    remove_reserved_workspace_entries(tool_skills_path)?;
-
     let expected_skill_names = enabled_skills
         .iter()
         .map(|skill| skill.name.as_str())

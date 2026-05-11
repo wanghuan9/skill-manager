@@ -29,6 +29,7 @@ import {
   openPathInFinder,
   openSkillRepository,
   saveSkillFileContent,
+  setSkillAllToolStatuses,
   setToolSkillStatuses,
   shouldUseFixtureData,
   toggleSkillTool,
@@ -103,11 +104,17 @@ type SkillWorkspaceContextValue = {
     relativePath: string;
     content: string;
   }) => Promise<SkillFileDocument>;
-  toggleSkillTool: (input: { skillName: string; toolName: string }) => Promise<void>;
+  toggleSkillTool: (input: { skillName: string; toolName: string; toolNames: string[] }) => Promise<void>;
   setToolSkillStatuses: (input: {
     toolName: string;
     skillNames: string[];
     enabled: boolean;
+    toolNames: string[];
+  }) => Promise<void>;
+  setSkillAllToolStatuses: (input: {
+    skillName: string;
+    enabled: boolean;
+    toolNames: string[];
   }) => Promise<void>;
   loadPushPreview: (input: {
     skillName: string;
@@ -167,6 +174,19 @@ function patchSkillToolStatus(skill: SkillSummary, toolName: string, enabled: bo
   if (!matchedTool) {
     return skill;
   }
+
+  return {
+    ...skill,
+    syncedToolCount: tools.filter((tool) => isToolEnabledStatus(tool.statusLabel)).length,
+    tools,
+  };
+}
+
+function patchAllSkillToolStatuses(skill: SkillSummary, enabled: boolean) {
+  const tools = skill.tools.map((tool) => ({
+    ...tool,
+    statusLabel: enabled ? "已启用" : "未启用",
+  }));
 
   return {
     ...skill,
@@ -570,7 +590,6 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
         setInstalledSkills(skillsWithCachedStatus);
         setIsLoading(false);
         void refreshGitStatesInBackground(() => active);
-
         await refreshWorkspaceAncillaryData(() => active);
       } catch (error) {
         console.error("Failed to load startup workspace:", error);
@@ -776,7 +795,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
     setInstalledSkills((current) => current.filter((skill) => skill.name !== skillName));
   }
 
-  async function handleToggleSkillTool(input: { skillName: string; toolName: string }) {
+  async function handleToggleSkillTool(input: { skillName: string; toolName: string; toolNames: string[] }) {
     let previousSkill: SkillSummary | null = null;
     setInstalledSkills((current) => current.map((skill) => {
       if (skill.name !== input.skillName) {
@@ -805,6 +824,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
     toolName: string;
     skillNames: string[];
     enabled: boolean;
+    toolNames: string[];
   }) {
     const targetSkillNames = new Set(input.skillNames);
     let previousSkills: SkillSummary[] = [];
@@ -826,6 +846,33 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       setInstalledSkills((current) => mergeUpdatedSkillsPreservingOrder(current, updatedSkills));
     } catch (error) {
       setInstalledSkills((current) => mergeUpdatedSkillsPreservingOrder(current, previousSkills));
+      throw error;
+    }
+  }
+
+  async function handleSetSkillAllToolStatuses(input: {
+    skillName: string;
+    enabled: boolean;
+    toolNames: string[];
+  }) {
+    let previousSkill: SkillSummary | null = null;
+    setInstalledSkills((current) => current.map((skill) => {
+      if (skill.name !== input.skillName) {
+        return skill;
+      }
+
+      previousSkill = skill;
+      return patchAllSkillToolStatuses(skill, input.enabled);
+    }));
+
+    try {
+      const updatedSkill = await setSkillAllToolStatuses(input);
+      setInstalledSkills((current) => mergeUpdatedSkillsPreservingOrder(current, [updatedSkill]));
+    } catch (error) {
+      if (previousSkill) {
+        const rollbackSkill = previousSkill;
+        setInstalledSkills((current) => mergeUpdatedSkillsPreservingOrder(current, [rollbackSkill]));
+      }
       throw error;
     }
   }
@@ -895,6 +942,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       saveSkillFileContent,
       toggleSkillTool: handleToggleSkillTool,
       setToolSkillStatuses: handleSetToolSkillStatuses,
+      setSkillAllToolStatuses: handleSetSkillAllToolStatuses,
       loadPushPreview: fetchPushPreviewSnapshot,
       loadPushTargets: fetchPushTargetSnapshot,
       openSkillRepository,
@@ -921,6 +969,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       marketplacePageBySource,
       marketplaceSkills,
       toolConfigs,
+      handleSetSkillAllToolStatuses,
       handleSetToolSkillStatuses,
     ],
   );
