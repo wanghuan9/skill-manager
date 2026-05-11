@@ -28,6 +28,20 @@ function FolderOpenIcon() {
   );
 }
 
+function getDirectoryPath(filePath: string) {
+  const normalizedPath = filePath.trim();
+  if (!normalizedPath) {
+    return "";
+  }
+
+  const lastSeparatorIndex = normalizedPath.lastIndexOf("/");
+  if (lastSeparatorIndex <= 0) {
+    return normalizedPath;
+  }
+
+  return normalizedPath.slice(0, lastSeparatorIndex);
+}
+
 export function SettingsRoute() {
   const {
     appSettings,
@@ -52,16 +66,16 @@ export function SettingsRoute() {
   const toolStatusPanelClassName = `panel-card placeholder-panel settings-panel settings-panel--tool-status${
     isToolStatusExpanded ? "" : " is-clickable"
   }`;
-  const storagePath = appSettings.storagePath.trim();
+  const storageDirectoryPath = getDirectoryPath(appSettings.storagePath);
 
   async function handleOpenStoragePath() {
-    if (!storagePath || isOpeningStoragePath) {
+    if (!storageDirectoryPath || isOpeningStoragePath) {
       return;
     }
 
     setIsOpeningStoragePath(true);
     try {
-      await openPathInFinder(storagePath);
+      await openPathInFinder(storageDirectoryPath);
     } finally {
       setIsOpeningStoragePath(false);
     }
@@ -69,18 +83,18 @@ export function SettingsRoute() {
 
   const generalSettingsItems = [
     {
-      label: "配置文件存储路径",
-      description: "应用设置会写入这个文件，便于你在本地查看或备份默认配置。",
+      label: "配置文件存储目录",
+      description: "应用设置会写入这个目录，便于你在本地查看或备份默认配置。",
       value: (
         <div className="settings-form-item__path-group">
           <div className="settings-form-item__value settings-form-item__value--path">
-            {storagePath || "暂未检测到存储路径"}
+            {storageDirectoryPath || "暂未检测到存储目录"}
           </div>
           <button
             className="secondary-button secondary-button--compact settings-open-button"
             type="button"
             onClick={() => void handleOpenStoragePath()}
-            disabled={!storagePath || isOpeningStoragePath}
+            disabled={!storageDirectoryPath || isOpeningStoragePath}
           >
             <FolderOpenIcon />
             打开

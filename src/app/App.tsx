@@ -324,7 +324,7 @@ function AppContent() {
           })}
         </nav>
       </aside>
-      <main className="main-panel">
+      <main className="main-panel" data-active-route={activeRoute}>
         {isMacOS ? <div className="window-topbar window-topbar--main" data-tauri-drag-region aria-hidden="true" /> : null}
         <header className="page-header">
           {activeRoute === "skills" ? (

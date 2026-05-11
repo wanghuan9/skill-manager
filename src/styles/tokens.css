@@ -4099,6 +4099,27 @@ code {
 .settings-page {
   display: grid;
   gap: 26px;
+  font-family:
+    "SF Pro Text",
+    "PingFang SC",
+    "Helvetica Neue",
+    sans-serif;
+  font-weight: 400;
+}
+
+.main-panel[data-active-route="settings"] .page-header h1 {
+  font-family:
+    "SF Pro Text",
+    "PingFang SC",
+    "Helvetica Neue",
+    sans-serif;
+  font-size: clamp(1.32rem, 2.4vw, 1.78rem);
+  font-weight: 560;
+}
+
+.main-panel[data-active-route="settings"] .page-header p {
+  font-size: 0.8rem;
+  font-weight: 400;
 }
 
 .settings-grid {
@@ -4129,7 +4150,7 @@ code {
   background: rgba(59, 130, 246, 0.09);
   color: #2f78ff;
   font-size: 0.7rem;
-  font-weight: 650;
+  font-weight: 500;
   letter-spacing: 0.03em;
 }
 
@@ -4158,23 +4179,23 @@ code {
 .settings-group__heading {
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: 12px;
   padding-left: 8px;
 }
 
 .settings-group__bar {
-  width: 8px;
-  height: 22px;
+  width: 6px;
+  height: 18px;
   border-radius: 999px;
-  background: linear-gradient(180deg, #2f6bff 0%, #214ed1 100%);
-  box-shadow: 0 6px 14px rgba(47, 107, 255, 0.24);
+  background: linear-gradient(180deg, #5f8bff 0%, #3f67df 100%);
+  box-shadow: 0 4px 10px rgba(47, 107, 255, 0.14);
 }
 
 .settings-group__title {
   margin: 0;
-  color: #1f2940;
-  font-size: 0.98rem;
-  font-weight: 650;
+  color: #344054;
+  font-size: 0.86rem;
+  font-weight: 500;
   line-height: 1.2;
 }
 
@@ -4223,16 +4244,16 @@ code {
 }
 
 .settings-form-item__title {
-  font-size: 0.96rem;
-  color: #1f2937;
+  font-size: 0.84rem;
+  color: #344054;
   line-height: 1.22;
-  font-weight: 550;
+  font-weight: 450;
 }
 
 .settings-form-item__copy p {
   margin: 0;
-  font-size: 0.86rem;
-  color: #6b7280;
+  font-size: 0.78rem;
+  color: #667085;
   line-height: 1.42;
 }
 
@@ -4252,8 +4273,8 @@ code {
 
 .settings-toggle-control__state {
   color: #6b7280;
-  font-size: 0.8rem;
-  font-weight: 500;
+  font-size: 0.78rem;
+  font-weight: 400;
 }
 
 .settings-form-item__path-group {
@@ -4273,7 +4294,7 @@ code {
   padding: 0 12px;
   background: #f4f7fc;
   color: #1f2937;
-  font-size: 0.86rem;
+  font-size: 0.82rem;
 }
 
 .settings-form-item__control select:focus {
@@ -4291,14 +4312,15 @@ code {
   border: 1px solid #dce4f0;
   background: #f4f7fc;
   color: #1f2937;
-  font-size: 0.86rem;
-  font-weight: 500;
+  font-size: 0.82rem;
+  font-weight: 450;
 }
 
 .settings-form-item__value--path {
   flex: 1;
   max-width: min(480px, 100%);
   justify-content: flex-start;
+  font-weight: 400;
   overflow-wrap: anywhere;
   word-break: break-word;
   white-space: normal;
@@ -4314,7 +4336,7 @@ code {
   flex: 0 0 auto;
   min-width: 74px;
   border-radius: 999px;
-  font-weight: 500;
+  font-weight: 450;
   background: #ffffff;
   box-shadow: 0 4px 14px rgba(31, 41, 55, 0.08);
 }
@@ -4329,10 +4351,35 @@ code {
 }
 
 .settings-tool-grid {
+  --settings-tool-grid-row-gap: 8px;
+  --settings-tool-grid-max-height: 354px;
+
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 8px;
+  gap: var(--settings-tool-grid-row-gap);
+  max-height: var(--settings-tool-grid-max-height);
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 0 20px 18px;
+  scrollbar-gutter: stable;
+}
+
+.settings-tool-grid::-webkit-scrollbar {
+  width: 8px;
+}
+
+.settings-tool-grid::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.settings-tool-grid::-webkit-scrollbar-thumb {
+  border: 2px solid rgba(255, 255, 255, 0.72);
+  border-radius: 999px;
+  background: rgba(123, 140, 166, 0.36);
+}
+
+.settings-tool-grid::-webkit-scrollbar-thumb:hover {
+  background: rgba(96, 113, 139, 0.48);
 }
 
 .settings-panel--tool-status {
@@ -4382,9 +4429,9 @@ code {
   min-width: 0;
   display: block;
   color: var(--heading);
-  font-size: 0.8rem;
+  font-size: 0.76rem;
   line-height: 1.12;
-  font-weight: 600;
+  font-weight: 500;
   letter-spacing: 0;
   overflow-wrap: anywhere;
   white-space: normal;
@@ -4402,7 +4449,7 @@ code {
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.96) 0%, rgba(246, 250, 255, 0.88) 100%);
   color: #5a6f9f;
   font-size: 0.74rem;
-  font-weight: 800;
+  font-weight: 600;
   box-shadow:
     inset 0 0 0 1px rgba(207, 219, 238, 0.44),
     0 3px 8px rgba(142, 156, 181, 0.1);
@@ -4456,7 +4503,7 @@ code {
   background: transparent;
   color: #748196;
   font-size: 0.56rem;
-  font-weight: 600;
+  font-weight: 500;
   line-height: 1.05;
   letter-spacing: 0;
   white-space: nowrap;
@@ -4490,6 +4537,8 @@ code {
 
 @media (max-width: 700px) {
   .settings-tool-grid {
+    --settings-tool-grid-max-height: 334px;
+
     grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
     padding-right: 14px;
     padding-left: 14px;
@@ -4550,7 +4599,7 @@ code {
 
 .settings-section-toggle__title {
   font-size: 1rem;
-  font-weight: 650;
+  font-weight: 560;
 }
 
 .settings-section-toggle__chevron {
@@ -4562,7 +4611,7 @@ code {
 .settings-section-hint {
   margin: 0;
   color: var(--muted);
-  font-size: 0.84rem;
+  font-size: 0.8rem;
   line-height: 1.4;
 }
 
@@ -5346,7 +5395,7 @@ code {
   border-radius: 12px;
   background: transparent;
   border: 0;
-  font-size: 0.84rem;
+  font-size: 0.8rem;
 }
 
 .settings-row--highlight {
@@ -5359,7 +5408,7 @@ code {
 }
 
 .settings-row__title {
-  font-weight: 600;
+  font-weight: 500;
   color: var(--heading);
 }
 
@@ -5434,12 +5483,12 @@ code {
   }
 
   .settings-group__bar {
-    width: 7px;
-    height: 20px;
+    width: 5px;
+    height: 16px;
   }
 
   .settings-group__title {
-    font-size: 0.92rem;
+    font-size: 0.84rem;
   }
 
   .settings-grid {
