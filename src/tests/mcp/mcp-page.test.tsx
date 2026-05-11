@@ -283,5 +283,9 @@ test("shows MCP tools discovery errors when refresh fails due to missing env", a
   await userEvent.click(await screen.findByRole("button", { name: "展开 bright data" }));
 
   expect(screen.getByText("获取失败")).toBeInTheDocument();
+  expect(screen.getByText("需配置参数")).toHaveAttribute(
+    "data-tooltip",
+    "需要配置参数：API_TOKEN, BRIGHTDATA_API_TOKEN",
+  );
   expect(screen.getByText("获取 tools 失败：MCP server 启动失败：缺少环境变量 API_TOKEN")).toBeInTheDocument();
 });

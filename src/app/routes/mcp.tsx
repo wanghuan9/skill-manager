@@ -37,6 +37,10 @@ type McpFormState = {
   enabledAppIds: string[];
 };
 
+const MCP_CONFIG_PLACEHOLDER_PATTERN = /<[^>]*(?:YOUR|TOKEN|KEY|SECRET|PASSWORD|API)[^>]*>|^(?:your[_ -]?(?:api[_ -]?)?(?:key|token|secret|password)|replace[_ -]?me|change[_ -]?me|changeme|todo)$/i;
+const MCP_MISSING_ENV_PATTERN = /缺少环境变量\s+([A-Z0-9_]+)/i;
+const MCP_CONFIG_PARAM_FIELDS = ["env", "headers"];
+
 const EMPTY_FORM_STATE: McpFormState = {
   id: "",
   name: "",
@@ -60,6 +64,69 @@ function parseServerJson(value: string): Record<string, unknown> {
   }
 
   return parsed as Record<string, unknown>;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function isUnconfiguredMcpConfigValue(value: unknown) {
+  if (value == null) {
+    return true;
+  }
+  if (typeof value !== "string") {
+    return false;
+  }
+
+  const normalized = value.trim();
+  return normalized.length === 0 || MCP_CONFIG_PLACEHOLDER_PATTERN.test(normalized);
+}
+
+function collectUnconfiguredMcpParamNames(
+  target: unknown,
+  paramNames: Set<string>,
+) {
+  if (!isRecord(target)) {
+    return;
+  }
+
+  for (const [name, value] of Object.entries(target)) {
+    if (isUnconfiguredMcpConfigValue(value)) {
+      paramNames.add(name);
+    }
+  }
+}
+
+function getMissingMcpEnvParamName(errorMessage: string) {
+  const match = errorMessage.match(MCP_MISSING_ENV_PATTERN);
+  return match?.[1] ?? "";
+}
+
+function getRequiredMcpConfigParamNames(server: McpServerSummary) {
+  const paramNames = new Set<string>();
+  try {
+    const serverConfig = parseServerJson(server.serverJson);
+    for (const field of MCP_CONFIG_PARAM_FIELDS) {
+      collectUnconfiguredMcpParamNames(serverConfig[field], paramNames);
+    }
+  } catch {
+    // JSON errors are surfaced in the edit dialog; the list badge only handles valid saved config.
+  }
+
+  const missingEnvParamName = getMissingMcpEnvParamName(server.toolsDiscoveryError);
+  if (missingEnvParamName) {
+    paramNames.add(missingEnvParamName);
+  }
+
+  return Array.from(paramNames).sort();
+}
+
+function formatRequiredMcpConfigTooltip(paramNames: string[]) {
+  if (paramNames.length === 0) {
+    return "需要配置参数";
+  }
+
+  return `需要配置参数：${paramNames.join(", ")}`;
 }
 
 function normalizeServerJsonForSave(value: string): Record<string, unknown> {
@@ -779,6 +846,8 @@ export function McpRoute() {
           const sourceTypeLabel = formatSkillSourceLabel("自定义仓库", {
             sourceUrl: server.sourceUrl,
           });
+          const requiredConfigParamNames = getRequiredMcpConfigParamNames(server);
+          const requiredConfigTooltip = formatRequiredMcpConfigTooltip(requiredConfigParamNames);
 
           return (
             <article key={server.id} className={`mcp-server-card${isExpanded ? " is-expanded" : ""}`}>
@@ -802,6 +871,14 @@ export function McpRoute() {
                           <span className="status-badge tone-info">
                             {enabledAppSummaryLabel}
                           </span>
+                          {requiredConfigParamNames.length > 0 ? (
+                            <span
+                              className="status-badge tone-warning"
+                              data-tooltip={requiredConfigTooltip}
+                            >
+                              需配置参数
+                            </span>
+                          ) : null}
                         </div>
                         <div
                           className="mcp-server-card__subtitle"
