@@ -431,7 +431,7 @@ function AppContent() {
             </div>
           ) : activeRoute === "install" ? (
             <div className="page-header--split">
-              <div className="page-header__row">
+              <div className="page-header__row page-header__row--install">
                 <h1>{activeDefinition.label}</h1>
                 <div className="install-header-toolbar-slot" id="install-header-toolbar-slot" />
               </div>

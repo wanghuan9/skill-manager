@@ -303,26 +303,28 @@ function InstallCategorySwitcher(props: InstallCategorySwitcherProps) {
   const { activeCategory, onCategoryChange } = props;
 
   return (
-    <div className="install-category-row" role="tablist" aria-label="安装类型">
-      {installCategories.map((category) => {
-        const selected = category.key === activeCategory;
+    <div className="page-tabs-row page-tabs-center install-category-tabs-row">
+      <div className="page-tabs filter-tabs install-category-row" role="tablist" aria-label="安装类型">
+        {installCategories.map((category) => {
+          const selected = category.key === activeCategory;
 
-        return (
-          <button
-            key={category.key}
-            className={`install-category-tab${selected ? " is-selected" : ""}`}
-            type="button"
-            role="tab"
-            aria-selected={selected}
-            onClick={() => onCategoryChange(category.key)}
-          >
-            <span className="install-category-tab__icon">
-              <InstallCategoryIcon category={category.key} />
-            </span>
-            <span>{category.label}</span>
-          </button>
-        );
-      })}
+          return (
+            <button
+              key={category.key}
+              className={`filter-tab install-category-tab${selected ? " active is-selected" : ""}`}
+              type="button"
+              role="tab"
+              aria-selected={selected}
+              onClick={() => onCategoryChange(category.key)}
+            >
+              <span className="tab-icon install-category-tab__icon">
+                <InstallCategoryIcon category={category.key} />
+              </span>
+              <span>{category.label}</span>
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }
