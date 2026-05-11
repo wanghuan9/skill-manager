@@ -58,6 +58,7 @@ import type {
   ToolConfig,
 } from "@/features/skills/state/skill-store";
 import { buildOpenToolOptions } from "@/features/skills/utils/open-tools";
+import { isToolEnabledStatus } from "@/features/skills/utils/tool-status";
 
 const STARTUP_WORKSPACE_CACHE_KEY = "skillm.startupWorkspaceCache";
 const FALLBACK_OPEN_TOOL_ID = "finder";
@@ -148,6 +149,43 @@ function removeInstalledMarketplaceSkill(
   installedSkill: SkillSummary,
 ) {
   return skills.filter((skill) => skill.name !== installedSkill.name);
+}
+
+function patchSkillToolStatus(skill: SkillSummary, toolName: string, enabled: boolean) {
+  let matchedTool = false;
+  const tools = skill.tools.map((tool) => {
+    if (tool.name !== toolName) {
+      return tool;
+    }
+
+    matchedTool = true;
+    return {
+      ...tool,
+      statusLabel: enabled ? "已启用" : "未启用",
+    };
+  });
+
+  if (!matchedTool) {
+    return skill;
+  }
+
+  return {
+    ...skill,
+    syncedToolCount: tools.filter((tool) => isToolEnabledStatus(tool.statusLabel)).length,
+    tools,
+  };
+}
+
+function mergeUpdatedSkillsPreservingOrder(
+  currentSkills: SkillSummary[],
+  updatedSkills: SkillSummary[],
+) {
+  const updatedByName = new Map(updatedSkills.map((skill) => [skill.name, skill]));
+  const mergedSkills = currentSkills.map((skill) => updatedByName.get(skill.name) ?? skill);
+  const currentSkillNames = new Set(currentSkills.map((skill) => skill.name));
+  const newSkills = updatedSkills.filter((skill) => !currentSkillNames.has(skill.name));
+
+  return [...newSkills, ...mergedSkills];
 }
 
 function removeImportedCandidate(
@@ -697,8 +735,28 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
   }
 
   async function handleToggleSkillTool(input: { skillName: string; toolName: string }) {
-    const updatedSkill = await toggleSkillTool(input);
-    setInstalledSkills((current) => [updatedSkill, ...current.filter((item) => item.name !== updatedSkill.name)]);
+    let previousSkill: SkillSummary | null = null;
+    setInstalledSkills((current) => current.map((skill) => {
+      if (skill.name !== input.skillName) {
+        return skill;
+      }
+
+      previousSkill = skill;
+      const matchedTool = skill.tools.find((tool) => tool.name === input.toolName);
+      const nextEnabled = matchedTool ? !isToolEnabledStatus(matchedTool.statusLabel) : true;
+      return patchSkillToolStatus(skill, input.toolName, nextEnabled);
+    }));
+
+    try {
+      const updatedSkill = await toggleSkillTool(input);
+      setInstalledSkills((current) => mergeUpdatedSkillsPreservingOrder(current, [updatedSkill]));
+    } catch (error) {
+      if (previousSkill) {
+        const rollbackSkill = previousSkill;
+        setInstalledSkills((current) => mergeUpdatedSkillsPreservingOrder(current, [rollbackSkill]));
+      }
+      throw error;
+    }
   }
 
   async function handleSetToolSkillStatuses(input: {
@@ -706,16 +764,28 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
     skillNames: string[];
     enabled: boolean;
   }) {
-    const updatedSkills = await setToolSkillStatuses(input);
-    if (updatedSkills.length === 0) {
-      return;
-    }
+    const targetSkillNames = new Set(input.skillNames);
+    let previousSkills: SkillSummary[] = [];
+    setInstalledSkills((current) => {
+      previousSkills = current.filter((skill) => targetSkillNames.has(skill.name));
+      return current.map((skill) => (
+        targetSkillNames.has(skill.name)
+          ? patchSkillToolStatus(skill, input.toolName, input.enabled)
+          : skill
+      ));
+    });
 
-    const updatedNames = new Set(updatedSkills.map((skill) => skill.name));
-    setInstalledSkills((current) => [
-      ...updatedSkills,
-      ...current.filter((skill) => !updatedNames.has(skill.name)),
-    ]);
+    try {
+      const updatedSkills = await setToolSkillStatuses(input);
+      if (updatedSkills.length === 0) {
+        return;
+      }
+
+      setInstalledSkills((current) => mergeUpdatedSkillsPreservingOrder(current, updatedSkills));
+    } catch (error) {
+      setInstalledSkills((current) => mergeUpdatedSkillsPreservingOrder(current, previousSkills));
+      throw error;
+    }
   }
 
   async function handleOpenSkillWithDefaultTool(skillName: string) {

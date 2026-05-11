@@ -4206,7 +4206,21 @@ pub fn delete_skill(skill_name: &str) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn toggle_skill_tool_status(skill_name: &str, tool_name: &str) -> Result<SkillSummary, String> {
+pub async fn toggle_skill_tool_status(
+    skill_name: String,
+    tool_name: String,
+) -> Result<SkillSummary, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        toggle_skill_tool_status_blocking(&skill_name, &tool_name)
+    })
+    .await
+    .map_err(|error| format!("切换 skill 工具状态失败: {error}"))?
+}
+
+fn toggle_skill_tool_status_blocking(
+    skill_name: &str,
+    tool_name: &str,
+) -> Result<SkillSummary, String> {
     if sync_trace_enabled() {
         eprintln!(
             "[sync-trace] command toggle_skill_tool_status skill_name={skill_name} tool_name={tool_name}"
@@ -4246,7 +4260,19 @@ pub fn toggle_skill_tool_status(skill_name: &str, tool_name: &str) -> Result<Ski
 }
 
 #[tauri::command]
-pub fn set_tool_skill_statuses(
+pub async fn set_tool_skill_statuses(
+    tool_name: String,
+    skill_names: Vec<String>,
+    enabled: bool,
+) -> Result<Vec<SkillSummary>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        set_tool_skill_statuses_blocking(&tool_name, skill_names, enabled)
+    })
+    .await
+    .map_err(|error| format!("批量切换 skill 工具状态失败: {error}"))?
+}
+
+fn set_tool_skill_statuses_blocking(
     tool_name: &str,
     skill_names: Vec<String>,
     enabled: bool,

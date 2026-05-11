@@ -4712,8 +4712,7 @@ code {
 
 .tool-manage-dialog__list {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 240px));
-  justify-content: space-between;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
   min-height: 0;
   overflow: auto;

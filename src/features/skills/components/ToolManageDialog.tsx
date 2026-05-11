@@ -181,18 +181,31 @@ export function ToolManageDialog({ isOpen, onClose, tool }: ToolManageDialogProp
     : `Skills ${enabledSkillCount}/${installedSkills.length} · MCP 未识别`;
 
   async function handleToggleSkill(skillName: string) {
-    await toggleSkillTool({ skillName, toolName: tool.name });
+    try {
+      await toggleSkillTool({ skillName, toolName: tool.name });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "切换 Skill 启用状态失败";
+      window.alert(message);
+    }
   }
 
   async function handleToggleMcp(serverId: string, enabled: boolean) {
-    await toggleMcpServerApp({
-      serverId,
-      appId: tool.id,
-      enabled,
-    });
+    const previousWorkspace = mcpWorkspace;
     setMcpWorkspace((current) => (
       current ? patchMcpWorkspaceToggle(current, serverId, tool.id, enabled) : current
     ));
+    try {
+      const nextWorkspace = await toggleMcpServerApp({
+        serverId,
+        appId: tool.id,
+        enabled,
+      });
+      setMcpWorkspace(nextWorkspace);
+    } catch (error) {
+      setMcpWorkspace(previousWorkspace);
+      const message = error instanceof Error ? error.message : "切换 MCP 启用状态失败";
+      window.alert(message);
+    }
   }
 
   async function handleToggleAllOn() {
@@ -204,7 +217,6 @@ export function ToolManageDialog({ isOpen, onClose, tool }: ToolManageDialogProp
         return;
       }
 
-      setIsUpdatingAll(true);
       try {
         await setToolSkillStatuses({
           toolName: tool.name,
@@ -214,8 +226,6 @@ export function ToolManageDialog({ isOpen, onClose, tool }: ToolManageDialogProp
       } catch (error) {
         const message = error instanceof Error ? error.message : "批量启用 Skills 失败";
         window.alert(message);
-      } finally {
-        setIsUpdatingAll(false);
       }
       return;
     }
@@ -229,7 +239,11 @@ export function ToolManageDialog({ isOpen, onClose, tool }: ToolManageDialogProp
       return;
     }
 
+    const previousWorkspace = mcpWorkspace;
     setIsUpdatingAll(true);
+    setMcpWorkspace((current) => (
+      current ? patchMcpWorkspaceBulkToggle(current, disabledRows, tool.id, true) : current
+    ));
     try {
       for (const row of disabledRows) {
         await toggleMcpServerApp({
@@ -238,10 +252,8 @@ export function ToolManageDialog({ isOpen, onClose, tool }: ToolManageDialogProp
           enabled: true,
         });
       }
-      setMcpWorkspace((current) => (
-        current ? patchMcpWorkspaceBulkToggle(current, disabledRows, tool.id, true) : current
-      ));
     } catch (error) {
+      setMcpWorkspace(previousWorkspace);
       const message = error instanceof Error ? error.message : "批量启用 MCP 失败";
       window.alert(message);
     } finally {
@@ -258,7 +270,6 @@ export function ToolManageDialog({ isOpen, onClose, tool }: ToolManageDialogProp
         return;
       }
 
-      setIsUpdatingAll(true);
       try {
         await setToolSkillStatuses({
           toolName: tool.name,
@@ -268,8 +279,6 @@ export function ToolManageDialog({ isOpen, onClose, tool }: ToolManageDialogProp
       } catch (error) {
         const message = error instanceof Error ? error.message : "批量关闭 Skills 失败";
         window.alert(message);
-      } finally {
-        setIsUpdatingAll(false);
       }
       return;
     }
@@ -283,7 +292,11 @@ export function ToolManageDialog({ isOpen, onClose, tool }: ToolManageDialogProp
       return;
     }
 
+    const previousWorkspace = mcpWorkspace;
     setIsUpdatingAll(true);
+    setMcpWorkspace((current) => (
+      current ? patchMcpWorkspaceBulkToggle(current, enabledRows, tool.id, false) : current
+    ));
     try {
       for (const row of enabledRows) {
         await toggleMcpServerApp({
@@ -292,10 +305,8 @@ export function ToolManageDialog({ isOpen, onClose, tool }: ToolManageDialogProp
           enabled: false,
         });
       }
-      setMcpWorkspace((current) => (
-        current ? patchMcpWorkspaceBulkToggle(current, enabledRows, tool.id, false) : current
-      ));
     } catch (error) {
+      setMcpWorkspace(previousWorkspace);
       const message = error instanceof Error ? error.message : "批量关闭 MCP 失败";
       window.alert(message);
     } finally {
@@ -380,7 +391,7 @@ export function ToolManageDialog({ isOpen, onClose, tool }: ToolManageDialogProp
               onClick={() => void handleToggleAllOn()}
               disabled={isUpdatingAll || disabledVisibleCount === 0 || (activeTab === "mcp" && isMcpLoading)}
             >
-              {isUpdatingAll ? "处理中..." : "全部开启"}
+              全部开启
             </button>
             <button
               className="secondary-button secondary-button--compact"
@@ -388,7 +399,7 @@ export function ToolManageDialog({ isOpen, onClose, tool }: ToolManageDialogProp
               onClick={() => void handleToggleAllOff()}
               disabled={isUpdatingAll || enabledVisibleCount === 0 || (activeTab === "mcp" && isMcpLoading)}
             >
-              {isUpdatingAll ? "处理中..." : "全部关闭"}
+              全部关闭
             </button>
           </div>
         </div>
