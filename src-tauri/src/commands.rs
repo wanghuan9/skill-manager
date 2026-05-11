@@ -2047,7 +2047,6 @@ fn resolve_startup_installed_skills() -> Vec<SkillSummary> {
     let installed_tool_entries = installed_tool_sync_entries_from_configs(&tool_configs);
     load_installed_skills(&default_installed_skills())
         .iter()
-        .map(normalize_installed_skill_source_url)
         .map(|skill| normalize_skill_tools_with_entries(&skill, &installed_tool_entries))
         .map(|skill| enrich_skill_with_cached_update_state(&skill))
         .collect()

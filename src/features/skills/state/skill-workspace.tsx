@@ -12,7 +12,6 @@ import {
   deleteSkill,
   fetchGitAccount,
   fetchGitStates,
-  fetchInstalledSkills,
   fetchLocalSkillCandidates,
   fetchMarketplaceSkillsByPage,
   fetchSkillFileBrowser,
@@ -425,9 +424,66 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
     await persistAppSettings(nextSettings);
   }
 
+  function applyWorkspaceAncillaryData(input: {
+    candidates?: LocalSkillCandidate[];
+    tools?: ToolConfig[];
+    account?: GitAccountSummary | null;
+    settings?: AppSettings;
+  }) {
+    if (input.candidates) {
+      setLocalCandidates(input.candidates);
+    }
+    if (input.tools) {
+      setToolConfigs(input.tools);
+    }
+    if (input.account) {
+      setGitAccount(input.account);
+    }
+    if (input.settings) {
+      setAppSettings(input.settings);
+    }
+  }
+
+  async function refreshWorkspaceAncillaryData(shouldApply: () => boolean = () => true) {
+    const [candidatesResult, toolsResult, accountResult, settingsResult] = await Promise.allSettled([
+      fetchLocalSkillCandidates(),
+      fetchToolConfigs(),
+      fetchGitAccount(),
+      fetchAppSettings(),
+    ]);
+
+    if (!shouldApply()) {
+      return;
+    }
+
+    if (candidatesResult.status === "fulfilled") {
+      setLocalCandidates(candidatesResult.value);
+    } else {
+      console.error("Failed to load local skill candidates:", candidatesResult.reason);
+    }
+
+    if (toolsResult.status === "fulfilled") {
+      setToolConfigs(toolsResult.value);
+    } else {
+      console.error("Failed to load tool configs:", toolsResult.reason);
+    }
+
+    if (accountResult.status === "fulfilled") {
+      setGitAccount(accountResult.value);
+    } else {
+      console.error("Failed to load git account:", accountResult.reason);
+    }
+
+    if (settingsResult.status === "fulfilled") {
+      setAppSettings(settingsResult.value);
+    } else {
+      console.error("Failed to load app settings:", settingsResult.reason);
+    }
+  }
+
   async function loadWorkspaceCore() {
     const [skills, candidates, tools, account, settings] = await Promise.all([
-      fetchInstalledSkills(),
+      fetchStartupInstalledSkills(),
       fetchLocalSkillCandidates(),
       fetchToolConfigs(),
       fetchGitAccount(),
@@ -444,17 +500,35 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
   }
 
   async function loadWorkspaceSnapshot() {
-    setIsLoading(true);
+    const shouldBlockSkillList = installedSkills.length === 0;
+    if (shouldBlockSkillList) {
+      setIsLoading(true);
+    }
     try {
+      const skills = await fetchStartupInstalledSkills();
+      setInstalledSkills(skills);
+      if (shouldBlockSkillList) {
+        setIsLoading(false);
+      }
+      void refreshGitStatesInBackground();
+      void refreshWorkspaceAncillaryData();
+      return;
+    } catch (startupError) {
+      console.error("Failed to refresh startup skills snapshot:", startupError);
+
       const workspace = await loadWorkspaceCore();
       setInstalledSkills(workspace.skills);
-      setLocalCandidates(workspace.candidates);
-      setToolConfigs(workspace.tools);
-      setGitAccount(workspace.account);
-      setAppSettings(workspace.settings);
+      applyWorkspaceAncillaryData({
+        candidates: workspace.candidates,
+        tools: workspace.tools,
+        account: workspace.account,
+        settings: workspace.settings,
+      });
       void refreshGitStatesInBackground();
     } finally {
-      setIsLoading(false);
+      if (shouldBlockSkillList) {
+        setIsLoading(false);
+      }
     }
   }
 
@@ -497,39 +571,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
         setIsLoading(false);
         void refreshGitStatesInBackground(() => active);
 
-        const [candidatesResult, toolsResult, accountResult, settingsResult] = await Promise.allSettled([
-          fetchLocalSkillCandidates(),
-          fetchToolConfigs(),
-          fetchGitAccount(),
-          fetchAppSettings(),
-        ]);
-        if (!active) {
-          return;
-        }
-
-        if (candidatesResult.status === "fulfilled") {
-          setLocalCandidates(candidatesResult.value);
-        } else {
-          console.error("Failed to load local skill candidates:", candidatesResult.reason);
-        }
-
-        if (toolsResult.status === "fulfilled") {
-          setToolConfigs(toolsResult.value);
-        } else {
-          console.error("Failed to load tool configs:", toolsResult.reason);
-        }
-
-        if (accountResult.status === "fulfilled") {
-          setGitAccount(accountResult.value);
-        } else {
-          console.error("Failed to load git account:", accountResult.reason);
-        }
-
-        if (settingsResult.status === "fulfilled") {
-          setAppSettings(settingsResult.value);
-        } else {
-          console.error("Failed to load app settings:", settingsResult.reason);
-        }
+        await refreshWorkspaceAncillaryData(() => active);
       } catch (error) {
         console.error("Failed to load startup workspace:", error);
       } finally {
