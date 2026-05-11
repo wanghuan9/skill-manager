@@ -29,6 +29,7 @@ const APP_CURSOR: &str = "cursor";
 const APP_WINDSURF: &str = "windsurf";
 static MCP_NPM_METADATA_CACHE: OnceLock<Mutex<HashMap<String, McpResolvedMetadata>>> = OnceLock::new();
 static README_MARKDOWN_LINK_REGEX: OnceLock<Regex> = OnceLock::new();
+static MCP_DIRECTORY_GITHUB_URL_REGEX: OnceLock<Regex> = OnceLock::new();
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum McpStdioWireFormat {
@@ -186,6 +187,8 @@ pub struct McpMarketplaceServer {
     pub category: String,
     pub transport_label: String,
     pub source_url: String,
+    #[serde(default)]
+    pub marketplace_url: Option<String>,
     pub popularity_label: String,
     pub avatar_url: Option<String>,
     pub server: Option<Value>,
@@ -215,6 +218,11 @@ struct McpDirectoryServer {
     stars: u64,
     github_stars: Option<u64>,
     npm_weekly_downloads: Option<u64>,
+    github_url: Option<String>,
+    repository_url: Option<String>,
+    source_url: Option<String>,
+    homepage_url: Option<String>,
+    website_url: Option<String>,
     #[serde(default)]
     publisher: McpDirectoryPublisher,
 }
@@ -338,12 +346,15 @@ pub async fn install_mcp_server_from_marketplace(
         return build_mcp_workspace_snapshot();
     }
 
+    let source_url = resolve_mcp_marketplace_source_url(&server, &server_config)
+        .await
+        .unwrap_or_default();
     let mut record = McpServerRecord {
         id: server_id.clone(),
         name: server.name.trim().to_lowercase(),
         server: server_config,
         description: server.description.trim().to_string(),
-        source_url: git_repository_source_url(&server.source_url).unwrap_or_default(),
+        source_url,
         enabled_app_ids: Vec::new(),
         tools: Vec::new(),
         tools_discovered_at: String::new(),
@@ -351,8 +362,11 @@ pub async fn install_mcp_server_from_marketplace(
         installed_at: now_label(),
         updated_at: now_label(),
     };
+    let metadata_client = mcp_metadata_client();
+    enrich_mcp_record_metadata(&mut record, metadata_client.as_ref()).await;
     if record.source_url.trim().is_empty() {
-        record.source_url = server.source_url.trim().to_string();
+        record.source_url = mcp_marketplace_detail_url(&server)
+            .unwrap_or_else(|| server.source_url.trim().to_string());
     }
     if normalize_mcp_install_activation(&load_app_settings().mcp_install_activation)
         == "apply-all-tools"
@@ -2112,18 +2126,98 @@ fn git_repository_source_url(value: &str) -> Option<String> {
         .trim_start_matches("git+")
         .trim_end_matches(".git")
         .to_string();
-    let lower = normalized.to_lowercase();
-    if lower.contains("github.com")
-        || lower.contains("gitlab.com")
-        || lower.contains("gitee.com")
-        || lower.starts_with("git@github.com:")
-        || lower.starts_with("git@gitlab.com:")
-        || lower.starts_with("git@gitee.com:")
+    repository_parts_from_url(&normalized)
+        .map(|(host, owner, repo)| format!("https://{host}/{owner}/{repo}"))
+}
+
+async fn resolve_mcp_marketplace_source_url(
+    server: &McpMarketplaceServer,
+    server_config: &Value,
+) -> Option<String> {
+    if let Some(source_url) = git_repository_source_url(&server.source_url) {
+        return Some(source_url);
+    }
+    if let Some(source_url) = server
+        .marketplace_url
+        .as_deref()
+        .and_then(git_repository_source_url)
     {
-        return Some(normalized);
+        return Some(source_url);
+    }
+    if let Some(source_url) = explicit_mcp_source_url(server_config) {
+        return Some(source_url);
+    }
+    if let Some(source_url) = server.server.as_ref().and_then(explicit_mcp_source_url) {
+        return Some(source_url);
     }
 
-    None
+    fetch_mcp_directory_source_url(server).await
+}
+
+async fn fetch_mcp_directory_source_url(server: &McpMarketplaceServer) -> Option<String> {
+    if server.source_site != "MCP.Directory" {
+        return None;
+    }
+    let detail_url = mcp_marketplace_detail_url(server)?;
+    let client = mcp_http_client().ok()?;
+    let response = client.get(detail_url).send().await.ok()?;
+    if !response.status().is_success() {
+        return None;
+    }
+    let html = response.text().await.ok()?;
+    extract_mcp_directory_github_url(&html)
+}
+
+fn extract_mcp_directory_github_url(html: &str) -> Option<String> {
+    let regex = MCP_DIRECTORY_GITHUB_URL_REGEX.get_or_init(|| {
+        Regex::new(r#"(?i)(?:githubUrl\\?":\\?"|View full README on GitHub\]\()(?P<url>https://github\.com/[^"\\)\s<]+)"#)
+            .expect("MCP.Directory GitHub URL regex should compile")
+    });
+    regex
+        .captures_iter(html)
+        .filter_map(|captures| captures.name("url").map(|url| url.as_str()))
+        .find_map(git_repository_source_url)
+}
+
+fn repository_parts_from_url(value: &str) -> Option<(String, String, String)> {
+    let normalized = value
+        .trim()
+        .trim_start_matches("git+")
+        .trim_end_matches(".git");
+    let lower = normalized.to_lowercase();
+    for host in ["github.com", "gitlab.com", "gitee.com"] {
+        let ssh_prefix = format!("git@{host}:");
+        if lower.starts_with(&ssh_prefix) {
+            return repository_parts_from_path(host, &normalized[ssh_prefix.len()..]);
+        }
+    }
+
+    let parsed = url::Url::parse(normalized).ok()?;
+    let host = parsed.host_str()?.to_lowercase();
+    if !matches!(host.as_str(), "github.com" | "gitlab.com" | "gitee.com") {
+        return None;
+    }
+
+    repository_parts_from_path(&host, parsed.path())
+}
+
+fn repository_parts_from_path(host: &str, path: &str) -> Option<(String, String, String)> {
+    let segments = path
+        .trim_matches('/')
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>();
+    if segments.len() < 2 {
+        return None;
+    }
+
+    let owner = segments[0].to_string();
+    let repo = segments[1].trim_end_matches(".git").to_string();
+    if owner.is_empty() || repo.is_empty() {
+        return None;
+    }
+
+    Some((host.to_string(), owner, repo))
 }
 
 fn stored_mcp_description(record: &McpServerRecord) -> String {
@@ -2510,35 +2604,8 @@ fn pypi_repository_url(project_urls: &BTreeMap<String, String>) -> Option<&str> 
 }
 
 fn github_repo_from_url(value: &str) -> Option<(String, String)> {
-    let normalized = value
-        .trim()
-        .trim_start_matches("git+")
-        .trim_end_matches(".git");
-    if let Some(path) = normalized.strip_prefix("git@github.com:") {
-        return github_repo_from_path(path);
-    }
-
-    let parsed = url::Url::parse(normalized).ok()?;
-    if parsed.host_str() != Some("github.com") {
-        return None;
-    }
-
-    github_repo_from_path(parsed.path())
-}
-
-fn github_repo_from_path(path: &str) -> Option<(String, String)> {
-    let segments = path
-        .trim_matches('/')
-        .split('/')
-        .filter(|segment| !segment.is_empty())
-        .collect::<Vec<_>>();
-    if segments.len() < 2 {
-        return None;
-    }
-
-    let owner = segments[0].to_string();
-    let repo = segments[1].trim_end_matches(".git").to_string();
-    if owner.is_empty() || repo.is_empty() {
+    let (host, owner, repo) = repository_parts_from_url(value)?;
+    if host != "github.com" {
         return None;
     }
 
@@ -3166,11 +3233,22 @@ async fn fetch_mcp_directory_servers_page(
 fn map_mcp_directory_server(server: McpDirectoryServer) -> McpMarketplaceServer {
     let slug = server.slug.trim().to_string();
     let name = server.name.trim().to_string();
-    let source_url = if slug.is_empty() {
+    let marketplace_url = if slug.is_empty() {
         "https://mcp.directory/servers".to_string()
     } else {
         format!("https://mcp.directory/servers/{slug}")
     };
+    let source_url = [
+        server.github_url.as_deref(),
+        server.repository_url.as_deref(),
+        server.source_url.as_deref(),
+        server.homepage_url.as_deref(),
+        server.website_url.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .find_map(git_repository_source_url)
+    .unwrap_or_else(|| marketplace_url.clone());
     let publisher = if server.publisher.name.trim().is_empty() {
         "MCP.Directory".to_string()
     } else {
@@ -3222,6 +3300,7 @@ fn map_mcp_directory_server(server: McpDirectoryServer) -> McpMarketplaceServer 
         category,
         transport_label,
         source_url,
+        marketplace_url: Some(marketplace_url),
         popularity_label: if popularity > 0 {
             format_compact_count(popularity)
         } else {
@@ -3235,21 +3314,14 @@ fn map_mcp_directory_server(server: McpDirectoryServer) -> McpMarketplaceServer 
 async fn fetch_mcp_marketplace_install_config(
     server: &McpMarketplaceServer,
 ) -> Result<Option<Value>, String> {
-    let slug = server
-        .source_url
-        .trim_end_matches('/')
-        .rsplit('/')
-        .next()
-        .unwrap_or_default()
-        .trim();
-    if slug.is_empty() || server.source_url.trim().is_empty() {
+    let Some(slug) = mcp_marketplace_slug(server) else {
         return Ok(None);
-    }
+    };
 
     let client = mcp_http_client()?;
     let endpoint = format!(
         "https://mcp.directory/api/v1/servers/{}/install-configs",
-        encode_query_component(slug)
+        encode_query_component(&slug)
     );
     let payload = client
         .get(endpoint)
@@ -3266,6 +3338,49 @@ async fn fetch_mcp_marketplace_install_config(
         &payload.install_configs,
         &server.description,
     ))
+}
+
+fn mcp_marketplace_slug(server: &McpMarketplaceServer) -> Option<String> {
+    let detail_url = mcp_marketplace_detail_url(server)?;
+    let slug = detail_url
+        .trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .unwrap_or_default()
+        .trim();
+    if slug.is_empty() || slug == "servers" {
+        None
+    } else {
+        Some(slug.to_string())
+    }
+}
+
+fn mcp_marketplace_detail_url(server: &McpMarketplaceServer) -> Option<String> {
+    if let Some(detail_url) = server
+        .marketplace_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            let source_url = server.source_url.trim();
+            if source_url.contains("mcp.directory/servers") {
+                Some(source_url)
+            } else {
+                None
+            }
+        })
+        .map(ToString::to_string)
+    {
+        return Some(detail_url);
+    }
+
+    server
+        .id
+        .trim()
+        .strip_prefix("mcp-directory-")
+        .map(|slug| slug.trim())
+        .filter(|slug| !slug.is_empty())
+        .map(|slug| format!("https://mcp.directory/servers/{slug}"))
 }
 
 fn select_mcp_install_config(
@@ -3396,6 +3511,13 @@ fn parse_mcp_directory_detail(html: &str) -> Option<McpMarketplaceServer> {
         .and_then(Value::as_str)
         .unwrap_or("https://mcp.directory/servers")
         .to_string();
+    let repository_url = payload
+        .get("githubUrl")
+        .or_else(|| payload.get("repositoryUrl"))
+        .or_else(|| payload.get("sourceUrl"))
+        .and_then(Value::as_str)
+        .and_then(git_repository_source_url)
+        .or_else(|| extract_mcp_directory_github_url(html));
     let server = extract_mcp_server_config(html, &name, &description);
     let transport_label = transport_label_for_market_config(server.as_ref());
 
@@ -3410,7 +3532,8 @@ fn parse_mcp_directory_detail(html: &str) -> Option<McpMarketplaceServer> {
         publisher,
         category,
         transport_label,
-        source_url,
+        source_url: repository_url.unwrap_or_else(|| source_url.clone()),
+        marketplace_url: Some(source_url),
         popularity_label,
         avatar_url,
         server,
@@ -3491,7 +3614,8 @@ fn default_mcp_marketplace_servers() -> Vec<McpMarketplaceServer> {
             publisher: "upstash".to_string(),
             category: "AI/ML".to_string(),
             transport_label: "HTTP / stdio".to_string(),
-            source_url: "https://mcp.directory/servers/context7".to_string(),
+            source_url: "https://github.com/upstash/context7".to_string(),
+            marketplace_url: Some("https://mcp.directory/servers/context7".to_string()),
             popularity_label: "36.7K".to_string(),
             avatar_url: Some("https://github.com/upstash.png".to_string()),
             server: Some(json!({
@@ -3510,7 +3634,8 @@ fn default_mcp_marketplace_servers() -> Vec<McpMarketplaceServer> {
             publisher: "microsoft".to_string(),
             category: "Browser Automation".to_string(),
             transport_label: "stdio".to_string(),
-            source_url: "https://mcp.directory/servers/playwright".to_string(),
+            source_url: "https://github.com/microsoft/playwright-mcp".to_string(),
+            marketplace_url: Some("https://mcp.directory/servers/playwright".to_string()),
             popularity_label: "12.4K".to_string(),
             avatar_url: Some("https://github.com/microsoft.png".to_string()),
             server: Some(json!({
@@ -3635,6 +3760,21 @@ mod tests {
     }
 
     #[test]
+    fn normalizes_git_source_to_repository_url() {
+        assert_eq!(
+            git_repository_source_url("git+https://github.com/upstash/context7.git").as_deref(),
+            Some("https://github.com/upstash/context7")
+        );
+        assert_eq!(
+            git_repository_source_url(
+                "https://github.com/upstash/context7/blob/master/public/cover.png?raw=true"
+            )
+            .as_deref(),
+            Some("https://github.com/upstash/context7")
+        );
+    }
+
+    #[test]
     fn records_git_source_over_marketplace_source() {
         let server = json!({
             "sourceUrl": "https://mcp.directory/servers/context7",
@@ -3644,6 +3784,51 @@ mod tests {
         assert_eq!(
             explicit_mcp_source_url(&server),
             Some("https://github.com/upstash/context7".to_string())
+        );
+    }
+
+    #[test]
+    fn extracts_mcp_directory_github_url_from_next_payload() {
+        let html = r#"
+<script>self.__next_f.push([1,"{\"server\":{\"githubUrl\":\"https://github.com/upstash/context7\",\"websiteUrl\":\"https://context7.com\"}}"])</script>
+"#;
+
+        assert_eq!(
+            extract_mcp_directory_github_url(html).as_deref(),
+            Some("https://github.com/upstash/context7")
+        );
+    }
+
+    #[test]
+    fn maps_mcp_directory_repository_source_separately_from_marketplace_url() {
+        let server = McpDirectoryServer {
+            id: "5".to_string(),
+            fastmcp_id: Some(5),
+            name: "Context7".to_string(),
+            slug: "context7".to_string(),
+            short_description: "Docs".to_string(),
+            classification: "official".to_string(),
+            transport_type: vec!["streamable-http".to_string()],
+            stars: 10,
+            github_stars: Some(48_180),
+            npm_weekly_downloads: None,
+            github_url: Some("git+https://github.com/upstash/context7.git".to_string()),
+            repository_url: None,
+            source_url: None,
+            homepage_url: None,
+            website_url: None,
+            publisher: McpDirectoryPublisher {
+                name: "upstash".to_string(),
+                avatar_url: None,
+            },
+        };
+
+        let mapped = map_mcp_directory_server(server);
+
+        assert_eq!(mapped.source_url, "https://github.com/upstash/context7");
+        assert_eq!(
+            mapped.marketplace_url.as_deref(),
+            Some("https://mcp.directory/servers/context7")
         );
     }
 

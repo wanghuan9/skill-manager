@@ -95,6 +95,7 @@ export type McpMarketplaceServer = {
   category: string;
   transportLabel: string;
   sourceUrl: string;
+  marketplaceUrl?: string | null;
   popularityLabel: string;
   avatarUrl?: string | null;
   server: Record<string, unknown> | null;

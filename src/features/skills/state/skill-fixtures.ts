@@ -173,7 +173,8 @@ export const mcpMarketplaceServerFixtures: McpMarketplaceServer[] = [
     publisher: "upstash",
     category: "AI/ML",
     transportLabel: "HTTP / stdio",
-    sourceUrl: "https://mcp.directory/servers/context7",
+    sourceUrl: "https://github.com/upstash/context7",
+    marketplaceUrl: "https://mcp.directory/servers/context7",
     popularityLabel: "36.7K",
     avatarUrl: "https://github.com/upstash.png",
     server: {
@@ -190,7 +191,8 @@ export const mcpMarketplaceServerFixtures: McpMarketplaceServer[] = [
     publisher: "microsoft",
     category: "Browser Automation",
     transportLabel: "stdio",
-    sourceUrl: "https://mcp.directory/servers/playwright",
+    sourceUrl: "https://github.com/microsoft/playwright-mcp",
+    marketplaceUrl: "https://mcp.directory/servers/playwright",
     popularityLabel: "12.4K",
     avatarUrl: "https://github.com/microsoft.png",
     server: {

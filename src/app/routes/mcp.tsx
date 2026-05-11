@@ -610,6 +610,7 @@ export function McpRoute() {
       enabledAppIds: formState.enabledAppIds,
       tools: activeEditingServer?.tools ?? [],
       toolsDiscoveredAt: activeEditingServer?.toolsDiscoveredAt ?? "",
+      toolsDiscoveryError: activeEditingServer?.toolsDiscoveryError ?? "",
       installedAt: activeEditingServer?.installedAt ?? "",
       updatedAt: "",
     };

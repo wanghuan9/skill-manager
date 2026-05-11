@@ -607,6 +607,7 @@ export async function installMcpServerFromMarketplace(
     tools: [],
     toolsDiscoveredAt: "",
     toolsDiscoveryError: "",
+    installedAt: "刚刚",
   };
   const fallback = {
     ...mcpWorkspaceFixture,
@@ -649,6 +650,7 @@ export async function saveMcpServer(server: McpServerRecord): Promise<McpWorkspa
     })),
     tools: server.tools,
     toolsDiscoveredAt: server.toolsDiscoveredAt,
+    toolsDiscoveryError: server.toolsDiscoveryError,
     installedAt: server.installedAt,
   };
   const fallback = {
