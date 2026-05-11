@@ -190,6 +190,58 @@ test("tool toggles stay visually stable while updating", async () => {
   toggleSpy.mockRestore();
 });
 
+test("app toggles update immediately without showing processing text", async () => {
+  window.localStorage.clear();
+  const initialSnapshot = await skillClient.fetchMcpWorkspace();
+  const nextSnapshot = {
+    ...initialSnapshot,
+    servers: initialSnapshot.servers.map((server) => (
+      server.id === "context7"
+        ? {
+            ...server,
+            enabledAppCount: 1,
+            apps: server.apps.map((app) => (
+              app.appId === "claude-code"
+                ? { ...app, isEnabled: false }
+                : app
+            )),
+          }
+        : server
+    )),
+  };
+  let resolveToggle: ((value: typeof nextSnapshot) => void) | undefined;
+  const toggleSpy = vi.spyOn(skillClient, "toggleMcpServerApp").mockImplementation(
+    () =>
+      new Promise((resolve) => {
+        resolveToggle = resolve;
+      }),
+  );
+
+  render(<App />);
+
+  await userEvent.click(screen.getByRole("button", { name: "MCP" }));
+  await userEvent.click(await screen.findByRole("button", { name: "展开 context7" }));
+  const claudeButton = screen.getAllByRole("button", { name: "Claude Code" })[0];
+  await userEvent.click(claudeButton);
+
+  expect(screen.getAllByRole("button", { name: "Claude Code" })[0]).toBeDisabled();
+  expect(screen.queryByText("处理中")).not.toBeInTheDocument();
+  expect(screen.getAllByText("已启用 1").length).toBeGreaterThan(0);
+  expect(screen.getAllByRole("button", { name: "Claude Code" })[0]).toHaveAttribute("aria-pressed", "false");
+
+  const finishToggle = resolveToggle;
+  if (!finishToggle) {
+    throw new Error("toggle handler was not called");
+  }
+  finishToggle(nextSnapshot);
+
+  await waitFor(() => {
+    expect(screen.getAllByRole("button", { name: "Claude Code" })[0]).toBeEnabled();
+  });
+
+  toggleSpy.mockRestore();
+});
+
 test("shows MCP tools discovery errors when refresh fails due to missing env", async () => {
   window.localStorage.clear();
   const workspace = await skillClient.fetchMcpWorkspace();

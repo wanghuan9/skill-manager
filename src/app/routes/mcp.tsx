@@ -168,6 +168,35 @@ function patchWorkspaceToolState(
   };
 }
 
+function patchWorkspaceAppState(
+  current: McpWorkspaceSnapshot | null,
+  serverId: string,
+  appId: string,
+  enabled: boolean,
+) {
+  if (!current) {
+    return current;
+  }
+
+  return {
+    ...current,
+    servers: current.servers.map((server) => {
+      if (server.id !== serverId) {
+        return server;
+      }
+
+      const apps = server.apps.map((app) => (
+        app.appId === appId ? { ...app, isEnabled: enabled } : app
+      ));
+      return {
+        ...server,
+        enabledAppCount: apps.filter((app) => app.isEnabled).length,
+        apps,
+      };
+    }),
+  };
+}
+
 function McpServerMonogram({ server }: { server: McpServerSummary }) {
   const statusClassName = server.enabledAppCount > 0 ? "is-active" : "is-inactive";
   return (
@@ -491,8 +520,10 @@ export function McpRoute() {
       return;
     }
 
+    const previousWorkspace = workspace;
     setDeleteConfirmingServerId("");
     setPendingAppKey(key);
+    commitWorkspace(patchWorkspaceAppState(previousWorkspace, server.id, appId, enabled));
     try {
       const snapshot = await toggleMcpServerApp({
         serverId: server.id,
@@ -501,6 +532,7 @@ export function McpRoute() {
       });
       commitWorkspace(snapshot);
     } catch (error) {
+      commitWorkspace(previousWorkspace);
       const message = error instanceof Error ? error.message : "更新 MCP 启用状态失败";
       notify({ tone: "error", message });
     } finally {
@@ -923,7 +955,7 @@ export function McpRoute() {
                             <span className="tool-pill__logo">
                               <McpToolLogo appId={app.appId} appName={app.appName} />
                             </span>
-                            <span className="tool-pill__name">{isUpdating ? "处理中" : app.appName}</span>
+                            <span className="tool-pill__name">{app.appName}</span>
                           </button>
                         );
                       })}

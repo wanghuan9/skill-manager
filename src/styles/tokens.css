@@ -5134,7 +5134,6 @@ code {
 
 .mcp-app-toggle:disabled {
   cursor: not-allowed;
-  opacity: 0.52;
 }
 
 .mcp-server-card__actions {
