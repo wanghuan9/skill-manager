@@ -170,6 +170,45 @@ function McpNavIcon() {
   );
 }
 
+function SidebarToggleButton(props: {
+  isSidebarCollapsed: boolean;
+  onToggle: () => void;
+  className?: string;
+}) {
+  const { className, isSidebarCollapsed, onToggle } = props;
+  const buttonClassName = `sidebar-toggle${className ? ` ${className}` : ""}`;
+
+  return (
+    <button
+      className={buttonClassName}
+      type="button"
+      aria-label={isSidebarCollapsed ? "展开侧边栏" : "收起侧边栏"}
+      title={isSidebarCollapsed ? "展开侧边栏" : "收起侧边栏"}
+      onClick={onToggle}
+    >
+      <svg viewBox="0 0 16 16" aria-hidden="true">
+        <rect
+          x="3"
+          y="3"
+          width="10"
+          height="10"
+          rx="2"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.3"
+        />
+        <path
+          d={isSidebarCollapsed ? "M6.7 3.6v8.8" : "M9.3 3.6v8.8"}
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.3"
+          strokeLinecap="round"
+        />
+      </svg>
+    </button>
+  );
+}
+
 function AppContent() {
   const { installedSkills, refreshWorkspace, toolConfigs } = useSkillWorkspace();
   const initialSkillViewMode = readSkillViewModePreference();
@@ -234,8 +273,19 @@ function AppContent() {
     <div
       className={`app-shell${isSidebarCollapsed ? " is-sidebar-collapsed" : ""}${isMacOS ? " is-macos-window" : ""}`}
     >
+      {isMacOS ? (
+        <SidebarToggleButton
+          className="sidebar-toggle--macos"
+          isSidebarCollapsed={isSidebarCollapsed}
+          onToggle={() => setIsSidebarCollapsed((current) => !current)}
+        />
+      ) : null}
       <aside className="sidebar">
-        {isMacOS ? <div className="window-topbar window-topbar--sidebar" data-tauri-drag-region aria-hidden="true" /> : null}
+        {isMacOS ? (
+          <div className="window-topbar window-topbar--sidebar">
+            <div className="window-topbar__drag-region" data-tauri-drag-region aria-hidden="true" />
+          </div>
+        ) : null}
         <div className="brand-block">
           <div className="brand-icon" aria-hidden="true">
             <svg viewBox="0 0 24 24" role="img">
@@ -259,24 +309,12 @@ function AppContent() {
             </svg>
           </div>
           <p className="brand-title">skillm</p>
-          <button
-            className="sidebar-toggle"
-            type="button"
-            aria-label={isSidebarCollapsed ? "展开侧边栏" : "收起侧边栏"}
-            title={isSidebarCollapsed ? "展开侧边栏" : "收起侧边栏"}
-            onClick={() => setIsSidebarCollapsed((current) => !current)}
-          >
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path
-                d={isSidebarCollapsed ? "m9 6 6 6-6 6" : "m15 6-6 6 6 6"}
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-            </svg>
-          </button>
+          {!isMacOS ? (
+            <SidebarToggleButton
+              isSidebarCollapsed={isSidebarCollapsed}
+              onToggle={() => setIsSidebarCollapsed((current) => !current)}
+            />
+          ) : null}
         </div>
         <div className="sidebar-divider" aria-hidden="true" />
         <nav aria-label="Primary" className="nav-list">

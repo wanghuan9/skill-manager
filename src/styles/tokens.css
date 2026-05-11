@@ -366,7 +366,20 @@ code {
 }
 
 .window-topbar--sidebar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
   margin: 0 -12px 6px;
+  padding: 0 12px;
+  position: sticky;
+  top: 0;
+  z-index: 5;
+}
+
+.window-topbar__drag-region {
+  flex: 1 1 auto;
+  align-self: stretch;
+  min-width: 0;
 }
 
 .window-topbar--main {
@@ -444,9 +457,44 @@ code {
   padding-left: 1px;
 }
 
+.sidebar-toggle--macos {
+  position: fixed;
+  top: 74px;
+  left: 0;
+  right: auto;
+  transform: translate(78px, -50%);
+  z-index: 20;
+  width: 18px;
+  height: 30px;
+  border: 1px solid rgba(206, 217, 233, 0.85);
+  border-left: none;
+  border-radius: 0 10px 10px 0;
+  background: transparent;
+  box-shadow: 0 10px 20px rgba(15, 23, 42, 0.14);
+  color: var(--muted);
+  justify-content: flex-start;
+  padding: 0 0 0 1px;
+  transition:
+    transform 0.25s cubic-bezier(0.16, 1, 0.3, 1),
+    background-color 0.2s ease,
+    color 0.2s ease,
+    box-shadow 0.2s ease;
+}
+
+.sidebar-toggle--macos:focus {
+  outline: none;
+}
+
+.sidebar-toggle--macos:focus-visible {
+  border-color: #c1d3ef;
+  color: var(--heading);
+  background: #f2f6fc;
+  box-shadow: 0 12px 24px rgba(15, 23, 42, 0.2);
+}
+
 .sidebar-toggle svg {
-  width: 12px;
-  height: 12px;
+  width: 14px;
+  height: 14px;
   display: block;
 }
 
@@ -455,6 +503,18 @@ code {
   color: var(--heading);
   background: #f2f6fc;
   box-shadow: 0 12px 24px rgba(15, 23, 42, 0.2);
+}
+
+.sidebar-toggle--macos:hover {
+  border-color: #c1d3ef;
+  color: var(--heading);
+  background: #f2f6fc;
+  box-shadow: 0 12px 24px rgba(15, 23, 42, 0.2);
+}
+
+.sidebar-toggle--macos svg {
+  width: 16px;
+  height: 16px;
 }
 
 .page-header p,
@@ -563,10 +623,29 @@ code {
   min-height: 74px;
 }
 
-.app-shell.is-sidebar-collapsed .sidebar-toggle {
+.app-shell.is-sidebar-collapsed .brand-block .sidebar-toggle {
   right: -10px;
   top: 50%;
   transform: translateY(-50%);
+}
+
+.app-shell.is-macos-window.is-sidebar-collapsed .window-topbar--sidebar {
+  height: 0;
+  flex-basis: 0;
+  margin-bottom: 0;
+  padding: 0;
+}
+
+.app-shell.is-macos-window.is-sidebar-collapsed .brand-block {
+  padding-top: 50px;
+}
+
+.app-shell.is-macos-window.is-sidebar-collapsed .sidebar-toggle--macos {
+  transform: translate(78px, -50%);
+}
+
+.app-shell.is-sidebar-collapsed .sidebar-divider {
+  display: none;
 }
 
 .app-shell.is-sidebar-collapsed .nav-item {
@@ -603,6 +682,7 @@ code {
 }
 
 .app-shell.is-macos-window .brand-block {
+  gap: 30px;
   padding-top: 6px;
 }
 
@@ -630,6 +710,16 @@ code {
   align-items: center;
   justify-content: space-between;
   gap: 24px;
+}
+
+.page-header__row--install {
+  position: relative;
+  min-height: 54px;
+}
+
+.page-header__row--install h1 {
+  position: relative;
+  z-index: 1;
 }
 
 .page-header__copy {
@@ -2285,13 +2375,20 @@ code {
 }
 
 .install-category-row {
-  align-self: flex-start;
-  gap: 6px;
-  padding: 5px;
-  border-radius: 999px;
-  border: 1px solid #cfdcf0;
-  background: linear-gradient(180deg, #f3f8ff 0%, #eaf2ff 100%);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  align-self: center;
+}
+
+.install-category-row.page-tabs.filter-tabs {
+  --page-tab-item-radius: 16px;
+  --page-tab-shell-padding: 8px;
+  gap: 8px;
+  padding: var(--page-tab-shell-padding);
+  border-radius: calc(var(--page-tab-item-radius) + var(--page-tab-shell-padding));
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  background: rgba(255, 255, 255, 0.75);
+  box-shadow: 0 20px 40px rgba(15, 23, 42, 0.18);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
 }
 
 .market-tab-row {
@@ -2311,38 +2408,39 @@ code {
   justify-content: center;
   gap: 8px;
   min-width: 0;
-  min-height: 38px;
-  padding: 0 16px;
-  border-radius: 999px;
-  border: 1px solid transparent;
+  min-height: 42px;
+  padding: 0 18px;
+  border: 0;
+  border-radius: var(--page-tab-item-radius, 16px);
   background: transparent;
-  color: #4b5563;
-  font-size: 0.9rem;
-  font-weight: 650;
+  color: #475569;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
   box-shadow: none;
   transition:
     background-color 140ms ease,
     color 140ms ease,
-    box-shadow 140ms ease;
+    box-shadow 140ms ease,
+    transform 140ms ease;
 }
 
 .install-category-tab:hover {
-  background: rgba(47, 120, 255, 0.1);
-  color: #245bd6;
+  background: rgba(15, 23, 42, 0.06);
+  color: #0f172a;
+  transform: scale(1.05);
 }
 
 .install-category-tab.is-selected {
-  background: #2f78ff;
-  border-color: rgba(37, 99, 235, 0.95);
-  color: #ffffff;
-  font-weight: 760;
-  box-shadow: 0 8px 18px rgba(47, 120, 255, 0.22);
+  background: rgba(29, 78, 216, 0.08);
+  color: #1d4ed8;
+  font-weight: 600;
+  box-shadow: none;
 }
 
 .install-category-tab.is-selected:hover {
-  background: #256beb;
-  border-color: rgba(37, 99, 235, 0.95);
-  color: #ffffff;
+  background: rgba(29, 78, 216, 0.08);
+  color: #1d4ed8;
 }
 
 .install-category-tab__icon {
@@ -2363,12 +2461,21 @@ code {
 .install-header-toolbar-slot {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
-  min-height: 52px;
+  justify-content: center;
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: max-content;
+  min-height: 0;
+  transform: translate(-50%, -50%);
 }
 
-.install-header-toolbar-slot .install-category-row {
-  align-self: auto;
+.install-header-toolbar-slot .install-category-tabs-row {
+  width: auto;
+}
+
+.market-shell > .install-category-tabs-row {
+  align-self: center;
 }
 
 .source-tab-row {
