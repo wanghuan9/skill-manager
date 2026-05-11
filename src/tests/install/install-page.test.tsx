@@ -33,7 +33,7 @@ test("renders install-source and repository install panels", async () => {
   expect(screen.getByRole("tab", { name: "市场安装" })).toBeInTheDocument();
   expect(screen.getByRole("tab", { name: "skills.sh" })).toBeInTheDocument();
   expect(screen.getByRole("tab", { name: "skillsmp" })).toBeInTheDocument();
-  expect(screen.getByText("安装后默认应用到所有已安装工具")).toBeInTheDocument();
+  expect(screen.queryByText("安装后默认应用到所有已安装工具")).not.toBeInTheDocument();
   await userEvent.click(screen.getByRole("tab", { name: "Git 安装" }));
   expect(screen.getByRole("textbox", { name: "Git 仓库地址" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "识别仓库技能" })).toBeInTheDocument();
@@ -327,7 +327,9 @@ test("installs a local skill from a typed path", async () => {
   render(<App />);
   await userEvent.click(screen.getByRole("button", { name: /安装/ }));
   await userEvent.click(screen.getByRole("tab", { name: "本地安装" }));
+  await userEvent.click(screen.getByRole("tab", { name: "手动安装" }));
 
+  expect(screen.queryByRole("dialog", { name: "手动安装本地 skill" })).not.toBeInTheDocument();
   await userEvent.type(screen.getByRole("textbox", { name: "本地 skill 路径" }), "/Users/demo/skills/local-helper");
   await userEvent.type(screen.getByRole("textbox", { name: "技能名称（可选）" }), "local-helper");
   await userEvent.click(screen.getByRole("button", { name: "安装技能" }));

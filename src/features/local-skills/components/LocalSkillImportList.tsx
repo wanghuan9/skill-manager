@@ -1,4 +1,7 @@
 import { useMemo, useState } from "react";
+import type { ReactNode } from "react";
+import { LocalInstallPanel } from "@/features/install/components/LocalInstallPanel";
+import { useNotifications } from "@/app/notifications";
 import { useSkillWorkspace } from "@/features/skills/state/skill-workspace";
 import type { LocalSkillCandidate } from "@/features/skills/state/skill-store";
 
@@ -6,6 +9,20 @@ type LocalSkillGroup = {
   name: string;
   candidates: LocalSkillCandidate[];
 };
+
+type LocalInstallTab = "scan" | "manual";
+
+const SOURCE_LABEL_ORDER = ["cursor", "claude_code", "codex", "windsurf"];
+
+const localInstallTabs: { key: LocalInstallTab; label: string }[] = [
+  { key: "scan", label: "扫描导入" },
+  { key: "manual", label: "手动安装" },
+];
+
+function sourceOrder(candidate: LocalSkillCandidate) {
+  const index = SOURCE_LABEL_ORDER.indexOf(sourceLabel(candidate));
+  return index === -1 ? SOURCE_LABEL_ORDER.length : index;
+}
 
 function buildLocalSkillGroups(candidates: LocalSkillCandidate[]) {
   const groupsByName = new Map<string, LocalSkillCandidate[]>();
@@ -18,7 +35,9 @@ function buildLocalSkillGroups(candidates: LocalSkillCandidate[]) {
   return Array.from(groupsByName.entries())
     .map(([name, groupCandidates]) => ({
       name,
-      candidates: groupCandidates.sort((left, right) => left.detectedFrom.localeCompare(right.detectedFrom)),
+      candidates: groupCandidates.sort((left, right) =>
+        sourceOrder(left) - sourceOrder(right) || left.localPath.localeCompare(right.localPath)
+      ),
     }))
     .sort((left, right) => left.name.localeCompare(right.name));
 }
@@ -43,40 +62,62 @@ function sourceLabel(candidate: LocalSkillCandidate) {
 
 export function LocalSkillImportList() {
   const { importCandidate, installedSkills, isLoading, localCandidates, refreshWorkspace } = useSkillWorkspace();
+  const { notify } = useNotifications();
   const groups = useMemo(() => buildLocalSkillGroups(localCandidates), [localCandidates]);
+  const [activeLocalTab, setActiveLocalTab] = useState<LocalInstallTab>("scan");
   const [expandedNames, setExpandedNames] = useState<Set<string>>(new Set());
-  const [showDetails, setShowDetails] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isImportingAll, setIsImportingAll] = useState(false);
+  const [importingNames, setImportingNames] = useState<Set<string>>(new Set());
   const localManagedCount = installedSkills.filter((skill) => skill.sourceType === "local").length;
   const duplicatedSkillCount = groups.filter((group) => group.candidates.length > 1).length;
+  const totalLocationCount = localCandidates.length;
+
+  if (activeLocalTab === "manual") {
+    return (
+      <LocalInstallShell activeTab={activeLocalTab} onTabChange={setActiveLocalTab}>
+        <div className="local-install-panel">
+          <div className="panel-header">
+            <h2>手动安装</h2>
+            <p>从本机目录或 .zip/.skill 文件安装一个新的 skill。</p>
+          </div>
+          <LocalInstallPanel variant="embedded" />
+        </div>
+      </LocalInstallShell>
+    );
+  }
 
   if (isLoading) {
     return (
-      <section className="panel-card market-panel local-scan-panel">
-        <div className="panel-header">
-          <h2>本地导入</h2>
-          <p>从已存在的工具目录中导入 skill。</p>
+      <LocalInstallShell activeTab={activeLocalTab} onTabChange={setActiveLocalTab}>
+        <div className="local-scan-panel">
+          <div className="panel-header">
+            <h2>扫描本地 Skills 并导入</h2>
+            <p>正在读取常见技能目录，马上给出可导入项。</p>
+          </div>
+          <section className="placeholder-card">
+            <h3>正在扫描本地技能</h3>
+            <p>系统正在汇总本机已有工具目录中的 skill。</p>
+          </section>
         </div>
-        <section className="placeholder-card">
-          <h3>正在扫描本地技能</h3>
-          <p>系统正在读取常见技能目录，马上给出可导入项。</p>
-        </section>
-      </section>
+      </LocalInstallShell>
     );
   }
 
   if (localCandidates.length === 0) {
     return (
-      <section className="panel-card market-panel local-scan-panel">
-        <div className="panel-header">
-          <h2>本地导入</h2>
-          <p>从已存在的工具目录中导入 skill。</p>
+      <LocalInstallShell activeTab={activeLocalTab} onTabChange={setActiveLocalTab}>
+        <div className="local-scan-panel">
+          <div className="panel-header">
+            <h2>扫描导入</h2>
+            <p>从已存在的工具目录中导入 skill。</p>
+          </div>
+          <div className="local-import-overview__empty">
+            <h3>没有待导入的本地技能</h3>
+            <p>当前本机已发现的 skill 都已经纳入统一管理了。</p>
+          </div>
         </div>
-        <div className="local-import-overview__empty">
-          <h3>没有待导入的本地技能</h3>
-          <p>当前本机已发现的 skill 都已经纳入统一管理了。</p>
-        </div>
-      </section>
+      </LocalInstallShell>
     );
   }
 
@@ -96,104 +137,203 @@ export function LocalSkillImportList() {
     setIsRefreshing(true);
     try {
       await refreshWorkspace();
-      setShowDetails(false);
       setExpandedNames(new Set());
     } finally {
       setIsRefreshing(false);
     }
   }
 
+  async function handleImportGroup(group: LocalSkillGroup, shouldNotify = true) {
+    const candidate = group.candidates[0];
+    if (!candidate || importingNames.has(group.name) || isImportingAll) {
+      return false;
+    }
+
+    setImportingNames((current) => new Set(current).add(group.name));
+    try {
+      await importCandidate(candidate.localPath);
+      if (shouldNotify) {
+        notify({ message: `${group.name} 已导入`, tone: "success" });
+      }
+      return true;
+    } catch (error) {
+      if (shouldNotify) {
+        notify({
+          message: error instanceof Error ? error.message : `${group.name} 导入失败，请稍后重试。`,
+          tone: "error",
+        });
+      }
+      return false;
+    } finally {
+      setImportingNames((current) => {
+        const next = new Set(current);
+        next.delete(group.name);
+        return next;
+      });
+    }
+  }
+
+  async function handleImportAll() {
+    if (groups.length === 0 || isImportingAll) {
+      return;
+    }
+
+    setIsImportingAll(true);
+    setImportingNames(new Set(groups.map((group) => group.name)));
+    let importedCount = 0;
+    let failedCount = 0;
+
+    try {
+      for (const group of groups) {
+        const candidate = group.candidates[0];
+        if (!candidate) {
+          failedCount += 1;
+          continue;
+        }
+
+        try {
+          await importCandidate(candidate.localPath);
+          importedCount += 1;
+        } catch {
+          failedCount += 1;
+        }
+      }
+
+      if (failedCount > 0) {
+        notify({ message: `已导入 ${importedCount} 个 skill，${failedCount} 个失败。`, tone: "error" });
+        return;
+      }
+
+      notify({ message: `已导入 ${importedCount} 个本地 skill`, tone: "success" });
+    } finally {
+      setIsImportingAll(false);
+      setImportingNames(new Set());
+    }
+  }
+
   return (
-    <>
-      <section className="panel-card market-panel local-scan-panel">
+    <LocalInstallShell activeTab={activeLocalTab} onTabChange={setActiveLocalTab}>
+      <div className="local-scan-panel">
         <div className="panel-header">
-          <h2>本地导入</h2>
-          <p>从已存在的工具目录中导入 skill。</p>
+          <h2>扫描导入</h2>
+          <p>从已存在的工具目录中导入 skill，列表按技能名称聚合同一技能的多个来源位置。</p>
         </div>
-        <div className="local-import-overview" aria-label="本地导入总览">
-        <div className="local-import-overview__hero">
-          <span>发现本地 skill</span>
-          <strong>{groups.length}</strong>
-        </div>
-        <div className="local-import-overview__metrics">
-          <div>
-            <span>{localCandidates.length}</span>
-            <strong>发现位置</strong>
+        <div className="local-import-summary-bar" aria-label="本地导入总览">
+          <p>
+            发现 <strong>{groups.length}</strong> 个本地 skill · <strong>{totalLocationCount}</strong> 个位置 ·{" "}
+            <strong>{duplicatedSkillCount}</strong> 个重复 · 已管理 <strong>{localManagedCount}</strong> 个
+          </p>
+          <div className="local-import-overview__actions">
+            <button
+              className="secondary-button"
+              type="button"
+              disabled={isRefreshing}
+              onClick={() => void handleRefresh()}
+            >
+              {isRefreshing ? "扫描中..." : "重新扫描"}
+            </button>
+            <button
+              className="primary-button"
+              type="button"
+              disabled={isImportingAll || groups.length === 0}
+              onClick={() => void handleImportAll()}
+            >
+              {isImportingAll ? "导入中..." : "全部导入"}
+            </button>
           </div>
-          <div>
-            <span>{duplicatedSkillCount}</span>
-            <strong>多位置重复</strong>
-          </div>
-          <div>
-            <span>{localManagedCount}</span>
-            <strong>已管理本地</strong>
-          </div>
         </div>
-        <div className="local-import-overview__actions">
-          <button
-            className="secondary-button"
-            type="button"
-            disabled={isRefreshing}
-            onClick={() => void handleRefresh()}
-          >
-            {isRefreshing ? "扫描中..." : "重新扫描"}
-          </button>
-          <button
-            className="primary-button"
-            type="button"
-            onClick={() => setShowDetails((current) => !current)}
-          >
-            {showDetails ? "收起详情" : "查看可导入"}
-          </button>
-        </div>
-        </div>
-      </section>
 
-      {showDetails ? (
-        <section className="panel-card market-panel local-scan-detail-panel">
-          <div className="panel-header">
-            <h2>可导入技能</h2>
-            <p>按 skill 名聚合本机不同工具目录中的位置。</p>
-          </div>
-          <div className="local-scan-list">
-            {groups.map((group) => (
-              <article key={group.name} className="local-scan-group">
-                <button
-                  className="local-scan-group__header"
-                  type="button"
-                  aria-expanded={expandedNames.has(group.name)}
-                  onClick={() => toggleGroup(group.name)}
-                >
-                  <span className="local-scan-group__chevron" aria-hidden="true">
-                    {expandedNames.has(group.name) ? "⌄" : "›"}
+        <div className="local-scan-list-header" aria-hidden="true">
+          <span>skill 名称</span>
+          <span>来源位置</span>
+          <span>操作</span>
+        </div>
+        <div className="local-scan-list">
+          {groups.map((group) => {
+            const isExpanded = expandedNames.has(group.name);
+            const isGroupImporting = importingNames.has(group.name);
+            const sourceSummary = group.candidates.map(sourceLabel).join(" / ");
+
+            return (
+              <article key={group.name} className="local-scan-group" aria-label={group.name}>
+                <div className="local-scan-group__row">
+                  <button
+                    className="local-scan-group__header"
+                    type="button"
+                    aria-label={`${isExpanded ? "收起" : "展开"} ${group.name}`}
+                    aria-expanded={isExpanded}
+                    onClick={() => toggleGroup(group.name)}
+                  >
+                    <span className="local-scan-group__chevron" aria-hidden="true">
+                      {isExpanded ? "⌄" : "›"}
+                    </span>
+                    <strong>{group.name}</strong>
+                  </button>
+                  <span className="local-scan-group__sources">
+                    {group.candidates.length} 个位置 · {sourceSummary}
                   </span>
-                  <strong>{group.name}</strong>
-                  <span>{group.candidates.length} 个位置</span>
-                </button>
+                  <button
+                    className="primary-button local-scan-group__import-button"
+                    type="button"
+                    aria-label={`导入 ${group.name}`}
+                    disabled={isGroupImporting || isImportingAll}
+                    onClick={() => void handleImportGroup(group)}
+                  >
+                    {isGroupImporting ? "导入中..." : "导入"}
+                  </button>
+                </div>
 
-                {expandedNames.has(group.name) ? (
+                {isExpanded ? (
                   <div className="local-scan-group__locations">
                     {group.candidates.map((candidate) => (
                       <div key={candidate.localPath} className="local-scan-location">
                         <span className="local-scan-location__source">{sourceLabel(candidate)}</span>
                         <span className="local-scan-location__path">{candidate.localPath}</span>
                         <span className="local-scan-location__hint">{candidate.sourceHint}</span>
-                        <button
-                          className="primary-button local-scan-location__button"
-                          type="button"
-                          onClick={() => void importCandidate(candidate.localPath)}
-                        >
-                          导入
-                        </button>
                       </div>
                     ))}
                   </div>
                 ) : null}
               </article>
-            ))}
-          </div>
-        </section>
-      ) : null}
-    </>
+            );
+          })}
+        </div>
+      </div>
+    </LocalInstallShell>
+  );
+}
+
+type LocalInstallShellProps = {
+  activeTab: LocalInstallTab;
+  children: ReactNode;
+  onTabChange: (tab: LocalInstallTab) => void;
+};
+
+function LocalInstallShell(props: LocalInstallShellProps) {
+  const { activeTab, children, onTabChange } = props;
+  return (
+    <section className="panel-card market-panel local-install-workspace">
+      <div className="local-install-workspace__toolbar">
+        <div className="page-tabs filter-tabs local-install-subtabs" role="tablist" aria-label="本地安装方式">
+          {localInstallTabs.map((tab) => {
+            const selected = tab.key === activeTab;
+
+            return (
+              <button
+                key={tab.key}
+                className={`filter-tab local-install-subtab${selected ? " active is-selected" : ""}`}
+                type="button"
+                role="tab"
+                aria-selected={selected}
+                onClick={() => onTabChange(tab.key)}
+              >
+                {tab.label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+      {children}
+    </section>
   );
 }

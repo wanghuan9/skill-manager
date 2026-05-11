@@ -3225,28 +3225,93 @@ code {
 
 .local-install-layout {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 16px;
-  align-items: stretch;
+  align-items: start;
+}
+
+.local-install-workspace {
+  display: grid;
+  gap: 18px;
+  align-content: start;
+  min-height: 360px;
+  max-width: none;
+  padding: 16px;
+}
+
+.local-install-workspace__toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding-top: 2px;
+}
+
+.local-install-subtabs.page-tabs.filter-tabs {
+  justify-self: center;
+  display: flex;
+  gap: 28px;
+  width: auto;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.local-install-subtab {
+  position: relative;
+  justify-content: center;
+  min-height: 34px;
+  padding: 0 2px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: #667085;
+  font-size: 0.86rem;
+  font-weight: 700;
+  box-shadow: none;
+}
+
+.local-install-subtab::after {
+  position: absolute;
+  left: 50%;
+  bottom: 0;
+  width: 0;
+  height: 3px;
+  border-radius: 999px;
+  background: #2f78ff;
+  content: "";
+  transform: translateX(-50%);
+  transition:
+    width 160ms ease,
+    background-color 160ms ease;
+}
+
+.local-install-subtab.is-selected {
+  background: transparent;
+  color: #2f78ff;
+  box-shadow: none;
+}
+
+.local-install-subtab.is-selected::after {
+  width: 28px;
+}
+
+.local-install-subtab:hover {
+  background: transparent;
+  color: #344054;
+}
+
+.local-install-subtab.is-selected:hover {
+  background: transparent;
+  color: #2f78ff;
 }
 
 .local-install-panel,
 .local-scan-panel {
   display: grid;
   align-content: start;
-  grid-template-rows: auto 1fr;
   max-width: none;
-  min-height: 360px;
-}
-
-.local-scan-panel {
-  grid-column: 1;
-  grid-row: 1;
-}
-
-.local-install-panel {
-  grid-column: 2;
-  grid-row: 1;
+  gap: 12px;
 }
 
 .local-install-panel .panel-header,
@@ -3259,20 +3324,40 @@ code {
 
 .local-install-form {
   display: grid;
+  grid-template-columns: minmax(220px, 0.85fr) minmax(320px, 1.45fr) minmax(220px, 0.85fr) auto;
+  grid-template-areas:
+    "dropzone path name actions";
   gap: 14px;
+  align-items: end;
+}
+
+.local-install-panel > .local-install-form {
+  grid-template-columns: minmax(260px, 0.8fr) minmax(0, 1.2fr);
+  grid-template-areas:
+    "dropzone path"
+    "dropzone name"
+    "dropzone actions";
+  align-items: stretch;
+}
+
+.local-install-panel > .local-install-form .repo-form__actions {
+  justify-content: flex-start;
 }
 
 .local-install-dropzone {
+  grid-area: dropzone;
   display: grid;
-  place-items: center;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-content: center;
+  align-items: center;
   gap: 8px;
-  min-height: 154px;
-  padding: 22px;
+  min-height: 74px;
+  padding: 12px 14px;
   border: 2px dashed rgba(120, 130, 145, 0.7);
   border-radius: 12px;
   background: rgba(255, 255, 255, 0.02);
   color: var(--muted);
-  text-align: center;
+  text-align: left;
   transition:
     border-color 140ms ease,
     background-color 140ms ease,
@@ -3286,21 +3371,25 @@ code {
 }
 
 .local-install-dropzone svg {
-  width: 34px;
-  height: 34px;
+  grid-row: 1 / span 2;
+  width: 24px;
+  height: 24px;
 }
 
 .local-install-dropzone strong {
   color: var(--heading);
-  font-size: 0.92rem;
+  font-size: 0.86rem;
+  line-height: 1.2;
 }
 
 .local-install-dropzone span {
   color: var(--muted);
-  font-size: 0.82rem;
+  font-size: 0.76rem;
+  line-height: 1.35;
 }
 
 .local-install-form__section {
+  grid-area: path;
   display: grid;
   gap: 8px;
 }
@@ -3341,19 +3430,51 @@ code {
   height: 19px;
 }
 
+.local-install-form .repo-form__field {
+  grid-area: name;
+}
+
+.local-install-form .repo-form__actions {
+  grid-area: actions;
+  align-self: end;
+}
+
 .local-scan-detail-panel {
-  grid-column: 1 / -1;
-  grid-row: 2;
   display: grid;
   gap: 12px;
   min-height: min(58vh, 680px);
   align-content: start;
 }
 
+.local-import-summary-bar {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: center;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--surface) 96%, #ffffff 4%);
+}
+
+.local-import-summary-bar p {
+  margin: 0;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 0.86rem;
+  line-height: 1.45;
+}
+
+.local-import-summary-bar strong {
+  color: var(--heading);
+  font-weight: 760;
+}
+
 .local-import-overview {
   display: grid;
+  grid-template-columns: minmax(180px, 0.8fr) minmax(0, 1.4fr) auto;
   gap: 14px;
-  align-content: start;
+  align-items: stretch;
 }
 
 .local-import-overview__empty {
@@ -3365,6 +3486,11 @@ code {
   border: 1px dashed var(--line-strong);
   border-radius: 12px;
   background: color-mix(in srgb, var(--surface) 96%, #ffffff 4%);
+}
+
+.local-import-overview__empty .secondary-button {
+  justify-self: start;
+  margin-top: 10px;
 }
 
 .local-import-overview__empty h3,
@@ -3429,11 +3555,26 @@ code {
   display: flex;
   gap: 10px;
   flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.local-scan-list-header {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.9fr) minmax(0, 1.6fr) 92px;
+  gap: 12px;
+  padding: 6px 18px 0;
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+
+.local-scan-list-header span:last-child {
+  text-align: right;
 }
 
 .local-scan-list {
   display: grid;
-  gap: 12px;
+  gap: 10px;
 }
 
 .local-scan-group {
@@ -3443,14 +3584,23 @@ code {
   background: color-mix(in srgb, var(--surface) 96%, #ffffff 4%);
 }
 
+.local-scan-group__row {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.9fr) minmax(0, 1.6fr) 92px;
+  gap: 12px;
+  align-items: center;
+  min-height: 56px;
+  padding: 0 12px 0 18px;
+}
+
 .local-scan-group__header {
   display: grid;
-  grid-template-columns: 22px minmax(0, 1fr) auto;
+  grid-template-columns: 22px minmax(0, 1fr);
   align-items: center;
   gap: 10px;
   width: 100%;
   min-height: 54px;
-  padding: 0 18px;
+  padding: 0;
   border: 0;
   background: transparent;
   color: var(--heading);
@@ -3461,13 +3611,22 @@ code {
 
 .local-scan-group__header:hover,
 .local-scan-group__header:focus-visible {
-  background: rgba(255, 255, 255, 0.04);
+  color: color-mix(in srgb, var(--accent) 82%, var(--heading) 18%);
   outline: none;
 }
 
 .local-scan-group__header strong {
   overflow: hidden;
   font-size: 0.94rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.local-scan-group__sources {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.82rem;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -3489,7 +3648,7 @@ code {
 
 .local-scan-location {
   display: grid;
-  grid-template-columns: 84px minmax(0, 1fr) 96px auto;
+  grid-template-columns: 84px minmax(0, 1fr) 96px;
   gap: 12px;
   align-items: center;
   min-height: 52px;
@@ -3519,6 +3678,12 @@ code {
   min-width: 58px;
   min-height: 32px;
   padding: 0 13px;
+}
+
+.local-scan-group__import-button {
+  min-width: 72px;
+  min-height: 32px;
+  padding: 0 14px;
 }
 
 @keyframes spin {
@@ -5543,6 +5708,15 @@ code {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .local-install-form {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      "dropzone"
+      "path"
+      "name"
+      "actions";
+  }
+
   .page-topbar {
     align-items: flex-start;
     flex-direction: column;
@@ -5623,8 +5797,43 @@ code {
   }
 
   .local-install-layout,
-  .local-import-overview__metrics {
+  .local-import-overview,
+  .local-import-overview__metrics,
+  .local-scan-group__row,
+  .local-scan-list-header {
     grid-template-columns: 1fr;
+  }
+
+  .local-install-subtabs.page-tabs.filter-tabs {
+    width: auto;
+  }
+
+  .local-install-subtab {
+    min-width: 0;
+  }
+
+  .local-install-panel > .local-install-form,
+  .local-install-form {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      "dropzone"
+      "path"
+      "name"
+      "actions";
+    align-items: stretch;
+  }
+
+  .local-import-summary-bar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .local-import-overview__actions {
+    justify-content: flex-start;
+  }
+
+  .local-scan-list-header {
+    display: none;
   }
 
   .local-install-panel,
@@ -5708,7 +5917,7 @@ code {
   }
 
   .local-install-form__icon-button,
-  .local-scan-location__button {
+  .local-scan-group__import-button {
     width: 100%;
   }
 

@@ -3,6 +3,11 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { useNotifications } from "@/app/notifications";
 import { useSkillWorkspace } from "@/features/skills/state/skill-workspace";
 
+type LocalInstallPanelProps = {
+  variant?: "panel" | "embedded";
+  onInstalled?: () => void;
+};
+
 type FileWithPath = File & {
   path?: string;
 };
@@ -19,7 +24,8 @@ function pathFromDroppedFile(file: FileWithPath | undefined) {
   return file?.path ?? "";
 }
 
-export function LocalInstallPanel() {
+export function LocalInstallPanel(props: LocalInstallPanelProps) {
+  const { variant = "panel", onInstalled } = props;
   const { installFromLocalPath } = useSkillWorkspace();
   const { notify } = useNotifications();
   const [localPath, setLocalPath] = useState("");
@@ -78,6 +84,7 @@ export function LocalInstallPanel() {
       notify({ message: "本地技能已安装", tone: "success" });
       setLocalPath("");
       setSkillName("");
+      onInstalled?.();
     } catch (error) {
       notify({
         message: error instanceof Error ? error.message : "安装本地技能失败，请稍后重试。",
@@ -88,12 +95,7 @@ export function LocalInstallPanel() {
     }
   }
 
-  return (
-    <section className="panel-card market-panel local-install-panel">
-      <div className="panel-header">
-        <h2>本地安装</h2>
-        <p>从本机目录或 .zip/.skill 文件安装一个新的 skill。</p>
-      </div>
+  const form = (
       <form className="local-install-form" onSubmit={(event) => void handleSubmit(event)}>
         <div
           className={`local-install-dropzone${isDragging ? " is-dragging" : ""}`}
@@ -188,6 +190,19 @@ export function LocalInstallPanel() {
           </button>
         </div>
       </form>
+  );
+
+  if (variant === "embedded") {
+    return form;
+  }
+
+  return (
+    <section className="panel-card market-panel local-install-panel">
+      <div className="panel-header">
+        <h2>本地安装</h2>
+        <p>从本机目录或 .zip/.skill 文件安装一个新的 skill。</p>
+      </div>
+      {form}
     </section>
   );
 }
