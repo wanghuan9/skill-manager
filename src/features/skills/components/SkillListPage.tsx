@@ -158,11 +158,11 @@ export function SkillListToolbar(props: SkillToolbarProps) {
 
   return (
     <div className="skills-header-bar__tools">
-      <label className="search-field search-field--header">
+      <label className="search-field search-field--header skill-search-field">
         <span className="sr-only">搜索技能</span>
         <input
           type="search"
-          placeholder="搜索技能名称、来源..."
+          placeholder="搜索技能名称、描述、来源..."
           value={query}
           onChange={(event) => onQueryChange(event.target.value)}
         />

@@ -140,6 +140,21 @@ test("opens GitHub source url from MCP details", async () => {
   );
 });
 
+test("filters MCP servers by description", async () => {
+  window.localStorage.clear();
+  render(<App />);
+
+  await userEvent.click(screen.getByRole("button", { name: "MCP" }));
+  await screen.findByText("context7");
+  await userEvent.type(
+    screen.getByRole("searchbox", { name: "搜索 MCP" }),
+    "issue tracking",
+  );
+
+  expect(screen.getByText("linear")).toBeInTheDocument();
+  expect(screen.queryByText("context7")).not.toBeInTheDocument();
+});
+
 test("tool toggles stay visually stable while updating", async () => {
   window.localStorage.clear();
   const initialSnapshot = await skillClient.fetchMcpWorkspace();

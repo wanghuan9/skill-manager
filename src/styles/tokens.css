@@ -1051,6 +1051,11 @@ code {
   box-sizing: border-box;
 }
 
+.skill-search-field {
+  flex: 0 0 300px;
+  width: 300px;
+}
+
 .search-field--header input {
   width: 100%;
   height: 100%;

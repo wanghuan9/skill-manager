@@ -501,7 +501,14 @@ export function McpRoute() {
     }
 
     return servers.filter((server) => {
-      const searchableText = `${server.id} ${server.name} ${server.commandLabel}`.toLowerCase();
+      const serverDescription = formatMcpDescription(server);
+      const searchableText = [
+        server.id,
+        server.name,
+        server.commandLabel,
+        serverDescription,
+        server.sourceUrl,
+      ].join(" ").toLowerCase();
       return searchableText.includes(normalizedQuery);
     });
   }, [deferredQuery, workspace?.servers]);
@@ -776,7 +783,7 @@ export function McpRoute() {
         <span className="sr-only">搜索 MCP</span>
         <input
           type="search"
-          placeholder="搜索 MCP 名称、命令或地址..."
+          placeholder="搜索 MCP 名称、描述、命令或地址..."
           value={query}
           onChange={(event) => setQuery(event.target.value)}
         />

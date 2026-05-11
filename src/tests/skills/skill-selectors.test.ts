@@ -74,4 +74,22 @@ describe("filterSkills", () => {
       "enabled-clean-skill",
     ]);
   });
+
+  it("matches query against skill descriptions", () => {
+    const skills = filterSkills(
+      [
+        createSkill({
+          name: "diagram-helper",
+          description: "Builds editable architecture diagrams.",
+        }),
+        createSkill({
+          name: "release-helper",
+          description: "Prepares release notes.",
+        }),
+      ],
+      { query: "architecture", status: "all" },
+    );
+
+    expect(skills.map((skill) => skill.name)).toEqual(["diagram-helper"]);
+  });
 });

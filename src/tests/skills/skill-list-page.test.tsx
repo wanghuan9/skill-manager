@@ -13,7 +13,7 @@ test("renders installed skill page header and search input", () => {
   expect(screen.getByRole("heading", { name: "Skills", level: 1 })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "刷新" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "全部更新 (1)" })).toBeInTheDocument();
-  expect(screen.getByPlaceholderText("搜索技能名称、来源...")).toBeInTheDocument();
+  expect(screen.getByPlaceholderText("搜索技能名称、描述、来源...")).toBeInTheDocument();
 });
 
 test("uses grouped view but keeps groups collapsed by default when installed skill count is below threshold", () => {
