@@ -14,6 +14,7 @@ test("renders installed skill page header and search input", () => {
   expect(screen.getByRole("button", { name: "刷新" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "全部更新 (1)" })).toBeInTheDocument();
   expect(screen.getByPlaceholderText("搜索技能名称、描述、来源...")).toBeInTheDocument();
+  expect(screen.getByLabelText("按状态筛选技能")).toBeInTheDocument();
 });
 
 test("uses grouped view but keeps groups collapsed by default when installed skill count is below threshold", () => {
@@ -34,6 +35,17 @@ test("shows the grouped skill count beside the group title", () => {
   const count = within(teamGroupHeader).getByText("2 个技能");
 
   expect(count.closest(".skill-group-section__name-row")).toBeTruthy();
+});
+
+test("filters grouped skills by selected status", async () => {
+  const user = userEvent.setup();
+
+  render(<App />);
+
+  await user.selectOptions(screen.getByLabelText("按状态筛选技能"), "update-available");
+
+  expect(screen.getByRole("button", { name: "展开来源分组 best-skills" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "展开来源分组 team-skills" })).not.toBeInTheDocument();
 });
 
 test("remembers expanded groups across app reopen", async () => {

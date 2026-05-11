@@ -238,13 +238,14 @@ function patchWorkspaceToolState(
 function patchWorkspaceAppState(
   current: McpWorkspaceSnapshot | null,
   serverId: string,
-  appId: string,
+  appIds: string[],
   enabled: boolean,
 ) {
-  if (!current) {
+  if (!current || appIds.length === 0) {
     return current;
   }
 
+  const targetAppIds = new Set(appIds);
   return {
     ...current,
     servers: current.servers.map((server) => {
@@ -253,7 +254,7 @@ function patchWorkspaceAppState(
       }
 
       const apps = server.apps.map((app) => (
-        app.appId === appId ? { ...app, isEnabled: enabled } : app
+        targetAppIds.has(app.appId) ? { ...app, isEnabled: enabled } : app
       ));
       return {
         ...server,
@@ -597,7 +598,7 @@ export function McpRoute() {
     const previousWorkspace = workspace;
     setDeleteConfirmingServerId("");
     setPendingAppKey(key);
-    commitWorkspace(patchWorkspaceAppState(previousWorkspace, server.id, appId, enabled));
+    commitWorkspace(patchWorkspaceAppState(previousWorkspace, server.id, [appId], enabled));
     try {
       const snapshot = await toggleMcpServerApp({
         serverId: server.id,
@@ -610,6 +611,41 @@ export function McpRoute() {
       const message = error instanceof Error
         ? error.message
         : String(error || "更新 MCP 启用状态失败");
+      notify({ tone: "error", message });
+    } finally {
+      setPendingAppKey("");
+    }
+  }
+
+  async function handleToggleAllApps(server: McpServerSummary, apps: McpAppStatus[], enabled: boolean) {
+    if (pendingAppKey || pendingToolKey) {
+      return;
+    }
+
+    const targetApps = apps.filter((app) => app.isEnabled !== enabled);
+    if (targetApps.length === 0) {
+      return;
+    }
+
+    const targetAppIds = targetApps.map((app) => app.appId);
+    const previousWorkspace = workspace;
+    setDeleteConfirmingServerId("");
+    setPendingAppKey(`${server.id}:apps:${enabled ? "enable" : "disable"}`);
+    commitWorkspace(patchWorkspaceAppState(previousWorkspace, server.id, targetAppIds, enabled));
+    await waitForNextPaint();
+    try {
+      let snapshot = workspace;
+      for (const app of targetApps) {
+        snapshot = await toggleMcpServerApp({
+          serverId: server.id,
+          appId: app.appId,
+          enabled,
+        });
+      }
+      commitWorkspace(patchWorkspaceAppState(snapshot, server.id, targetAppIds, enabled));
+    } catch (error) {
+      commitWorkspace(previousWorkspace);
+      const message = error instanceof Error ? error.message : "批量更新 MCP 启用状态失败";
       notify({ tone: "error", message });
     } finally {
       setPendingAppKey("");
@@ -672,7 +708,14 @@ export function McpRoute() {
           enabled,
         });
       }
-      commitWorkspace(snapshot);
+      commitWorkspace(
+        patchWorkspaceToolState(
+          snapshot,
+          server.id,
+          targetTools.map((tool) => tool.name),
+          enabled,
+        ),
+      );
     } catch (error) {
       commitWorkspace(previousWorkspace);
       const message = error instanceof Error ? error.message : "批量更新 MCP tools 启用状态失败";
@@ -835,6 +878,12 @@ export function McpRoute() {
           const isToolSectionCollapsed = collapsedToolSectionIds[server.id] ?? false;
           const visibleApps = server.apps.filter((app) => installedAppIdSet.has(app.appId));
           const enabledVisibleAppCount = visibleApps.filter((app) => app.isEnabled).length;
+          const disabledVisibleAppCount = visibleApps.length - enabledVisibleAppCount;
+          const appBulkAction = pendingAppKey === `${server.id}:apps:enable`
+            ? "enable"
+            : pendingAppKey === `${server.id}:apps:disable`
+              ? "disable"
+              : null;
           const enabledToolCount = server.tools.filter((tool) => tool.isEnabled).length;
           const totalToolCount = server.tools.length;
           const disabledToolCount = totalToolCount - enabledToolCount;
@@ -1022,6 +1071,28 @@ export function McpRoute() {
                   <section>
                     <div className="skill-card__section-header">
                       <h4>启用到工具</h4>
+                      {visibleApps.length > 0 ? (
+                        <div className="tool-sync-panel__actions">
+                          <button
+                            className="secondary-button secondary-button--compact"
+                            type="button"
+                            onClick={() => void handleToggleAllApps(server, visibleApps, true)}
+                            disabled={Boolean(pendingAppKey) || Boolean(pendingToolKey) || disabledVisibleAppCount === 0}
+                            aria-label={`全部开启 ${server.name} 启用到工具`}
+                          >
+                            {appBulkAction === "enable" ? "开启中..." : "全部开启"}
+                          </button>
+                          <button
+                            className="secondary-button secondary-button--compact"
+                            type="button"
+                            onClick={() => void handleToggleAllApps(server, visibleApps, false)}
+                            disabled={Boolean(pendingAppKey) || Boolean(pendingToolKey) || enabledVisibleAppCount === 0}
+                            aria-label={`全部关闭 ${server.name} 启用到工具`}
+                          >
+                            {appBulkAction === "disable" ? "关闭中..." : "全部关闭"}
+                          </button>
+                        </div>
+                      ) : null}
                     </div>
                     <div className="mcp-server-card__apps">
                       {visibleApps.map((app) => {
@@ -1034,7 +1105,7 @@ export function McpRoute() {
                             className={`tool-pill mcp-app-toggle${app.isEnabled ? " is-enabled" : ""}`}
                             type="button"
                             onClick={() => void handleToggle(server, app.appId, !app.isEnabled)}
-                            disabled={isUpdating}
+                            disabled={isUpdating || appBulkAction !== null}
                             aria-pressed={app.isEnabled}
                             data-tooltip={appTooltipLabel}
                           >

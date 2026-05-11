@@ -10,14 +10,23 @@ import {
   writeSkillGroupCollapsedState,
 } from "@/features/skills/utils/skill-view-preference";
 import { getMonogramLabel } from "@/features/skills/utils/monogram";
-import type { SkillSummary } from "@/features/skills/state/skill-store";
+import type { SkillStatusFilter, SkillSummary } from "@/features/skills/state/skill-store";
 
 type SkillToolbarProps = {
   query: string;
+  statusFilter: SkillStatusFilter;
   onQueryChange: (value: string) => void;
+  onStatusFilterChange: (value: SkillStatusFilter) => void;
   showGroupView: boolean;
   onShowGroupViewChange: (value: boolean) => void;
 };
+
+const skillStatusFilterOptions: Array<{ value: SkillStatusFilter; label: string }> = [
+  { value: "all", label: "全部" },
+  { value: "update-available", label: "可更新" },
+  { value: "pending-push", label: "待推送" },
+  { value: "diverged", label: "冲突" },
+];
 
 function GridIcon() {
   return (
@@ -52,6 +61,14 @@ function UpdateAllIcon({ isSpinning = false }: { isSpinning?: boolean }) {
     <svg className={isSpinning ? "skills-toolbar-button__svg is-spinning" : "skills-toolbar-button__svg"} viewBox="0 0 20 20" fill="none" aria-hidden="true">
       <path d="M15.2 6.6A6.25 6.25 0 1 0 16 10" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
       <path d="M15.3 4.2v2.8h-2.8" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function FilterIcon() {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+      <path d="M4 5.5h12l-4.7 5.1v3.9l-2.6 1v-4.9L4 5.5Z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
     </svg>
   );
 }
@@ -112,10 +129,20 @@ function SkillGroupMonogram({ label }: { label: string }) {
 }
 
 export function SkillListToolbar(props: SkillToolbarProps) {
-  const { query, onQueryChange, showGroupView, onShowGroupViewChange } = props;
+  const { query, statusFilter, onQueryChange, onStatusFilterChange, showGroupView, onShowGroupViewChange } = props;
   const { installedSkills, isLoading, refreshWorkspace, updateAllSkills } = useSkillWorkspace();
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isUpdatingAll, setIsUpdatingAll] = useState(false);
+  const statusFilterCounts = useMemo(
+    () => ({
+      all: installedSkills.length,
+      clean: installedSkills.filter((skill) => skill.collabStatus === "clean").length,
+      "update-available": installedSkills.filter((skill) => skill.collabStatus === "update-available").length,
+      "pending-push": installedSkills.filter((skill) => skill.collabStatus === "pending-push").length,
+      diverged: installedSkills.filter((skill) => skill.collabStatus === "diverged").length,
+    }),
+    [installedSkills],
+  );
   const updatableSkillCount = useMemo(
     () => installedSkills.filter((skill) => skill.collabStatus === "update-available").length,
     [installedSkills],
@@ -178,6 +205,23 @@ export function SkillListToolbar(props: SkillToolbarProps) {
         </span>
         <span>{showGroupView ? "分组" : "平铺"}</span>
       </button>
+      <label className="skill-status-filter">
+        <span className="sr-only">按状态筛选技能</span>
+        <span className="skill-status-filter__icon" aria-hidden="true">
+          <FilterIcon />
+        </span>
+        <select
+          value={statusFilter}
+          onChange={(event) => onStatusFilterChange(event.target.value as SkillStatusFilter)}
+          aria-label="按状态筛选技能"
+        >
+          {skillStatusFilterOptions.map((option) => (
+            <option key={option.value} value={option.value}>
+              {`${option.label} (${statusFilterCounts[option.value]})`}
+            </option>
+          ))}
+        </select>
+      </label>
       <button
         className={`secondary-button secondary-button--compact skills-toolbar-button skills-toolbar-button--refresh${isRefreshing ? " is-loading" : ""}`}
         type="button"
@@ -206,17 +250,18 @@ export function SkillListToolbar(props: SkillToolbarProps) {
 
 type SkillListPageProps = {
   query: string;
+  statusFilter: SkillStatusFilter;
   showGroupView: boolean;
 };
 
 export function SkillListPage(props: SkillListPageProps) {
-  const { query, showGroupView } = props;
+  const { query, statusFilter, showGroupView } = props;
   const { installedSkills, isLoading } = useSkillWorkspace();
   const deferredQuery = useDeferredValue(query);
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>(readSkillGroupCollapsedState);
   const skills = useMemo(
-    () => filterSkills(installedSkills, { query: deferredQuery, status: "all" }),
-    [deferredQuery, installedSkills],
+    () => filterSkills(installedSkills, { query: deferredQuery, status: statusFilter }),
+    [deferredQuery, installedSkills, statusFilter],
   );
   const groupedSkills = useMemo(() => groupSkillsBySource(skills), [skills]);
 

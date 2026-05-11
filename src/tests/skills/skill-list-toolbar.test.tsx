@@ -35,7 +35,9 @@ test("shows update-all loading state before running the update task", async () =
   render(
     <SkillListToolbar
       query=""
+      statusFilter="all"
       onQueryChange={vi.fn()}
+      onStatusFilterChange={vi.fn()}
       showGroupView
       onShowGroupViewChange={vi.fn()}
     />,
@@ -53,4 +55,35 @@ test("shows update-all loading state before running the update task", async () =
   });
 
   expect(updateAllSkills).toHaveBeenCalledOnce();
+});
+
+test("notifies status filter changes", () => {
+  const onStatusFilterChange = vi.fn();
+
+  mockedUseSkillWorkspace.mockReturnValue({
+    installedSkills: installedSkillFixtures,
+    isLoading: false,
+    refreshWorkspace: vi.fn(),
+    updateAllSkills: vi.fn(),
+  } as unknown as ReturnType<typeof useSkillWorkspace>);
+
+  render(
+    <SkillListToolbar
+      query=""
+      statusFilter="all"
+      onQueryChange={vi.fn()}
+      onStatusFilterChange={onStatusFilterChange}
+      showGroupView
+      onShowGroupViewChange={vi.fn()}
+    />,
+  );
+
+  fireEvent.change(screen.getByLabelText("按状态筛选技能"), {
+    target: { value: "update-available" },
+  });
+
+  expect(screen.getByRole("option", { name: "全部 (4)" })).toBeInTheDocument();
+  expect(screen.getByRole("option", { name: "可更新 (1)" })).toBeInTheDocument();
+  expect(screen.queryByRole("option", { name: "已同步 (1)" })).not.toBeInTheDocument();
+  expect(onStatusFilterChange).toHaveBeenCalledWith("update-available");
 });

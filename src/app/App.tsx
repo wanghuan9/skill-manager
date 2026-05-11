@@ -9,6 +9,7 @@ import { NotificationProvider } from "@/app/notifications";
 import { waitForNextPaint } from "@/app/utils/wait-for-next-paint";
 import { SkillWorkspaceProvider, useSkillWorkspace } from "@/features/skills/state/skill-workspace";
 import { SkillListToolbar } from "@/features/skills/components/SkillListPage";
+import type { SkillStatusFilter } from "@/features/skills/state/skill-store";
 import {
   readSkillViewModePreference,
   resolveSkillViewModePreference,
@@ -117,6 +118,7 @@ function NavRouteIcon(props: { route: RouteKey }) {
 function renderRoute(
   route: RouteKey,
   skillQuery: string,
+  skillStatusFilter: SkillStatusFilter,
   showGroupView: boolean,
   activeInstallTab: InstallTab,
   onInstallTabChange: (tab: InstallTab) => void,
@@ -139,7 +141,7 @@ function renderRoute(
     return <McpRoute />;
   }
 
-  return <SkillsRoute query={skillQuery} showGroupView={showGroupView} />;
+  return <SkillsRoute query={skillQuery} statusFilter={skillStatusFilter} showGroupView={showGroupView} />;
 }
 
 function McpNavIcon() {
@@ -212,6 +214,7 @@ function AppContent() {
   const [activeRoute, setActiveRoute] = useState<RouteKey>("skills");
   const [activeSkillsSection, setActiveSkillsSection] = useState<SkillsSectionKey>("skills");
   const [skillQuery, setSkillQuery] = useState("");
+  const [skillStatusFilter, setSkillStatusFilter] = useState<SkillStatusFilter>("all");
   const [showGroupView, setShowGroupView] = useState(
     () => resolveSkillViewModePreference(initialSkillViewMode, installedSkills.length) === "grouped",
   );
@@ -309,7 +312,7 @@ function AppContent() {
           className="sidebar-toggle--macos"
           isSidebarCollapsed={isSidebarCollapsed}
           onToggle={() => setIsSidebarCollapsed((current) => !current)}
-          style={sidebarHandleTop == null ? undefined : { top: sidebarHandleTop + "px" }}
+          style={sidebarHandleTop == null ? undefined : { top: `${sidebarHandleTop}px` }}
         />
       ) : null}
       <aside className="sidebar">
@@ -404,7 +407,9 @@ function AppContent() {
                 {activeSkillsSection === "skills" ? (
                   <SkillListToolbar
                     query={skillQuery}
+                    statusFilter={skillStatusFilter}
                     onQueryChange={setSkillQuery}
+                    onStatusFilterChange={setSkillStatusFilter}
                     showGroupView={showGroupView}
                     onShowGroupViewChange={handleShowGroupViewChange}
                   />
@@ -478,7 +483,15 @@ function AppContent() {
         </header>
         <div className="page-header-divider" aria-hidden="true" />
         <section className="page-content">
-          {renderRoute(activeRoute, skillQuery, showGroupView, activeInstallTab, setActiveInstallTab, activeSkillsSection)}
+          {renderRoute(
+            activeRoute,
+            skillQuery,
+            skillStatusFilter,
+            showGroupView,
+            activeInstallTab,
+            setActiveInstallTab,
+            activeSkillsSection,
+          )}
         </section>
       </main>
     </div>

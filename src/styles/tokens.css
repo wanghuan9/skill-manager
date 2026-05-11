@@ -1038,11 +1038,12 @@ code {
 }
 
 .search-field--header {
-  flex: 0 0 300px;
+  flex: 0 1 300px;
   display: flex;
   align-items: center;
   height: 36px;
   min-height: 36px;
+  min-width: 220px;
   border: 1px solid var(--line);
   border-radius: 14px;
   padding: 0 12px;
@@ -1075,6 +1076,63 @@ code {
 
 .search-field--header input:focus {
   outline: 0;
+}
+
+.skill-status-filter {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: 0 0 92px;
+  height: 36px;
+  min-height: 36px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--surface-strong);
+  color: #374151;
+  overflow: hidden;
+}
+
+.skill-status-filter__icon {
+  position: absolute;
+  left: 8px;
+  top: 50%;
+  display: inline-flex;
+  width: 14px;
+  height: 14px;
+  color: inherit;
+  pointer-events: none;
+  transform: translateY(-50%);
+}
+
+.skill-status-filter__icon svg {
+  width: 14px;
+  height: 14px;
+}
+
+.skill-status-filter select {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  border-radius: 0;
+  padding: 0 9px 0 26px;
+  background: transparent;
+  color: inherit;
+  font-size: 0.76rem;
+  line-height: 1;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+  outline: 0;
+}
+
+.skill-status-filter:focus-within {
+  border-color: #c6d6f5;
+  background: #f8fafe;
+}
+
+.skill-status-filter:hover {
+  border-color: #c6d6f5;
+  background: #f8fafe;
 }
 
 .toolbar {
@@ -2173,6 +2231,20 @@ code {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+.tool-sync-panel__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.tool-sync-panel__actions .secondary-button--compact {
+  min-height: 30px;
+  padding: 0 10px;
+  font-size: 0.76rem;
+  font-weight: 500;
 }
 
 .tool-pill {
@@ -5623,6 +5695,11 @@ code {
 }
 
 @media (max-width: 1180px) {
+  .skill-search-field {
+    flex: 0 1 300px;
+    width: auto;
+  }
+
   .mcp-server-card {
     grid-template-columns: 1fr;
   }
@@ -5645,6 +5722,30 @@ code {
 }
 
 @media (max-width: 760px) {
+  .page-header__row--install {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .page-header__row--install .install-header-toolbar-slot {
+    position: static;
+    width: 100%;
+    transform: none;
+  }
+
+  .install-category-tabs-row {
+    width: 100%;
+  }
+
+  .install-category-row.page-tabs.filter-tabs {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .install-category-tab {
+    flex: 1 1 0;
+  }
+
   .tool-manage-dialog__toolbar {
     flex-wrap: wrap;
   }

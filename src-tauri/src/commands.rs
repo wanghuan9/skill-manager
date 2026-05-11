@@ -18,11 +18,11 @@ use crate::git_state::{
 };
 use crate::library::{
     clone_repo_for_discovery, clone_repo_for_discovery_with_sparse_paths, clone_repo_skill,
-    create_skill_symlink,
-    ensure_repo_skill_with_sparse_paths, get_tool_skills_path, install_market_skill_from_source,
-    parse_market_source_url, reconcile_tool_skill_symlinks, remove_reserved_workspace_entries,
-    remove_reserved_workspace_symlinks_from_all_tools, remove_skill_symlink,
-    remove_skill_symlinks_from_all_tools, sanitize_storage_name, skill_directory,
+    create_skill_symlink, ensure_repo_skill_with_sparse_paths, get_tool_skills_path,
+    install_market_skill_from_source, parse_market_source_url, reconcile_tool_skill_symlinks,
+    remove_reserved_workspace_entries, remove_reserved_workspace_symlinks_from_all_tools,
+    remove_skill_symlink, remove_skill_symlinks_from_all_tools, sanitize_storage_name,
+    skill_directory,
 };
 use crate::models::{
     AppSettings, GitAccountSummary, GitChangeFile, LocalSkillCandidate, MarketplaceSkill,
@@ -1933,7 +1933,9 @@ fn build_tree_source_url(
         "gitlab" => format!(
             "{normalized_repository_url}/-/tree/{branch_segment}/{normalized_relative_path}"
         ),
-        _ => format!("{normalized_repository_url}/tree/{branch_segment}/{normalized_relative_path}"),
+        _ => {
+            format!("{normalized_repository_url}/tree/{branch_segment}/{normalized_relative_path}")
+        }
     }
 }
 
@@ -1944,9 +1946,11 @@ fn git_repo_root(skill_path: &str) -> Option<PathBuf> {
 }
 
 fn origin_default_branch_name(skill_path: &str) -> Option<String> {
-    let symbolic_ref =
-        run_git_command(skill_path, &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"])
-            .ok()?;
+    let symbolic_ref = run_git_command(
+        skill_path,
+        &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
+    )
+    .ok()?;
     symbolic_ref
         .trim()
         .strip_prefix(REMOTE_PREFIX)
@@ -1973,9 +1977,10 @@ fn normalize_installed_skill_source_url(skill: &SkillSummary) -> SkillSummary {
         return skill.clone();
     }
 
-    let Some(repository_url) = run_git_command(&skill.local_path, &["config", "--get", "remote.origin.url"])
-        .ok()
-        .and_then(|remote_url| normalize_git_remote_repository_url(&remote_url))
+    let Some(repository_url) =
+        run_git_command(&skill.local_path, &["config", "--get", "remote.origin.url"])
+            .ok()
+            .and_then(|remote_url| normalize_git_remote_repository_url(&remote_url))
     else {
         return skill.clone();
     };
@@ -1985,7 +1990,8 @@ fn normalize_installed_skill_source_url(skill: &SkillSummary) -> SkillSummary {
     };
     let skill_path =
         fs::canonicalize(&skill.local_path).unwrap_or_else(|_| PathBuf::from(&skill.local_path));
-    let repo_root = fs::canonicalize(repo_root).unwrap_or_else(|_| PathBuf::from(&skill.local_path));
+    let repo_root =
+        fs::canonicalize(repo_root).unwrap_or_else(|_| PathBuf::from(&skill.local_path));
     let relative_path = skill_path
         .strip_prefix(&repo_root)
         .ok()
@@ -2112,7 +2118,8 @@ fn normalize_known_tool_names(tool_names: &[String]) -> Vec<String> {
 
     for tool_name in tool_names {
         let normalized_tool_name = tool_name.trim();
-        if normalized_tool_name.is_empty() || !seen_tool_names.insert(normalized_tool_name.to_string())
+        if normalized_tool_name.is_empty()
+            || !seen_tool_names.insert(normalized_tool_name.to_string())
         {
             continue;
         }
@@ -2170,7 +2177,10 @@ fn align_installed_skills_with_known_tools(
     skill_names: &[String],
     tool_names: &[String],
 ) {
-    let target_skill_names = skill_names.iter().map(|name| name.trim()).collect::<BTreeSet<_>>();
+    let target_skill_names = skill_names
+        .iter()
+        .map(|name| name.trim())
+        .collect::<BTreeSet<_>>();
     if target_skill_names.is_empty() {
         return;
     }
@@ -4478,14 +4488,14 @@ fn set_skill_all_tool_statuses_blocking(
         } else {
             remove_skill_symlink(&tool_skills_path, skill_name)?;
             let skill_path = PathBuf::from(&updated_skill.local_path);
-            if let Some(legacy_skill_dir_name) = skill_path.file_name().and_then(|name| name.to_str())
+            if let Some(legacy_skill_dir_name) =
+                skill_path.file_name().and_then(|name| name.to_str())
             {
                 if legacy_skill_dir_name != skill_name {
                     remove_skill_symlink(&tool_skills_path, legacy_skill_dir_name)?;
                 }
             }
         }
-
     }
 
     save_installed_skills(&installed_skills)?;
@@ -4511,8 +4521,8 @@ mod tests {
     use super::{
         build_repo_skill_source_url, collect_local_skill_dirs, collect_skills_manager_cached_items,
         insert_trusted_project_path, intellij_trusted_location_for_project,
-        normalize_installed_skill_source_url, open_target_path_for_skill,
-        parse_repo_install_spec, parse_skills_sh_homepage_items, scan_repo_skill_candidates,
+        normalize_installed_skill_source_url, open_target_path_for_skill, parse_repo_install_spec,
+        parse_skills_sh_homepage_items, scan_repo_skill_candidates,
         should_use_skills_sh_homepage_page,
     };
     use crate::models::SkillSummary;
@@ -4835,7 +4845,10 @@ mod tests {
         fs::write(skill_path.join("SKILL.md"), "# planning-with-files-zh")
             .expect("write skill file");
 
-        run_git_test(&temp_dir, &["init", "--quiet", repo_path.to_str().expect("repo path")]);
+        run_git_test(
+            &temp_dir,
+            &["init", "--quiet", repo_path.to_str().expect("repo path")],
+        );
         run_git_test(&repo_path, &["checkout", "-b", "master"]);
         run_git_test(
             &repo_path,

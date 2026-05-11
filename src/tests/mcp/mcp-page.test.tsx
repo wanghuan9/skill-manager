@@ -257,6 +257,41 @@ test("app toggles update immediately without showing processing text", async () 
   toggleSpy.mockRestore();
 });
 
+test("bulk toggles MCP target apps from server details", async () => {
+  window.localStorage.clear();
+  render(<App />);
+
+  await userEvent.click(screen.getByRole("button", { name: "MCP" }));
+  await userEvent.click(await screen.findByRole("button", { name: "展开 context7" }));
+
+  const enableAllAppsButton = screen.getByRole("button", { name: "全部开启 context7 启用到工具" });
+  const disableAllAppsButton = screen.getByRole("button", { name: "全部关闭 context7 启用到工具" });
+  expect(enableAllAppsButton).toHaveTextContent("全部开启");
+  expect(disableAllAppsButton).toHaveTextContent("全部关闭");
+  expect(enableAllAppsButton).toHaveClass("secondary-button--compact");
+  expect(enableAllAppsButton.closest(".tool-sync-panel__actions")).not.toBeNull();
+
+  await userEvent.click(enableAllAppsButton);
+
+  await waitFor(() => {
+    const openCodeButton = screen.getByRole("button", { name: "OpenCode" });
+    expect(openCodeButton).toHaveAttribute("aria-pressed", "true");
+    expect(openCodeButton).toBeEnabled();
+  });
+  expect(screen.getByText("已启用 8")).toBeInTheDocument();
+  expect(enableAllAppsButton).toBeDisabled();
+
+  await userEvent.click(disableAllAppsButton);
+
+  await waitFor(() => {
+    const claudeCodeButton = screen.getAllByRole("button", { name: "Claude Code" })[0];
+    expect(claudeCodeButton).toHaveAttribute("aria-pressed", "false");
+    expect(claudeCodeButton).toBeEnabled();
+  });
+  expect(screen.getAllByText("未启用").length).toBeGreaterThan(0);
+  expect(disableAllAppsButton).toBeDisabled();
+});
+
 test("shows MCP tools discovery errors when refresh fails due to missing env", async () => {
   window.localStorage.clear();
   const workspace = await skillClient.fetchMcpWorkspace();

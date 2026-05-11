@@ -1,5 +1,5 @@
-use std::fs;
 use std::cmp::Ordering;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::mpsc;

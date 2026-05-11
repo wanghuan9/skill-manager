@@ -211,7 +211,9 @@ function removeImportedCandidate(
   candidates: LocalSkillCandidate[],
   importedSkill: SkillSummary,
 ) {
-  return candidates.filter((candidate) => candidate.localPath !== importedSkill.localPath);
+  return candidates.filter((candidate) =>
+    candidate.localPath !== importedSkill.localPath && candidate.name !== importedSkill.name
+  );
 }
 
 function normalizeCachedSkillSummary(skill: CachedSkillSummary): SkillSummary {

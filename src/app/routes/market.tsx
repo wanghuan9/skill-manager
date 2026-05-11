@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { LocalInstallPanel } from "@/features/install/components/LocalInstallPanel";
 import { MarketplaceInstallPanel } from "@/features/install/components/MarketplaceInstallPanel";
 import { McpMarketplacePanel } from "@/features/install/components/McpMarketplacePanel";
 import { RepoInstallPanel } from "@/features/install/components/RepoInstallPanel";
@@ -276,12 +275,7 @@ export function MarketRoute(props: MarketRouteProps) {
               />
             ) : null}
             {activeInstallTab === "git" ? <RepoInstallPanel /> : null}
-            {activeInstallTab === "local" ? (
-              <div className="local-install-layout">
-                <LocalSkillImportList />
-                <LocalInstallPanel />
-              </div>
-            ) : null}
+            {activeInstallTab === "local" ? <LocalSkillImportList /> : null}
           </>
         ) : (
           <McpMarketplacePanel
