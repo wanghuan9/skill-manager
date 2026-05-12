@@ -14,7 +14,7 @@ test("allows selecting default open tool in settings", async () => {
 
   await userEvent.click(screen.getByRole("button", { name: /设置/ }));
 
-  expect(screen.getByText("/Users/demo/.skillm/settings.json")).toBeInTheDocument();
+  expect(screen.getByText("/Users/demo/.skillm")).toBeInTheDocument();
   const select = screen.getByLabelText("默认编辑器");
   expect(select).toBeInTheDocument();
   expect(screen.getByLabelText("新增 Skill 默认启用")).toHaveAttribute("aria-pressed", "true");
@@ -82,14 +82,15 @@ test("opens storage path in Finder from settings", async () => {
   render(<App />);
 
   await userEvent.click(screen.getByRole("button", { name: /设置/ }));
-  expect(screen.getByText("/Users/demo/.skillm/settings.json")).toBeInTheDocument();
+  expect(screen.getByText("/Users/demo/.skillm")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "打开配置文件存储目录" })).toBeInTheDocument();
 
   (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
   invokeMock.mockResolvedValue(undefined);
-  await userEvent.click(screen.getByRole("button", { name: "打开" }));
+  await userEvent.click(screen.getByText("/Users/demo/.skillm"));
 
   expect(invokeMock).toHaveBeenCalledWith("open_path_in_finder", {
-    path: "/Users/demo/.skillm/settings.json",
+    path: "/Users/demo/.skillm",
   });
 
   delete (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;

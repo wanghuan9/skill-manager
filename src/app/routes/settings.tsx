@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import type { ReactNode } from "react";
 import { useSkillWorkspace } from "@/features/skills/state/skill-workspace";
 import {
   buildOpenToolOptions,
@@ -42,6 +43,16 @@ function getDirectoryPath(filePath: string) {
   return normalizedPath.slice(0, lastSeparatorIndex);
 }
 
+type SettingsFormItem = {
+  label: string;
+  description: string;
+  value: ReactNode;
+  readonly?: boolean;
+  actionLabel?: string;
+  disabled?: boolean;
+  onActivate?: () => void | Promise<void>;
+};
+
 export function SettingsRoute() {
   const {
     appSettings,
@@ -80,7 +91,7 @@ export function SettingsRoute() {
     }
   }
 
-  const generalSettingsItems = [
+  const generalSettingsItems: SettingsFormItem[] = [
     {
       label: "配置文件存储目录",
       description: "应用设置会写入这个目录，便于你在本地查看或备份默认配置。",
@@ -89,18 +100,16 @@ export function SettingsRoute() {
           <div className="settings-form-item__value settings-form-item__value--path">
             {storageDirectoryPath || "暂未检测到存储目录"}
           </div>
-          <button
-            className="secondary-button secondary-button--compact settings-open-button"
-            type="button"
-            onClick={() => void handleOpenStoragePath()}
-            disabled={!storageDirectoryPath || isOpeningStoragePath}
-          >
+          <span className="secondary-button secondary-button--compact settings-open-button settings-open-button--static">
             <FolderOpenIcon />
             打开
-          </button>
+          </span>
         </div>
       ),
       readonly: true,
+      actionLabel: "打开配置文件存储目录",
+      disabled: !storageDirectoryPath || isOpeningStoragePath,
+      onActivate: handleOpenStoragePath,
     },
     {
       label: "默认编辑器",
@@ -124,7 +133,7 @@ export function SettingsRoute() {
       ),
     },
   ];
-  const installBehaviorItems = [
+  const installBehaviorItems: SettingsFormItem[] = [
     {
       label: "新增 Skill 默认启用",
       description: "开启后会在安装 skill 时默认应用到所有已安装工具；关闭后先保持未启用。",
@@ -188,18 +197,41 @@ export function SettingsRoute() {
         </div>
         <div className="panel-card placeholder-panel settings-panel settings-panel--module">
           <div className="settings-form-list">
-            {generalSettingsItems.map((item) => (
-              <div
-                key={item.label}
-                className={`settings-form-item${item.readonly ? " settings-form-item--readonly" : ""}`}
-              >
-                <div className="settings-form-item__copy">
-                  <span className="settings-form-item__title">{item.label}</span>
-                  <p>{item.description}</p>
+            {generalSettingsItems.map((item) => {
+              const className = `settings-form-item${item.readonly ? " settings-form-item--readonly" : ""}${
+                item.onActivate ? " settings-form-item--action" : ""
+              }`;
+              const content = (
+                <>
+                  <div className="settings-form-item__copy">
+                    <span className="settings-form-item__title">{item.label}</span>
+                    <p>{item.description}</p>
+                  </div>
+                  {item.value}
+                </>
+              );
+
+              if (item.onActivate) {
+                return (
+                  <button
+                    key={item.label}
+                    className={className}
+                    type="button"
+                    aria-label={item.actionLabel}
+                    disabled={item.disabled}
+                    onClick={() => void item.onActivate?.()}
+                  >
+                    {content}
+                  </button>
+                );
+              }
+
+              return (
+                <div key={item.label} className={className}>
+                  {content}
                 </div>
-                {item.value}
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       </section>

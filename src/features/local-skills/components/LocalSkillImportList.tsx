@@ -317,20 +317,22 @@ export function LocalSkillImportList() {
                   <article key={group.name} className="local-scan-group" aria-label={group.name}>
                     <div className="local-scan-group__row">
                       <button
-                        className="local-scan-group__header"
+                        className="local-scan-group__toggle"
                         type="button"
                         aria-label={`${isExpanded ? "收起" : "展开"} ${group.name}`}
                         aria-expanded={isExpanded}
                         onClick={() => toggleGroup(group.name)}
                       >
-                        <span className="local-scan-group__chevron" aria-hidden="true">
-                          {isExpanded ? "⌄" : "›"}
+                        <span className="local-scan-group__header">
+                          <span className="local-scan-group__chevron" aria-hidden="true">
+                            {isExpanded ? "⌄" : "›"}
+                          </span>
+                          <strong>{group.name}</strong>
                         </span>
-                        <strong>{group.name}</strong>
+                        <span className="local-scan-group__sources">
+                          {group.candidates.length} 个位置 · {sourceSummary}
+                        </span>
                       </button>
-                      <span className="local-scan-group__sources">
-                        {group.candidates.length} 个位置 · {sourceSummary}
-                      </span>
                       <button
                         className="primary-button local-scan-group__import-button"
                         type="button"

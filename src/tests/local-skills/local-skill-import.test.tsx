@@ -20,7 +20,8 @@ test("renders local skill import list", async () => {
 
   const excalidrawGroup = screen.getByLabelText("excalidraw-diagram");
   expect(within(excalidrawGroup).getByRole("button", { name: "导入 excalidraw-diagram" })).toBeInTheDocument();
-  await userEvent.click(within(excalidrawGroup).getByRole("button", { name: "展开 excalidraw-diagram" }));
+  expect(within(excalidrawGroup).getByRole("button", { name: "展开 excalidraw-diagram" })).toBeInTheDocument();
+  await userEvent.click(within(excalidrawGroup).getByText("3 个位置 · cursor / claude_code / windsurf"));
   expect(within(excalidrawGroup).getByText("/Users/wanghuan/.cursor/skills/excalidraw-diagram")).toBeInTheDocument();
   expect(within(excalidrawGroup).getAllByRole("button")).toHaveLength(2);
 
