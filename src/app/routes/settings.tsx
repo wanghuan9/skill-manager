@@ -46,7 +46,6 @@ export function SettingsRoute() {
   const {
     appSettings,
     defaultOpenToolId,
-    gitAccount,
     openPathInFinder,
     setMcpInstallActivation,
     setDefaultOpenToolId,
@@ -291,13 +290,13 @@ export function SettingsRoute() {
       <section className="settings-group">
         <div className="settings-group__heading">
           <span className="settings-group__bar" aria-hidden="true" />
-          <h2 className="settings-group__title">Git 账号</h2>
+          <h2 className="settings-group__title">GitHub 账号</h2>
         </div>
         <div className="panel-card placeholder-panel settings-panel settings-panel--git-account">
           <div className="settings-row settings-row--account">
-            <span className="settings-row__title">{gitAccount?.provider ?? "未连接"}</span>
-            <span>{gitAccount?.accountName ?? "请连接代码仓库账号"}</span>
-            <span className="status-badge tone-info">{gitAccount?.statusLabel ?? "待连接"}</span>
+            <span className="settings-row__title">GitHub</span>
+            <span>账号信息占位</span>
+            <span className="status-badge tone-info">暂不展示</span>
           </div>
         </div>
       </section>

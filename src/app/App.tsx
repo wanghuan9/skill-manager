@@ -29,7 +29,7 @@ const routes: RouteDefinition[] = [
   { key: "skills", label: "Skills", description: "查看已安装 skill 的状态、更新和待处理情况" },
   { key: "tools", label: "工具", description: "检测可打开的编辑器工具并设置默认打开方式" },
   { key: "install", label: "安装", description: "通过安装源、Git 仓库或本地目录纳入新的 skill" },
-  { key: "settings", label: "设置", description: "配置默认打开工具、Git 账号和基础偏好" },
+  { key: "settings", label: "设置", description: "配置默认打开工具、GitHub 账号和基础偏好" },
   { key: "feedback", label: "反馈", description: "提交问题、建议和工具适配需求" },
 ];
 
