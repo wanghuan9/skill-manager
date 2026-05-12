@@ -551,7 +551,7 @@ code {
   border-radius: 14px;
   padding: 11px 12px;
   background: transparent;
-  color: var(--muted);
+  color: #566170;
   text-align: left;
   cursor: pointer;
   transition:
@@ -612,7 +612,7 @@ code {
 }
 
 .nav-label {
-  font-size: 1.02rem;
+  font-size: 0.95rem;
   font-weight: 600;
 }
 
@@ -742,7 +742,7 @@ code {
 }
 
 .page-header h1 {
-  font-size: clamp(1.45rem, 3vw, 2.1rem);
+  font-size: clamp(1.28rem, 2.3vw, 1.72rem);
   color: var(--heading);
   line-height: 1;
 }
@@ -4578,7 +4578,7 @@ code {
     "PingFang SC",
     "Helvetica Neue",
     sans-serif;
-  font-size: clamp(1.32rem, 2.4vw, 1.78rem);
+  font-size: clamp(1.18rem, 2vw, 1.46rem);
   font-weight: 560;
 }
 
@@ -6145,7 +6145,7 @@ button.settings-form-item:disabled {
   }
 
   .page-header h1 {
-    font-size: 2.2rem;
+    font-size: 1.55rem;
   }
 
   .tool-card {
