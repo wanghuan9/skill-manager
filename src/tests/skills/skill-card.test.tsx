@@ -45,6 +45,31 @@ test("shows remote and local updated time on skill card", () => {
   expect(screen.queryByText("更新人：")).not.toBeInTheDocument();
 });
 
+test("hides remote updated time for local skill details", async () => {
+  const skill = installedSkillFixtures.find((item) => item.name === "drawio-diagram");
+  if (!skill) {
+    throw new Error("missing drawio-diagram fixture");
+  }
+  const localSkill = {
+    ...skill,
+    sourceLabel: "本地安装",
+    sourceType: "local" as const,
+    sourceUrl: "/Users/wanghuan/.cursor/skills/drawio-diagram",
+    remoteUpdatedAt: "2026/5/12 11:38:11",
+    localUpdatedAt: "2026/5/12 09:20:00",
+    lastEditor: "",
+  };
+
+  renderSkillCardWithProviders(localSkill);
+
+  await userEvent.click(screen.getByRole("button", { name: /展开 drawio-diagram/ }));
+
+  expect(screen.queryByText("远端更新时间")).not.toBeInTheDocument();
+  expect(screen.queryByText("更新人")).not.toBeInTheDocument();
+  expect(screen.getByText("本地更新时间")).toBeInTheDocument();
+  expect(screen.getAllByText("2026/5/12 09:20:00").length).toBeGreaterThan(0);
+});
+
 test("sanitizes trailing emoticon in remote updater", async () => {
   const skill = installedSkillFixtures.find((item) => item.name === "excalidraw-diagram");
   if (!skill) {

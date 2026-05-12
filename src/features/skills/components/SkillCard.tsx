@@ -121,6 +121,7 @@ export function SkillCard({ skill }: SkillCardProps) {
   const visibleTools = enabledTools.slice(0, 2);
   const hiddenToolCount = Math.max(enabledTools.length - visibleTools.length, 0);
   const showDetailAction = skill.collabStatus === "update-available";
+  const showRemoteUpdateInfo = skill.sourceType !== "local";
 
   useEffect(() => {
     if (!isDeleteConfirming) {
@@ -352,14 +353,18 @@ export function SkillCard({ skill }: SkillCardProps) {
                     </span>
                   </dd>
                 </div>
-                <div>
-                  <dt>远端更新时间</dt>
-                  <dd>{remoteUpdatedAt || "未获取"}</dd>
-                </div>
-                <div>
-                  <dt>更新人</dt>
-                  <dd>{remoteUpdater}</dd>
-                </div>
+                {showRemoteUpdateInfo ? (
+                  <>
+                    <div>
+                      <dt>远端更新时间</dt>
+                      <dd>{remoteUpdatedAt || "未获取"}</dd>
+                    </div>
+                    <div>
+                      <dt>更新人</dt>
+                      <dd>{remoteUpdater}</dd>
+                    </div>
+                  </>
+                ) : null}
                 <div>
                   <dt>本地更新时间</dt>
                   <dd>{localUpdatedAt || "未获取"}</dd>
