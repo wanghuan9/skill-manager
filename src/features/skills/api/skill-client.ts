@@ -4,6 +4,7 @@ import {
   gitAccountFixture,
   installedSkillFixtures,
   localSkillFixtures,
+  localInstallSkillCandidateFixtures,
   marketplaceSkillFixtures,
   mcpMarketplaceServerFixtures,
   mcpWorkspaceFixture,
@@ -19,6 +20,7 @@ import type {
   AppSettings,
   GitAccountSummary,
   LocalSkillCandidate,
+  LocalInstallSkillCandidate,
   MarketplaceSkill,
   MarketplaceSourceSite,
   McpMarketplaceServer,
@@ -48,6 +50,11 @@ type InstallSelectedRepoSkillsInput = {
 type InstallLocalSkillInput = {
   localPath: string;
   skillName?: string;
+};
+
+type InstallSelectedLocalSkillsInput = {
+  localPath: string;
+  selectedPaths: string[];
 };
 
 type PushPreviewInput = {
@@ -338,6 +345,64 @@ export async function installSelectedRepoSkills(
   });
 
   const installedSkills = await invokeOrFallback<LegacySkillSummary[]>("install_selected_repo_skills", input, fallback);
+  return normalizeSkillSummaryList(installedSkills);
+}
+
+export async function discoverLocalInstallSkills(
+  localPath: string,
+): Promise<LocalInstallSkillCandidate[]> {
+  const fallbackName =
+    localPath.trim().split(/[\\/]/).filter(Boolean).at(-1)?.replace(/\.(zip|skill)$/i, "") ||
+    "local-skill";
+  const fallback = [
+    {
+      id: fallbackName,
+      name: fallbackName,
+      description: "从本地路径识别的技能。",
+      relativePath: "",
+    },
+  ];
+
+  const fixture = localInstallSkillCandidateFixtures[localPath] ?? fallback;
+
+  return invokeOrFallback("discover_local_install_skills", { localPath }, fixture);
+}
+
+export async function installSelectedLocalSkills(
+  input: InstallSelectedLocalSkillsInput,
+): Promise<SkillSummary[]> {
+  const fallback = input.selectedPaths.map((selectedPath) => {
+    const candidate =
+      (localInstallSkillCandidateFixtures[input.localPath] ?? []).find(
+        (item) => item.relativePath === selectedPath,
+      );
+    const fallbackName =
+      candidate?.name ||
+      selectedPath.trim().split(/[\\/]/).filter(Boolean).at(-1)?.replace(/\.(zip|skill)$/i, "") ||
+      input.localPath.trim().split(/[\\/]/).filter(Boolean).at(-1)?.replace(/\.(zip|skill)$/i, "") ||
+      "local-skill";
+
+    return {
+      ...installedSkillFixtures[0],
+      name: fallbackName,
+      description: "从本地路径安装的技能。",
+      sourceLabel: "本地安装",
+      sourceType: "local" as const,
+      sourceUrl: input.localPath,
+      localPath: `/Users/demo/.skillm/skills/${fallbackName}`,
+      collabStatus: "clean" as const,
+      statusText: "本地技能已安装，可继续同步到目标工具。",
+      gitLinked: false,
+      remoteUpdatedAt: "",
+      localUpdatedAt: "刚刚",
+    };
+  });
+
+  const installedSkills = await invokeOrFallback<LegacySkillSummary[]>(
+    "install_selected_local_skills",
+    input,
+    fallback,
+  );
   return normalizeSkillSummaryList(installedSkills);
 }
 

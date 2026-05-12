@@ -35,6 +35,8 @@ pub fn run() {
             commands::install_skill_from_repo,
             commands::discover_repo_skills,
             commands::install_selected_repo_skills,
+            commands::discover_local_install_skills,
+            commands::install_selected_local_skills,
             commands::install_local_skill,
             commands::import_local_skill,
             commands::get_push_target_snapshot,

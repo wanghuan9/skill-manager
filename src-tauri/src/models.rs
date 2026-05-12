@@ -73,6 +73,15 @@ pub struct RepoSkillCandidate {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct LocalInstallSkillCandidate {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub relative_path: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ToolConfig {
     pub id: String,
     pub name: String,

@@ -337,6 +337,63 @@ test("installs a local skill from a typed path", async () => {
   expect(await screen.findByRole("status")).toHaveTextContent("本地技能已安装");
 });
 
+test("discovers local project skills and allows multi-select install", async () => {
+  const discoverSpy = vi.spyOn(skillClient, "discoverLocalInstallSkills");
+  const installSpy = vi.spyOn(skillClient, "installSelectedLocalSkills");
+
+  render(<App />);
+  await userEvent.click(screen.getByRole("button", { name: /安装/ }));
+  await userEvent.click(screen.getByRole("tab", { name: "本地安装" }));
+  await userEvent.click(screen.getByRole("tab", { name: "手动安装" }));
+
+  await userEvent.type(
+    screen.getByRole("textbox", { name: "本地 skill 路径" }),
+    "/Users/demo/projects/skill-pack",
+  );
+  await userEvent.click(screen.getByRole("button", { name: "安装技能" }));
+
+  expect(await screen.findByText("发现 2 个技能，请选择要安装的技能")).toBeInTheDocument();
+  expect(screen.getByText("service-observer")).toBeInTheDocument();
+  expect(screen.getByText("release-scribe")).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: /service-observer/i }));
+  await userEvent.click(screen.getByRole("button", { name: /release-scribe/i }));
+  await userEvent.click(screen.getByRole("button", { name: "安装选中技能" }));
+
+  await waitFor(() => {
+    expect(discoverSpy).toHaveBeenCalledWith("/Users/demo/projects/skill-pack");
+    expect(installSpy).toHaveBeenCalledWith({
+      localPath: "/Users/demo/projects/skill-pack",
+      selectedPaths: ["skills/service-observer", "skills/release-scribe"],
+    });
+  });
+  expect(await screen.findByRole("status")).toHaveTextContent("选中本地技能已安装");
+  discoverSpy.mockRestore();
+  installSpy.mockRestore();
+});
+
+test("fills local skill path from a dropped file", async () => {
+  render(<App />);
+  await userEvent.click(screen.getByRole("button", { name: /安装/ }));
+  await userEvent.click(screen.getByRole("tab", { name: "本地安装" }));
+  await userEvent.click(screen.getByRole("tab", { name: "手动安装" }));
+
+  const dropzone = screen.getByText("拖拽文件夹或压缩包到此处").closest(".local-install-dropzone");
+  expect(dropzone).toBeInTheDocument();
+
+  const droppedFile = new File([""], "local-helper.skill");
+  Object.defineProperty(droppedFile, "path", { value: "/Users/demo/skills/local-helper.skill" });
+
+  fireEvent.dragEnter(dropzone!);
+  expect(dropzone).toHaveClass("is-dragging");
+
+  fireEvent.drop(dropzone!, { dataTransfer: { files: [droppedFile] } });
+  expect(screen.getByRole("textbox", { name: "本地 skill 路径" })).toHaveValue(
+    "/Users/demo/skills/local-helper.skill",
+  );
+  expect(dropzone).toHaveTextContent("已选择:/Users/demo/skills/local-helper.skill");
+  expect(dropzone).not.toHaveClass("is-dragging");
+});
+
 test("shows install errors in the global notification stack", async () => {
   render(<App />);
   await userEvent.click(screen.getByRole("button", { name: /安装/ }));

@@ -10,6 +10,7 @@ import {
 import {
   fetchAppSettings,
   deleteSkill,
+  discoverLocalInstallSkills,
   fetchGitAccount,
   fetchGitStates,
   fetchLocalSkillCandidates,
@@ -22,6 +23,7 @@ import {
   fetchStartupInstalledSkills,
   importLocalSkill,
   installLocalSkill,
+  installSelectedLocalSkills,
   installSkillFromMarket,
   installSkillFromRepo,
   installSelectedRepoSkills,
@@ -47,6 +49,7 @@ import type {
   GitAccountSummary,
   InstallActivationMode,
   LocalSkillCandidate,
+  LocalInstallSkillCandidate,
   MarketplaceSkill,
   MarketplaceSourceSite,
   PushPreviewSnapshot,
@@ -88,8 +91,11 @@ type SkillWorkspaceContextValue = {
   searchMarketplaceSkills: (query: string) => Promise<MarketplaceSkill[]>;
   discoverRepoSkills: (repoUrl: string) => Promise<RepoSkillCandidate[]>;
   installFromRepo: (repoUrl: string, selectedPaths: string[]) => Promise<void>;
+  discoverLocalInstallSkills: (localPath: string) => Promise<LocalInstallSkillCandidate[]>;
   installFromLocalPath: (localPath: string, skillName?: string) => Promise<void>;
+  installSelectedLocalSkills: (localPath: string, selectedPaths: string[]) => Promise<void>;
   importCandidate: (localPath: string) => Promise<void>;
+  refreshLocalCandidates: () => Promise<void>;
   refreshWorkspace: () => Promise<void>;
   updateSkill: (skillName: string) => Promise<void>;
   updateAllSkills: () => Promise<void>;
@@ -753,10 +759,36 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
     );
   }
 
+  async function handleInstallSelectedLocalSkills(localPath: string, selectedPaths: string[]) {
+    const installed = await installSelectedLocalSkills({ localPath, selectedPaths });
+    setInstalledSkills((current) => {
+      const merged = [...current];
+      for (const installedSkill of installed.reverse()) {
+        const next = [installedSkill, ...merged.filter((item) => item.name !== installedSkill.name)];
+        merged.splice(0, merged.length, ...next);
+      }
+      return merged;
+    });
+    setLocalCandidates((current) =>
+      current.filter(
+        (candidate) =>
+          !installed.some(
+            (installedSkill) =>
+              candidate.localPath === installedSkill.localPath || candidate.name === installedSkill.name,
+          ),
+      ),
+    );
+  }
+
   async function handleImportCandidate(localPath: string) {
     const importedSkill = await importLocalSkill(localPath);
     setInstalledSkills((current) => [importedSkill, ...current.filter((item) => item.name !== importedSkill.name)]);
     setLocalCandidates((current) => removeImportedCandidate(current, importedSkill));
+  }
+
+  async function handleRefreshLocalCandidates() {
+    const candidates = await fetchLocalSkillCandidates();
+    setLocalCandidates(candidates);
   }
 
   async function handleUpdateSkill(skillName: string) {
@@ -933,8 +965,11 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       searchMarketplaceSkills: handleSearchMarketplaceSkills,
       discoverRepoSkills: handleDiscoverRepoSkills,
       installFromRepo: handleInstallFromRepo,
+      discoverLocalInstallSkills,
       installFromLocalPath: handleInstallFromLocalPath,
+      installSelectedLocalSkills: handleInstallSelectedLocalSkills,
       importCandidate: handleImportCandidate,
+      refreshLocalCandidates: handleRefreshLocalCandidates,
       refreshWorkspace: loadWorkspaceSnapshot,
       updateSkill: handleUpdateSkill,
       updateAllSkills: handleUpdateAllSkills,

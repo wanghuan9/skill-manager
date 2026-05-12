@@ -117,6 +117,13 @@ export type RepoSkillCandidate = {
   relativePath: string;
 };
 
+export type LocalInstallSkillCandidate = {
+  id: string;
+  name: string;
+  description: string;
+  relativePath: string;
+};
+
 export type ToolType = "editor" | "cli" | "desktop";
 export type ToolSurfaceType = ToolType | "ide-plugin";
 

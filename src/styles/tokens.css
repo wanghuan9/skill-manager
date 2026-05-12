@@ -3404,16 +3404,22 @@ code {
 }
 
 .local-install-panel > .local-install-form {
-  grid-template-columns: minmax(260px, 0.8fr) minmax(0, 1.2fr);
+  grid-template-columns: minmax(420px, 1.05fr) minmax(360px, 0.95fr);
   grid-template-areas:
     "dropzone path"
     "dropzone name"
     "dropzone actions";
   align-items: stretch;
+  column-gap: 18px;
 }
 
 .local-install-panel > .local-install-form .repo-form__actions {
   justify-content: flex-start;
+}
+
+.local-install-panel > .local-install-form .local-install-dropzone {
+  min-height: 204px;
+  padding: 18px;
 }
 
 .local-install-dropzone {
@@ -3433,13 +3439,42 @@ code {
   transition:
     border-color 140ms ease,
     background-color 140ms ease,
+    box-shadow 140ms ease,
     color 140ms ease;
 }
 
+.local-install-dropzone:hover,
+.local-install-dropzone:focus-within {
+  border-color: color-mix(in srgb, var(--accent) 64%, #9fb6d5 36%);
+  background: color-mix(in srgb, var(--accent-soft) 54%, transparent 46%);
+  box-shadow:
+    0 0 0 3px rgba(59, 130, 246, 0.1),
+    0 10px 24px rgba(47, 124, 255, 0.08);
+}
+
 .local-install-dropzone.is-dragging {
-  border-color: #56d66b;
-  background: rgba(86, 214, 107, 0.12);
-  color: #d8ffe0;
+  border-color: #4ade80;
+  background: color-mix(in srgb, var(--success-soft) 82%, #ffffff 18%);
+  box-shadow:
+    0 0 0 3px rgba(74, 222, 128, 0.16),
+    0 14px 30px rgba(39, 179, 106, 0.16);
+  color: #16a34a;
+}
+
+.local-install-dropzone.is-dragging strong,
+.local-install-dropzone.is-dragging span {
+  color: #16a34a;
+}
+
+.local-install-dropzone.is-selected {
+  grid-template-columns: minmax(0, 1fr);
+  justify-items: center;
+  border-color: #4ade80;
+  background: color-mix(in srgb, var(--success-soft) 64%, #ffffff 36%);
+  box-shadow:
+    0 0 0 3px rgba(74, 222, 128, 0.12),
+    0 12px 26px rgba(39, 179, 106, 0.1);
+  text-align: center;
 }
 
 .local-install-dropzone svg {
@@ -3448,10 +3483,35 @@ code {
   height: 24px;
 }
 
+.local-install-dropzone.is-selected svg {
+  grid-row: auto;
+  width: 30px;
+  height: 30px;
+  color: #16a34a;
+}
+
 .local-install-dropzone strong {
   color: var(--heading);
   font-size: 0.86rem;
   line-height: 1.2;
+}
+
+.local-install-dropzone__selected {
+  display: inline;
+  max-width: 100%;
+  color: var(--muted);
+  font-weight: 680;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.local-install-dropzone__selected span:first-child {
+  color: var(--muted);
+}
+
+.local-install-dropzone__selected span:last-child {
+  color: #16a34a;
+  font-weight: 760;
 }
 
 .local-install-dropzone span {
@@ -3482,6 +3542,16 @@ code {
   color: var(--heading);
   padding: 0 14px;
   font: inherit;
+  transition:
+    background-color 140ms ease,
+    border-color 140ms ease,
+    box-shadow 140ms ease;
+}
+
+.local-install-form input:hover {
+  border-color: color-mix(in srgb, var(--accent) 54%, var(--line) 46%);
+  background: color-mix(in srgb, var(--surface) 98%, var(--accent-soft) 2%);
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.08);
 }
 
 .local-install-form input:focus {
@@ -3495,6 +3565,21 @@ code {
   height: 44px;
   padding: 0;
   justify-content: center;
+  transition:
+    background-color 140ms ease,
+    border-color 140ms ease,
+    box-shadow 140ms ease,
+    color 140ms ease,
+    transform 140ms ease;
+}
+
+.local-install-form__icon-button:hover,
+.local-install-form__icon-button:focus-visible {
+  border-color: color-mix(in srgb, var(--accent) 62%, var(--line) 38%);
+  background: color-mix(in srgb, var(--surface) 92%, var(--accent-soft) 8%);
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+  color: var(--accent);
+  transform: translateY(-1px);
 }
 
 .local-install-form__icon-button svg {
@@ -3630,9 +3715,14 @@ code {
   justify-content: flex-end;
 }
 
+.local-scan-results {
+  display: grid;
+  gap: 10px;
+}
+
 .local-scan-list-header {
   display: grid;
-  grid-template-columns: minmax(180px, 0.9fr) minmax(0, 1.6fr) 92px;
+  grid-template-columns: minmax(180px, 0.9fr) minmax(340px, 1.15fr) minmax(72px, 0.35fr) 92px;
   gap: 12px;
   padding: 6px 18px 0;
   color: var(--muted);
@@ -3641,6 +3731,7 @@ code {
 }
 
 .local-scan-list-header span:last-child {
+  grid-column: 4;
   text-align: right;
 }
 
@@ -3658,7 +3749,7 @@ code {
 
 .local-scan-group__row {
   display: grid;
-  grid-template-columns: minmax(180px, 0.9fr) minmax(0, 1.6fr) 92px;
+  grid-template-columns: minmax(180px, 0.9fr) minmax(340px, 1.15fr) minmax(72px, 0.35fr) 92px;
   gap: 12px;
   align-items: center;
   min-height: 56px;
@@ -3753,6 +3844,7 @@ code {
 }
 
 .local-scan-group__import-button {
+  grid-column: 4;
   min-width: 72px;
   min-height: 32px;
   padding: 0 14px;

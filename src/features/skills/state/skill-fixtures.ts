@@ -1,6 +1,7 @@
 import type {
   AppSettings,
   GitAccountSummary,
+  LocalInstallSkillCandidate,
   LocalSkillCandidate,
   MarketplaceSkill,
   McpMarketplaceServer,
@@ -282,6 +283,39 @@ export const repoSkillCandidateFixtures: Record<string, RepoSkillCandidate[]> = 
       name: "service-observer",
       description: "帮助团队巡检服务稳定性、日志信号和回归风险。",
       relativePath: "skills/service-observer",
+    },
+  ],
+};
+
+export const localInstallSkillCandidateFixtures: Record<string, LocalInstallSkillCandidate[]> = {
+  default: [
+    {
+      id: "local-skill",
+      name: "local-skill",
+      description: "从本地路径识别的技能。",
+      relativePath: "",
+    },
+  ],
+  "/Users/demo/skills/local-helper": [
+    {
+      id: "local-helper",
+      name: "local-helper",
+      description: "从本地路径识别的技能。",
+      relativePath: "",
+    },
+  ],
+  "/Users/demo/projects/skill-pack": [
+    {
+      id: "skills-service-observer",
+      name: "service-observer",
+      description: "帮助团队巡检服务稳定性、日志信号和回归风险。",
+      relativePath: "skills/service-observer",
+    },
+    {
+      id: "skills-release-scribe",
+      name: "release-scribe",
+      description: "用于整理版本变更说明、发布纪要和回滚策略。",
+      relativePath: "skills/release-scribe",
     },
   ],
 };

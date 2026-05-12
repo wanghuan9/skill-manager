@@ -134,9 +134,8 @@ pub fn scan_local_skill_candidates(installed_skills: &[SkillSummary]) -> Vec<(St
         return Vec::new();
     };
 
+    let managed_skills_root = home_dir.join(".skillm/skills");
     let known_roots = [
-        home_dir.join(".skillm/skills"),
-        home_dir.join(".skills-manager/skills"),
         home_dir.join(".claude/skills"),
         home_dir.join(".codex/skills"),
         home_dir.join(".config/opencode/skills"),
@@ -166,10 +165,7 @@ pub fn scan_local_skill_candidates(installed_skills: &[SkillSummary]) -> Vec<(St
         home_dir.join(".copilot/skills"),
     ];
 
-    let installed_paths: Vec<&str> = installed_skills
-        .iter()
-        .map(|skill| skill.local_path.as_str())
-        .collect();
+    let installed_paths = installed_skill_path_keys(installed_skills);
     let mut candidates = Vec::new();
 
     for root in known_roots {
@@ -195,15 +191,17 @@ pub fn scan_local_skill_candidates(installed_skills: &[SkillSummary]) -> Vec<(St
             if is_reserved_skillm_path(&home_dir, &path) {
                 continue;
             }
+            if is_skill_name_managed(name, &managed_skills_root, installed_skills) {
+                continue;
+            }
+            if is_synced_managed_skill_link(&path, &managed_skills_root) {
+                continue;
+            }
             if !path.join("SKILL.md").is_file() {
                 continue;
             }
 
-            let local_path = path.to_string_lossy().to_string();
-            if installed_paths
-                .iter()
-                .any(|installed| *installed == local_path)
-            {
+            if installed_paths.contains(&path_key(&path)) {
                 continue;
             }
 
@@ -214,6 +212,75 @@ pub fn scan_local_skill_candidates(installed_skills: &[SkillSummary]) -> Vec<(St
     candidates.sort_by(|left, right| left.0.cmp(&right.0));
     candidates.dedup_by(|left, right| left.0 == right.0 && left.1 == right.1);
     candidates
+}
+
+fn installed_skill_path_keys(installed_skills: &[SkillSummary]) -> Vec<String> {
+    let mut paths = installed_skills
+        .iter()
+        .flat_map(|skill| {
+            let path = PathBuf::from(&skill.local_path);
+            [skill.local_path.clone(), path_key(&path)]
+        })
+        .collect::<Vec<_>>();
+    paths.sort();
+    paths.dedup();
+    paths
+}
+
+fn is_synced_managed_skill_link(path: &Path, managed_skills_root: &Path) -> bool {
+    let Ok(metadata) = fs::symlink_metadata(path) else {
+        return false;
+    };
+    if !metadata.file_type().is_symlink() {
+        return false;
+    }
+
+    let Ok(target_path) = path.canonicalize() else {
+        return false;
+    };
+    managed_skills_root
+        .canonicalize()
+        .is_ok_and(|root| target_path.starts_with(root))
+}
+
+fn is_skill_name_managed(
+    name: &str,
+    managed_skills_root: &Path,
+    installed_skills: &[SkillSummary],
+) -> bool {
+    if installed_skills.iter().any(|skill| {
+        skill.name == name && is_managed_skill_path(&skill.local_path, managed_skills_root)
+    }) {
+        return true;
+    }
+
+    [
+        managed_skills_root.join(name),
+        managed_skills_root.join(name).join("skills").join(name),
+    ]
+    .iter()
+    .any(|path| path.join("SKILL.md").is_file())
+}
+
+fn is_managed_skill_path(skill_path: &str, managed_skills_root: &Path) -> bool {
+    let path = Path::new(skill_path);
+    if !path.join("SKILL.md").is_file() {
+        return false;
+    }
+
+    let Ok(skill_path) = path.canonicalize() else {
+        return false;
+    };
+    managed_skills_root
+        .canonicalize()
+        .is_ok_and(|root| skill_path.starts_with(root))
+}
+
+fn path_key(path: &Path) -> String {
+    path.canonicalize()
+        .unwrap_or_else(|_| path.to_path_buf())
+        .to_string_lossy()
+        .to_string()
 }
 
 fn is_reserved_skillm_path(home_dir: &Path, path: &Path) -> bool {
@@ -413,6 +480,29 @@ mod tests {
             }
         }
         let _ = fs::remove_dir_all(temp_home);
+    }
+
+    fn test_skill_summary(name: &str, local_path: &PathBuf) -> SkillSummary {
+        SkillSummary {
+            name: name.into(),
+            source_label: "GitHub".into(),
+            source_type: "github".into(),
+            source_url: format!("https://github.com/demo/{name}"),
+            description: name.into(),
+            local_path: local_path.to_string_lossy().to_string(),
+            branch: "main".into(),
+            collab_status: "clean".into(),
+            status_text: "ok".into(),
+            remote_updated_at: "刚刚".into(),
+            local_updated_at: "刚刚".into(),
+            last_synced_at: "刚刚".into(),
+            last_checked_at: "刚刚".into(),
+            synced_tool_count: 0,
+            last_editor: "".into(),
+            commit_label: "abc123".into(),
+            git_linked: false,
+            tools: vec![],
+        }
     }
 
     #[test]
@@ -663,6 +753,171 @@ mod tests {
                     codex_skills_root.to_string_lossy().to_string()
                 )]
             );
+        });
+    }
+
+    #[test]
+    fn local_candidate_scan_skips_managed_library_skills_without_state_entry() {
+        with_temp_home(|temp_home| {
+            let managed_skill_dir = temp_home.join(".skillm/skills/example-migration");
+            let codex_skills_root = temp_home.join(".codex/skills");
+            fs::create_dir_all(&managed_skill_dir).expect("create managed skill dir");
+            fs::create_dir_all(&codex_skills_root).expect("create codex skills dir");
+            fs::write(managed_skill_dir.join("SKILL.md"), "# example-migration")
+                .expect("write managed skill file");
+            fs::write(codex_skills_root.join("example-migration"), "# not a directory")
+                .expect("write non-directory entry");
+
+            let candidates = scan_local_skill_candidates(&[]);
+
+            assert!(candidates.is_empty());
+        });
+    }
+
+    #[test]
+    fn local_candidate_scan_skips_software_skill_when_skillm_has_same_skill() {
+        with_temp_home(|temp_home| {
+            let managed_skill_dir = temp_home.join(".skillm/skills/example-migration");
+            let external_skill_dir = temp_home.join(".codex/skills/example-migration");
+            fs::create_dir_all(&managed_skill_dir).expect("create managed skill dir");
+            fs::create_dir_all(&external_skill_dir).expect("create external skill dir");
+            fs::write(
+                managed_skill_dir.join("SKILL.md"),
+                "# managed example-migration",
+            )
+            .expect("write managed skill file");
+            fs::write(
+                external_skill_dir.join("SKILL.md"),
+                "# external example-migration",
+            )
+            .expect("write external skill file");
+
+            let candidates = scan_local_skill_candidates(&[]);
+
+            assert!(candidates.is_empty());
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn local_candidate_scan_keeps_symlink_to_non_skillm_source() {
+        with_temp_home(|temp_home| {
+            let legacy_skill_dir = temp_home.join(".skills-managers/skills/example-migration");
+            let codex_skills_root = temp_home.join(".codex/skills");
+            let codex_skill_link = codex_skills_root.join("example-migration");
+            fs::create_dir_all(&legacy_skill_dir).expect("create legacy skill dir");
+            fs::create_dir_all(&codex_skills_root).expect("create codex skills dir");
+            fs::write(legacy_skill_dir.join("SKILL.md"), "# example-migration")
+                .expect("write legacy skill file");
+            std::os::unix::fs::symlink(&legacy_skill_dir, &codex_skill_link)
+                .expect("create legacy skill symlink");
+
+            let candidates = scan_local_skill_candidates(&[]);
+
+            assert_eq!(
+                candidates,
+                vec![(
+                    "example-migration".to_string(),
+                    codex_skills_root.to_string_lossy().to_string()
+                )]
+            );
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn local_candidate_scan_skips_external_symlink_when_skillm_has_same_skill() {
+        with_temp_home(|temp_home| {
+            let managed_skill_dir = temp_home.join(".skillm/skills/example-migration");
+            let legacy_skill_dir = temp_home.join(".skills-managers/skills/example-migration");
+            let codex_skills_root = temp_home.join(".codex/skills");
+            let codex_skill_link = codex_skills_root.join("example-migration");
+            fs::create_dir_all(&managed_skill_dir).expect("create managed skill dir");
+            fs::create_dir_all(&legacy_skill_dir).expect("create legacy skill dir");
+            fs::create_dir_all(&codex_skills_root).expect("create codex skills dir");
+            fs::write(
+                managed_skill_dir.join("SKILL.md"),
+                "# managed example-migration",
+            )
+            .expect("write managed skill file");
+            fs::write(legacy_skill_dir.join("SKILL.md"), "# example-migration")
+                .expect("write legacy skill file");
+            std::os::unix::fs::symlink(&legacy_skill_dir, &codex_skill_link)
+                .expect("create legacy skill symlink");
+
+            let candidates = scan_local_skill_candidates(&[]);
+
+            assert!(candidates.is_empty());
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn local_candidate_scan_skips_external_symlink_when_skillm_has_nested_same_skill() {
+        with_temp_home(|temp_home| {
+            let managed_skill_dir =
+                temp_home.join(".skillm/skills/example-migration/skills/example-migration");
+            let legacy_skill_dir = temp_home.join(".skills-managers/skills/example-migration");
+            let codex_skills_root = temp_home.join(".codex/skills");
+            let codex_skill_link = codex_skills_root.join("example-migration");
+            fs::create_dir_all(&managed_skill_dir).expect("create nested managed skill dir");
+            fs::create_dir_all(&legacy_skill_dir).expect("create legacy skill dir");
+            fs::create_dir_all(&codex_skills_root).expect("create codex skills dir");
+            fs::write(
+                managed_skill_dir.join("SKILL.md"),
+                "# managed example-migration",
+            )
+            .expect("write nested managed skill file");
+            fs::write(legacy_skill_dir.join("SKILL.md"), "# example-migration")
+                .expect("write legacy skill file");
+            std::os::unix::fs::symlink(&legacy_skill_dir, &codex_skill_link)
+                .expect("create legacy skill symlink");
+
+            let installed_skills = vec![test_skill_summary("example-migration", &managed_skill_dir)];
+            let candidates = scan_local_skill_candidates(&installed_skills);
+
+            assert!(candidates.is_empty());
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn local_candidate_scan_skips_symlinked_managed_skills() {
+        with_temp_home(|temp_home| {
+            let managed_skill_dir = temp_home.join(".skillm/skills/managed-skill");
+            let cursor_skills_root = temp_home.join(".cursor/skills");
+            let cursor_skill_link = cursor_skills_root.join("managed-skill");
+            fs::create_dir_all(&managed_skill_dir).expect("create managed skill dir");
+            fs::create_dir_all(&cursor_skills_root).expect("create cursor skills dir");
+            fs::write(managed_skill_dir.join("SKILL.md"), "# managed-skill")
+                .expect("write managed skill file");
+            std::os::unix::fs::symlink(&managed_skill_dir, &cursor_skill_link)
+                .expect("create managed skill symlink");
+
+            let installed_skills = vec![SkillSummary {
+                name: "managed-skill".into(),
+                source_label: "GitHub".into(),
+                source_type: "github".into(),
+                source_url: "https://github.com/demo/managed-skill".into(),
+                description: "managed".into(),
+                local_path: managed_skill_dir.to_string_lossy().to_string(),
+                branch: "main".into(),
+                collab_status: "clean".into(),
+                status_text: "ok".into(),
+                remote_updated_at: "刚刚".into(),
+                local_updated_at: "刚刚".into(),
+                last_synced_at: "刚刚".into(),
+                last_checked_at: "刚刚".into(),
+                synced_tool_count: 1,
+                last_editor: "".into(),
+                commit_label: "abc123".into(),
+                git_linked: false,
+                tools: vec![],
+            }];
+
+            let candidates = scan_local_skill_candidates(&installed_skills);
+
+            assert!(candidates.is_empty());
         });
     }
 }
