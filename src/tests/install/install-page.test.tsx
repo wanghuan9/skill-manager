@@ -28,6 +28,7 @@ test("renders install-source and repository install panels", async () => {
   render(<App />);
   await userEvent.click(screen.getByRole("button", { name: /安装/ }));
   expect(screen.getByRole("heading", { name: "安装", level: 1 })).toBeInTheDocument();
+  expect(screen.getByText("通过安装源、Git 仓库或本地目录纳入新的 skill 和 MCP")).toBeInTheDocument();
   expect(screen.getByRole("tab", { name: "Skill" })).toHaveAttribute("aria-selected", "true");
   expect(screen.getByRole("tab", { name: "MCP" })).toBeInTheDocument();
   expect(screen.getByRole("tab", { name: "市场安装" })).toBeInTheDocument();
