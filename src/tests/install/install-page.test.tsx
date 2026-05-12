@@ -78,6 +78,7 @@ test("keeps MCP marketplace card and detail metadata consistent", async () => {
   await userEvent.click(context7Heading);
 
   const detailDialog = screen.getByRole("dialog", { name: "context7 详情" });
+  expect(within(detailDialog).getByRole("link", { name: "打开仓库" })).toBeInTheDocument();
   expect(within(detailDialog).getByText("来源: mcp.directory")).toBeInTheDocument();
   expect(within(detailDialog).getByText("作者: upstash")).toBeInTheDocument();
   expect(within(detailDialog).getByText("下载量: 36.7K")).toBeInTheDocument();
@@ -365,6 +366,51 @@ test("searches MCP marketplace and restores browse pagination after clearing que
   expect(await screen.findByText("已加载全部 MCP")).toBeInTheDocument();
 });
 
+test("loads appended MCP marketplace avatars eagerly after scrolling", async () => {
+  window.localStorage.clear();
+  resetMcpMarketplaceRuntimeCache();
+  const pagedServers = Array.from({ length: 25 }, (_, index) => ({
+    ...mcpMarketplaceServerFixtures[0],
+    id: `mcp-directory-server-${index + 1}`,
+    name: `server-${index + 1}`,
+    sourceUrl: `https://github.com/demo/server-${index + 1}`,
+    marketplaceUrl: `https://mcp.directory/servers/server-${index + 1}`,
+    avatarUrl: `https://github.com/demo-${index + 1}.png`,
+  }));
+  const fetchMcpMarketplaceServersSpy = vi
+    .spyOn(skillClient, "fetchMcpMarketplaceServers")
+    .mockImplementation(async ({ page = 1, limit = 24 }) => {
+      const startIndex = (page - 1) * limit;
+      return pagedServers.slice(startIndex, startIndex + limit);
+    });
+
+  render(<App />);
+  await userEvent.click(screen.getByRole("button", { name: /安装/ }));
+  await userEvent.click(screen.getByRole("tab", { name: "MCP" }));
+
+  expect(await screen.findByRole("heading", { name: "server-1", level: 3 })).toBeInTheDocument();
+
+  scrollPageContentToBottom();
+
+  const serverHeading = await screen.findByRole("heading", { name: "server-25", level: 3 });
+  const serverCard = serverHeading.closest("article");
+  if (!serverCard) {
+    throw new Error("server-25 marketplace card was not rendered");
+  }
+
+  const avatarImage = serverCard.querySelector<HTMLImageElement>("img.install-card__avatar-image");
+  if (!avatarImage) {
+    throw new Error("server-25 avatar image was not rendered");
+  }
+
+  expect(avatarImage).toHaveAttribute("loading", "eager");
+
+  fireEvent.load(avatarImage);
+
+  expect(avatarImage).toHaveClass("is-loaded");
+  fetchMcpMarketplaceServersSpy.mockRestore();
+});
+
 test("keeps the current MCP list visible until pending search results return", async () => {
   window.localStorage.clear();
   resetMcpMarketplaceRuntimeCache();
@@ -454,9 +500,10 @@ test("hydrates MCP marketplace from persisted cache on first open", async () => 
   });
 });
 
-test("resolves GitHub source links when MCP marketplace list still returns detail pages", async () => {
+test("prefetches GitHub source links and reuses the in-flight request on click", async () => {
   window.localStorage.clear();
   resetMcpMarketplaceRuntimeCache();
+  let resolveSourceUrl!: (value: string) => void;
   const fetchSpy = vi
     .spyOn(skillClient, "fetchMcpMarketplaceServers")
     .mockResolvedValue(
@@ -467,26 +514,44 @@ test("resolves GitHub source links when MCP marketplace list still returns detai
     );
   const resolveSpy = vi
     .spyOn(skillClient, "resolveMcpMarketplaceSourceUrl")
-    .mockResolvedValue("https://github.com/upstash/context7");
+    .mockImplementation((server) => {
+      if (server.name !== "context7") {
+        return Promise.resolve(server.sourceUrl);
+      }
+
+      return new Promise<string>((resolve) => {
+        resolveSourceUrl = resolve;
+      });
+    });
   const openSpy = vi.spyOn(window, "open").mockImplementation(() => null);
 
   render(<App />);
   await userEvent.click(screen.getByRole("button", { name: /安装/ }));
   await userEvent.click(screen.getByRole("tab", { name: "MCP" }));
 
-  const sourceLink = await screen.findByRole("link", { name: "打开 context7 来源" });
+  const sourceLink = await screen.findByRole("link", { name: "打开 context7 仓库" });
+  await waitFor(() => {
+    expect(resolveSpy).toHaveBeenCalledWith(expect.objectContaining({
+      name: "context7",
+      sourceUrl: "https://mcp.directory/servers/context7",
+    }));
+  });
   await userEvent.click(sourceLink);
 
+  const prefetchedServerCount = mcpMarketplaceServerFixtures.length;
   expect(fetchSpy).toHaveBeenCalled();
-  expect(resolveSpy).toHaveBeenCalledWith(expect.objectContaining({
-    name: "context7",
-    sourceUrl: "https://mcp.directory/servers/context7",
-  }));
-  expect(openSpy).toHaveBeenCalledWith(
-    "https://github.com/upstash/context7",
-    "_blank",
-    "noopener,noreferrer",
-  );
+  expect(resolveSpy).toHaveBeenCalledTimes(prefetchedServerCount);
+  expect(openSpy).not.toHaveBeenCalled();
+
+  resolveSourceUrl("https://github.com/upstash/context7");
+  await waitFor(() => {
+    expect(resolveSpy).toHaveBeenCalledTimes(prefetchedServerCount);
+    expect(openSpy).toHaveBeenCalledWith(
+      "https://github.com/upstash/context7",
+      "_blank",
+      "noopener,noreferrer",
+    );
+  });
 
   fetchSpy.mockRestore();
   resolveSpy.mockRestore();

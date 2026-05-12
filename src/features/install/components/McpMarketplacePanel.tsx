@@ -24,7 +24,7 @@ import {
 const MCP_MARKETPLACE_PAGE_SIZE = 24;
 const MCP_MARKETPLACE_SOURCE_SITE = "MCP.Directory";
 const MCP_MARKETPLACE_SOURCE_LABEL = "mcp.directory";
-const MCP_AVATAR_PRIORITY_COUNT = 12;
+const MCP_SOURCE_URL_PREFETCH_COUNT = 8;
 const MCP_MARKETPLACE_RUNTIME_CACHE_KEY = "__SKILLM_MCP_MARKETPLACE_CACHE__";
 const MCP_MARKETPLACE_PERSISTED_CACHE_KEY = "skillm.mcpMarketplaceCache";
 const MCP_MARKETPLACE_PERSISTED_CACHE_VERSION = 2;
@@ -294,6 +294,7 @@ export function McpMarketplacePanel(props: McpMarketplacePanelProps) {
   const { appSettings } = useSkillWorkspace();
   const configCacheRef = useRef<Map<string, Record<string, unknown> | null>>(new Map());
   const resolvedSourceUrlCacheRef = useRef<Map<string, string>>(new Map());
+  const resolvedSourceUrlPromiseCacheRef = useRef<Map<string, Promise<string>>>(new Map());
   const initialCachedSnapshot = readCachedMcpSnapshot(searchQuery);
   const [servers, setServers] = useState<McpMarketplaceServer[]>(() => initialCachedSnapshot?.servers ?? []);
   const [installedServerIds, setInstalledServerIds] = useState<Set<string>>(() => getCachedInstalledServerIds());
@@ -371,18 +372,43 @@ export function McpMarketplacePanel(props: McpMarketplacePanelProps) {
     setSelectedServer(applyCachedServerConfig(server));
   }, [applyCachedServerConfig]);
 
-  const handleOpenSource = useCallback(async (server: McpMarketplaceServer) => {
+  const resolveAndCacheSourceUrl = useCallback((server: McpMarketplaceServer) => {
     const cachedResolvedSourceUrl = resolvedSourceUrlCacheRef.current.get(server.id);
-    const resolvedSourceUrl = cachedResolvedSourceUrl
-      ?? await resolveMcpMarketplaceSourceUrl(server);
+    if (cachedResolvedSourceUrl) {
+      return Promise.resolve(cachedResolvedSourceUrl);
+    }
+
+    const resolvingSourceUrl = resolvedSourceUrlPromiseCacheRef.current.get(server.id);
+    if (resolvingSourceUrl) {
+      return resolvingSourceUrl;
+    }
+
     const fallbackSourceUrl = resolveServerSourceUrl(server);
-    const nextSourceUrl = resolvedSourceUrl.trim() || fallbackSourceUrl;
-    if (!cachedResolvedSourceUrl && nextSourceUrl) {
-      resolvedSourceUrlCacheRef.current.set(server.id, nextSourceUrl);
+    const nextResolvingSourceUrl = resolveMcpMarketplaceSourceUrl(server)
+      .then((resolvedSourceUrl) => resolvedSourceUrl.trim() || fallbackSourceUrl)
+      .catch(() => fallbackSourceUrl)
+      .then((nextSourceUrl) => {
+        if (nextSourceUrl) {
+          resolvedSourceUrlCacheRef.current.set(server.id, nextSourceUrl);
+        }
+        return nextSourceUrl;
+      })
+      .finally(() => {
+        resolvedSourceUrlPromiseCacheRef.current.delete(server.id);
+      });
+
+    resolvedSourceUrlPromiseCacheRef.current.set(server.id, nextResolvingSourceUrl);
+    return nextResolvingSourceUrl;
+  }, []);
+
+  const handleOpenSource = useCallback(async (server: McpMarketplaceServer) => {
+    const nextSourceUrl = await resolveAndCacheSourceUrl(server);
+    if (!nextSourceUrl) {
+      return;
     }
 
     await openExternalLink(nextSourceUrl);
-  }, []);
+  }, [resolveAndCacheSourceUrl]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -489,20 +515,11 @@ export function McpMarketplacePanel(props: McpMarketplacePanelProps) {
   }, [hasMore]);
 
   useEffect(() => {
-    const avatarUrls = servers
-      .map((server) => getOptimizedMcpAvatarUrl(server.avatarUrl))
-      .filter((url): url is string => Boolean(url));
-
-    for (const avatarUrl of avatarUrls) {
-      if (prefetchedAvatarUrls.has(avatarUrl)) {
-        continue;
-      }
-      prefetchedAvatarUrls.add(avatarUrl);
-      const image = new Image();
-      image.decoding = "async";
-      image.src = avatarUrl;
+    const prefetchSourceServers = servers.slice(0, MCP_SOURCE_URL_PREFETCH_COUNT);
+    for (const server of prefetchSourceServers) {
+      void resolveAndCacheSourceUrl(server);
     }
-  }, [servers]);
+  }, [resolveAndCacheSourceUrl, servers]);
 
   async function handleLoadMore() {
     if (isLoading || isLoadingMore || !hasMore) {
@@ -666,7 +683,7 @@ export function McpMarketplacePanel(props: McpMarketplacePanelProps) {
           </section>
         ) : servers.length > 0 ? (
           <>
-            {servers.map((server, index) => {
+            {servers.map((server) => {
               const resolvedId = normalizeMcpServerId(server.name);
               const isInstalled = installedServerIds.has(resolvedId);
               const isInstalling = installingServerIds.has(server.id);
@@ -684,14 +701,14 @@ export function McpMarketplacePanel(props: McpMarketplacePanelProps) {
                   >
                     <div className="install-card__header">
                       <div className="install-card__lead">
-                        <McpMarketplaceAvatar server={server} priority={index < MCP_AVATAR_PRIORITY_COUNT} />
+                        <McpMarketplaceAvatar server={server} />
                         <div className="install-card__title-group">
                           <div className="install-card__title-row">
                             <h3 title={server.name}>{server.name}</h3>
                             <a
                               className="install-card__link"
                               href={sourceUrl}
-                              aria-label={`打开 ${server.name} 来源`}
+                              aria-label={`打开 ${server.name} 仓库`}
                               onClick={(event) => {
                                 event.preventDefault();
                                 event.stopPropagation();
@@ -860,7 +877,7 @@ function McpServerDetailModal(props: McpServerDetailModalProps) {
               }}
             >
               <ExternalLinkIcon />
-              打开来源
+              打开仓库
             </a>
             <button className="skill-detail-modal__close" type="button" onClick={onClose} aria-label="关闭详情">
               ×
@@ -895,10 +912,9 @@ function normalizeMcpServerId(name: string) {
   return normalized || "mcp-server";
 }
 
-const prefetchedAvatarUrls = new Set<string>();
-
-function McpMarketplaceAvatar(props: { server: McpMarketplaceServer; priority: boolean }) {
-  const { server, priority } = props;
+function McpMarketplaceAvatar(props: { server: McpMarketplaceServer }) {
+  const { server } = props;
+  const imageRef = useRef<HTMLImageElement | null>(null);
   const [isLoaded, setIsLoaded] = useState(false);
   const [hasFailed, setHasFailed] = useState(false);
   const avatarUrl = getOptimizedMcpAvatarUrl(server.avatarUrl);
@@ -908,6 +924,20 @@ function McpMarketplaceAvatar(props: { server: McpMarketplaceServer; priority: b
     setIsLoaded(false);
     setHasFailed(false);
   }, [avatarUrl]);
+
+  useEffect(() => {
+    const image = imageRef.current;
+    if (!image || !shouldLoadImage || !image.complete) {
+      return;
+    }
+
+    if (image.naturalWidth > 0) {
+      setIsLoaded(true);
+      return;
+    }
+
+    setHasFailed(true);
+  }, [avatarUrl, shouldLoadImage]);
 
   const avatarClassName = [
     "install-card__avatar",
@@ -920,12 +950,12 @@ function McpMarketplaceAvatar(props: { server: McpMarketplaceServer; priority: b
       <McpIcon />
       {shouldLoadImage ? (
         <img
+          ref={imageRef}
           className={`install-card__avatar-image${isLoaded ? " is-loaded" : ""}`}
           src={avatarUrl}
           alt=""
-          loading={priority ? "eager" : "lazy"}
+          loading="eager"
           decoding="async"
-          {...{ fetchpriority: priority ? "high" : "auto" }}
           onLoad={() => setIsLoaded(true)}
           onError={() => setHasFailed(true)}
         />
