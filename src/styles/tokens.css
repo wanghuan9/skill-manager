@@ -4798,34 +4798,11 @@ code {
 
 .settings-tool-grid {
   --settings-tool-grid-row-gap: 8px;
-  --settings-tool-grid-max-height: 354px;
 
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: var(--settings-tool-grid-row-gap);
-  max-height: var(--settings-tool-grid-max-height);
-  overflow-y: auto;
-  overscroll-behavior: contain;
   padding: 0 20px 18px;
-  scrollbar-gutter: stable;
-}
-
-.settings-tool-grid::-webkit-scrollbar {
-  width: 8px;
-}
-
-.settings-tool-grid::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.settings-tool-grid::-webkit-scrollbar-thumb {
-  border: 2px solid rgba(255, 255, 255, 0.72);
-  border-radius: 999px;
-  background: rgba(123, 140, 166, 0.36);
-}
-
-.settings-tool-grid::-webkit-scrollbar-thumb:hover {
-  background: rgba(96, 113, 139, 0.48);
 }
 
 .settings-panel--tool-status {
@@ -4983,8 +4960,6 @@ code {
 
 @media (max-width: 700px) {
   .settings-tool-grid {
-    --settings-tool-grid-max-height: 334px;
-
     grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
     padding-right: 14px;
     padding-left: 14px;
