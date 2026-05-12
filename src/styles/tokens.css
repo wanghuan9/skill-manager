@@ -299,6 +299,123 @@ code {
   height: 16px;
 }
 
+.app-update-notice {
+  position: fixed;
+  top: 8px;
+  left: 84px;
+  z-index: 1200;
+}
+
+.app-update-pill {
+  min-width: 56px;
+  height: 24px;
+  border: 1px solid rgba(115, 140, 255, 0.5);
+  border-radius: 999px;
+  padding: 0 11px;
+  background: #6c7dff;
+  color: #ffffff;
+  font-size: 0.72rem;
+  font-weight: 600;
+  box-shadow: 0 6px 14px rgba(68, 89, 210, 0.24);
+  cursor: pointer;
+}
+
+.app-update-pill:hover,
+.app-update-pill.is-open {
+  background: #596cf0;
+}
+
+.app-update-pill:disabled {
+  cursor: wait;
+  opacity: 0.86;
+}
+
+.app-update-popover {
+  position: absolute;
+  top: 32px;
+  left: 0;
+  width: min(348px, calc(100vw - 20px));
+  max-height: min(560px, calc(100vh - 52px));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid rgba(207, 216, 230, 0.92);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.98);
+  color: #111827;
+  box-shadow: 0 18px 44px rgba(35, 49, 79, 0.16);
+  backdrop-filter: blur(18px);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-4px);
+  transition:
+    opacity 120ms ease,
+    transform 120ms ease,
+    visibility 120ms ease;
+  visibility: hidden;
+}
+
+.app-update-notice:hover .app-update-popover,
+.app-update-notice:focus-within .app-update-popover,
+.app-update-notice.is-panel-open .app-update-popover {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
+  visibility: visible;
+}
+
+.app-update-popover__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 16px 16px 12px;
+  border-bottom: 1px solid rgba(220, 226, 236, 0.94);
+}
+
+.app-update-popover__header h2,
+.app-update-popover__header p,
+.app-update-popover__content p,
+.app-update-popover__progress {
+  margin: 0;
+}
+
+.app-update-popover__header h2 {
+  font-size: 0.95rem;
+  line-height: 1.25;
+  color: #111827;
+}
+
+.app-update-popover__header p,
+.app-update-popover__content p,
+.app-update-popover__progress {
+  font-size: 0.78rem;
+  line-height: 1.55;
+  color: #667085;
+}
+
+.app-update-popover__content {
+  display: grid;
+  gap: 8px;
+  overflow: auto;
+  padding: 12px 16px;
+}
+
+.app-update-popover__content p:not(.is-bullet) {
+  color: #263142;
+  font-weight: 700;
+}
+
+.app-update-popover__content p.is-bullet {
+  padding-left: 10px;
+  color: #475467;
+}
+
+.app-update-popover__progress {
+  padding: 0 16px 12px;
+  color: #4052d6;
+}
+
 @keyframes notification-enter {
   from {
     opacity: 0;
@@ -4754,6 +4871,19 @@ button.settings-form-item:disabled {
   max-width: 100%;
 }
 
+.settings-update-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  width: fit-content;
+  min-width: 260px;
+}
+
+.settings-update-button {
+  min-width: 104px;
+}
+
 .settings-toggle-control {
   display: inline-flex;
   align-items: center;
@@ -5948,6 +6078,10 @@ button.settings-form-item:disabled {
 }
 
 @media (max-width: 760px) {
+  .app-update-notice {
+    left: 84px;
+  }
+
   .settings-form-item {
     grid-template-columns: 1fr;
     align-items: stretch;
@@ -5967,6 +6101,16 @@ button.settings-form-item:disabled {
 
   .settings-toggle-control {
     justify-content: space-between;
+  }
+
+  .settings-update-actions {
+    width: 100%;
+    min-width: 0;
+    justify-content: stretch;
+  }
+
+  .settings-update-actions button {
+    flex: 1;
   }
 
   .settings-open-button {

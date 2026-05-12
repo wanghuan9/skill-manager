@@ -74,6 +74,22 @@ test("expands tool status when clicking the hint copy", async () => {
   expect(screen.getByText("CodeBuddy")).toBeInTheDocument();
 });
 
+test("checks app updates from settings", async () => {
+  window.localStorage.clear();
+  render(<App />);
+
+  await userEvent.click(screen.getByRole("button", { name: /设置/ }));
+
+  expect(screen.getByText("软件更新")).toBeInTheDocument();
+  expect(await screen.findByText("0.1.0")).toBeInTheDocument();
+  expect(screen.getByText("尚未检查更新")).toBeInTheDocument();
+
+  await userEvent.click(screen.getByRole("button", { name: "检查更新" }));
+
+  expect(await screen.findByText("当前已经是最新版本")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "下载并重启" })).toBeDisabled();
+});
+
 test("opens storage path in Finder from settings", async () => {
   window.localStorage.clear();
   const invokeMock = vi.mocked(invoke);

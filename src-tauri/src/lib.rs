@@ -16,10 +16,14 @@ pub fn run() {
                         .build(),
                 )?;
             }
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            app.handle()
+                .plugin(tauri_plugin_updater::Builder::new().build())?;
             let _ = library::remove_reserved_workspace_symlinks_from_all_tools();
             Ok(())
         })
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_process::init())
         .invoke_handler(tauri::generate_handler![
             commands::get_workspace_snapshot,
             commands::list_startup_installed_skills,

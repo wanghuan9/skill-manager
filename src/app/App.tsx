@@ -7,6 +7,7 @@ import { SettingsRoute } from "@/app/routes/settings";
 import { FeedbackRoute } from "@/app/routes/feedback";
 import { NotificationProvider } from "@/app/notifications";
 import { waitForNextPaint } from "@/app/utils/wait-for-next-paint";
+import { AppUpdateAutoPrompt } from "@/features/app-update/AppUpdateAutoPrompt";
 import { SkillWorkspaceProvider, useSkillWorkspace } from "@/features/skills/state/skill-workspace";
 import { SkillListToolbar } from "@/features/skills/components/SkillListPage";
 import type { SkillStatusFilter } from "@/features/skills/state/skill-store";
@@ -502,6 +503,7 @@ export function App() {
   return (
     <SkillWorkspaceProvider>
       <NotificationProvider>
+        <AppUpdateAutoPrompt />
         <AppContent />
       </NotificationProvider>
     </SkillWorkspaceProvider>

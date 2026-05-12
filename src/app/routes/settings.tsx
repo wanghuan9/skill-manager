@@ -1,5 +1,11 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
+import {
+  type AppUpdateCheckResult,
+  type AppUpdateProgress,
+  checkForAppUpdate,
+  fetchCurrentAppVersion,
+} from "@/features/app-update/app-update-client";
 import { useSkillWorkspace } from "@/features/skills/state/skill-workspace";
 import {
   buildOpenToolOptions,
@@ -43,6 +49,27 @@ function getDirectoryPath(filePath: string) {
   return normalizedPath.slice(0, lastSeparatorIndex);
 }
 
+function formatUpdateSize(progress: AppUpdateProgress) {
+  if (!progress.totalBytes) {
+    return `${formatBytes(progress.downloadedBytes)} 已下载`;
+  }
+
+  return `${formatBytes(progress.downloadedBytes)} / ${formatBytes(progress.totalBytes)}`;
+}
+
+function formatBytes(bytes: number) {
+  if (bytes <= 0) {
+    return "0 B";
+  }
+
+  const units = ["B", "KB", "MB", "GB"];
+  const unitIndex = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+  const value = bytes / 1024 ** unitIndex;
+  const precision = unitIndex === 0 ? 0 : 1;
+
+  return `${value.toFixed(precision)} ${units[unitIndex]}`;
+}
+
 type SettingsFormItem = {
   label: string;
   description: string;
@@ -73,10 +100,37 @@ export function SettingsRoute() {
     : openToolOptions[0]?.id ?? "";
   const [isToolStatusExpanded, setIsToolStatusExpanded] = useState(false);
   const [isOpeningStoragePath, setIsOpeningStoragePath] = useState(false);
+  const [currentAppVersion, setCurrentAppVersion] = useState("");
+  const [appUpdate, setAppUpdate] = useState<AppUpdateCheckResult | null>(null);
+  const [appUpdateStatus, setAppUpdateStatus] = useState<
+    "idle" | "checking" | "available" | "not-available" | "installing" | "error"
+  >("idle");
+  const [appUpdateMessage, setAppUpdateMessage] = useState("尚未检查更新");
+  const [appUpdateProgress, setAppUpdateProgress] = useState<AppUpdateProgress | null>(null);
   const toolStatusPanelClassName = `panel-card placeholder-panel settings-panel settings-panel--tool-status${
     isToolStatusExpanded ? "" : " is-clickable"
   }`;
   const storageDirectoryPath = getDirectoryPath(appSettings.storagePath);
+
+  useEffect(() => {
+    let shouldIgnore = false;
+
+    void fetchCurrentAppVersion()
+      .then((version) => {
+        if (!shouldIgnore) {
+          setCurrentAppVersion(version);
+        }
+      })
+      .catch(() => {
+        if (!shouldIgnore) {
+          setCurrentAppVersion("未知");
+        }
+      });
+
+    return () => {
+      shouldIgnore = true;
+    };
+  }, []);
 
   async function handleOpenStoragePath() {
     if (!storageDirectoryPath || isOpeningStoragePath) {
@@ -88,6 +142,52 @@ export function SettingsRoute() {
       await openPathInFinder(storageDirectoryPath);
     } finally {
       setIsOpeningStoragePath(false);
+    }
+  }
+
+  async function handleCheckAppUpdate() {
+    if (appUpdateStatus === "checking" || appUpdateStatus === "installing") {
+      return;
+    }
+
+    setAppUpdateStatus("checking");
+    setAppUpdateMessage("正在检查 GitHub Releases...");
+    setAppUpdateProgress(null);
+
+    try {
+      const update = await checkForAppUpdate();
+      setCurrentAppVersion(update.currentVersion);
+      setAppUpdate(update);
+
+      if (update.available) {
+        setAppUpdateStatus("available");
+        setAppUpdateMessage(`发现新版本 ${update.version}`);
+        return;
+      }
+
+      setAppUpdateStatus("not-available");
+      setAppUpdateMessage("当前已经是最新版本");
+    } catch (error) {
+      setAppUpdateStatus("error");
+      setAppUpdateMessage(error instanceof Error ? error.message : "检查更新失败");
+    }
+  }
+
+  async function handleInstallAppUpdate() {
+    if (!appUpdate?.install || appUpdateStatus === "installing") {
+      return;
+    }
+
+    setAppUpdateStatus("installing");
+    setAppUpdateMessage("正在下载并安装更新...");
+
+    try {
+      await appUpdate.install((progress) => {
+        setAppUpdateProgress(progress);
+      });
+    } catch (error) {
+      setAppUpdateStatus("error");
+      setAppUpdateMessage(error instanceof Error ? error.message : "安装更新失败");
     }
   }
 
@@ -232,6 +332,51 @@ export function SettingsRoute() {
                 </div>
               );
             })}
+          </div>
+        </div>
+      </section>
+
+      <section className="settings-group">
+        <div className="settings-group__heading">
+          <span className="settings-group__bar" aria-hidden="true" />
+          <h2 className="settings-group__title">软件更新</h2>
+        </div>
+        <div className="panel-card placeholder-panel settings-panel settings-panel--module">
+          <div className="settings-form-list">
+            <div className="settings-form-item settings-form-item--readonly">
+              <div className="settings-form-item__copy">
+                <span className="settings-form-item__title">当前版本</span>
+                <p>应用会从 GitHub Releases 检查新版本，下载安装后自动重启。</p>
+              </div>
+              <div className="settings-form-item__value">
+                {currentAppVersion || "读取中..."}
+              </div>
+            </div>
+            <div className="settings-form-item">
+              <div className="settings-form-item__copy">
+                <span className="settings-form-item__title">更新状态</span>
+                <p>{appUpdateMessage}</p>
+                {appUpdateProgress ? <p>{formatUpdateSize(appUpdateProgress)}</p> : null}
+              </div>
+              <div className="settings-form-item__control settings-update-actions">
+                <button
+                  className="secondary-button secondary-button--compact"
+                  type="button"
+                  onClick={() => void handleCheckAppUpdate()}
+                  disabled={appUpdateStatus === "checking" || appUpdateStatus === "installing"}
+                >
+                  {appUpdateStatus === "checking" ? "检查中..." : "检查更新"}
+                </button>
+                <button
+                  className="primary-button settings-update-button"
+                  type="button"
+                  onClick={() => void handleInstallAppUpdate()}
+                  disabled={!appUpdate?.install || appUpdateStatus === "installing"}
+                >
+                  {appUpdateStatus === "installing" ? "安装中..." : "下载并重启"}
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       </section>
