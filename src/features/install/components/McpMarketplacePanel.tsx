@@ -272,6 +272,7 @@ export function McpMarketplacePanel(props: McpMarketplacePanelProps) {
   const loadMoreRef = useRef<() => Promise<void>>(async () => undefined);
   const normalizedQuery = debouncedQuery.trim();
   const isSearching = normalizedQuery.length > 0;
+  const showLoadingPlaceholder = isLoading && servers.length === 0;
   const installHint =
     appSettings.mcpInstallActivation === "apply-all-tools"
       ? "安装后默认同步到所有已支持应用"
@@ -552,7 +553,7 @@ export function McpMarketplacePanel(props: McpMarketplacePanelProps) {
       </div>
 
       <div className="install-grid">
-        {isLoading ? (
+        {showLoadingPlaceholder ? (
           <section className="placeholder-card">
             <h3>正在搜索 MCP</h3>
             <p>{normalizedQuery ? `正在从 ${MCP_MARKETPLACE_SOURCE_LABEL} 搜索 "${normalizedQuery}"...` : `正在加载 ${MCP_MARKETPLACE_SOURCE_LABEL} 真实服务列表。`}</p>

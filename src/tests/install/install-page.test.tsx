@@ -266,6 +266,50 @@ test("searches MCP marketplace and restores browse pagination after clearing que
   expect(await screen.findByText("已加载全部 MCP")).toBeInTheDocument();
 });
 
+test("keeps the current MCP list visible until pending search results return", async () => {
+  window.localStorage.clear();
+  resetMcpMarketplaceRuntimeCache();
+  const originalFetchMcpMarketplaceServers = skillClient.fetchMcpMarketplaceServers;
+  let resolvePendingSearch:
+    | ((value: Awaited<ReturnType<typeof skillClient.fetchMcpMarketplaceServers>>) => void)
+    | null = null;
+  const fetchMcpMarketplaceServersSpy = vi
+    .spyOn(skillClient, "fetchMcpMarketplaceServers")
+    .mockImplementation((input) => {
+      if (input.query === "playwright") {
+        return new Promise((resolve) => {
+          resolvePendingSearch = resolve;
+        });
+      }
+      return originalFetchMcpMarketplaceServers(input);
+    });
+
+  render(<App />);
+  await userEvent.click(screen.getByRole("button", { name: /安装/ }));
+  await userEvent.click(screen.getByRole("tab", { name: "MCP" }));
+
+  expect(await screen.findByText("context7")).toBeInTheDocument();
+
+  const searchInput = screen.getByRole("searchbox", { name: "搜索 MCP" });
+  await userEvent.type(searchInput, "playwright");
+
+  await waitFor(() => {
+    expect(fetchMcpMarketplaceServersSpy).toHaveBeenCalledWith(expect.objectContaining({ query: "playwright" }));
+  });
+
+  expect(screen.getByText("context7")).toBeInTheDocument();
+  expect(screen.queryByText("正在搜索 MCP")).not.toBeInTheDocument();
+
+  resolvePendingSearch?.(mcpMarketplaceServerFixtures.filter((server) => server.name === "playwright"));
+
+  await waitFor(() => {
+    expect(screen.getByText("playwright")).toBeInTheDocument();
+    expect(screen.queryByText("context7")).not.toBeInTheDocument();
+  });
+
+  fetchMcpMarketplaceServersSpy.mockRestore();
+});
+
 test("reuses cached MCP marketplace results when switching away and back", async () => {
   window.localStorage.clear();
   resetMcpMarketplaceRuntimeCache();
