@@ -121,6 +121,20 @@ function resolveServerSourceUrl(server: McpMarketplaceServer) {
   return buildOfficialRepositoryUrl(server.marketplaceUrl ?? "");
 }
 
+function resolveServerMarketplaceUrl(server: McpMarketplaceServer) {
+  const explicitMarketplaceUrl = server.marketplaceUrl?.trim() ?? "";
+  if (explicitMarketplaceUrl) {
+    return explicitMarketplaceUrl;
+  }
+
+  const parsedSourceUrl = tryParseUrl(server.sourceUrl);
+  if (parsedSourceUrl?.host === "mcp.directory") {
+    return parsedSourceUrl.toString();
+  }
+
+  return "";
+}
+
 function readPersistedMcpMarketplaceCache(): PersistedMcpMarketplaceCache | null {
   if (
     typeof window === "undefined" ||
@@ -789,6 +803,7 @@ type McpServerDetailModalProps = {
 function McpServerDetailModal(props: McpServerDetailModalProps) {
   const { server, onClose, onLoadServerConfig, onOpenSource } = props;
   const sourceUrl = resolveServerSourceUrl(server);
+  const marketplaceUrl = resolveServerMarketplaceUrl(server);
   const [serverConfig, setServerConfig] = useState<Record<string, unknown> | null>(server.server ?? null);
   const [configErrorMessage, setConfigErrorMessage] = useState("");
   const [isConfigLoading, setIsConfigLoading] = useState(() => server.server == null);
@@ -868,8 +883,21 @@ function McpServerDetailModal(props: McpServerDetailModalProps) {
             <p>{server.publisher} · {server.category}</p>
           </div>
           <div className="skill-detail-modal__actions">
+            {marketplaceUrl ? (
+              <a
+                className="skill-detail-modal__action-link"
+                href={marketplaceUrl}
+                onClick={(event) => {
+                  event.preventDefault();
+                  void openExternalLink(marketplaceUrl);
+                }}
+              >
+                <ExternalLinkIcon />
+                查看商店
+              </a>
+            ) : null}
             <a
-              className="skill-detail-modal__action-link"
+              className="skill-detail-modal__action-link skill-detail-modal__action-link--primary"
               href={sourceUrl}
               onClick={(event) => {
                 event.preventDefault();

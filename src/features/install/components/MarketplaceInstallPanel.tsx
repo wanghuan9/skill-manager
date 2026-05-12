@@ -142,7 +142,7 @@ export function MarketplaceInstallPanel(props: MarketplaceInstallPanelProps) {
                         <a
                           className="install-card__link"
                           href={buildOfficialRepositoryUrl(skill.sourceUrl)}
-                          aria-label={`打开 ${skill.name} 来源`}
+                          aria-label={`打开 ${skill.name} 仓库`}
                           onClick={(event) => {
                             event.preventDefault();
                             event.stopPropagation();
@@ -275,6 +275,7 @@ function SkillDetailModal(props: SkillDetailModalProps) {
   }, [onClose]);
 
   const officialRepositoryUrl = buildOfficialRepositoryUrl(skill.sourceUrl);
+  const marketplaceUrl = resolveMarketplaceSkillUrl(skill);
 
   return (
     <div className="skill-detail-modal__backdrop" role="presentation" onClick={onClose}>
@@ -291,8 +292,21 @@ function SkillDetailModal(props: SkillDetailModalProps) {
             <p>来源 {skill.sourceSite} · 作者 {skill.maintainer}</p>
           </div>
           <div className="skill-detail-modal__actions">
+            {marketplaceUrl ? (
+              <a
+                className="skill-detail-modal__action-link"
+                href={marketplaceUrl}
+                onClick={(event) => {
+                  event.preventDefault();
+                  void openExternalLink(marketplaceUrl);
+                }}
+              >
+                <ExternalLinkIcon />
+                查看商店
+              </a>
+            ) : null}
             <a
-              className="skill-detail-modal__action-link"
+              className="skill-detail-modal__action-link skill-detail-modal__action-link--primary"
               href={officialRepositoryUrl}
               onClick={(event) => {
                 event.preventDefault();
@@ -346,12 +360,65 @@ function extractRepositoryLabel(sourceUrl: string) {
   return parsed.host;
 }
 
+function extractSkillsShMarketplacePath(skillId: string) {
+  const normalizedSkillId = skillId.trim().replace(/^skills\.sh-/, "");
+  if (!normalizedSkillId) {
+    return "";
+  }
+
+  const separatorIndex = normalizedSkillId.indexOf("::");
+  if (separatorIndex >= 0) {
+    return normalizedSkillId.slice(separatorIndex + 2).trim().toLowerCase();
+  }
+
+  return normalizedSkillId.trim().toLowerCase();
+}
+
 function tryParseUrl(value: string) {
   try {
     return new URL(value);
   } catch {
     return null;
   }
+}
+
+function resolveMarketplaceSkillUrl(skill: MarketplaceSkill) {
+  const explicitMarketplaceUrl = skill.marketplaceUrl?.trim() ?? "";
+  if (explicitMarketplaceUrl) {
+    return explicitMarketplaceUrl;
+  }
+
+  if (skill.sourceSite === "skillsmp") {
+    const marketplaceSlug = skill.id.trim().replace(/^skillsmp-/, "");
+    return marketplaceSlug ? `https://skillsmp.com/skills/${marketplaceSlug}` : "https://skillsmp.com";
+  }
+
+  if (skill.sourceSite !== "skills.sh") {
+    return "";
+  }
+
+  const parsedSourceUrl = tryParseUrl(skill.sourceUrl);
+  if (!parsedSourceUrl) {
+    return "https://skills.sh/";
+  }
+
+  const segments = parsedSourceUrl.pathname.split("/").filter(Boolean);
+  if (segments.length < 2) {
+    return "https://skills.sh/";
+  }
+
+  const owner = segments[0];
+  const repository = segments[1].replace(/\.git$/i, "");
+  const treeIndex = segments.indexOf("tree");
+  const blobIndex = segments.indexOf("blob");
+  const cutIndex = treeIndex >= 0 ? treeIndex : blobIndex;
+  const sourcePath = cutIndex >= 0 ? segments.slice(cutIndex + 2).join("/") : "";
+  const fallbackPath = extractSkillsShMarketplacePath(skill.id);
+  const marketplacePath = sourcePath || fallbackPath;
+
+  return marketplacePath
+    ? `https://skills.sh/${owner}/${repository}/${marketplacePath}`
+    : `https://skills.sh/${owner}/${repository}`;
 }
 
 function buildAvatarTone(skill: MarketplaceSkill) {

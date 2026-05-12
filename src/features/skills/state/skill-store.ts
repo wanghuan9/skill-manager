@@ -83,6 +83,7 @@ export type MarketplaceSkill = {
   updatedAt: string;
   installLabel: string;
   sourceUrl: string;
+  marketplaceUrl?: string | null;
   popularityLabel: string;
   avatarUrl?: string | null;
 };

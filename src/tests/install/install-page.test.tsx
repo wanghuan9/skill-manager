@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 import { App } from "@/app/App";
 import * as skillClient from "@/features/skills/api/skill-client";
-import { mcpMarketplaceServerFixtures } from "@/features/skills/state/skill-fixtures";
+import { marketplaceSkillFixtures, mcpMarketplaceServerFixtures } from "@/features/skills/state/skill-fixtures";
 import type { McpMarketplaceServer } from "@/features/skills/state/skill-store";
 import { getCachedMcpWorkspace } from "@/features/skills/utils/mcp-workspace-cache";
 
@@ -57,6 +57,21 @@ test("shows MCP marketplace separately from skill-only install methods", async (
   expect(screen.queryByRole("button", { name: "加载更多" })).not.toBeInTheDocument();
 });
 
+test("shows store and repository actions in skill marketplace detail", async () => {
+  render(<App />);
+  await userEvent.click(screen.getByRole("button", { name: /安装/ }));
+
+  const workflowHeading = await screen.findByRole("heading", { name: "workflow-critic", level: 3 });
+  await userEvent.click(workflowHeading);
+
+  const detailDialog = screen.getByRole("dialog", { name: "workflow-critic 详情" });
+  expect(within(detailDialog).getByRole("link", { name: "查看商店" })).toBeInTheDocument();
+  expect(within(detailDialog).getByRole("link", { name: "打开仓库" })).toBeInTheDocument();
+  expect(within(detailDialog).getByText("来源: skills.sh")).toBeInTheDocument();
+  expect(within(detailDialog).getByText("作者: skills.sh")).toBeInTheDocument();
+  expect(within(detailDialog).getByText(marketplaceSkillFixtures[0].popularityLabel)).toBeInTheDocument();
+});
+
 test("keeps MCP marketplace card and detail metadata consistent", async () => {
   window.localStorage.clear();
   resetMcpMarketplaceRuntimeCache();
@@ -78,6 +93,7 @@ test("keeps MCP marketplace card and detail metadata consistent", async () => {
   await userEvent.click(context7Heading);
 
   const detailDialog = screen.getByRole("dialog", { name: "context7 详情" });
+  expect(within(detailDialog).getByRole("link", { name: "查看商店" })).toBeInTheDocument();
   expect(within(detailDialog).getByRole("link", { name: "打开仓库" })).toBeInTheDocument();
   expect(within(detailDialog).getByText("来源: mcp.directory")).toBeInTheDocument();
   expect(within(detailDialog).getByText("作者: upstash")).toBeInTheDocument();
