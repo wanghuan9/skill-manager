@@ -35,6 +35,17 @@ function FolderOpenIcon() {
   );
 }
 
+function RefreshIcon({ isSpinning = false }: { isSpinning?: boolean }) {
+  return (
+    <svg className={isSpinning ? "settings-update-button__svg is-spinning" : "settings-update-button__svg"} viewBox="0 0 20 20" fill="none" aria-hidden="true">
+      <path d="M16.2 9.1a6.2 6.2 0 0 0-10.7-3.6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M3.7 3.9v3.7h3.7" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M3.8 10.9a6.2 6.2 0 0 0 10.7 3.6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M16.3 16.1v-3.7h-3.7" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
 function getDirectoryPath(filePath: string) {
   const normalizedPath = filePath.trim();
   if (!normalizedPath) {
@@ -111,6 +122,15 @@ export function SettingsRoute() {
     isToolStatusExpanded ? "" : " is-clickable"
   }`;
   const storageDirectoryPath = getDirectoryPath(appSettings.storagePath);
+  const isCheckingAppUpdate = appUpdateStatus === "checking";
+  const isInstallingAppUpdate = appUpdateStatus === "installing";
+  const shouldShowInstallAppUpdate = Boolean(appUpdate?.available && appUpdate?.install);
+  const appUpdateActionLabel = shouldShowInstallAppUpdate
+    ? (isInstallingAppUpdate ? "安装中..." : "下载并重启")
+    : (isCheckingAppUpdate ? "检查中..." : "检查更新");
+  const appUpdateActionClassName = shouldShowInstallAppUpdate
+    ? "primary-button primary-button--compact settings-update-button"
+    : "secondary-button secondary-button--compact settings-update-button";
 
   useEffect(() => {
     let shouldIgnore = false;
@@ -146,12 +166,13 @@ export function SettingsRoute() {
   }
 
   async function handleCheckAppUpdate() {
-    if (appUpdateStatus === "checking" || appUpdateStatus === "installing") {
+    if (isCheckingAppUpdate || isInstallingAppUpdate) {
       return;
     }
 
+    setAppUpdate(null);
     setAppUpdateStatus("checking");
-    setAppUpdateMessage("正在检查 GitHub Releases...");
+    setAppUpdateMessage("正在检查");
     setAppUpdateProgress(null);
 
     try {
@@ -161,7 +182,7 @@ export function SettingsRoute() {
 
       if (update.available) {
         setAppUpdateStatus("available");
-        setAppUpdateMessage(`发现新版本 ${update.version}`);
+        setAppUpdateMessage(update.version ? `发现新版本 ${update.version}` : "发现新版本");
         return;
       }
 
@@ -174,7 +195,7 @@ export function SettingsRoute() {
   }
 
   async function handleInstallAppUpdate() {
-    if (!appUpdate?.install || appUpdateStatus === "installing") {
+    if (!appUpdate?.install || isInstallingAppUpdate) {
       return;
     }
 
@@ -360,20 +381,19 @@ export function SettingsRoute() {
               </div>
               <div className="settings-form-item__control settings-update-actions">
                 <button
-                  className="secondary-button secondary-button--compact"
+                  className={appUpdateActionClassName}
                   type="button"
-                  onClick={() => void handleCheckAppUpdate()}
-                  disabled={appUpdateStatus === "checking" || appUpdateStatus === "installing"}
+                  onClick={() =>
+                    void (shouldShowInstallAppUpdate ? handleInstallAppUpdate() : handleCheckAppUpdate())
+                  }
+                  disabled={isCheckingAppUpdate || isInstallingAppUpdate}
                 >
-                  {appUpdateStatus === "checking" ? "检查中..." : "检查更新"}
-                </button>
-                <button
-                  className="primary-button settings-update-button"
-                  type="button"
-                  onClick={() => void handleInstallAppUpdate()}
-                  disabled={!appUpdate?.install || appUpdateStatus === "installing"}
-                >
-                  {appUpdateStatus === "installing" ? "安装中..." : "下载并重启"}
+                  {shouldShowInstallAppUpdate ? null : (
+                    <span aria-hidden="true" className="settings-update-button__icon">
+                      <RefreshIcon isSpinning={isCheckingAppUpdate} />
+                    </span>
+                  )}
+                  <span>{appUpdateActionLabel}</span>
                 </button>
               </div>
             </div>

@@ -5029,11 +5029,33 @@ button.settings-form-item:disabled {
   justify-content: flex-end;
   gap: 10px;
   width: fit-content;
-  min-width: 260px;
+  min-width: 132px;
 }
 
 .settings-update-button {
-  min-width: 104px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 132px;
+  max-width: 100%;
+}
+
+.settings-update-button__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+}
+
+.settings-update-button__icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.settings-update-button__svg.is-spinning {
+  animation: spin 0.8s linear infinite;
 }
 
 .settings-toggle-control {
@@ -6261,8 +6283,9 @@ button.settings-form-item:disabled {
     justify-content: stretch;
   }
 
-  .settings-update-actions button {
+  .settings-update-actions .settings-update-button {
     flex: 1;
+    width: 100%;
   }
 
   .settings-open-button {

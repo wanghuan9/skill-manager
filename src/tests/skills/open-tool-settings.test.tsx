@@ -3,10 +3,16 @@ import userEvent from "@testing-library/user-event";
 import { invoke } from "@tauri-apps/api/core";
 import { vi } from "vitest";
 import { App } from "@/app/App";
+import * as appUpdateClient from "@/features/app-update/app-update-client";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
 }));
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  delete (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
+});
 
 test("allows selecting default open tool in settings", async () => {
   window.localStorage.clear();
@@ -84,10 +90,39 @@ test("checks app updates from settings", async () => {
   expect(await screen.findByText("0.1.0")).toBeInTheDocument();
   expect(screen.getByText("尚未检查更新")).toBeInTheDocument();
 
-  await userEvent.click(screen.getByRole("button", { name: "检查更新" }));
+  const checkButton = screen.getByRole("button", { name: "检查更新" });
+  expect(checkButton.querySelector("svg")).not.toBeNull();
+
+  await userEvent.click(checkButton);
 
   expect(await screen.findByText("当前已经是最新版本")).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "下载并重启" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "检查更新" })).toBeEnabled();
+  expect(screen.queryByRole("button", { name: "下载并重启" })).not.toBeInTheDocument();
+});
+
+test("switches app update action to install when a new version is available", async () => {
+  window.localStorage.clear();
+  const install = vi.fn().mockResolvedValue(undefined);
+  vi.spyOn(appUpdateClient, "checkForAppUpdate").mockResolvedValue({
+    available: true,
+    currentVersion: "0.1.0",
+    version: "0.2.0",
+    install,
+  });
+
+  render(<App />);
+
+  await userEvent.click(screen.getByRole("button", { name: /设置/ }));
+  await userEvent.click(screen.getByRole("button", { name: "检查更新" }));
+
+  expect(await screen.findByText("发现新版本 0.2.0")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "检查更新" })).not.toBeInTheDocument();
+
+  await userEvent.click(screen.getByRole("button", { name: "下载并重启" }));
+
+  expect(install).toHaveBeenCalled();
+  expect(screen.getByText("正在下载并安装更新...")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "安装中..." })).toBeDisabled();
 });
 
 test("opens storage path in Finder from settings", async () => {
