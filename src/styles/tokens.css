@@ -4879,21 +4879,6 @@ code {
   font-weight: 400;
 }
 
-.main-panel[data-active-route="settings"] .page-header h1 {
-  font-family:
-    "SF Pro Text",
-    "PingFang SC",
-    "Helvetica Neue",
-    sans-serif;
-  font-size: clamp(1.18rem, 2vw, 1.46rem);
-  font-weight: 560;
-}
-
-.main-panel[data-active-route="settings"] .page-header p {
-  font-size: 0.8rem;
-  font-weight: 400;
-}
-
 .settings-grid {
   grid-template-columns: minmax(0, 1.05fr) minmax(0, 1.35fr);
 }
