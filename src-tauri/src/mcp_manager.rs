@@ -34,6 +34,7 @@ static MCP_NPM_METADATA_CACHE: OnceLock<Mutex<HashMap<String, McpResolvedMetadat
     OnceLock::new();
 static README_MARKDOWN_LINK_REGEX: OnceLock<Regex> = OnceLock::new();
 static MCP_DIRECTORY_GITHUB_URL_REGEX: OnceLock<Regex> = OnceLock::new();
+static MCP_DIRECTORY_GITHUB_BUTTON_REGEX: OnceLock<Regex> = OnceLock::new();
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum McpStdioWireFormat {
@@ -147,11 +148,6 @@ struct NpmPackageMetadata {
 }
 
 #[derive(Debug, Deserialize)]
-struct PackageJsonMetadata {
-    name: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
 #[serde(untagged)]
 enum NpmRepository {
     Object { url: Option<String> },
@@ -254,6 +250,7 @@ struct McpDirectoryInstallConfigsResponse {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct McpDirectoryInstallConfig {
+    #[allow(dead_code)]
     #[serde(default)]
     client_slug: String,
     config_json: String,
@@ -340,7 +337,7 @@ pub async fn list_mcp_marketplace_servers(
 pub async fn install_mcp_server_from_marketplace(
     server: McpMarketplaceServer,
 ) -> Result<McpWorkspaceSnapshot, String> {
-    let mut server_config = match server.server.clone() {
+    let server_config = match server.server.clone() {
         Some(config) => config,
         None => fetch_mcp_marketplace_install_config(&server)
             .await?
@@ -353,16 +350,8 @@ pub async fn install_mcp_server_from_marketplace(
         return build_mcp_workspace_snapshot();
     }
 
-    let source_url = resolve_mcp_marketplace_source_url(&server, &server_config)
-        .await
-        .unwrap_or_default();
+    let source_url = marketplace_install_source_url(&server, &server_config);
     let metadata_client = mcp_metadata_client();
-    repair_unavailable_npm_package_from_source(
-        &mut server_config,
-        &source_url,
-        metadata_client.as_ref(),
-    )
-    .await;
     validate_mcp_server(&server_id, &server_config)?;
     let mut record = McpServerRecord {
         id: server_id.clone(),
@@ -1473,6 +1462,7 @@ fn normalize_record(mut record: McpServerRecord) -> Result<McpServerRecord, Stri
     if let Some(unwrapped_server) = unwrap_mcp_filter_server(&record.server) {
         record.server = unwrapped_server;
     }
+    normalize_stdio_command_path(&mut record.server);
     normalize_npx_stdio_args(&mut record.server);
     normalize_tableau_env_aliases(&mut record.server);
     if repair_known_mcp_server_config(&mut record.server, &record.description) {
@@ -2129,6 +2119,8 @@ fn build_synced_server_config(
     server: &Value,
     tools: &[McpServerToolStatus],
 ) -> Result<Value, String> {
+    let mut normalized_server = server.clone();
+    normalize_stdio_command_path(&mut normalized_server);
     let normalized_tools = tools
         .iter()
         .map(|tool| McpServerToolStatus {
@@ -2139,12 +2131,12 @@ fn build_synced_server_config(
         .collect::<Vec<_>>();
     let has_disabled_tools = normalized_tools.iter().any(|tool| !tool.is_enabled);
     if !has_disabled_tools {
-        return Ok(server.clone());
+        return Ok(normalized_server);
     }
 
-    match mcp_server_type(server).as_str() {
-        "stdio" => build_stdio_synced_server_config(server, &normalized_tools),
-        "http" | "sse" => build_remote_synced_server_config(server, &normalized_tools),
+    match mcp_server_type(&normalized_server).as_str() {
+        "stdio" => build_stdio_synced_server_config(&normalized_server, &normalized_tools),
+        "http" | "sse" => build_remote_synced_server_config(&normalized_server, &normalized_tools),
         other => Err(format!("当前暂不支持为 {other} MCP 同步 tools 级开关")),
     }
 }
@@ -2341,34 +2333,18 @@ fn git_repository_source_url(value: &str) -> Option<String> {
     repository_parts_from_url(&normalized)
         .map(|(host, owner, repo)| format!("https://{host}/{owner}/{repo}"))
 }
-
-async fn resolve_mcp_marketplace_source_url(
-    server: &McpMarketplaceServer,
-    server_config: &Value,
-) -> Option<String> {
-    if let Some(source_url) = git_repository_source_url(&server.source_url) {
-        return Some(source_url);
-    }
-    if let Some(source_url) = server
-        .marketplace_url
-        .as_deref()
-        .and_then(git_repository_source_url)
-    {
-        return Some(source_url);
-    }
+fn marketplace_install_source_url(server: &McpMarketplaceServer, server_config: &Value) -> String {
     if let Some(source_url) = explicit_mcp_source_url(server_config) {
-        return Some(source_url);
-    }
-    if let Some(source_url) = server.server.as_ref().and_then(explicit_mcp_source_url) {
-        return Some(source_url);
+        return source_url;
     }
 
-    fetch_mcp_directory_source_url(server).await
+    if let Some(detail_url) = mcp_marketplace_detail_url(server) {
+        return detail_url;
+    }
+
+    server.source_url.trim().to_string()
 }
 
-async fn fetch_mcp_directory_source_url(server: &McpMarketplaceServer) -> Option<String> {
-    if server.source_site != "MCP.Directory" {
-        return None;
 async fn resolve_mcp_marketplace_browser_source_url(
     server: &McpMarketplaceServer,
 ) -> Option<String> {
@@ -2389,30 +2365,78 @@ async fn resolve_mcp_marketplace_browser_source_url(
     fetch_mcp_directory_source_url(server).await
 }
 
+fn mcp_marketplace_fallback_source_url(server: &McpMarketplaceServer) -> Option<String> {
+    server
+        .marketplace_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|url| !url.is_empty())
+        .map(ToString::to_string)
+        .or_else(|| {
+            let source_url = server.source_url.trim();
+            if source_url.is_empty() {
+                None
+            } else {
+                Some(source_url.to_string())
+            }
+        })
+}
+
+fn should_fallback_to_marketplace_source_url(
+    source_url: &str,
+    status_code: reqwest::StatusCode,
+) -> bool {
+    status_code == reqwest::StatusCode::NOT_FOUND && github_repo_from_url(source_url).is_some()
+}
+
+async fn github_repository_url_is_not_found(source_url: &str) -> bool {
+    if github_repo_from_url(source_url).is_none() {
+        return false;
+    }
+
+    let Some(client) = mcp_metadata_client() else {
+        return false;
+    };
+    let Ok(response) = client.head(source_url).send().await else {
+        return false;
+    };
+
+    should_fallback_to_marketplace_source_url(source_url, response.status())
+}
+
 #[tauri::command]
 pub async fn resolve_mcp_marketplace_source_link(
     server: McpMarketplaceServer,
 ) -> Result<String, String> {
+    let fallback_source_url = mcp_marketplace_fallback_source_url(&server);
     let resolved_source_url = resolve_mcp_marketplace_browser_source_url(&server)
         .await
-        .or_else(|| {
-            let fallback_source_url = server.source_url.trim();
-            if fallback_source_url.is_empty() {
-                server
-                    .marketplace_url
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|url| !url.is_empty())
-                    .map(ToString::to_string)
-            } else {
-                Some(fallback_source_url.to_string())
-            }
-        })
+        .or_else(|| fallback_source_url.clone())
         .ok_or_else(|| format!("未找到 {} 的来源地址", server.name))?;
+
+    if github_repository_url_is_not_found(&resolved_source_url).await {
+        if let Some(next_source_url) = fallback_source_url {
+            return Ok(next_source_url);
+        }
+    }
 
     Ok(resolved_source_url)
 }
 
+#[tauri::command]
+pub async fn get_mcp_marketplace_server_config(
+    server: McpMarketplaceServer,
+) -> Result<Option<Value>, String> {
+    if let Some(server_config) = server.server.clone() {
+        return Ok(Some(server_config));
+    }
+
+    fetch_mcp_marketplace_install_config(&server).await
+}
+
+async fn fetch_mcp_directory_source_url(server: &McpMarketplaceServer) -> Option<String> {
+    if server.source_site != "MCP.Directory" {
+        return None;
     }
     let detail_url = mcp_marketplace_detail_url(server)?;
     let client = mcp_http_client().ok()?;
@@ -2425,11 +2449,23 @@ pub async fn resolve_mcp_marketplace_source_link(
 }
 
 fn extract_mcp_directory_github_url(html: &str) -> Option<String> {
-    let regex = MCP_DIRECTORY_GITHUB_URL_REGEX.get_or_init(|| {
+    let payload_regex = MCP_DIRECTORY_GITHUB_URL_REGEX.get_or_init(|| {
         Regex::new(r#"(?i)(?:githubUrl\\?":\\?"|View full README on GitHub\]\()(?P<url>https://github\.com/[^"\\)\s<]+)"#)
             .expect("MCP.Directory GitHub URL regex should compile")
     });
-    regex
+    if let Some(source_url) = payload_regex
+        .captures_iter(html)
+        .filter_map(|captures| captures.name("url").map(|url| url.as_str()))
+        .find_map(git_repository_source_url)
+    {
+        return Some(source_url);
+    }
+
+    let button_regex = MCP_DIRECTORY_GITHUB_BUTTON_REGEX.get_or_init(|| {
+        Regex::new(r#"(?is)href="(?P<url>https://github\.com/[^"]+)"[^>]*>.*?GitHub(?:<|&lt;)"#)
+            .expect("MCP.Directory GitHub button regex should compile")
+    });
+    button_regex
         .captures_iter(html)
         .filter_map(|captures| captures.name("url").map(|url| url.as_str()))
         .find_map(git_repository_source_url)
@@ -2797,70 +2833,6 @@ async fn fetch_npm_package_metadata(
     response.json::<NpmPackageMetadata>().await.ok()
 }
 
-async fn repair_unavailable_npm_package_from_source(
-    server: &mut Value,
-    source_url: &str,
-    client: Option<&Client>,
-) -> bool {
-    let Some(client) = client else {
-        return false;
-    };
-    let Some(current_package_name) = npm_package_from_mcp_server(server) else {
-        return false;
-    };
-    if fetch_npm_package_metadata(client, &current_package_name)
-        .await
-        .is_some()
-    {
-        return false;
-    }
-    let Some((owner, repo)) = github_repo_from_url(source_url) else {
-        return false;
-    };
-    let Some(source_package_name) = fetch_github_package_json_name(client, &owner, &repo).await
-    else {
-        return false;
-    };
-    if source_package_name == current_package_name {
-        return false;
-    }
-    if fetch_npm_package_metadata(client, &source_package_name)
-        .await
-        .is_none()
-    {
-        return false;
-    }
-
-    replace_npm_package_arg(server, &format!("{source_package_name}@latest"));
-    true
-}
-
-async fn fetch_github_package_json_name(
-    client: &Client,
-    owner: &str,
-    repo: &str,
-) -> Option<String> {
-    for branch in ["main", "master"] {
-        let url = format!(
-            "https://raw.githubusercontent.com/{}/{}/{}/package.json",
-            encode_query_component(owner),
-            encode_query_component(repo),
-            branch
-        );
-        let response = client.get(url).send().await.ok()?;
-        if !response.status().is_success() {
-            continue;
-        }
-        let package_json = response.json::<PackageJsonMetadata>().await.ok()?;
-        let package_name = package_json.name?.trim().to_string();
-        if is_npm_package_candidate(&package_name) {
-            return Some(package_name);
-        }
-    }
-
-    None
-}
-
 async fn fetch_pypi_package_metadata(
     client: &Client,
     package_name: &str,
@@ -3105,14 +3077,39 @@ fn python_package_from_executable_path(path: &Path) -> Option<String> {
     None
 }
 
-fn command_basename(command: &str) -> &str {
-    Path::new(command)
-        .file_name()
-        .and_then(|value| value.to_str())
-        .unwrap_or(command)
+fn normalize_stdio_command_path(server: &mut Value) {
+    normalize_stdio_command_path_with_search_dirs(server, &user_local_command_search_paths());
 }
 
-fn resolve_executable_path(command: &str) -> Option<PathBuf> {
+fn normalize_stdio_command_path_with_search_dirs(server: &mut Value, search_dirs: &[PathBuf]) {
+    if mcp_server_type(server) != "stdio" {
+        return;
+    }
+
+    let Some(obj) = server.as_object_mut() else {
+        return;
+    };
+    let Some(command) = obj
+        .get("command")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return;
+    };
+
+    let Some(resolved_path) = resolve_sync_command_path(command, search_dirs) else {
+        return;
+    };
+    let resolved_command = resolved_path.to_string_lossy().to_string();
+    if resolved_command == command {
+        return;
+    }
+
+    obj.insert("command".to_string(), Value::String(resolved_command));
+}
+
+fn resolve_sync_command_path(command: &str, search_dirs: &[PathBuf]) -> Option<PathBuf> {
     let trimmed = command.trim();
     if trimmed.is_empty() {
         return None;
@@ -3120,23 +3117,37 @@ fn resolve_executable_path(command: &str) -> Option<PathBuf> {
 
     let command_path = Path::new(trimmed);
     if command_path.components().count() > 1 || command_path.is_absolute() {
-        return fs::canonicalize(command_path).ok().or_else(|| {
-            if command_path.exists() {
-                Some(command_path.to_path_buf())
-            } else {
-                None
-            }
-        });
+        return command_path.exists().then(|| command_path.to_path_buf());
     }
 
-    for search_dir in command_search_paths() {
+    search_dirs.iter().find_map(|search_dir| {
         let candidate = search_dir.join(trimmed);
-        if candidate.exists() {
-            return fs::canonicalize(&candidate).ok().or(Some(candidate));
-        }
+        candidate.exists().then_some(candidate)
+    })
+}
+
+fn command_basename(command: &str) -> &str {
+    Path::new(command)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or(command)
+}
+
+fn user_local_command_search_paths() -> Vec<PathBuf> {
+    if let Ok(home_dir) = home_dir() {
+        return vec![
+            home_dir.join(".local/bin"),
+            home_dir.join(".npm-global/bin"),
+            home_dir.join(".cargo/bin"),
+        ];
     }
 
-    None
+    Vec::new()
+}
+
+fn resolve_executable_path(command: &str) -> Option<PathBuf> {
+    resolve_sync_command_path(command, &command_search_paths())
+        .and_then(|path| fs::canonicalize(&path).ok().or(Some(path)))
 }
 
 fn command_search_paths() -> Vec<PathBuf> {
@@ -3737,17 +3748,6 @@ fn select_mcp_install_config(
     configs: &[McpDirectoryInstallConfig],
     description: &str,
 ) -> Option<Value> {
-    const PREFERRED_CLIENTS: [&str; 4] = ["claude-desktop", "cursor", "vscode", "codex"];
-    for preferred_client in PREFERRED_CLIENTS {
-        if let Some(config) = configs
-            .iter()
-            .find(|item| item.client_slug == preferred_client)
-            .and_then(|item| parse_mcp_install_config(&item.config_json, description))
-        {
-            return Some(config);
-        }
-    }
-
     configs
         .iter()
         .find_map(|item| parse_mcp_install_config(&item.config_json, description))
@@ -3760,7 +3760,13 @@ fn parse_mcp_install_config(config_json: &str, description: &str) -> Option<Valu
         .or_else(|| value.get("mcp").and_then(|mcp| mcp.get("servers")))
         .and_then(Value::as_object)
         .and_then(|servers| servers.values().next())
-        .cloned()?;
+        .cloned()
+        .or_else(|| {
+            value.as_object().and_then(|obj| {
+                (obj.contains_key("command") || obj.contains_key("url") || obj.contains_key("type"))
+                    .then_some(value.clone())
+            })
+        })?;
     normalize_mcp_install_config(server_value, description)
 }
 
@@ -3822,6 +3828,7 @@ fn normalize_npx_stdio_args(server: &mut Value) {
     }
 }
 
+#[cfg(test)]
 fn replace_npm_package_arg(server: &mut Value, replacement: &str) {
     let Some(args) = server
         .as_object_mut()
@@ -4250,6 +4257,22 @@ mod tests {
     }
 
     #[test]
+    fn extracts_mcp_directory_github_url_from_github_button_link() {
+        let html = r#"
+<div class="actions">
+  <a href="https://github.com/docfork/docfork-mcp" target="_blank" rel="noopener noreferrer nofollow">
+    <svg></svg>GitHub<svg></svg>
+  </a>
+</div>
+"#;
+
+        assert_eq!(
+            extract_mcp_directory_github_url(html).as_deref(),
+            Some("https://github.com/docfork/docfork-mcp")
+        );
+    }
+
+    #[test]
     fn maps_mcp_directory_repository_source_separately_from_marketplace_url() {
         let server = McpDirectoryServer {
             id: "5".to_string(),
@@ -4279,6 +4302,45 @@ mod tests {
         assert_eq!(
             mapped.marketplace_url.as_deref(),
             Some("https://mcp.directory/servers/context7")
+        );
+    }
+
+    #[test]
+    fn falls_back_to_marketplace_url_only_for_github_not_found() {
+        assert!(should_fallback_to_marketplace_source_url(
+            "https://github.com/mem0ai/mem0-mcp",
+            reqwest::StatusCode::NOT_FOUND
+        ));
+        assert!(!should_fallback_to_marketplace_source_url(
+            "https://github.com/mem0ai/mem0-mcp",
+            reqwest::StatusCode::OK
+        ));
+        assert!(!should_fallback_to_marketplace_source_url(
+            "https://mcp.directory/servers/mem0",
+            reqwest::StatusCode::NOT_FOUND
+        ));
+    }
+
+    #[test]
+    fn prefers_marketplace_url_as_browser_fallback() {
+        let server = McpMarketplaceServer {
+            id: "mcp-directory-mem0".to_string(),
+            name: "Mem0".to_string(),
+            source_site: "MCP.Directory".to_string(),
+            description: "Memory MCP".to_string(),
+            publisher: "mem0ai".to_string(),
+            category: "Official".to_string(),
+            transport_label: "stdio".to_string(),
+            source_url: "https://github.com/mem0ai/mem0-mcp".to_string(),
+            marketplace_url: Some("https://mcp.directory/servers/mem0".to_string()),
+            popularity_label: "1.0K".to_string(),
+            avatar_url: None,
+            server: None,
+        };
+
+        assert_eq!(
+            mcp_marketplace_fallback_source_url(&server).as_deref(),
+            Some("https://mcp.directory/servers/mem0")
         );
     }
 
@@ -4720,6 +4782,38 @@ mcpServers:
     }
 
     #[test]
+    fn normalizes_user_local_stdio_command_to_shim_path_without_canonicalizing() {
+        let dir = unique_continue_test_dir("normalize-command");
+        let shim_dir = dir.join(".local/bin");
+        let target_dir = dir.join(".local/pipx/venvs/easy-code-reader/bin");
+        fs::create_dir_all(&shim_dir).unwrap();
+        fs::create_dir_all(&target_dir).unwrap();
+
+        let target = target_dir.join("easy-code-reader");
+        fs::write(&target, "#!/bin/sh\n").unwrap();
+        let shim = shim_dir.join("easy-code-reader");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&target, &shim).unwrap();
+        #[cfg(not(unix))]
+        fs::write(&shim, "#!/bin/sh\n").unwrap();
+
+        let mut server = json!({
+            "type": "stdio",
+            "command": "easy-code-reader",
+            "args": ["--project-dir", "/tmp/project"]
+        });
+
+        normalize_stdio_command_path_with_search_dirs(&mut server, &[shim_dir.clone()]);
+
+        assert_eq!(
+            server["command"],
+            Value::String(shim.to_string_lossy().to_string())
+        );
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn normalizes_brightdata_api_token_env_name_from_marketplace_config() {
         let config = r#"{
           "mcpServers": {
@@ -4746,6 +4840,105 @@ mcpServers:
                     "API_TOKEN": "<YOUR_TOKEN>"
                 }
             })
+        );
+    }
+
+    #[test]
+    fn marketplace_install_source_url_prefers_detail_page_over_github_source() {
+        let server = McpMarketplaceServer {
+            id: "mcp-directory-sendgrid-mcp".to_string(),
+            name: "sendgrid-mcp".to_string(),
+            source_site: "MCP.Directory".to_string(),
+            description: "SendGrid MCP".to_string(),
+            publisher: "sendgrid".to_string(),
+            category: "Email".to_string(),
+            transport_label: "stdio".to_string(),
+            source_url: "https://github.com/example/sendgrid-mcp".to_string(),
+            marketplace_url: Some("https://mcp.directory/servers/sendgrid-mcp".to_string()),
+            popularity_label: "12.3K".to_string(),
+            avatar_url: None,
+            server: None,
+        };
+
+        assert_eq!(
+            marketplace_install_source_url(&server, &json!({})),
+            "https://mcp.directory/servers/sendgrid-mcp"
+        );
+    }
+
+    #[test]
+    fn marketplace_install_source_url_prefers_config_source_when_present() {
+        let server = McpMarketplaceServer {
+            id: "mcp-directory-custom".to_string(),
+            name: "custom".to_string(),
+            source_site: "MCP.Directory".to_string(),
+            description: "Custom MCP".to_string(),
+            publisher: "demo".to_string(),
+            category: "Tools".to_string(),
+            transport_label: "stdio".to_string(),
+            source_url: "https://github.com/example/custom-mcp".to_string(),
+            marketplace_url: Some("https://mcp.directory/servers/custom".to_string()),
+            popularity_label: "1.2K".to_string(),
+            avatar_url: None,
+            server: None,
+        };
+        let server_config = json!({
+            "sourceUrl": "https://github.com/example/custom-mcp-runtime"
+        });
+
+        assert_eq!(
+            marketplace_install_source_url(&server, &server_config),
+            "https://github.com/example/custom-mcp-runtime"
+        );
+    }
+
+    #[test]
+    fn selects_first_parseable_marketplace_install_config_in_returned_order() {
+        let configs = vec![
+            McpDirectoryInstallConfig {
+                client_slug: "claude-desktop".to_string(),
+                config_json: r#"{"mcpServers":{"sendgrid":{"command":"npx","args":["-y","sendgrid-mcp"]}}}"#
+                    .to_string(),
+            },
+            McpDirectoryInstallConfig {
+                client_slug: "cursor".to_string(),
+                config_json: r#"{"mcpServers":{"sendgrid":{"command":"uvx","args":["sendgrid-mcp"]}}}"#
+                    .to_string(),
+            },
+        ];
+
+        assert_eq!(
+            select_mcp_install_config(&configs, "SendGrid MCP"),
+            Some(json!({
+                "type": "stdio",
+                "command": "npx",
+                "args": ["-y", "sendgrid-mcp"],
+                "description": "SendGrid MCP"
+            }))
+        );
+    }
+
+    #[test]
+    fn parses_direct_marketplace_server_config_without_wrapper() {
+        let config = r#"{
+          "command": "npx",
+          "args": ["-y", "sendgrid-mcp"],
+          "env": {
+            "SENDGRID_API_KEY": "<YOUR_API_KEY>"
+          }
+        }"#;
+
+        assert_eq!(
+            parse_mcp_install_config(config, "SendGrid MCP"),
+            Some(json!({
+                "type": "stdio",
+                "command": "npx",
+                "args": ["-y", "sendgrid-mcp"],
+                "description": "SendGrid MCP",
+                "env": {
+                    "SENDGRID_API_KEY": "<YOUR_API_KEY>"
+                }
+            }))
         );
     }
 

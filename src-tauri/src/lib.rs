@@ -64,6 +64,7 @@ pub fn run() {
             mcp_manager::list_mcp_workspace,
             mcp_manager::list_mcp_marketplace_servers,
             mcp_manager::resolve_mcp_marketplace_source_link,
+            mcp_manager::get_mcp_marketplace_server_config,
             mcp_manager::install_mcp_server_from_marketplace,
             mcp_manager::import_mcp_servers_from_apps,
             mcp_manager::upsert_mcp_server,

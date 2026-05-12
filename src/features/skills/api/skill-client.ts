@@ -129,6 +129,10 @@ type InstallMcpMarketplaceServerInput = {
   server: McpMarketplaceServer;
 };
 
+type FetchMcpMarketplaceServerConfigInput = {
+  server: McpMarketplaceServer;
+};
+
 type UpdateAppSettingsInput = {
   settings: AppSettings;
 };
@@ -694,18 +698,29 @@ export async function fetchMcpMarketplaceServers(input: {
   );
 }
 
+export async function fetchMcpMarketplaceServerConfig(
+  input: FetchMcpMarketplaceServerConfigInput,
+): Promise<Record<string, unknown> | null> {
+  const fallbackServer = mcpMarketplaceServerFixtures.find((server) => server.id === input.server.id);
+  const fallback = fallbackServer?.server ?? input.server.server ?? null;
+  return invokeOrFallback("get_mcp_marketplace_server_config", input, fallback);
+}
+
 export async function installMcpServerFromMarketplace(
   input: InstallMcpMarketplaceServerInput,
 ): Promise<McpWorkspaceSnapshot> {
+  const installedServerConfig = input.server.server
+    ?? mcpMarketplaceServerFixtures.find((server) => server.id === input.server.id)?.server
+    ?? {};
   const normalizedName = input.server.name.trim().toLowerCase();
   const installedServer = {
     id: normalizeMcpServerId(input.server.name),
     name: normalizedName,
-    serverType: String(input.server.server?.type ?? "stdio"),
-    commandLabel: buildMcpCommandLabel(input.server.server),
+    serverType: String(installedServerConfig.type ?? "stdio"),
+    commandLabel: buildMcpCommandLabel(installedServerConfig),
     description: input.server.description,
     sourceUrl: input.server.sourceUrl,
-    serverJson: JSON.stringify(input.server.server ?? {}, null, 2),
+    serverJson: JSON.stringify(installedServerConfig, null, 2),
     enabledAppCount: 0,
     apps: mcpWorkspaceFixture.apps.map((app) => ({
       appId: app.id,
