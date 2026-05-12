@@ -1,12 +1,15 @@
-use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
 use crate::models::{AppSettings, SkillSummary, WorkspacePersistence};
+use crate::workspace::{
+    home_dir_option, managed_skill_library_root, managed_workspace_root_option,
+    normalize_workspace_path, remove_legacy_workspace_file, workspace_file_candidates,
+    workspace_file_path,
+};
 
-const STATE_DIR_NAME: &str = ".skillm";
 const STATE_FILE_NAME: &str = "state.json";
 const SETTINGS_FILE_NAME: &str = "settings.json";
 const EMPTY_DESCRIPTION_VALUES: [&str; 4] = ["", "---", "...", "未提供简介"];
@@ -30,10 +33,15 @@ struct SettingsPersistence {
 }
 
 pub fn load_installed_skills(default_skills: &[SkillSummary]) -> Vec<SkillSummary> {
-    let contents = workspace_state_candidates()
-        .into_iter()
-        .find_map(|state_file| fs::read_to_string(state_file).ok());
-    let Some(contents) = contents else {
+    let Some((loaded_from, contents)) =
+        workspace_state_candidates()
+            .into_iter()
+            .find_map(|state_file| {
+                fs::read_to_string(&state_file)
+                    .ok()
+                    .map(|contents| (state_file, contents))
+            })
+    else {
         return default_skills.to_vec();
     };
 
@@ -46,13 +54,25 @@ pub fn load_installed_skills(default_skills: &[SkillSummary]) -> Vec<SkillSummar
     }
 
     let original_skills = persistence.installed_skills;
+    let original_paths = original_skills
+        .iter()
+        .map(|skill| skill.local_path.clone())
+        .collect::<Vec<_>>();
     let original_count = original_skills.len();
+    let loaded_from_legacy = loaded_from.to_string_lossy().contains("/.skillm/");
     let filtered_skills = original_skills
         .into_iter()
+        .map(normalize_skill_workspace_path)
         .filter(is_skill_local_path_valid)
         .map(hydrate_skill_description)
         .collect::<Vec<_>>();
-    if filtered_skills.len() != original_count {
+    if loaded_from_legacy
+        || filtered_skills.len() != original_count
+        || filtered_skills
+            .iter()
+            .zip(original_paths.iter())
+            .any(|(current, original)| current.local_path != *original)
+    {
         let _ = save_installed_skills(&filtered_skills);
     }
     filtered_skills
@@ -67,13 +87,20 @@ pub fn save_installed_skills(skills: &[SkillSummary]) -> Result<(), String> {
 
     fs::create_dir_all(parent_dir).map_err(|error| format!("创建状态目录失败: {error}"))?;
 
+    let normalized_skills = skills
+        .iter()
+        .cloned()
+        .map(normalize_skill_workspace_path)
+        .collect::<Vec<_>>();
     let persistence = WorkspacePersistence {
-        installed_skills: skills.to_vec(),
+        installed_skills: normalized_skills,
     };
     let payload = serde_json::to_string_pretty(&persistence)
         .map_err(|error| format!("序列化状态失败: {error}"))?;
 
-    fs::write(state_file, payload).map_err(|error| format!("写入状态文件失败: {error}"))
+    fs::write(state_file, payload).map_err(|error| format!("写入状态文件失败: {error}"))?;
+    remove_legacy_workspace_file(STATE_FILE_NAME);
+    Ok(())
 }
 
 pub fn load_app_settings() -> AppSettings {
@@ -81,8 +108,9 @@ pub fn load_app_settings() -> AppSettings {
         .map(|path| path.to_string_lossy().to_string())
         .unwrap_or_default();
 
-    let persisted = settings_file_path()
-        .and_then(|path| fs::read_to_string(path).ok())
+    let persisted = settings_file_candidates()
+        .into_iter()
+        .find_map(|path| fs::read_to_string(path).ok())
         .and_then(|content| serde_json::from_str::<SettingsPersistence>(&content).ok())
         .unwrap_or_default();
 
@@ -126,15 +154,18 @@ pub fn save_app_settings(input: AppSettings) -> Result<AppSettings, String> {
         .map_err(|error| format!("序列化设置失败: {error}"))?;
 
     fs::write(&settings_file, payload).map_err(|error| format!("写入设置文件失败: {error}"))?;
+    remove_legacy_workspace_file(SETTINGS_FILE_NAME);
     Ok(normalized)
 }
 
 pub fn scan_local_skill_candidates(installed_skills: &[SkillSummary]) -> Vec<(String, String)> {
-    let Some(home_dir) = home_dir() else {
+    let Some(home_dir) = home_dir_option() else {
         return Vec::new();
     };
 
-    let managed_skills_root = home_dir.join(".skillm/skills");
+    let Some(managed_skills_root) = managed_skill_library_root().ok() else {
+        return Vec::new();
+    };
     let known_roots = [
         home_dir.join(".claude/skills"),
         home_dir.join(".codex/skills"),
@@ -188,7 +219,7 @@ pub fn scan_local_skill_candidates(installed_skills: &[SkillSummary]) -> Vec<(St
             if is_reserved_workspace_name(name) {
                 continue;
             }
-            if is_reserved_skillm_path(&home_dir, &path) {
+            if is_reserved_workspace_path(&home_dir, &path) {
                 continue;
             }
             if is_skill_name_managed(name, &managed_skills_root, installed_skills) {
@@ -283,9 +314,12 @@ fn path_key(path: &Path) -> String {
         .to_string()
 }
 
-fn is_reserved_skillm_path(home_dir: &Path, path: &Path) -> bool {
-    let skillm_root = home_dir.join(".skillm");
-    if path.parent() != Some(skillm_root.as_path()) {
+fn is_reserved_workspace_path(home_dir: &Path, path: &Path) -> bool {
+    let Some(workspace_root) = managed_workspace_root_option() else {
+        return false;
+    };
+    if workspace_root.parent() != Some(home_dir) || path.parent() != Some(workspace_root.as_path())
+    {
         return false;
     }
 
@@ -299,25 +333,19 @@ fn is_reserved_workspace_name(name: &str) -> bool {
 }
 
 fn workspace_state_file() -> Option<PathBuf> {
-    let home_dir = home_dir()?;
-    Some(home_dir.join(STATE_DIR_NAME).join(STATE_FILE_NAME))
+    workspace_file_path(STATE_FILE_NAME).ok()
 }
 
 fn workspace_state_candidates() -> Vec<PathBuf> {
-    let Some(home_dir) = home_dir() else {
-        return Vec::new();
-    };
-
-    vec![home_dir.join(STATE_DIR_NAME).join(STATE_FILE_NAME)]
+    workspace_file_candidates(STATE_FILE_NAME)
 }
 
 fn settings_file_path() -> Option<PathBuf> {
-    let home_dir = home_dir()?;
-    Some(home_dir.join(STATE_DIR_NAME).join(SETTINGS_FILE_NAME))
+    workspace_file_path(SETTINGS_FILE_NAME).ok()
 }
 
-fn home_dir() -> Option<PathBuf> {
-    env::var("HOME").ok().map(PathBuf::from)
+fn settings_file_candidates() -> Vec<PathBuf> {
+    workspace_file_candidates(SETTINGS_FILE_NAME)
 }
 
 pub fn normalize_skill_install_activation(value: &str) -> &'static str {
@@ -353,6 +381,11 @@ fn hydrate_skill_description(mut skill: SkillSummary) -> SkillSummary {
         skill.description = description;
     }
 
+    skill
+}
+
+fn normalize_skill_workspace_path(mut skill: SkillSummary) -> SkillSummary {
+    skill.local_path = normalize_workspace_path(&skill.local_path);
     skill
 }
 
@@ -431,32 +464,32 @@ mod tests {
     use std::env;
     use std::fs;
     use std::path::PathBuf;
-    use std::sync::Mutex;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use crate::models::SkillSummary;
     use crate::models::ToolSyncStatus;
     use crate::models::WorkspacePersistence;
+    use crate::workspace::TEST_ENV_LOCK;
 
     use super::{
         hydrate_skill_description, load_installed_skills, save_installed_skills,
         scan_local_skill_candidates,
     };
 
-    static HOME_ENV_LOCK: Mutex<()> = Mutex::new(());
-
     fn with_temp_home<F>(run: F)
     where
         F: FnOnce(PathBuf),
     {
-        let _guard = HOME_ENV_LOCK.lock().expect("lock HOME env for test");
+        let _guard = TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         let original_home = env::var_os("HOME");
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("system time should be available")
             .as_nanos();
         let temp_home = env::temp_dir().join(format!(
-            "skillm-state-test-home-{}-{}",
+            "skilldock-state-test-home-{}-{}",
             std::process::id(),
             timestamp
         ));
@@ -534,13 +567,13 @@ mod tests {
 
             let result = save_installed_skills(&skills);
             assert!(result.is_ok());
-            assert!(temp_home.join(".skillm/state.json").exists());
+            assert!(temp_home.join(".skilldock/state.json").exists());
         });
     }
 
     #[test]
     fn hydrates_description_from_local_skill_file_when_state_is_placeholder() {
-        let temp_dir = env::temp_dir().join(format!("skillm-state-test-{}", std::process::id()));
+        let temp_dir = env::temp_dir().join(format!("skilldock-state-test-{}", std::process::id()));
         let _ = fs::remove_dir_all(&temp_dir);
         fs::create_dir_all(&temp_dir).expect("should create temp skill dir");
         fs::write(
@@ -582,7 +615,7 @@ mod tests {
     #[test]
     fn drops_missing_skills_and_rewrites_state_file() {
         with_temp_home(|temp_home| {
-            let skills_root = temp_home.join(".skillm/skills");
+            let skills_root = temp_home.join(".skilldock/skills");
             let existing_skill_dir = skills_root.join("kept-skill");
             fs::create_dir_all(&existing_skill_dir).expect("create existing skill dir");
             fs::write(existing_skill_dir.join("SKILL.md"), "# kept-skill")
@@ -633,11 +666,12 @@ mod tests {
                     },
                 ],
             };
-            let state_file = temp_home.join(".skillm/state.json");
-            fs::create_dir_all(state_file.parent().expect("state parent exists"))
+            let legacy_state_file = temp_home.join(".skillm/state.json");
+            let state_file = temp_home.join(".skilldock/state.json");
+            fs::create_dir_all(legacy_state_file.parent().expect("state parent exists"))
                 .expect("create state parent");
             fs::write(
-                &state_file,
+                &legacy_state_file,
                 serde_json::to_string_pretty(&persisted).expect("serialize persistence"),
             )
             .expect("write state file");
@@ -658,12 +692,12 @@ mod tests {
     #[test]
     fn drops_reserved_workspace_skill_entries_and_rewrites_state_file() {
         with_temp_home(|temp_home| {
-            let reserved_skill_dir = temp_home.join(".skillm/skills/skills");
+            let reserved_skill_dir = temp_home.join(".skilldock/skills/skills");
             fs::create_dir_all(&reserved_skill_dir).expect("create reserved skill dir");
             fs::write(reserved_skill_dir.join("SKILL.md"), "# skills")
                 .expect("write SKILL.md for reserved dir");
 
-            let valid_skill_dir = temp_home.join(".skillm/skills/kept-skill");
+            let valid_skill_dir = temp_home.join(".skilldock/skills/kept-skill");
             fs::create_dir_all(&valid_skill_dir).expect("create valid skill dir");
             fs::write(valid_skill_dir.join("SKILL.md"), "# kept-skill")
                 .expect("write SKILL.md for valid dir");
@@ -712,11 +746,12 @@ mod tests {
                     },
                 ],
             };
-            let state_file = temp_home.join(".skillm/state.json");
-            fs::create_dir_all(state_file.parent().expect("state parent exists"))
+            let legacy_state_file = temp_home.join(".skillm/state.json");
+            let state_file = temp_home.join(".skilldock/state.json");
+            fs::create_dir_all(legacy_state_file.parent().expect("state parent exists"))
                 .expect("create state parent");
             fs::write(
-                &state_file,
+                &legacy_state_file,
                 serde_json::to_string_pretty(&persisted).expect("serialize persistence"),
             )
             .expect("write state file");
@@ -759,7 +794,7 @@ mod tests {
     #[test]
     fn local_candidate_scan_skips_managed_library_skills_without_state_entry() {
         with_temp_home(|temp_home| {
-            let managed_skill_dir = temp_home.join(".skillm/skills/example-migration");
+            let managed_skill_dir = temp_home.join(".skilldock/skills/example-migration");
             let codex_skills_root = temp_home.join(".codex/skills");
             fs::create_dir_all(&managed_skill_dir).expect("create managed skill dir");
             fs::create_dir_all(&codex_skills_root).expect("create codex skills dir");
@@ -775,9 +810,9 @@ mod tests {
     }
 
     #[test]
-    fn local_candidate_scan_skips_software_skill_when_skillm_has_same_skill() {
+    fn local_candidate_scan_skips_software_skill_when_skilldock_has_same_skill() {
         with_temp_home(|temp_home| {
-            let managed_skill_dir = temp_home.join(".skillm/skills/example-migration");
+            let managed_skill_dir = temp_home.join(".skilldock/skills/example-migration");
             let external_skill_dir = temp_home.join(".codex/skills/example-migration");
             fs::create_dir_all(&managed_skill_dir).expect("create managed skill dir");
             fs::create_dir_all(&external_skill_dir).expect("create external skill dir");
@@ -800,7 +835,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn local_candidate_scan_keeps_symlink_to_non_skillm_source() {
+    fn local_candidate_scan_keeps_symlink_to_non_skilldock_source() {
         with_temp_home(|temp_home| {
             let legacy_skill_dir = temp_home.join(".skills-managers/skills/example-migration");
             let codex_skills_root = temp_home.join(".codex/skills");
@@ -826,9 +861,9 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn local_candidate_scan_skips_external_symlink_when_skillm_has_same_skill() {
+    fn local_candidate_scan_skips_external_symlink_when_skilldock_has_same_skill() {
         with_temp_home(|temp_home| {
-            let managed_skill_dir = temp_home.join(".skillm/skills/example-migration");
+            let managed_skill_dir = temp_home.join(".skilldock/skills/example-migration");
             let legacy_skill_dir = temp_home.join(".skills-managers/skills/example-migration");
             let codex_skills_root = temp_home.join(".codex/skills");
             let codex_skill_link = codex_skills_root.join("example-migration");
@@ -853,10 +888,10 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn local_candidate_scan_skips_external_symlink_when_skillm_has_nested_same_skill() {
+    fn local_candidate_scan_skips_external_symlink_when_skilldock_has_nested_same_skill() {
         with_temp_home(|temp_home| {
             let managed_skill_dir =
-                temp_home.join(".skillm/skills/example-migration/skills/example-migration");
+                temp_home.join(".skilldock/skills/example-migration/skills/example-migration");
             let legacy_skill_dir = temp_home.join(".skills-managers/skills/example-migration");
             let codex_skills_root = temp_home.join(".codex/skills");
             let codex_skill_link = codex_skills_root.join("example-migration");
@@ -884,7 +919,7 @@ mod tests {
     #[test]
     fn local_candidate_scan_skips_symlinked_managed_skills() {
         with_temp_home(|temp_home| {
-            let managed_skill_dir = temp_home.join(".skillm/skills/managed-skill");
+            let managed_skill_dir = temp_home.join(".skilldock/skills/managed-skill");
             let cursor_skills_root = temp_home.join(".cursor/skills");
             let cursor_skill_link = cursor_skills_root.join("managed-skill");
             fs::create_dir_all(&managed_skill_dir).expect("create managed skill dir");

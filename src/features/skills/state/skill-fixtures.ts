@@ -23,7 +23,7 @@ export const installedSkillFixtures: SkillSummary[] = [
     sourceType: "gitlab",
     sourceUrl: "https://gitlab.com/team/skills/skill-publisher",
     description: "用于维护技能发布说明、变更记录和发布前自检脚本。",
-    localPath: "/Users/demo/.skillm/skills/skill-publisher",
+    localPath: "/Users/demo/.skilldock/skills/skill-publisher",
     branch: "feat/publish-copy",
     collabStatus: "pending-push",
     statusText: "本地已修改 4 个文件，建议打开 canonical repo 后提交 MR。",
@@ -45,7 +45,7 @@ export const installedSkillFixtures: SkillSummary[] = [
     sourceType: "github",
     sourceUrl: "https://github.com/xstongxue/best-skills/tree/main",
     description: "用于生成 Excalidraw 风格的图表和草图。",
-    localPath: "/Users/demo/.skillm/skills/excalidraw-diagram",
+    localPath: "/Users/demo/.skilldock/skills/excalidraw-diagram",
     branch: "main",
     collabStatus: "update-available",
     statusText: "远端有新版本，建议更新后重新同步到工具。",
@@ -68,7 +68,7 @@ export const installedSkillFixtures: SkillSummary[] = [
     sourceType: "gitlab",
     sourceUrl: "https://gitlab.com/team/skills/drawio-diagram",
     description: "将结构描述转成可编辑的 Draw.io 图表。",
-    localPath: "/Users/demo/.skillm/skills/drawio-diagram",
+    localPath: "/Users/demo/.skilldock/skills/drawio-diagram",
     branch: "main",
     collabStatus: "pending-push",
     statusText: "本地存在待处理改动，可在 canonical repo 中提交 MR。",
@@ -90,7 +90,7 @@ export const installedSkillFixtures: SkillSummary[] = [
     sourceType: "github",
     sourceUrl: "https://github.com/example-research/multi-search-engine",
     description: "聚合多搜索引擎能力，用于研究和信息检索。",
-    localPath: "/Users/demo/.skillm/skills/multi-search-engine",
+    localPath: "/Users/demo/.skilldock/skills/multi-search-engine",
     branch: "stable",
     collabStatus: "clean",
     statusText: "本地与远端一致，可直接使用。",
@@ -385,7 +385,7 @@ function buildMcpFixtureTools(toolNames: string[], disabledToolNames: string[] =
 }
 
 export const mcpWorkspaceFixture: McpWorkspaceSnapshot = {
-  storagePath: "/Users/demo/.skillm/mcp-servers.json",
+  storagePath: "/Users/demo/.skilldock/mcp-servers.json",
   apps: mcpFixtureApps,
   servers: [
     {
@@ -445,7 +445,7 @@ export const gitAccountFixture: GitAccountSummary = {
 };
 
 export const appSettingsFixture: AppSettings = {
-  storagePath: "/Users/demo/.skillm/settings.json",
+  storagePath: "/Users/demo/.skilldock/settings.json",
   defaultOpenToolId: "",
   skillInstallActivation: "apply-all-tools",
   mcpInstallActivation: "disable-all-tools",
@@ -483,7 +483,7 @@ export const pushPreviewFixtures: Record<string, PushPreviewSnapshot> = {
   "skill-publisher": {
     targetBranch: "feat/publish-copy",
     willCreateBranch: false,
-    repositoryPath: "/Users/demo/.skillm/skills/team-skills",
+    repositoryPath: "/Users/demo/.skilldock/skills/team-skills",
     unpushedCommitCount: 1,
     uncommittedFiles: [
       {
@@ -501,7 +501,7 @@ export const pushPreviewFixtures: Record<string, PushPreviewSnapshot> = {
   "drawio-diagram": {
     targetBranch: "main",
     willCreateBranch: false,
-    repositoryPath: "/Users/demo/.skillm/skills/drawio-diagram",
+    repositoryPath: "/Users/demo/.skilldock/skills/drawio-diagram",
     unpushedCommitCount: 0,
     uncommittedFiles: [
       {

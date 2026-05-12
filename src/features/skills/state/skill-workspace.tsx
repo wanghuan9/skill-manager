@@ -63,7 +63,7 @@ import type {
 import { buildOpenToolOptions } from "@/features/skills/utils/open-tools";
 import { isToolEnabledStatus } from "@/features/skills/utils/tool-status";
 
-const STARTUP_WORKSPACE_CACHE_KEY = "skillm.startupWorkspaceCache";
+const STARTUP_WORKSPACE_CACHE_KEY = "skilldock.startupWorkspaceCache";
 const FALLBACK_OPEN_TOOL_ID = "finder";
 const MARKETPLACE_PAGE_SIZE = 18;
 const MARKETPLACE_SOURCE_SITES: MarketplaceSourceSite[] = ["skills.sh", "skillsmp"];

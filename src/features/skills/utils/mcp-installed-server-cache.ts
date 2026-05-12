@@ -1,5 +1,5 @@
 const MCP_INSTALLED_SERVER_IDS_CACHE_KEY = "__SKILLM_MCP_INSTALLED_SERVER_IDS__";
-const MCP_INSTALLED_SERVER_IDS_EVENT = "skillm:mcp-installed-server-ids-updated";
+const MCP_INSTALLED_SERVER_IDS_EVENT = "skilldock:mcp-installed-server-ids-updated";
 
 declare global {
   interface Window {

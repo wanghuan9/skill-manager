@@ -88,7 +88,7 @@ describe("groupSkillsBySource", () => {
       createSkill({
         name: "local-skill",
         sourceType: "github",
-        sourceUrl: "file:///Users/wanghuan/.skillm/skills/local-skill",
+        sourceUrl: "file:///Users/wanghuan/.skilldock/skills/local-skill",
         sourceLabel: "Users/wanghuan",
       }),
     ]);

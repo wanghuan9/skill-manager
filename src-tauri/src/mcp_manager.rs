@@ -15,8 +15,10 @@ use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::state::{load_app_settings, normalize_mcp_install_activation};
+use crate::workspace::{
+    self, remove_legacy_workspace_file, workspace_file_candidates, workspace_file_path,
+};
 
-const STATE_DIR_NAME: &str = ".skillm";
 const MCP_STATE_FILE_NAME: &str = "mcp-servers.json";
 const MCP_PROTOCOL_VERSION: &str = "2024-11-05";
 const MCP_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(12);
@@ -1700,7 +1702,7 @@ fn discover_http_mcp_tools(server: &Value) -> Result<Vec<String>, String> {
         .ok_or_else(|| "HTTP MCP 缺少 url".to_string())?;
     let client = reqwest::blocking::Client::builder()
         .timeout(MCP_DISCOVERY_TIMEOUT)
-        .user_agent("skillm/0.1 MCP tools discovery")
+        .user_agent("skilldock/0.1 MCP tools discovery")
         .build()
         .map_err(|error| format!("创建 MCP tools 探测客户端失败: {error}"))?;
 
@@ -1943,7 +1945,7 @@ fn mcp_initialize_request() -> Value {
             "protocolVersion": MCP_PROTOCOL_VERSION,
             "capabilities": {},
             "clientInfo": {
-                "name": "skillm",
+                "name": "skilldock",
                 "version": "0.1.0"
             }
         }
@@ -2601,7 +2603,7 @@ fn fallback_mcp_description(record: &McpServerRecord) -> String {
 fn mcp_metadata_client() -> Option<Client> {
     Client::builder()
         .timeout(Duration::from_secs(4))
-        .user_agent("skillm/0.1 MCP metadata resolver")
+        .user_agent("skilldock/0.1 MCP metadata resolver")
         .build()
         .ok()
 }
@@ -3269,13 +3271,16 @@ fn write_text_value(path: &Path, value: &str) -> Result<(), String> {
 }
 
 fn load_mcp_records() -> Result<Vec<McpServerRecord>, String> {
-    let state_file = mcp_state_file()?;
-    if !state_file.exists() {
+    let Some((_, content)) = workspace_file_candidates(MCP_STATE_FILE_NAME)
+        .into_iter()
+        .find_map(|path| {
+            fs::read_to_string(&path)
+                .ok()
+                .map(|content| (path, content))
+        })
+    else {
         return Ok(Vec::new());
-    }
-
-    let content =
-        fs::read_to_string(&state_file).map_err(|error| format!("读取 MCP 状态失败: {error}"))?;
+    };
     let persistence = serde_json::from_str::<McpPersistence>(&content)
         .map_err(|error| format!("解析 MCP 状态失败: {error}"))?;
     persistence
@@ -3296,17 +3301,17 @@ fn save_mcp_records(records: &[McpServerRecord]) -> Result<(), String> {
     };
     let payload = serde_json::to_string_pretty(&persistence)
         .map_err(|error| format!("序列化 MCP 状态失败: {error}"))?;
-    fs::write(state_file, payload).map_err(|error| format!("写入 MCP 状态失败: {error}"))
+    fs::write(state_file, payload).map_err(|error| format!("写入 MCP 状态失败: {error}"))?;
+    remove_legacy_workspace_file(MCP_STATE_FILE_NAME);
+    Ok(())
 }
 
 fn mcp_state_file() -> Result<PathBuf, String> {
-    Ok(home_dir()?.join(STATE_DIR_NAME).join(MCP_STATE_FILE_NAME))
+    workspace_file_path(MCP_STATE_FILE_NAME)
 }
 
 fn home_dir() -> Result<PathBuf, String> {
-    env::var("HOME")
-        .map(PathBuf::from)
-        .map_err(|_| "无法读取 HOME 环境变量".to_string())
+    workspace::home_dir()
 }
 
 fn sort_records(records: &mut [McpServerRecord]) {
@@ -3458,7 +3463,7 @@ fn toml_value_to_json(value: &toml_edit::Value) -> Option<Value> {
 
 fn mcp_http_client() -> Result<Client, String> {
     Client::builder()
-        .user_agent("skillm/0.1 MCP marketplace")
+        .user_agent("skilldock/0.1 MCP marketplace")
         .connect_timeout(Duration::from_secs(8))
         .timeout(Duration::from_secs(14))
         .build()
@@ -3466,13 +3471,9 @@ fn mcp_http_client() -> Result<Client, String> {
 }
 
 fn mcp_marketplace_cache_file() -> Option<PathBuf> {
-    let home_dir = env::var("HOME").ok()?;
-    Some(
-        PathBuf::from(home_dir)
-            .join(".skillm")
-            .join("cache")
-            .join("mcp-marketplace.json"),
-    )
+    workspace::managed_workspace_root()
+        .ok()
+        .map(|workspace_root| workspace_root.join("cache").join("mcp-marketplace.json"))
 }
 
 fn load_mcp_marketplace_cache_page(page: usize) -> Option<Vec<McpMarketplaceServer>> {
@@ -4550,7 +4551,7 @@ mcpServers:
             .map(|duration| duration.as_nanos())
             .unwrap_or_default();
         env::temp_dir().join(format!(
-            "skillm-continue-test-{label}-{}-{nanos}",
+            "skilldock-continue-test-{label}-{}-{nanos}",
             std::process::id()
         ))
     }
@@ -4897,13 +4898,15 @@ mcpServers:
         let configs = vec![
             McpDirectoryInstallConfig {
                 client_slug: "claude-desktop".to_string(),
-                config_json: r#"{"mcpServers":{"sendgrid":{"command":"npx","args":["-y","sendgrid-mcp"]}}}"#
-                    .to_string(),
+                config_json:
+                    r#"{"mcpServers":{"sendgrid":{"command":"npx","args":["-y","sendgrid-mcp"]}}}"#
+                        .to_string(),
             },
             McpDirectoryInstallConfig {
                 client_slug: "cursor".to_string(),
-                config_json: r#"{"mcpServers":{"sendgrid":{"command":"uvx","args":["sendgrid-mcp"]}}}"#
-                    .to_string(),
+                config_json:
+                    r#"{"mcpServers":{"sendgrid":{"command":"uvx","args":["sendgrid-mcp"]}}}"#
+                        .to_string(),
             },
         ];
 

@@ -7,11 +7,12 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::models::SkillSummary;
+use crate::workspace;
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 
-const SKILL_LIBRARY_DIR: &str = ".skillm/skills";
-const REPO_CACHE_DIR: &str = ".skillm/repo-cache";
+const SKILL_LIBRARY_DIR: &str = "skills";
+const REPO_CACHE_DIR: &str = "repo-cache";
 const RESERVED_WORKSPACE_LINK_NAMES: [&str; 5] =
     ["state.json", "skills", "repo-cache", "cache", "imports"];
 const GIT_CLONE_HISTORY_DEPTH: &str = "20";
@@ -543,7 +544,7 @@ fn remote_skill_file_exists(owner_repo: &str, branch: &str, skill_dir: &Path) ->
             "-o",
             "/dev/null",
             "-H",
-            "User-Agent: skillm/0.1",
+            "User-Agent: skilldock/0.1",
             &url,
         ])
         .output()
@@ -573,7 +574,7 @@ fn fetch_json_with_curl<T: DeserializeOwned>(url: &str, timeout_seconds: u64) ->
             "-H",
             "Accept: application/vnd.github.v3+json",
             "-H",
-            "User-Agent: skillm/0.1",
+            "User-Agent: skilldock/0.1",
             url,
         ])
         .output()
@@ -805,15 +806,15 @@ pub fn ensure_repo_skill_with_sparse_paths(
 }
 
 pub fn skill_directory(skill_name: &str) -> Result<PathBuf, String> {
-    let home_dir = env::var("HOME").map_err(|_| "无法读取 HOME 环境变量".to_string())?;
-    Ok(PathBuf::from(home_dir)
+    Ok(workspace::managed_workspace_root()?
         .join(SKILL_LIBRARY_DIR)
         .join(skill_name))
 }
 
 pub fn repo_cache_directory(repo_key: &str) -> Result<PathBuf, String> {
-    let home_dir = env::var("HOME").map_err(|_| "无法读取 HOME 环境变量".to_string())?;
-    Ok(PathBuf::from(home_dir).join(REPO_CACHE_DIR).join(repo_key))
+    Ok(workspace::managed_workspace_root()?
+        .join(REPO_CACHE_DIR)
+        .join(repo_key))
 }
 
 pub fn sanitize_storage_name(name: &str) -> String {
@@ -1391,12 +1392,11 @@ fn is_reserved_workspace_name(name: &str) -> bool {
 }
 
 fn managed_workspace_root() -> Result<PathBuf, String> {
-    let home_dir = env::var("HOME").map_err(|_| "无法读取 HOME 环境变量".to_string())?;
-    Ok(PathBuf::from(home_dir).join(".skillm"))
+    workspace::managed_workspace_root()
 }
 
 fn managed_skill_library_root() -> Result<PathBuf, String> {
-    Ok(managed_workspace_root()?.join("skills"))
+    workspace::managed_skill_library_root()
 }
 
 fn ensure_managed_skill_sync_source(skill_path: &Path) -> Result<(), String> {
@@ -1747,12 +1747,10 @@ mod tests {
         ResolvedRemoteSkillPath,
     };
     use crate::models::SkillSummary;
+    use crate::workspace::TEST_ENV_LOCK;
     use std::fs;
     use std::path::PathBuf;
-    use std::sync::Mutex;
     use std::time::{SystemTime, UNIX_EPOCH};
-
-    static HOME_ENV_LOCK: Mutex<()> = Mutex::new(());
 
     fn temp_test_dir(label: &str) -> PathBuf {
         let timestamp = SystemTime::now()
@@ -1760,7 +1758,7 @@ mod tests {
             .expect("system time should be available")
             .as_nanos();
         let temp_dir = std::env::temp_dir().join(format!(
-            "skillm-library-test-{label}-{}-{}",
+            "skilldock-library-test-{label}-{}-{}",
             std::process::id(),
             timestamp
         ));
@@ -1832,12 +1830,14 @@ mod tests {
 
     #[test]
     fn create_skill_symlink_rejects_source_outside_managed_skill_root() {
-        let _guard = HOME_ENV_LOCK.lock().expect("lock HOME env for test");
+        let _guard = TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         let temp_dir = temp_test_dir("external-symlink");
         let home_dir = temp_dir.join("home");
         let external_skill_dir = temp_dir.join("external-skill");
         let tool_skills_dir = temp_dir.join("tool-skills");
-        fs::create_dir_all(home_dir.join(".skillm/skills")).expect("create managed skill root");
+        fs::create_dir_all(home_dir.join(".skilldock/skills")).expect("create managed skill root");
         fs::create_dir_all(&external_skill_dir).expect("create external skill dir");
         fs::write(external_skill_dir.join("SKILL.md"), "# external-skill").expect("write SKILL.md");
         fs::create_dir_all(&tool_skills_dir).expect("create tool skills dir");
@@ -1874,14 +1874,16 @@ mod tests {
 
     #[test]
     fn remove_reserved_workspace_symlinks_drops_managed_workspace_links() {
-        let _guard = HOME_ENV_LOCK.lock().expect("lock HOME env for test");
+        let _guard = TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         let temp_dir = temp_test_dir("reserved-cleanup");
         let home_dir = temp_dir.join("home");
         let tool_skills_dir = temp_dir.join("tool-skills");
-        fs::create_dir_all(home_dir.join(".skillm/cache")).expect("create cache dir");
-        fs::create_dir_all(home_dir.join(".skillm/repo-cache")).expect("create repo-cache dir");
-        fs::create_dir_all(home_dir.join(".skillm/skills")).expect("create skills dir");
-        fs::create_dir_all(home_dir.join(".skillm/imports")).expect("create imports dir");
+        fs::create_dir_all(home_dir.join(".skilldock/cache")).expect("create cache dir");
+        fs::create_dir_all(home_dir.join(".skilldock/repo-cache")).expect("create repo-cache dir");
+        fs::create_dir_all(home_dir.join(".skilldock/skills")).expect("create skills dir");
+        fs::create_dir_all(home_dir.join(".skilldock/imports")).expect("create imports dir");
         fs::create_dir_all(&tool_skills_dir).expect("create tool skills dir");
         fs::create_dir_all(tool_skills_dir.join("imports").join("stale"))
             .expect("create imports directory");
@@ -1890,17 +1892,17 @@ mod tests {
         #[cfg(unix)]
         {
             std::os::unix::fs::symlink(
-                home_dir.join(".skillm/cache"),
+                home_dir.join(".skilldock/cache"),
                 tool_skills_dir.join("cache"),
             )
             .expect("create cache symlink");
             std::os::unix::fs::symlink(
-                home_dir.join(".skillm/repo-cache"),
+                home_dir.join(".skilldock/repo-cache"),
                 tool_skills_dir.join("repo-cache"),
             )
             .expect("create repo-cache symlink");
             std::os::unix::fs::symlink(
-                home_dir.join(".skillm/skills"),
+                home_dir.join(".skilldock/skills"),
                 tool_skills_dir.join("skills"),
             )
             .expect("create skills symlink");
@@ -1937,16 +1939,18 @@ mod tests {
 
     #[test]
     fn reconcile_tool_skill_symlinks_removes_unmanaged_workspace_entries() {
-        let _guard = HOME_ENV_LOCK.lock().expect("lock HOME env for test");
+        let _guard = TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         let temp_dir = temp_test_dir("reconcile-tool-skills");
         let home_dir = temp_dir.join("home");
         let tool_skills_dir = temp_dir.join("tool-skills");
-        let kept_skill_dir = home_dir.join(".skillm/skills/kept-skill");
-        let stale_skill_dir = home_dir.join(".skillm/skills/stale-skill");
+        let kept_skill_dir = home_dir.join(".skilldock/skills/kept-skill");
+        let stale_skill_dir = home_dir.join(".skilldock/skills/stale-skill");
         let external_skill_dir = temp_dir.join("external-skill");
         fs::create_dir_all(&kept_skill_dir).expect("create kept skill dir");
         fs::create_dir_all(&stale_skill_dir).expect("create stale skill dir");
-        fs::create_dir_all(home_dir.join(".skillm/cache")).expect("create cache dir");
+        fs::create_dir_all(home_dir.join(".skilldock/cache")).expect("create cache dir");
         fs::create_dir_all(&external_skill_dir).expect("create external skill dir");
         fs::create_dir_all(&tool_skills_dir).expect("create tool skills dir");
         fs::write(kept_skill_dir.join("SKILL.md"), "# kept-skill").expect("write kept SKILL");
@@ -1961,7 +1965,7 @@ mod tests {
             std::os::unix::fs::symlink(&stale_skill_dir, tool_skills_dir.join("stale-skill"))
                 .expect("create stale symlink");
             std::os::unix::fs::symlink(
-                home_dir.join(".skillm/cache"),
+                home_dir.join(".skilldock/cache"),
                 tool_skills_dir.join("cache"),
             )
             .expect("create cache symlink");

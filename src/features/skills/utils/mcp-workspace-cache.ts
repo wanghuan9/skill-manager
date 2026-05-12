@@ -1,7 +1,7 @@
 import type { McpWorkspaceSnapshot } from "@/features/skills/state/skill-store";
 import { cacheInstalledServerIds, invalidateCachedInstalledServerIds } from "@/features/skills/utils/mcp-installed-server-cache";
 
-const MCP_WORKSPACE_UPDATED_EVENT = "skillm:mcp-workspace-updated";
+const MCP_WORKSPACE_UPDATED_EVENT = "skilldock:mcp-workspace-updated";
 
 declare global {
   interface Window {

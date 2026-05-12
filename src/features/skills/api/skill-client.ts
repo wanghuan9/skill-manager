@@ -342,7 +342,7 @@ export async function installSelectedRepoSkills(
           ? "gitlab" as const
           : "github" as const,
       sourceUrl: input.repoUrl,
-      localPath: `/Users/demo/.skillm/skills/${repoName}/${candidate.relativePath}`,
+      localPath: `/Users/demo/.skilldock/skills/${repoName}/${candidate.relativePath}`,
       collabStatus: "clean" as const,
       statusText: "仓库技能已导入，后续可继续同步到工具。",
     };
@@ -393,7 +393,7 @@ export async function installSelectedLocalSkills(
       sourceLabel: "本地安装",
       sourceType: "local" as const,
       sourceUrl: input.localPath,
-      localPath: `/Users/demo/.skillm/skills/${fallbackName}`,
+      localPath: `/Users/demo/.skilldock/skills/${fallbackName}`,
       collabStatus: "clean" as const,
       statusText: "本地技能已安装，可继续同步到目标工具。",
       gitLinked: false,
@@ -423,7 +423,7 @@ export async function installLocalSkill(input: InstallLocalSkillInput): Promise<
     sourceLabel: "本地安装",
     sourceType: "local" as const,
     sourceUrl: input.localPath,
-    localPath: `/Users/demo/.skillm/skills/${fallbackName}`,
+    localPath: `/Users/demo/.skilldock/skills/${fallbackName}`,
     collabStatus: "clean" as const,
     statusText: "本地技能已安装，可继续同步到目标工具。",
     gitLinked: false,
@@ -474,7 +474,7 @@ export async function fetchPushPreviewSnapshot(input: PushPreviewInput): Promise
     pushPreviewFixtures[input.skillName] ?? {
       targetBranch: input.targetBranch,
       willCreateBranch: Boolean(input.createBranchName?.trim()),
-      repositoryPath: `/Users/demo/.skillm/skills/${input.skillName}`,
+      repositoryPath: `/Users/demo/.skilldock/skills/${input.skillName}`,
       uncommittedFiles: [],
       unpushedCommitCount: 0,
     };

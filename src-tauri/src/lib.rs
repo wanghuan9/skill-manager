@@ -4,11 +4,13 @@ mod library;
 mod mcp_manager;
 mod models;
 mod state;
+mod workspace;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
+            workspace::ensure_workspace_migrated()?;
             if cfg!(debug_assertions) {
                 app.handle().plugin(
                     tauri_plugin_log::Builder::default()

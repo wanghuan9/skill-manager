@@ -344,7 +344,7 @@ function AppContent() {
               <path d="M6.4 17.6 9 15" stroke="#ffffff" strokeWidth="1.6" strokeLinecap="round" />
             </svg>
           </div>
-          <p className="brand-title">skillm</p>
+          <p className="brand-title">SkillDock</p>
           {!isMacOS ? (
             <SidebarToggleButton
               isSidebarCollapsed={isSidebarCollapsed}

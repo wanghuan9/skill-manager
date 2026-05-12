@@ -1,6 +1,6 @@
-# macOS Skill Manager
+# SkillDock
 
-一个基于 Tauri + React 的 macOS 技能管理器，用于管理和组织各种开发工具和 AI 助手技能。
+一个基于 Tauri + React 的桌面技能工作台，用于管理和组织各种开发工具、AI 助手技能与 MCP 配置。
 
 ## 🚀 功能特性
 
@@ -30,8 +30,8 @@
 1. 克隆仓库
 
 ```bash
-git clone https://github.com/wanghuan9/macos-skill-manager.git
-cd macos-skill-manager
+git clone https://github.com/wanghuan9/skill-manager.git
+cd skill-manager
 ```
 
 2. 安装依赖
@@ -65,7 +65,7 @@ npm run test:watch
 ## 📁 项目结构
 
 ```text
-macos-skill-manager/
+skill-manager/
 ├── src/                    # React 前端源码
 │   ├── app/               # 应用主组件和路由
 │   ├── features/          # 功能模块

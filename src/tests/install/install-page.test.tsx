@@ -494,7 +494,7 @@ test("reuses cached MCP marketplace results when switching away and back", async
 test("hydrates MCP marketplace from persisted cache on first open", async () => {
   window.localStorage.clear();
   window.localStorage.setItem(
-    "skillm.mcpMarketplaceCache",
+    "skilldock.mcpMarketplaceCache",
     JSON.stringify({
       version: 2,
       timestamp: Date.now(),

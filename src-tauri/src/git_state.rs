@@ -6,6 +6,9 @@ use std::sync::mpsc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::models::SkillSummary;
+use crate::workspace::{
+    remove_legacy_workspace_file, workspace_file_candidates, workspace_file_path,
+};
 use serde::{Deserialize, Serialize};
 
 const STATUS_CLEAN: &str = "clean";
@@ -463,10 +466,14 @@ fn remove_pending_push_cache_entry(skill: &SkillSummary) {
 }
 
 fn load_update_cache() -> GitUpdateCache {
-    let Some(cache_file) = update_cache_file() else {
-        return GitUpdateCache::default();
-    };
-    let Ok(contents) = fs::read_to_string(cache_file) else {
+    let Some((_, contents)) = workspace_file_candidates(UPDATE_CACHE_FILE_NAME)
+        .into_iter()
+        .find_map(|path| {
+            fs::read_to_string(&path)
+                .ok()
+                .map(|contents| (path, contents))
+        })
+    else {
         return GitUpdateCache::default();
     };
     serde_json::from_str(&contents).unwrap_or_default()
@@ -481,14 +488,13 @@ fn save_update_cache(cache: &GitUpdateCache) -> Result<(), String> {
         .map_err(|error| format!("创建 Git 更新缓存目录失败: {error}"))?;
     let payload = serde_json::to_string_pretty(cache)
         .map_err(|error| format!("序列化 Git 更新缓存失败: {error}"))?;
-    fs::write(cache_file, payload).map_err(|error| format!("写入 Git 更新缓存失败: {error}"))
+    fs::write(cache_file, payload).map_err(|error| format!("写入 Git 更新缓存失败: {error}"))?;
+    remove_legacy_workspace_file(UPDATE_CACHE_FILE_NAME);
+    Ok(())
 }
 
 fn update_cache_file() -> Option<PathBuf> {
-    std::env::var("HOME")
-        .ok()
-        .map(PathBuf::from)
-        .map(|home_dir| home_dir.join(".skillm").join(UPDATE_CACHE_FILE_NAME))
+    workspace_file_path(UPDATE_CACHE_FILE_NAME).ok()
 }
 
 fn resolve_remote_branch(skill_path: &Path, branch: &str) -> Option<String> {
@@ -798,7 +804,7 @@ mod tests {
             .expect("system time should be available")
             .as_nanos();
         env::temp_dir().join(format!(
-            "skillm-git-state-{name}-{}-{timestamp}",
+            "skilldock-git-state-{name}-{}-{timestamp}",
             std::process::id()
         ))
     }
@@ -829,14 +835,14 @@ mod tests {
             local_dir.to_str().expect("local path"),
             "config",
             "user.email",
-            "skillm@example.com",
+            "skilldock@example.com",
         ]);
         run_git_test([
             "-C",
             local_dir.to_str().expect("local path"),
             "config",
             "user.name",
-            "Skill Manager",
+            "SkillDock",
         ]);
 
         fs::create_dir_all(local_dir.join("skills/skill-a")).expect("create skill-a");
@@ -876,14 +882,14 @@ mod tests {
             remote_work_dir.to_str().expect("remote work path"),
             "config",
             "user.email",
-            "skillm@example.com",
+            "skilldock@example.com",
         ]);
         run_git_test([
             "-C",
             remote_work_dir.to_str().expect("remote work path"),
             "config",
             "user.name",
-            "Skill Manager",
+            "SkillDock",
         ]);
         fs::write(
             remote_work_dir.join("skills/skill-b/SKILL.md"),
@@ -1053,14 +1059,14 @@ mod tests {
             repo_dir.to_str().expect("repo path"),
             "config",
             "user.email",
-            "skillm@example.com",
+            "skilldock@example.com",
         ]);
         run_git_test([
             "-C",
             repo_dir.to_str().expect("repo path"),
             "config",
             "user.name",
-            "Skill Manager",
+            "SkillDock",
         ]);
 
         fs::write(repo_dir.join("SKILL.md"), "# demo-skill\n").expect("write skill file");
@@ -1107,14 +1113,14 @@ mod tests {
             repo_dir.to_str().expect("repo path"),
             "config",
             "user.email",
-            "skillm@example.com",
+            "skilldock@example.com",
         ]);
         run_git_test([
             "-C",
             repo_dir.to_str().expect("repo path"),
             "config",
             "user.name",
-            "Skill Manager",
+            "SkillDock",
         ]);
 
         fs::write(repo_dir.join("SKILL.md"), "# demo-skill\n").expect("write skill file");

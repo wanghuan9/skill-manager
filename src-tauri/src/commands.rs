@@ -34,6 +34,7 @@ use crate::state::{
     load_app_settings, load_installed_skills, normalize_skill_install_activation,
     save_app_settings, save_installed_skills, scan_local_skill_candidates,
 };
+use crate::workspace::{self, APP_BRAND_NAME};
 
 fn default_installed_skills() -> Vec<SkillSummary> {
     Vec::new()
@@ -200,7 +201,7 @@ fn default_marketplace_skills() -> Vec<MarketplaceSkill> {
 
 fn marketplace_http_client() -> Result<Client, String> {
     Client::builder()
-        .user_agent("skillm/0.1 (+https://github.com/wanghuan)")
+        .user_agent("skilldock/0.1 (+https://github.com/wanghuan)")
         .connect_timeout(Duration::from_secs(8))
         .timeout(Duration::from_secs(12))
         .build()
@@ -1072,13 +1073,9 @@ async fn fetch_skillsmp_marketplace(
 }
 
 fn marketplace_cache_file() -> Option<PathBuf> {
-    let home_dir = env::var("HOME").ok()?;
-    Some(
-        PathBuf::from(home_dir)
-            .join(".skillm")
-            .join("cache")
-            .join("marketplace.json"),
-    )
+    workspace::managed_workspace_root()
+        .ok()
+        .map(|workspace_root| workspace_root.join("cache").join("marketplace.json"))
 }
 
 fn marketplace_cache_key(source: &str) -> String {
@@ -2108,7 +2105,6 @@ fn load_interactive_installed_skills() -> Vec<SkillSummary> {
 const GIT_BINARY: &str = "git";
 const ORIGIN_REMOTE: &str = "origin";
 const REMOTE_PREFIX: &str = "origin/";
-const WORKSPACE_DIR: &str = ".skillm";
 const RESERVED_WORKSPACE_NAMES: [&str; 5] =
     ["state.json", "skills", "repo-cache", "cache", "imports"];
 
@@ -2773,8 +2769,7 @@ fn collect_skill_entries(
 }
 
 fn managed_workspace_root() -> Result<PathBuf, String> {
-    let home_dir = env::var("HOME").map_err(|_| "无法读取 HOME 环境变量".to_string())?;
-    Ok(PathBuf::from(home_dir).join(WORKSPACE_DIR))
+    workspace::managed_workspace_root()
 }
 
 fn should_remove_local_directory(path: &Path) -> Result<bool, String> {
@@ -2947,8 +2942,7 @@ fn upsert_trusted_project_path(config_path: &Path, trusted_path: &str) -> Result
 }
 
 fn intellij_trusted_location_for_project(project_path: &Path) -> PathBuf {
-    if let Some(home_dir) = env::var_os("HOME") {
-        let managed_skills_root = PathBuf::from(home_dir).join(".skillm/skills");
+    if let Ok(managed_skills_root) = workspace::managed_skill_library_root() {
         if project_path.starts_with(&managed_skills_root) {
             return managed_skills_root;
         }
@@ -4042,7 +4036,6 @@ fn resolve_local_install_source(source_path: &Path) -> Result<(PathBuf, Option<P
 }
 
 fn local_import_extract_dir(source_path: &Path) -> Result<PathBuf, String> {
-    let home_dir = env::var("HOME").map_err(|_| "无法读取 HOME 环境变量".to_string())?;
     let source_name = source_path
         .file_stem()
         .and_then(|value| value.to_str())
@@ -4052,8 +4045,8 @@ fn local_import_extract_dir(source_path: &Path) -> Result<PathBuf, String> {
         .duration_since(UNIX_EPOCH)
         .map_err(|error| format!("生成导入缓存目录失败: {error}"))?
         .as_millis();
-    Ok(PathBuf::from(home_dir)
-        .join(".skillm/imports")
+    Ok(workspace::managed_workspace_root()?
+        .join("imports")
         .join(format!("{source_name}-{timestamp}")))
 }
 
@@ -4228,7 +4221,7 @@ pub fn import_local_skill(local_path: &str) -> Result<SkillSummary, String> {
         local_path: installed_local_path,
         branch: "local".into(),
         collab_status: "clean".into(),
-        status_text: "本地技能已复制到 skillm 并纳入统一管理。".into(),
+        status_text: format!("本地技能已复制到 {APP_BRAND_NAME} 并纳入统一管理。"),
         remote_updated_at: String::new(),
         local_updated_at: installed_at.clone(),
         last_synced_at: installed_at.clone(),
@@ -4740,14 +4733,12 @@ mod tests {
         scan_repo_skill_candidates, should_use_skills_sh_homepage_page,
     };
     use crate::models::SkillSummary;
+    use crate::workspace::TEST_ENV_LOCK;
     use std::env;
     use std::fs;
     use std::path::PathBuf;
     use std::process::Command;
-    use std::sync::Mutex;
     use std::time::{SystemTime, UNIX_EPOCH};
-
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     fn temp_test_dir(label: &str) -> PathBuf {
         let timestamp = SystemTime::now()
@@ -4755,7 +4746,7 @@ mod tests {
             .expect("system time should be available")
             .as_nanos();
         let temp_dir = env::temp_dir().join(format!(
-            "skillm-commands-test-{label}-{}-{}",
+            "skilldock-commands-test-{label}-{}-{}",
             std::process::id(),
             timestamp
         ));
@@ -4815,9 +4806,9 @@ mod tests {
 
     #[test]
     fn local_candidates_mark_real_directory_as_local_file() {
-        let _guard = ENV_LOCK
+        let _guard = TEST_ENV_LOCK
             .lock()
-            .expect("lock env for local candidate hint test");
+            .unwrap_or_else(|error| error.into_inner());
         let temp_dir = temp_test_dir("local-candidate-real-file-hint");
         let home_dir = temp_dir.join("home");
         let skill_dir = home_dir.join(".cursor/skills/real-skill");
@@ -4844,9 +4835,9 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn local_candidates_mark_symlink_as_symbolic_link() {
-        let _guard = ENV_LOCK
+        let _guard = TEST_ENV_LOCK
             .lock()
-            .expect("lock env for local candidate symlink hint test");
+            .unwrap_or_else(|error| error.into_inner());
         let temp_dir = temp_test_dir("local-candidate-symlink-hint");
         let home_dir = temp_dir.join("home");
         let legacy_skill_dir = temp_dir.join("legacy/linked-skill");
@@ -5008,11 +4999,11 @@ mod tests {
 
     #[test]
     fn creates_intellij_trusted_project_paths_config() {
-        let xml = insert_trusted_project_path("", "$USER_HOME$/.skillm/skills");
+        let xml = insert_trusted_project_path("", "$USER_HOME$/.skilldock/skills");
 
         assert!(xml.contains("<component name=\"Trusted.Paths\">"));
         assert!(xml.contains("<option name=\"TRUSTED_PROJECT_PATHS\">"));
-        assert!(xml.contains("<entry key=\"$USER_HOME$/.skillm/skills\" value=\"true\" />"));
+        assert!(xml.contains("<entry key=\"$USER_HOME$/.skilldock/skills\" value=\"true\" />"));
     }
 
     #[test]
@@ -5028,18 +5019,18 @@ mod tests {
 </application>
 "#;
 
-        let xml = insert_trusted_project_path(existing_xml, "$USER_HOME$/.skillm/skills");
-        let duplicate_xml = insert_trusted_project_path(&xml, "$USER_HOME$/.skillm/skills");
+        let xml = insert_trusted_project_path(existing_xml, "$USER_HOME$/.skilldock/skills");
+        let duplicate_xml = insert_trusted_project_path(&xml, "$USER_HOME$/.skilldock/skills");
 
         assert!(xml.contains("<entry key=\"$USER_HOME$/Projects\" value=\"true\" />"));
-        assert!(xml.contains("<entry key=\"$USER_HOME$/.skillm/skills\" value=\"true\" />"));
+        assert!(xml.contains("<entry key=\"$USER_HOME$/.skilldock/skills\" value=\"true\" />"));
         assert_eq!(xml, duplicate_xml);
     }
 
     #[test]
     fn trusts_managed_skill_root_for_intellij_projects() {
         let home_dir = env::var_os("HOME").expect("HOME should exist in tests");
-        let expected_root = PathBuf::from(&home_dir).join(".skillm/skills");
+        let expected_root = PathBuf::from(&home_dir).join(".skilldock/skills");
         let project_path = expected_root.join("drawio-diagram/skills/drawio-diagram");
 
         assert_eq!(
@@ -5173,6 +5164,9 @@ mod tests {
 
     #[test]
     fn local_install_installs_selected_project_skill_dirs() {
+        let _guard = TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         let home_dir = temp_test_dir("local-project-install-home");
         let local_root = temp_test_dir("local-project-install");
         let skill_dir = local_root.join("skills/service-observer");
@@ -5211,7 +5205,7 @@ mod tests {
         assert_eq!(installed.len(), 1);
         assert_eq!(installed[0].name, "service-observer");
         assert!(home_dir
-            .join(".skillm/skills/service-observer/SKILL.md")
+            .join(".skilldock/skills/service-observer/SKILL.md")
             .is_file());
 
         let _ = fs::remove_dir_all(home_dir);
@@ -5221,9 +5215,9 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn local_install_default_activation_replaces_existing_external_symlink() {
-        let _guard = ENV_LOCK
+        let _guard = TEST_ENV_LOCK
             .lock()
-            .expect("lock env for local install sync test");
+            .unwrap_or_else(|error| error.into_inner());
         let temp_dir = temp_test_dir("local-install-default-sync");
         let home_dir = temp_dir.join("home");
         let local_root = temp_dir.join("local-project");
@@ -5264,7 +5258,7 @@ mod tests {
         restore_env_var("HOME", original_home);
         restore_env_var("PATH", original_path);
 
-        let managed_skill_dir = home_dir.join(".skillm/skills/service-observer");
+        let managed_skill_dir = home_dir.join(".skilldock/skills/service-observer");
         assert_eq!(installed.len(), 1);
         assert_eq!(
             installed[0].local_path,
@@ -5285,10 +5279,10 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn local_import_copies_external_skill_into_skillm_before_syncing() {
-        let _guard = ENV_LOCK
+    fn local_import_copies_external_skill_into_skilldock_before_syncing() {
+        let _guard = TEST_ENV_LOCK
             .lock()
-            .expect("lock env for local import sync test");
+            .unwrap_or_else(|error| error.into_inner());
         let temp_dir = temp_test_dir("local-import-default-sync");
         let home_dir = temp_dir.join("home");
         let legacy_skill_dir = temp_dir.join("legacy/excalidraw-diagram");
@@ -5317,7 +5311,7 @@ mod tests {
         restore_env_var("HOME", original_home);
         restore_env_var("PATH", original_path);
 
-        let managed_skill_dir = home_dir.join(".skillm/skills/excalidraw-diagram");
+        let managed_skill_dir = home_dir.join(".skilldock/skills/excalidraw-diagram");
         assert_eq!(
             imported.local_path,
             managed_skill_dir.to_string_lossy().to_string()
