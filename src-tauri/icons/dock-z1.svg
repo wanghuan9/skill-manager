@@ -1,0 +1,16 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="dockZ1Gradient" x1="108" y1="108" x2="916" y2="916" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#163257" />
+      <stop offset="0.55" stop-color="#116396" />
+      <stop offset="1" stop-color="#1fc4b1" />
+    </linearGradient>
+  </defs>
+  <rect x="81" y="81" width="862" height="862" rx="224" fill="url(#dockZ1Gradient)" />
+  <rect x="301" y="301" width="90" height="90" rx="31" fill="rgba(255,255,255,0.9)" />
+  <rect x="633" y="301" width="90" height="90" rx="31" fill="rgba(223,248,255,0.78)" />
+  <rect x="301" y="633" width="90" height="90" rx="31" fill="rgba(223,248,255,0.78)" />
+  <rect x="633" y="633" width="90" height="90" rx="31" fill="rgba(255,255,255,0.9)" />
+  <path d="M512 301c58 108 76 126 211 211c-135 58-153 76-211 211c-58-135-76-153-211-211c135-85 153-103 211-211Z" fill="#ffffff" />
+  <circle cx="512" cy="512" r="63" fill="#16b3a8" />
+</svg>

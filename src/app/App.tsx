@@ -324,24 +324,23 @@ function AppContent() {
         ) : null}
         <div className="brand-block">
           <div ref={brandIconRef} className="brand-icon" aria-hidden="true">
-            <svg viewBox="0 0 24 24" role="img">
+            <svg viewBox="0 0 228 228" role="img">
               <defs>
-                <linearGradient id="brand-gradient" x1="2" y1="2" x2="22" y2="22" gradientUnits="userSpaceOnUse">
-                  <stop offset="0" stopColor="#2f7cff" />
-                  <stop offset="1" stopColor="#1ec8b8" />
+                <linearGradient id="brand-gradient" x1="24" y1="24" x2="210" y2="204" gradientUnits="userSpaceOnUse">
+                  <stop offset="0" stopColor="#163257" />
+                  <stop offset="0.55" stopColor="#116396" />
+                  <stop offset="1" stopColor="#1fc4b1" />
+                </linearGradient>
+                <linearGradient id="brand-star" x1="114" y1="54" x2="114" y2="176" gradientUnits="userSpaceOnUse">
+                  <stop offset="0" stopColor="#ffffff" />
+                  <stop offset="1" stopColor="#d7f8ff" />
                 </linearGradient>
               </defs>
-              <rect x="1.5" y="1.5" width="21" height="21" rx="6.5" fill="url(#brand-gradient)" />
-              <path
-                d="M14.9 6.6c-2.8.3-4.7 2.2-5.9 4.8l-1.9.7a1 1 0 0 0-.4 1.7l1.4 1.4a1 1 0 0 0 1.1.2l1.5-.6c.9 1.4 2 2.4 3.4 3.3l-.6 1.5a1 1 0 0 0 .2 1.1l1.4 1.4a1 1 0 0 0 1.7-.4l.7-1.9c2.6-1.2 4.5-3.1 4.8-5.9c.1-.9-.2-1.8-.8-2.5l-2.2-2.2c-.7-.6-1.6-.9-2.5-.8Z"
-                fill="none"
-                stroke="#ffffff"
-                strokeWidth="1.6"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-              <circle cx="15.7" cy="8.4" r="1.2" fill="#ffffff" />
-              <path d="M6.4 17.6 9 15" stroke="#ffffff" strokeWidth="1.6" strokeLinecap="round" />
+              <rect x="18" y="18" width="192" height="192" rx="50" fill="url(#brand-gradient)" />
+              <circle cx="114" cy="114" r="54" fill="none" stroke="rgba(255,255,255,0.26)" strokeWidth="14" />
+              <path d="M114 56c11 26 18 33 44 44c-26 11-33 18-44 44c-11-26-18-33-44-44c26-11 33-18 44-44Z" fill="url(#brand-star)" />
+              <path d="M114 84c6 14 10 18 24 24c-14 6-18 10-24 24c-6-14-10-18-24-24c14-6 18-10 24-24Z" fill="#16b3a8" />
+              <circle cx="114" cy="114" r="10" fill="#ffffff" />
             </svg>
           </div>
           <p className="brand-title">SkillDock</p>

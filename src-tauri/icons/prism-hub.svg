@@ -1,0 +1,18 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="prismHubGradient" x1="108" y1="108" x2="944" y2="916" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#163257" />
+      <stop offset="0.55" stop-color="#116396" />
+      <stop offset="1" stop-color="#1fc4b1" />
+    </linearGradient>
+    <linearGradient id="prismHubStar" x1="512" y1="242" x2="512" y2="782" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffffff" />
+      <stop offset="1" stop-color="#d7f8ff" />
+    </linearGradient>
+  </defs>
+  <rect x="81" y="81" width="862" height="862" rx="224" fill="url(#prismHubGradient)" />
+  <circle cx="512" cy="512" r="241" fill="none" stroke="rgba(255,255,255,0.26)" stroke-width="63" />
+  <path d="M512 251c49 116 80 147 197 197c-117 49-148 80-197 197c-49-117-80-148-197-197c117-50 148-81 197-197Z" fill="url(#prismHubStar)" />
+  <path d="M512 373c27 63 45 81 108 108c-63 27-81 45-108 108c-27-63-45-81-108-108c63-27 81-45 108-108Z" fill="#16b3a8" />
+  <circle cx="512" cy="512" r="45" fill="#ffffff" />
+</svg>
