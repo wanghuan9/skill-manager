@@ -1344,15 +1344,28 @@ fn build_local_candidates(installed_skills: &[SkillSummary]) -> Vec<LocalSkillCa
         .into_iter()
         .map(|(name, detected_from)| {
             let local_path = format!("{detected_from}/{name}");
+            let source_hint = local_candidate_source_hint(&local_path).to_string();
             LocalSkillCandidate {
                 description: format!("从 {detected_from} 发现的本地技能。"),
-                source_hint: "符号链接".into(),
+                source_hint,
                 name,
                 local_path,
                 detected_from,
             }
         })
         .collect()
+}
+
+fn local_candidate_source_hint(local_path: &str) -> &'static str {
+    fs::symlink_metadata(Path::new(local_path))
+        .map(|metadata| {
+            if metadata.file_type().is_symlink() {
+                "符号链接"
+            } else {
+                "本地文件"
+            }
+        })
+        .unwrap_or("本地文件")
 }
 
 #[derive(Clone, Copy)]
@@ -4719,12 +4732,12 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        build_repo_skill_source_url, collect_local_skill_dirs, collect_skills_manager_cached_items,
-        import_local_skill, insert_trusted_project_path, install_selected_local_skill_dirs,
-        intellij_trusted_location_for_project, normalize_installed_skill_source_url,
-        open_target_path_for_skill, parse_repo_install_spec, parse_skills_sh_homepage_items,
-        scan_local_install_skill_candidates, scan_repo_skill_candidates,
-        should_use_skills_sh_homepage_page,
+        build_local_candidates, build_repo_skill_source_url, collect_local_skill_dirs,
+        collect_skills_manager_cached_items, import_local_skill, insert_trusted_project_path,
+        install_selected_local_skill_dirs, intellij_trusted_location_for_project,
+        normalize_installed_skill_source_url, open_target_path_for_skill, parse_repo_install_spec,
+        parse_skills_sh_homepage_items, scan_local_install_skill_candidates,
+        scan_repo_skill_candidates, should_use_skills_sh_homepage_page,
     };
     use crate::models::SkillSummary;
     use std::env;
@@ -4798,6 +4811,68 @@ mod tests {
                 env::remove_var(name);
             }
         }
+    }
+
+    #[test]
+    fn local_candidates_mark_real_directory_as_local_file() {
+        let _guard = ENV_LOCK
+            .lock()
+            .expect("lock env for local candidate hint test");
+        let temp_dir = temp_test_dir("local-candidate-real-file-hint");
+        let home_dir = temp_dir.join("home");
+        let skill_dir = home_dir.join(".cursor/skills/real-skill");
+        fs::create_dir_all(&skill_dir).expect("create real skill dir");
+        fs::write(skill_dir.join("SKILL.md"), "# real-skill").expect("write skill file");
+
+        let original_home = env::var_os("HOME");
+        // SAFETY: this test holds ENV_LOCK and restores HOME before returning.
+        unsafe {
+            env::set_var("HOME", &home_dir);
+        }
+
+        let candidates = build_local_candidates(&[]);
+
+        restore_env_var("HOME", original_home);
+
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].name, "real-skill");
+        assert_eq!(candidates[0].source_hint, "本地文件");
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn local_candidates_mark_symlink_as_symbolic_link() {
+        let _guard = ENV_LOCK
+            .lock()
+            .expect("lock env for local candidate symlink hint test");
+        let temp_dir = temp_test_dir("local-candidate-symlink-hint");
+        let home_dir = temp_dir.join("home");
+        let legacy_skill_dir = temp_dir.join("legacy/linked-skill");
+        let codex_skills_dir = home_dir.join(".codex/skills");
+        let codex_skill_link = codex_skills_dir.join("linked-skill");
+        fs::create_dir_all(&legacy_skill_dir).expect("create legacy skill dir");
+        fs::create_dir_all(&codex_skills_dir).expect("create codex skills dir");
+        fs::write(legacy_skill_dir.join("SKILL.md"), "# linked-skill").expect("write skill file");
+        std::os::unix::fs::symlink(&legacy_skill_dir, &codex_skill_link)
+            .expect("create skill symlink");
+
+        let original_home = env::var_os("HOME");
+        // SAFETY: this test holds ENV_LOCK and restores HOME before returning.
+        unsafe {
+            env::set_var("HOME", &home_dir);
+        }
+
+        let candidates = build_local_candidates(&[]);
+
+        restore_env_var("HOME", original_home);
+
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].name, "linked-skill");
+        assert_eq!(candidates[0].source_hint, "符号链接");
+
+        let _ = fs::remove_dir_all(temp_dir);
     }
 
     #[test]
