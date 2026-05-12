@@ -20,6 +20,8 @@ const STATE_DIR_NAME: &str = ".skillm";
 const MCP_STATE_FILE_NAME: &str = "mcp-servers.json";
 const MCP_PROTOCOL_VERSION: &str = "2024-11-05";
 const MCP_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(12);
+const CANVA_REMOTE_MCP_URL: &str = "https://mcp.canva.com/mcp";
+const MEM0_REMOTE_MCP_URL: &str = "https://mcp.mem0.ai/mcp/";
 const APP_CLAUDE_CODE: &str = "claude-code";
 const APP_CODEX: &str = "codex";
 const APP_GEMINI: &str = "gemini";
@@ -142,6 +144,11 @@ struct NpmPackageMetadata {
     repository: Option<NpmRepository>,
     homepage: Option<String>,
     readme: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PackageJsonMetadata {
+    name: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -333,7 +340,7 @@ pub async fn list_mcp_marketplace_servers(
 pub async fn install_mcp_server_from_marketplace(
     server: McpMarketplaceServer,
 ) -> Result<McpWorkspaceSnapshot, String> {
-    let server_config = match server.server.clone() {
+    let mut server_config = match server.server.clone() {
         Some(config) => config,
         None => fetch_mcp_marketplace_install_config(&server)
             .await?
@@ -341,8 +348,6 @@ pub async fn install_mcp_server_from_marketplace(
     };
 
     let server_id = normalize_mcp_marketplace_server_id(&server.name);
-    validate_mcp_server(&server_id, &server_config)?;
-
     let mut records = load_mcp_records()?;
     if records.iter().any(|record| record.id == server_id) {
         return build_mcp_workspace_snapshot();
@@ -351,6 +356,14 @@ pub async fn install_mcp_server_from_marketplace(
     let source_url = resolve_mcp_marketplace_source_url(&server, &server_config)
         .await
         .unwrap_or_default();
+    let metadata_client = mcp_metadata_client();
+    repair_unavailable_npm_package_from_source(
+        &mut server_config,
+        &source_url,
+        metadata_client.as_ref(),
+    )
+    .await;
+    validate_mcp_server(&server_id, &server_config)?;
     let mut record = McpServerRecord {
         id: server_id.clone(),
         name: server.name.trim().to_lowercase(),
@@ -364,7 +377,6 @@ pub async fn install_mcp_server_from_marketplace(
         installed_at: now_label(),
         updated_at: now_label(),
     };
-    let metadata_client = mcp_metadata_client();
     enrich_mcp_record_metadata(&mut record, metadata_client.as_ref()).await;
     if record.source_url.trim().is_empty() {
         record.source_url = mcp_marketplace_detail_url(&server)
@@ -1461,6 +1473,13 @@ fn normalize_record(mut record: McpServerRecord) -> Result<McpServerRecord, Stri
     if let Some(unwrapped_server) = unwrap_mcp_filter_server(&record.server) {
         record.server = unwrapped_server;
     }
+    normalize_npx_stdio_args(&mut record.server);
+    normalize_tableau_env_aliases(&mut record.server);
+    if repair_known_mcp_server_config(&mut record.server, &record.description) {
+        record.tools.clear();
+        record.tools_discovered_at.clear();
+        record.tools_discovery_error.clear();
+    }
     let supported_app_ids = target_app_specs()?
         .into_iter()
         .map(|app| app.id.to_string())
@@ -1532,6 +1551,23 @@ fn discover_mcp_server_tools(server: &Value) -> Result<Vec<String>, String> {
 }
 
 fn discover_stdio_mcp_tools(server: &Value) -> Result<Vec<String>, String> {
+    if prefers_legacy_stdio_wire_format(server) {
+        return match discover_stdio_mcp_tools_with_wire_format(
+            server,
+            McpStdioWireFormat::LineDelimitedJson,
+        ) {
+            Ok(result) => Ok(result.tools),
+            Err(error) => {
+                log::info!(
+                    "使用逐行 JSON 探测失败，回退到标准 MCP stdio framing 重试: {}",
+                    error
+                );
+                discover_stdio_mcp_tools_with_wire_format(server, McpStdioWireFormat::ContentLength)
+                    .map(|result| result.tools)
+            }
+        };
+    }
+
     match discover_stdio_mcp_tools_with_wire_format(server, McpStdioWireFormat::ContentLength) {
         Ok(result) => Ok(result.tools),
         Err(error) if should_retry_stdio_discovery_with_legacy_wire_format(&error) => {
@@ -1544,6 +1580,10 @@ fn discover_stdio_mcp_tools(server: &Value) -> Result<Vec<String>, String> {
         }
         Err(error) => Err(error),
     }
+}
+
+fn prefers_legacy_stdio_wire_format(server: &Value) -> bool {
+    npm_package_from_mcp_server(server).as_deref() == Some("@sylphlab/pdf-reader-mcp")
 }
 
 fn discover_stdio_mcp_tools_with_wire_format(
@@ -1754,9 +1794,10 @@ fn read_next_mcp_stdio_message(reader: &mut impl BufRead) -> Result<Option<Value
         }
 
         if trimmed.starts_with('{') || trimmed.starts_with('[') {
-            let value = serde_json::from_str::<Value>(trimmed)
-                .map_err(|error| format!("解析 MCP JSON 响应失败: {error}"))?;
-            return Ok(Some(value));
+            match serde_json::from_str::<Value>(trimmed) {
+                Ok(value) => return Ok(Some(value)),
+                Err(_) => continue,
+            }
         }
 
         let Some(mut content_length) = parse_mcp_content_length_header(trimmed) else {
@@ -1864,9 +1905,20 @@ fn post_mcp_http_message(
             }
         }
     }
-    request
+    let response = request
         .send()
-        .map_err(|error| format!("请求 MCP tools 失败: {error}"))?
+        .map_err(|error| format!("请求 MCP tools 失败: {error}"))?;
+    if response.status() == reqwest::StatusCode::UNAUTHORIZED
+        && response
+            .headers()
+            .get("www-authenticate")
+            .and_then(|value| value.to_str().ok())
+            .map(|value| value.to_lowercase().contains("oauth"))
+            .unwrap_or(false)
+    {
+        return Err("MCP tools 探测需要 OAuth 授权，请先在目标工具中完成登录".to_string());
+    }
+    response
         .error_for_status()
         .map_err(|error| format!("MCP tools 响应异常: {error}"))
 }
@@ -2699,6 +2751,70 @@ async fn fetch_npm_package_metadata(
     }
 
     response.json::<NpmPackageMetadata>().await.ok()
+}
+
+async fn repair_unavailable_npm_package_from_source(
+    server: &mut Value,
+    source_url: &str,
+    client: Option<&Client>,
+) -> bool {
+    let Some(client) = client else {
+        return false;
+    };
+    let Some(current_package_name) = npm_package_from_mcp_server(server) else {
+        return false;
+    };
+    if fetch_npm_package_metadata(client, &current_package_name)
+        .await
+        .is_some()
+    {
+        return false;
+    }
+    let Some((owner, repo)) = github_repo_from_url(source_url) else {
+        return false;
+    };
+    let Some(source_package_name) = fetch_github_package_json_name(client, &owner, &repo).await
+    else {
+        return false;
+    };
+    if source_package_name == current_package_name {
+        return false;
+    }
+    if fetch_npm_package_metadata(client, &source_package_name)
+        .await
+        .is_none()
+    {
+        return false;
+    }
+
+    replace_npm_package_arg(server, &format!("{source_package_name}@latest"));
+    true
+}
+
+async fn fetch_github_package_json_name(
+    client: &Client,
+    owner: &str,
+    repo: &str,
+) -> Option<String> {
+    for branch in ["main", "master"] {
+        let url = format!(
+            "https://raw.githubusercontent.com/{}/{}/{}/package.json",
+            encode_query_component(owner),
+            encode_query_component(repo),
+            branch
+        );
+        let response = client.get(url).send().await.ok()?;
+        if !response.status().is_success() {
+            continue;
+        }
+        let package_json = response.json::<PackageJsonMetadata>().await.ok()?;
+        let package_name = package_json.name?.trim().to_string();
+        if is_npm_package_candidate(&package_name) {
+            return Some(package_name);
+        }
+    }
+
+    None
 }
 
 async fn fetch_pypi_package_metadata(
@@ -3621,7 +3737,107 @@ fn normalize_mcp_install_config(mut server: Value, description: &str) -> Option<
             .or_insert_with(|| Value::String(description.trim().to_string()));
     }
     normalize_marketplace_install_env_aliases(obj);
+    normalize_npx_stdio_args(&mut server);
+    normalize_tableau_env_aliases(&mut server);
+    repair_known_mcp_server_config(&mut server, description);
     Some(server)
+}
+
+fn normalize_npx_stdio_args(server: &mut Value) {
+    if mcp_server_type(server) != "stdio" {
+        return;
+    }
+    let Some(obj) = server.as_object_mut() else {
+        return;
+    };
+    let command_name = obj
+        .get("command")
+        .and_then(Value::as_str)
+        .map(command_basename)
+        .unwrap_or_default()
+        .to_string();
+    if command_name != "npx" {
+        return;
+    }
+    let Some(args) = obj.get_mut("args").and_then(Value::as_array_mut) else {
+        return;
+    };
+    if args.iter().any(|arg| {
+        arg.as_str()
+            .map(|value| matches!(value, "-y" | "--yes" | "--no-install"))
+            .unwrap_or(false)
+    }) {
+        return;
+    }
+    if args
+        .iter()
+        .filter_map(Value::as_str)
+        .any(is_npm_package_candidate)
+    {
+        args.insert(0, Value::String("-y".to_string()));
+    }
+}
+
+fn replace_npm_package_arg(server: &mut Value, replacement: &str) {
+    let Some(args) = server
+        .as_object_mut()
+        .and_then(|obj| obj.get_mut("args"))
+        .and_then(Value::as_array_mut)
+    else {
+        return;
+    };
+    for arg in args {
+        let Some(value) = arg.as_str() else {
+            continue;
+        };
+        if is_npm_package_candidate(value) {
+            *arg = Value::String(replacement.to_string());
+            return;
+        }
+    }
+}
+
+fn normalize_tableau_env_aliases(server: &mut Value) {
+    let Some(env) = server
+        .as_object_mut()
+        .and_then(|obj| obj.get_mut("env"))
+        .and_then(Value::as_object_mut)
+    else {
+        return;
+    };
+    move_env_alias(env, "TABLEAU_SERVER", "SERVER");
+    move_env_alias(env, "TABLEAU_PAT_NAME", "PAT_NAME");
+    move_env_alias(env, "TABLEAU_PAT_VALUE", "PAT_VALUE");
+    move_env_alias(env, "TABLEAU_SITE_NAME", "SITE_NAME");
+}
+
+fn move_env_alias(env: &mut Map<String, Value>, from: &str, to: &str) {
+    let Some(value) = env.remove(from) else {
+        return;
+    };
+    env.entry(to.to_string()).or_insert(value);
+}
+
+fn repair_known_mcp_server_config(server: &mut Value, fallback_description: &str) -> bool {
+    let Some(package_name) = npm_package_from_mcp_server(server) else {
+        return false;
+    };
+    let remote_url = match package_name.as_str() {
+        "@canva/mcp-server" => CANVA_REMOTE_MCP_URL,
+        "@mem0/mcp" => MEM0_REMOTE_MCP_URL,
+        _ => return false,
+    };
+    let description = explicit_mcp_description(server)
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| fallback_description.trim().to_string());
+    let mut obj = Map::new();
+    obj.insert("type".to_string(), Value::String("http".to_string()));
+    obj.insert("url".to_string(), Value::String(remote_url.to_string()));
+    if !description.trim().is_empty() {
+        obj.insert("description".to_string(), Value::String(description));
+    }
+    *server = Value::Object(obj);
+    true
 }
 
 fn normalize_marketplace_install_env_aliases(obj: &mut Map<String, Value>) {
@@ -4490,6 +4706,149 @@ mcpServers:
     }
 
     #[test]
+    fn repairs_canva_marketplace_npm_config_to_remote_http() {
+        let config = r#"{
+          "mcpServers": {
+            "canva": {
+              "command": "npx",
+              "args": ["-y", "@canva/mcp-server"],
+              "env": {
+                "CANVA_API_TOKEN": "<YOUR_TOKEN>"
+              }
+            }
+          }
+        }"#;
+
+        let server = parse_mcp_install_config(config, "Canva MCP").unwrap();
+
+        assert_eq!(
+            server,
+            json!({
+                "type": "http",
+                "url": CANVA_REMOTE_MCP_URL,
+                "description": "Canva MCP"
+            })
+        );
+    }
+
+    #[test]
+    fn repairs_mem0_marketplace_npm_config_to_remote_http() {
+        let config = r#"{
+          "mcpServers": {
+            "mem0": {
+              "command": "npx",
+              "args": ["-y", "@mem0/mcp"],
+              "env": {
+                "MEM0_API_KEY": "<YOUR_API_KEY>"
+              }
+            }
+          }
+        }"#;
+
+        let server = parse_mcp_install_config(config, "Mem0 MCP").unwrap();
+
+        assert_eq!(
+            server,
+            json!({
+                "type": "http",
+                "url": MEM0_REMOTE_MCP_URL,
+                "description": "Mem0 MCP"
+            })
+        );
+    }
+
+    #[test]
+    fn adds_yes_flag_to_marketplace_npx_stdio_config() {
+        let config = r#"{
+          "mcpServers": {
+            "pdf-reader-mcp": {
+              "command": "npx",
+              "args": ["@sylphlab/pdf-reader-mcp"]
+            }
+          }
+        }"#;
+
+        let server = parse_mcp_install_config(config, "PDF Reader MCP").unwrap();
+
+        assert_eq!(
+            server,
+            json!({
+                "type": "stdio",
+                "command": "npx",
+                "args": ["-y", "@sylphlab/pdf-reader-mcp"],
+                "description": "PDF Reader MCP"
+            })
+        );
+    }
+
+    #[test]
+    fn identifies_pdf_reader_mcp_as_legacy_stdio_wire_format() {
+        let server = json!({
+            "type": "stdio",
+            "command": "npx",
+            "args": ["-y", "@sylphlab/pdf-reader-mcp"]
+        });
+
+        assert!(prefers_legacy_stdio_wire_format(&server));
+    }
+
+    #[test]
+    fn normalizes_tableau_marketplace_env_aliases() {
+        let config = r#"{
+          "mcpServers": {
+            "tableau": {
+              "command": "npx",
+              "args": ["-y", "@tableau/tableau-mcp"],
+              "env": {
+                "TABLEAU_SERVER": "<YOUR_TABLEAU_SERVER>",
+                "TABLEAU_PAT_NAME": "<YOUR_PAT_NAME>",
+                "TABLEAU_PAT_VALUE": "<YOUR_PAT_VALUE>",
+                "TABLEAU_SITE_NAME": "<YOUR_SITE_NAME>"
+              }
+            }
+          }
+        }"#;
+
+        let server = parse_mcp_install_config(config, "Tableau MCP").unwrap();
+
+        assert_eq!(
+            server,
+            json!({
+                "type": "stdio",
+                "command": "npx",
+                "args": ["-y", "@tableau/tableau-mcp"],
+                "description": "Tableau MCP",
+                "env": {
+                    "SERVER": "<YOUR_TABLEAU_SERVER>",
+                    "PAT_NAME": "<YOUR_PAT_NAME>",
+                    "PAT_VALUE": "<YOUR_PAT_VALUE>",
+                    "SITE_NAME": "<YOUR_SITE_NAME>"
+                }
+            })
+        );
+    }
+
+    #[test]
+    fn replaces_first_npm_package_arg_with_source_package_name() {
+        let mut server = json!({
+            "type": "stdio",
+            "command": "npx",
+            "args": ["-y", "@tableau/tableau-mcp"]
+        });
+
+        replace_npm_package_arg(&mut server, "@tableau/mcp-server@latest");
+
+        assert_eq!(
+            server,
+            json!({
+                "type": "stdio",
+                "command": "npx",
+                "args": ["-y", "@tableau/mcp-server@latest"]
+            })
+        );
+    }
+
+    #[test]
     fn writes_stdio_messages_with_content_length_header() {
         let mut output = Vec::new();
         write_mcp_stdio_message(
@@ -4532,6 +4891,27 @@ mcpServers:
     fn reads_legacy_line_delimited_stdio_messages() {
         let payload =
             b"{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{\"tools\":[{\"name\":\"alpha\"}]}}\n";
+        let mut reader = BufReader::new(&payload[..]);
+
+        let message = read_next_mcp_stdio_message(&mut reader).unwrap();
+
+        assert_eq!(
+            message,
+            Some(json!({
+                "jsonrpc": "2.0",
+                "id": 2,
+                "result": {
+                    "tools": [
+                        { "name": "alpha" }
+                    ]
+                }
+            }))
+        );
+    }
+
+    #[test]
+    fn skips_stdout_log_lines_that_look_like_json_arrays() {
+        let payload = b"[Filesystem MCP] Server running on stdio\n{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{\"tools\":[{\"name\":\"alpha\"}]}}\n";
         let mut reader = BufReader::new(&payload[..]);
 
         let message = read_next_mcp_stdio_message(&mut reader).unwrap();
