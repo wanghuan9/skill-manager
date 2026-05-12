@@ -84,6 +84,104 @@ test("keeps MCP marketplace card and detail metadata consistent", async () => {
   expect(within(detailDialog).getByText("分类: AI/ML")).toBeInTheDocument();
 });
 
+test("marks MCP marketplace avatars as loaded after image load events", async () => {
+  window.localStorage.clear();
+  resetMcpMarketplaceRuntimeCache();
+  render(<App />);
+  await userEvent.click(screen.getByRole("button", { name: /安装/ }));
+  await userEvent.click(screen.getByRole("tab", { name: "MCP" }));
+
+  const context7Heading = await screen.findByRole("heading", { name: "context7", level: 3 });
+  const context7Card = context7Heading.closest("article");
+  if (!context7Card) {
+    throw new Error("context7 marketplace card was not rendered");
+  }
+
+  const avatarImage = context7Card.querySelector<HTMLImageElement>("img.install-card__avatar-image");
+  if (!avatarImage) {
+    throw new Error("context7 avatar image was not rendered");
+  }
+
+  fireEvent.load(avatarImage);
+
+  expect(avatarImage).toHaveClass("is-loaded");
+  expect(avatarImage.closest(".install-card__avatar")).toHaveClass("install-card__avatar--image-loaded");
+});
+
+test("loads and caches MCP install config when opening marketplace detail", async () => {
+  window.localStorage.clear();
+  resetMcpMarketplaceRuntimeCache();
+  const playwrightServer = mcpMarketplaceServerFixtures.find((server) => server.name === "playwright");
+  if (!playwrightServer) {
+    throw new Error("missing playwright marketplace fixture");
+  }
+
+  const marketplaceServerWithoutConfig: McpMarketplaceServer = {
+    ...playwrightServer,
+    server: null,
+  };
+  let resolveConfigRequest!: (value: Record<string, unknown> | null) => void;
+  const fetchMarketplaceServersSpy = vi
+    .spyOn(skillClient, "fetchMcpMarketplaceServers")
+    .mockResolvedValue([marketplaceServerWithoutConfig]);
+  const installSpy = vi.spyOn(skillClient, "installMcpServerFromMarketplace");
+  const fetchConfigSpy = vi
+    .spyOn(skillClient, "fetchMcpMarketplaceServerConfig")
+    .mockImplementation(() => new Promise<Record<string, unknown> | null>((resolve) => {
+      resolveConfigRequest = resolve;
+    }));
+
+  render(<App />);
+  await userEvent.click(screen.getByRole("button", { name: /安装/ }));
+  await userEvent.click(screen.getByRole("tab", { name: "MCP" }));
+
+  const playwrightHeading = await screen.findByRole("heading", { name: "playwright", level: 3 });
+  await userEvent.click(playwrightHeading);
+
+  const detailDialog = screen.getByRole("dialog", { name: "playwright 详情" });
+  expect(within(detailDialog).getByText("正在加载安装配置...")).toBeInTheDocument();
+
+  if (typeof resolveConfigRequest !== "function") {
+    throw new Error("marketplace config request was not triggered");
+  }
+  resolveConfigRequest(playwrightServer.server ?? null);
+
+  await waitFor(() => {
+    expect(within(detailDialog).getByText(/"command": "npx"/)).toBeInTheDocument();
+  });
+
+  await userEvent.click(screen.getByRole("button", { name: "关闭详情" }));
+  await userEvent.click(screen.getByRole("heading", { name: "playwright", level: 3 }));
+
+  const reopenedDialog = screen.getByRole("dialog", { name: "playwright 详情" });
+  expect(within(reopenedDialog).getByText(/"command": "npx"/)).toBeInTheDocument();
+  expect(fetchMarketplaceServersSpy).toHaveBeenCalled();
+  expect(fetchConfigSpy).toHaveBeenCalledTimes(1);
+
+  await userEvent.click(screen.getByRole("button", { name: "关闭详情" }));
+  const playwrightCard = screen.getByRole("heading", { name: "playwright", level: 3 }).closest("article");
+  if (!playwrightCard) {
+    throw new Error("playwright marketplace card was not rendered");
+  }
+  await userEvent.click(within(playwrightCard).getByRole("button", { name: "安装" }));
+
+  await waitFor(() => {
+    expect(installSpy).toHaveBeenCalledWith({
+      server: expect.objectContaining({
+        id: "mcp-directory-playwright",
+        server: expect.objectContaining({
+          command: "npx",
+          args: ["-y", "@playwright/mcp"],
+        }),
+      }),
+    });
+  });
+
+  fetchMarketplaceServersSpy.mockRestore();
+  installSpy.mockRestore();
+  fetchConfigSpy.mockRestore();
+});
+
 test("installs MCP marketplace servers into the managed MCP list without enabling tools", async () => {
   window.localStorage.clear();
   resetMcpMarketplaceRuntimeCache();

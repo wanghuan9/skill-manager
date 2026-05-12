@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent a
 import { useNotifications } from "@/app/notifications";
 import {
   fetchMcpMarketplaceServers,
+  fetchMcpMarketplaceServerConfig,
   fetchMcpWorkspace,
   installMcpServerFromMarketplace,
   openExternalLink,
@@ -291,6 +292,7 @@ export function McpMarketplacePanel(props: McpMarketplacePanelProps) {
   const { searchQuery, onSearchQueryChange } = props;
   const { notify } = useNotifications();
   const { appSettings } = useSkillWorkspace();
+  const configCacheRef = useRef<Map<string, Record<string, unknown> | null>>(new Map());
   const resolvedSourceUrlCacheRef = useRef<Map<string, string>>(new Map());
   const initialCachedSnapshot = readCachedMcpSnapshot(searchQuery);
   const [servers, setServers] = useState<McpMarketplaceServer[]>(() => initialCachedSnapshot?.servers ?? []);
@@ -315,6 +317,59 @@ export function McpMarketplacePanel(props: McpMarketplacePanelProps) {
     appSettings.mcpInstallActivation === "apply-all-tools"
       ? "安装后默认同步到所有已支持应用"
       : "";
+
+  const applyCachedServerConfig = useCallback((server: McpMarketplaceServer) => {
+    if (!configCacheRef.current.has(server.id)) {
+      return server;
+    }
+
+    const cachedConfig = configCacheRef.current.get(server.id);
+    if (!cachedConfig) {
+      return server;
+    }
+
+    return {
+      ...server,
+      server: cachedConfig,
+    };
+  }, []);
+
+  const applyCachedServerConfigs = useCallback((items: McpMarketplaceServer[]) => {
+    return items.map((server) => applyCachedServerConfig(server));
+  }, [applyCachedServerConfig]);
+
+  const handleLoadServerConfig = useCallback(async (server: McpMarketplaceServer) => {
+    if (server.server) {
+      configCacheRef.current.set(server.id, server.server);
+      return server.server;
+    }
+
+    if (configCacheRef.current.has(server.id)) {
+      return configCacheRef.current.get(server.id) ?? null;
+    }
+
+    const serverConfig = await fetchMcpMarketplaceServerConfig({ server });
+    configCacheRef.current.set(server.id, serverConfig);
+    if (!serverConfig) {
+      return null;
+    }
+
+    setServers((current) => current.map((item) => (
+      item.id === server.id
+        ? { ...item, server: serverConfig }
+        : item
+    )));
+    setSelectedServer((current) => (
+      current?.id === server.id
+        ? { ...current, server: serverConfig }
+        : current
+    ));
+    return serverConfig;
+  }, []);
+
+  const handleSelectServer = useCallback((server: McpMarketplaceServer) => {
+    setSelectedServer(applyCachedServerConfig(server));
+  }, [applyCachedServerConfig]);
 
   const handleOpenSource = useCallback(async (server: McpMarketplaceServer) => {
     const cachedResolvedSourceUrl = resolvedSourceUrlCacheRef.current.get(server.id);
@@ -370,7 +425,7 @@ export function McpMarketplacePanel(props: McpMarketplacePanelProps) {
         if (!active) {
           return;
         }
-        setServers(cachedSnapshot.servers);
+        setServers(applyCachedServerConfigs(cachedSnapshot.servers));
         setPage(cachedSnapshot.page);
         setHasMore(cachedSnapshot.hasMore);
         setIsLoading(false);
@@ -395,7 +450,7 @@ export function McpMarketplacePanel(props: McpMarketplacePanelProps) {
         }
 
         writeCachedMcpPage(normalizedQuery, 1, marketplaceServers);
-        setServers(marketplaceServers);
+        setServers(applyCachedServerConfigs(marketplaceServers));
         setPage(1);
         setHasMore(isSearching ? marketplaceServers.length >= MCP_MARKETPLACE_PAGE_SIZE : marketplaceServers.length > 0);
       } catch (error) {
@@ -419,7 +474,7 @@ export function McpMarketplacePanel(props: McpMarketplacePanelProps) {
     return () => {
       active = false;
     };
-  }, [normalizedQuery]);
+  }, [applyCachedServerConfigs, normalizedQuery]);
 
   useEffect(() => {
     isLoadingRef.current = isLoading;
@@ -457,7 +512,7 @@ export function McpMarketplacePanel(props: McpMarketplacePanelProps) {
     const nextPage = page + 1;
     const cachedPage = getCachedMcpPageMap(normalizedQuery)?.get(nextPage);
     if (cachedPage) {
-      setServers((current) => [...current, ...cachedPage]);
+      setServers((current) => [...current, ...applyCachedServerConfigs(cachedPage)]);
       setPage(nextPage);
       setHasMore(isSearching ? cachedPage.length >= MCP_MARKETPLACE_PAGE_SIZE : cachedPage.length > 0);
       return;
@@ -469,11 +524,11 @@ export function McpMarketplacePanel(props: McpMarketplacePanelProps) {
       const nextServers = await fetchMcpMarketplaceServers({
         sourceSite: MCP_MARKETPLACE_SOURCE_SITE,
         page: nextPage,
-          limit: MCP_MARKETPLACE_PAGE_SIZE,
-          query: normalizedQuery,
+        limit: MCP_MARKETPLACE_PAGE_SIZE,
+        query: normalizedQuery,
       });
       writeCachedMcpPage(normalizedQuery, nextPage, nextServers);
-      setServers((current) => [...current, ...nextServers]);
+      setServers((current) => [...current, ...applyCachedServerConfigs(nextServers)]);
       setPage(nextPage);
       setHasMore(isSearching ? nextServers.length >= MCP_MARKETPLACE_PAGE_SIZE : nextServers.length > 0);
     } catch (error) {
@@ -571,7 +626,7 @@ export function McpMarketplacePanel(props: McpMarketplacePanelProps) {
     }
 
     event.preventDefault();
-    setSelectedServer(server);
+    handleSelectServer(server);
   }
 
   return (
@@ -624,7 +679,7 @@ export function McpMarketplacePanel(props: McpMarketplacePanelProps) {
                     className="install-card__surface"
                     role="button"
                     tabIndex={0}
-                    onClick={() => setSelectedServer(server)}
+                    onClick={() => handleSelectServer(server)}
                     onKeyDown={(event) => handleServerSurfaceKeyDown(event, server)}
                   >
                     <div className="install-card__header">
@@ -699,6 +754,7 @@ export function McpMarketplacePanel(props: McpMarketplacePanelProps) {
         <McpServerDetailModal
           server={selectedServer}
           onClose={() => setSelectedServer(null)}
+          onLoadServerConfig={handleLoadServerConfig}
           onOpenSource={handleOpenSource}
         />
       ) : null}
@@ -709,16 +765,28 @@ export function McpMarketplacePanel(props: McpMarketplacePanelProps) {
 type McpServerDetailModalProps = {
   server: McpMarketplaceServer;
   onClose: () => void;
+  onLoadServerConfig: (server: McpMarketplaceServer) => Promise<Record<string, unknown> | null>;
   onOpenSource: (server: McpMarketplaceServer) => Promise<void>;
 };
 
 function McpServerDetailModal(props: McpServerDetailModalProps) {
-  const { server, onClose, onOpenSource } = props;
+  const { server, onClose, onLoadServerConfig, onOpenSource } = props;
   const sourceUrl = resolveServerSourceUrl(server);
-  const serverJson = useMemo(
-    () => (server.server ? JSON.stringify(server.server, null, 2) : "安装时将从 MCP.Directory 自动拉取配置"),
-    [server.server],
-  );
+  const [serverConfig, setServerConfig] = useState<Record<string, unknown> | null>(server.server ?? null);
+  const [configErrorMessage, setConfigErrorMessage] = useState("");
+  const [isConfigLoading, setIsConfigLoading] = useState(() => server.server == null);
+  const serverJson = useMemo(() => {
+    if (serverConfig) {
+      return JSON.stringify(serverConfig, null, 2);
+    }
+    if (isConfigLoading) {
+      return "正在加载安装配置...";
+    }
+    if (configErrorMessage) {
+      return configErrorMessage;
+    }
+    return "当前 MCP 暂未提供安装配置";
+  }, [configErrorMessage, isConfigLoading, serverConfig]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -729,6 +797,44 @@ function McpServerDetailModal(props: McpServerDetailModalProps) {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [onClose]);
+
+  useEffect(() => {
+    let active = true;
+
+    setServerConfig(server.server ?? null);
+    setConfigErrorMessage("");
+    if (server.server) {
+      setIsConfigLoading(false);
+      return () => {
+        active = false;
+      };
+    }
+
+    setIsConfigLoading(true);
+    void onLoadServerConfig(server)
+      .then((nextServerConfig) => {
+        if (!active) {
+          return;
+        }
+        setServerConfig(nextServerConfig);
+      })
+      .catch((error) => {
+        if (!active) {
+          return;
+        }
+        const message = error instanceof Error ? error.message : "加载安装配置失败，请稍后重试。";
+        setConfigErrorMessage(message);
+      })
+      .finally(() => {
+        if (active) {
+          setIsConfigLoading(false);
+        }
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [onLoadServerConfig, server]);
 
   return (
     <div className="skill-detail-modal__backdrop" role="presentation" onClick={onClose}>
@@ -820,9 +926,7 @@ function McpMarketplaceAvatar(props: { server: McpMarketplaceServer; priority: b
           loading={priority ? "eager" : "lazy"}
           decoding="async"
           {...{ fetchpriority: priority ? "high" : "auto" }}
-          onLoad={(event) => {
-            setIsLoaded(event.currentTarget.naturalWidth > 0);
-          }}
+          onLoad={() => setIsLoaded(true)}
           onError={() => setHasFailed(true)}
         />
       ) : null}
