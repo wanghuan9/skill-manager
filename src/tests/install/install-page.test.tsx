@@ -4,6 +4,7 @@ import { vi } from "vitest";
 import { App } from "@/app/App";
 import * as skillClient from "@/features/skills/api/skill-client";
 import { mcpMarketplaceServerFixtures } from "@/features/skills/state/skill-fixtures";
+import type { McpMarketplaceServer } from "@/features/skills/state/skill-store";
 import { getCachedMcpWorkspace } from "@/features/skills/utils/mcp-workspace-cache";
 
 function resetMcpMarketplaceRuntimeCache() {
@@ -270,9 +271,7 @@ test("keeps the current MCP list visible until pending search results return", a
   window.localStorage.clear();
   resetMcpMarketplaceRuntimeCache();
   const originalFetchMcpMarketplaceServers = skillClient.fetchMcpMarketplaceServers;
-  let resolvePendingSearch:
-    | ((value: Awaited<ReturnType<typeof skillClient.fetchMcpMarketplaceServers>>) => void)
-    | null = null;
+  let resolvePendingSearch: ((value: McpMarketplaceServer[]) => void) | null = null;
   const fetchMcpMarketplaceServersSpy = vi
     .spyOn(skillClient, "fetchMcpMarketplaceServers")
     .mockImplementation((input) => {
@@ -300,7 +299,11 @@ test("keeps the current MCP list visible until pending search results return", a
   expect(screen.getByText("context7")).toBeInTheDocument();
   expect(screen.queryByText("正在搜索 MCP")).not.toBeInTheDocument();
 
-  resolvePendingSearch?.(mcpMarketplaceServerFixtures.filter((server) => server.name === "playwright"));
+  const finishPendingSearch = resolvePendingSearch as ((value: McpMarketplaceServer[]) => void) | null;
+  if (!finishPendingSearch) {
+    throw new Error("pending MCP marketplace search was not triggered");
+  }
+  finishPendingSearch(mcpMarketplaceServerFixtures.filter((server) => server.name === "playwright"));
 
   await waitFor(() => {
     expect(screen.getByText("playwright")).toBeInTheDocument();
@@ -333,7 +336,7 @@ test("hydrates MCP marketplace from persisted cache on first open", async () => 
   window.localStorage.setItem(
     "skillm.mcpMarketplaceCache",
     JSON.stringify({
-      version: 1,
+      version: 2,
       timestamp: Date.now(),
       pages: {
         "1": mcpMarketplaceServerFixtures,
@@ -351,6 +354,45 @@ test("hydrates MCP marketplace from persisted cache on first open", async () => 
   await waitFor(() => {
     expect(screen.getByRole("tab", { name: "mcp.directory" })).toBeInTheDocument();
   });
+});
+
+test("resolves GitHub source links when MCP marketplace list still returns detail pages", async () => {
+  window.localStorage.clear();
+  resetMcpMarketplaceRuntimeCache();
+  const fetchSpy = vi
+    .spyOn(skillClient, "fetchMcpMarketplaceServers")
+    .mockResolvedValue(
+      mcpMarketplaceServerFixtures.map((server) => ({
+        ...server,
+        sourceUrl: server.marketplaceUrl ?? server.sourceUrl,
+      })),
+    );
+  const resolveSpy = vi
+    .spyOn(skillClient, "resolveMcpMarketplaceSourceUrl")
+    .mockResolvedValue("https://github.com/upstash/context7");
+  const openSpy = vi.spyOn(window, "open").mockImplementation(() => null);
+
+  render(<App />);
+  await userEvent.click(screen.getByRole("button", { name: /安装/ }));
+  await userEvent.click(screen.getByRole("tab", { name: "MCP" }));
+
+  const sourceLink = await screen.findByRole("link", { name: "打开 context7 来源" });
+  await userEvent.click(sourceLink);
+
+  expect(fetchSpy).toHaveBeenCalled();
+  expect(resolveSpy).toHaveBeenCalledWith(expect.objectContaining({
+    name: "context7",
+    sourceUrl: "https://mcp.directory/servers/context7",
+  }));
+  expect(openSpy).toHaveBeenCalledWith(
+    "https://github.com/upstash/context7",
+    "_blank",
+    "noopener,noreferrer",
+  );
+
+  fetchSpy.mockRestore();
+  resolveSpy.mockRestore();
+  openSpy.mockRestore();
 });
 
 test("discovers repo skills and allows multi-select install", async () => {

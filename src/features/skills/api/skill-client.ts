@@ -496,6 +496,19 @@ export async function openExternalLink(url: string): Promise<void> {
   return invokeOrFallback("open_external_link", { url }, undefined);
 }
 
+export async function resolveMcpMarketplaceSourceUrl(server: McpMarketplaceServer): Promise<string> {
+  const fallbackSourceUrl = server.sourceUrl || server.marketplaceUrl || "";
+  if (shouldUseFixtureData()) {
+    return fallbackSourceUrl;
+  }
+
+  return invokeOrFallback(
+    "resolve_mcp_marketplace_source_link",
+    { server },
+    fallbackSourceUrl,
+  );
+}
+
 export async function openSkillInEditor(input: OpenSkillInEditorInput): Promise<void> {
   return invokeOrFallback("open_skill_in_editor", input, undefined);
 }

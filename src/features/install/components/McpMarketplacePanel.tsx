@@ -5,6 +5,7 @@ import {
   fetchMcpWorkspace,
   installMcpServerFromMarketplace,
   openExternalLink,
+  resolveMcpMarketplaceSourceUrl,
   refreshMcpServerTools,
 } from "@/features/skills/api/skill-client";
 import type { McpMarketplaceServer } from "@/features/skills/state/skill-store";
@@ -25,7 +26,7 @@ const MCP_MARKETPLACE_SOURCE_LABEL = "mcp.directory";
 const MCP_AVATAR_PRIORITY_COUNT = 12;
 const MCP_MARKETPLACE_RUNTIME_CACHE_KEY = "__SKILLM_MCP_MARKETPLACE_CACHE__";
 const MCP_MARKETPLACE_PERSISTED_CACHE_KEY = "skillm.mcpMarketplaceCache";
-const MCP_MARKETPLACE_PERSISTED_CACHE_VERSION = 1;
+const MCP_MARKETPLACE_PERSISTED_CACHE_VERSION = 2;
 const MCP_MARKETPLACE_PERSISTED_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 type McpMarketplacePanelProps = {
@@ -81,6 +82,42 @@ function getMcpMarketplaceRuntimeCache() {
 
 function normalizeMcpCacheKey(query: string) {
   return query.trim().toLowerCase();
+}
+
+function tryParseUrl(value: string) {
+  try {
+    return new URL(value);
+  } catch {
+    return null;
+  }
+}
+
+function buildOfficialRepositoryUrl(sourceUrl: string) {
+  const parsed = tryParseUrl(sourceUrl);
+  if (!parsed) {
+    return sourceUrl;
+  }
+
+  const segments = parsed.pathname.split("/").filter(Boolean);
+  const treeIndex = segments.indexOf("tree");
+  const blobIndex = segments.indexOf("blob");
+  const cutIndex = treeIndex >= 0 ? treeIndex : blobIndex;
+  if (cutIndex > 0) {
+    parsed.pathname = `/${segments.slice(0, cutIndex).join("/")}`;
+    parsed.search = "";
+    parsed.hash = "";
+  }
+
+  return parsed.toString();
+}
+
+function resolveServerSourceUrl(server: McpMarketplaceServer) {
+  const normalizedSourceUrl = buildOfficialRepositoryUrl(server.sourceUrl);
+  if (normalizedSourceUrl) {
+    return normalizedSourceUrl;
+  }
+
+  return buildOfficialRepositoryUrl(server.marketplaceUrl ?? "");
 }
 
 function readPersistedMcpMarketplaceCache(): PersistedMcpMarketplaceCache | null {
@@ -254,6 +291,7 @@ export function McpMarketplacePanel(props: McpMarketplacePanelProps) {
   const { searchQuery, onSearchQueryChange } = props;
   const { notify } = useNotifications();
   const { appSettings } = useSkillWorkspace();
+  const resolvedSourceUrlCacheRef = useRef<Map<string, string>>(new Map());
   const initialCachedSnapshot = readCachedMcpSnapshot(searchQuery);
   const [servers, setServers] = useState<McpMarketplaceServer[]>(() => initialCachedSnapshot?.servers ?? []);
   const [installedServerIds, setInstalledServerIds] = useState<Set<string>>(() => getCachedInstalledServerIds());
@@ -277,6 +315,19 @@ export function McpMarketplacePanel(props: McpMarketplacePanelProps) {
     appSettings.mcpInstallActivation === "apply-all-tools"
       ? "安装后默认同步到所有已支持应用"
       : "";
+
+  const handleOpenSource = useCallback(async (server: McpMarketplaceServer) => {
+    const cachedResolvedSourceUrl = resolvedSourceUrlCacheRef.current.get(server.id);
+    const resolvedSourceUrl = cachedResolvedSourceUrl
+      ?? await resolveMcpMarketplaceSourceUrl(server);
+    const fallbackSourceUrl = resolveServerSourceUrl(server);
+    const nextSourceUrl = resolvedSourceUrl.trim() || fallbackSourceUrl;
+    if (!cachedResolvedSourceUrl && nextSourceUrl) {
+      resolvedSourceUrlCacheRef.current.set(server.id, nextSourceUrl);
+    }
+
+    await openExternalLink(nextSourceUrl);
+  }, []);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -564,6 +615,7 @@ export function McpMarketplacePanel(props: McpMarketplacePanelProps) {
               const resolvedId = normalizeMcpServerId(server.name);
               const isInstalled = installedServerIds.has(resolvedId);
               const isInstalling = installingServerIds.has(server.id);
+              const sourceUrl = resolveServerSourceUrl(server);
               const canInstall = Boolean(server.sourceUrl);
 
               return (
@@ -583,12 +635,12 @@ export function McpMarketplacePanel(props: McpMarketplacePanelProps) {
                             <h3 title={server.name}>{server.name}</h3>
                             <a
                               className="install-card__link"
-                              href={server.sourceUrl}
+                              href={sourceUrl}
                               aria-label={`打开 ${server.name} 来源`}
                               onClick={(event) => {
                                 event.preventDefault();
                                 event.stopPropagation();
-                                void openExternalLink(server.sourceUrl);
+                                void handleOpenSource(server);
                               }}
                             >
                               <ExternalLinkIcon />
@@ -644,7 +696,11 @@ export function McpMarketplacePanel(props: McpMarketplacePanelProps) {
       </div>
 
       {selectedServer ? (
-        <McpServerDetailModal server={selectedServer} onClose={() => setSelectedServer(null)} />
+        <McpServerDetailModal
+          server={selectedServer}
+          onClose={() => setSelectedServer(null)}
+          onOpenSource={handleOpenSource}
+        />
       ) : null}
     </section>
   );
@@ -653,10 +709,12 @@ export function McpMarketplacePanel(props: McpMarketplacePanelProps) {
 type McpServerDetailModalProps = {
   server: McpMarketplaceServer;
   onClose: () => void;
+  onOpenSource: (server: McpMarketplaceServer) => Promise<void>;
 };
 
 function McpServerDetailModal(props: McpServerDetailModalProps) {
-  const { server, onClose } = props;
+  const { server, onClose, onOpenSource } = props;
+  const sourceUrl = resolveServerSourceUrl(server);
   const serverJson = useMemo(
     () => (server.server ? JSON.stringify(server.server, null, 2) : "安装时将从 MCP.Directory 自动拉取配置"),
     [server.server],
@@ -689,10 +747,10 @@ function McpServerDetailModal(props: McpServerDetailModalProps) {
           <div className="skill-detail-modal__actions">
             <a
               className="skill-detail-modal__action-link"
-              href={server.sourceUrl}
+              href={sourceUrl}
               onClick={(event) => {
                 event.preventDefault();
-                void openExternalLink(server.sourceUrl);
+                void onOpenSource(server);
               }}
             >
               <ExternalLinkIcon />

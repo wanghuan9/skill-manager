@@ -2369,6 +2369,50 @@ async fn resolve_mcp_marketplace_source_url(
 async fn fetch_mcp_directory_source_url(server: &McpMarketplaceServer) -> Option<String> {
     if server.source_site != "MCP.Directory" {
         return None;
+async fn resolve_mcp_marketplace_browser_source_url(
+    server: &McpMarketplaceServer,
+) -> Option<String> {
+    if let Some(source_url) = git_repository_source_url(&server.source_url) {
+        return Some(source_url);
+    }
+    if let Some(source_url) = server
+        .marketplace_url
+        .as_deref()
+        .and_then(git_repository_source_url)
+    {
+        return Some(source_url);
+    }
+    if let Some(source_url) = server.server.as_ref().and_then(explicit_mcp_source_url) {
+        return Some(source_url);
+    }
+
+    fetch_mcp_directory_source_url(server).await
+}
+
+#[tauri::command]
+pub async fn resolve_mcp_marketplace_source_link(
+    server: McpMarketplaceServer,
+) -> Result<String, String> {
+    let resolved_source_url = resolve_mcp_marketplace_browser_source_url(&server)
+        .await
+        .or_else(|| {
+            let fallback_source_url = server.source_url.trim();
+            if fallback_source_url.is_empty() {
+                server
+                    .marketplace_url
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|url| !url.is_empty())
+                    .map(ToString::to_string)
+            } else {
+                Some(fallback_source_url.to_string())
+            }
+        })
+        .ok_or_else(|| format!("未找到 {} 的来源地址", server.name))?;
+
+    Ok(resolved_source_url)
+}
+
     }
     let detail_url = mcp_marketplace_detail_url(server)?;
     let client = mcp_http_client().ok()?;
