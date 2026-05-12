@@ -270,37 +270,38 @@ export function SkillFileDialog({ skill, isOpen, onClose }: SkillFileDialogProps
       >
         <div className="skill-file-dialog__header">
           <div className="skill-file-dialog__title">
-            <button className="secondary-button secondary-button--compact" type="button" onClick={onClose}>
-              <span aria-hidden="true">←</span>
-              <span>返回</span>
-            </button>
             <h3 id={dialogTitleId}>{skill.name}</h3>
           </div>
           <div className="skill-file-dialog__toolbar">
-            <div className="skill-file-dialog__view-toggle" role="group" aria-label="文件视图切换">
+            <div className="skill-file-dialog__actions">
+              <div className="skill-file-dialog__view-toggle" role="group" aria-label="文件视图切换">
+                <button
+                  className={`secondary-button secondary-button--compact${viewMode === "preview" ? " is-selected" : ""}`}
+                  type="button"
+                  onClick={() => setViewMode("preview")}
+                >
+                  预览
+                </button>
+                <button
+                  className={`secondary-button secondary-button--compact${viewMode === "edit" ? " is-selected" : ""}`}
+                  type="button"
+                  onClick={() => setViewMode("edit")}
+                >
+                  编辑
+                </button>
+              </div>
               <button
-                className={`secondary-button secondary-button--compact${viewMode === "preview" ? " is-selected" : ""}`}
+                className="secondary-button secondary-button--compact"
                 type="button"
-                onClick={() => setViewMode("preview")}
+                onClick={() => void handleSave()}
+                disabled={!selectedPath || isSaving}
               >
-                预览
-              </button>
-              <button
-                className={`secondary-button secondary-button--compact${viewMode === "edit" ? " is-selected" : ""}`}
-                type="button"
-                onClick={() => setViewMode("edit")}
-              >
-                编辑
+                <span aria-hidden="true">⌘</span>
+                <span>{isSaving ? "保存中..." : "保存"}</span>
               </button>
             </div>
-            <button
-              className="secondary-button secondary-button--compact"
-              type="button"
-              onClick={() => void handleSave()}
-              disabled={!selectedPath || isSaving}
-            >
-              <span aria-hidden="true">⌘</span>
-              <span>{isSaving ? "保存中..." : "保存"}</span>
+            <button className="skill-file-dialog__close" type="button" onClick={onClose} aria-label="关闭">
+              <span aria-hidden="true">×</span>
             </button>
           </div>
         </div>

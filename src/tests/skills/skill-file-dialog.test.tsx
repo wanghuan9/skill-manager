@@ -49,3 +49,11 @@ test("switches between edit and markdown preview views", async () => {
 
   expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
 });
+
+test("shows a close button instead of a back button in the header", async () => {
+  renderSkillFileDialog();
+
+  expect(await screen.findByRole("dialog", { name: "drawio-diagram" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "关闭" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "返回" })).not.toBeInTheDocument();
+});
