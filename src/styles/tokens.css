@@ -2307,6 +2307,10 @@ code {
   grid-template-columns: minmax(180px, 220px) minmax(0, 1fr);
 }
 
+.detail-grid--mcp-meta {
+  grid-template-columns: minmax(150px, max-content) minmax(0, 1fr);
+}
+
 .detail-grid dt {
   margin-bottom: 4px;
   color: var(--muted);

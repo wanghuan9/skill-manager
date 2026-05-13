@@ -23,7 +23,6 @@ import type {
 } from "@/features/skills/state/skill-store";
 import { getToolDisplayRank, getToolLogoUrl } from "@/features/skills/utils/tool-logo";
 import { getMonogramLabel } from "@/features/skills/utils/monogram";
-import { formatSkillSourceLabel } from "@/features/skills/utils/skill-source";
 import { formatSkillUpdatedAt } from "@/features/skills/utils/skill-time";
 import {
   cacheMcpWorkspace,
@@ -967,9 +966,6 @@ export function McpRoute() {
           const isDeleteConfirming = deleteConfirmingServerId === server.id;
           const isDeleting = deletingServerId === server.id;
           const deleteConfirmTooltipLabel = isDeleting ? "正在删除" : "再次点击删除";
-          const sourceTypeLabel = formatSkillSourceLabel("自定义仓库", {
-            sourceUrl: server.sourceUrl,
-          });
           const requiredConfigParamNames = getRequiredMcpConfigParamNames(server);
           const requiredConfigTooltip = formatRequiredMcpConfigTooltip(requiredConfigParamNames);
 
@@ -1076,60 +1072,44 @@ export function McpRoute() {
                         </dd>
                       </div>
                     </dl>
-                    {server.sourceUrl ? (
-                      <dl className="detail-grid detail-grid--source">
-                        <div>
-                          <dt>来源类型</dt>
-                          <dd>{sourceTypeLabel}</dd>
-                        </div>
-                        <div>
-                          <dt>来源</dt>
-                          <dd className="detail-grid__source-value">
-                            {isHttpUrl(server.sourceUrl) ? (
-                              <a
-                                className="detail-grid__source-link detail-grid__single-line"
-                                data-tooltip={server.sourceUrl}
-                                href={server.sourceUrl}
-                                onClick={(event) => {
-                                  event.preventDefault();
-                                  void openExternalLink(server.sourceUrl);
-                                }}
-                              >
-                                {server.sourceUrl}
-                              </a>
-                            ) : (
-                              <span className="detail-grid__single-line" data-tooltip={server.sourceUrl}>
-                                {server.sourceUrl}
-                              </span>
-                            )}
-                            <span className="detail-git-badge is-linked">git</span>
-                          </dd>
-                        </div>
-                      </dl>
-                    ) : server.installedAt ? (
-                      <dl className="detail-grid detail-grid--single">
-                        <div>
-                          <dt>安装时间</dt>
-                          <dd
-                            className="detail-grid__single-line detail-grid__single-line--tooltip"
-                            data-tooltip={formatSkillUpdatedAt(server.installedAt)}
-                          >
-                            {formatSkillUpdatedAt(server.installedAt)}
-                          </dd>
-                        </div>
-                      </dl>
-                    ) : null}
-                    {server.sourceUrl && server.installedAt ? (
-                      <dl className="detail-grid detail-grid--single">
-                        <div>
-                          <dt>安装时间</dt>
-                          <dd
-                            className="detail-grid__single-line detail-grid__single-line--tooltip"
-                            data-tooltip={formatSkillUpdatedAt(server.installedAt)}
-                          >
-                            {formatSkillUpdatedAt(server.installedAt)}
-                          </dd>
-                        </div>
+                    {server.sourceUrl || server.installedAt ? (
+                      <dl className="detail-grid detail-grid--mcp-meta">
+                        {server.installedAt ? (
+                          <div>
+                            <dt>安装时间</dt>
+                            <dd
+                              className="detail-grid__single-line detail-grid__single-line--tooltip"
+                              data-tooltip={formatSkillUpdatedAt(server.installedAt)}
+                            >
+                              {formatSkillUpdatedAt(server.installedAt)}
+                            </dd>
+                          </div>
+                        ) : null}
+                        {server.sourceUrl ? (
+                          <div>
+                            <dt>来源</dt>
+                            <dd className="detail-grid__source-value">
+                              {isHttpUrl(server.sourceUrl) ? (
+                                <a
+                                  className="detail-grid__source-link detail-grid__single-line"
+                                  data-tooltip={server.sourceUrl}
+                                  href={server.sourceUrl}
+                                  onClick={(event) => {
+                                    event.preventDefault();
+                                    void openExternalLink(server.sourceUrl);
+                                  }}
+                                >
+                                  {server.sourceUrl}
+                                </a>
+                              ) : (
+                                <span className="detail-grid__single-line" data-tooltip={server.sourceUrl}>
+                                  {server.sourceUrl}
+                                </span>
+                              )}
+                              <span className="detail-git-badge is-linked">git</span>
+                            </dd>
+                          </div>
+                        ) : null}
                       </dl>
                     ) : null}
                   </section>
