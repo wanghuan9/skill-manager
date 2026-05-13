@@ -5,7 +5,7 @@ use std::process::Command;
 use std::sync::mpsc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use crate::models::SkillSummary;
+use crate::models::{LocalGitStateSignature, SkillSummary};
 use crate::workspace::{
     remove_legacy_workspace_file, workspace_file_candidates, workspace_file_path,
 };
@@ -271,6 +271,98 @@ pub fn enrich_skill_with_cached_update_state(skill: &SkillSummary) -> SkillSumma
     enriched.last_checked_at = "已缓存".into();
     enriched.git_linked = true;
     enriched
+}
+
+pub fn enrich_skill_with_local_git_state(skill: &SkillSummary) -> SkillSummary {
+    let skill_path = Path::new(&skill.local_path);
+    if !skill_path.exists() || repo_root(skill_path).is_none() {
+        let mut unlinked = skill.clone();
+        let fallback_local_updated_at = if skill.local_updated_at.trim().is_empty() {
+            skill.last_synced_at.clone()
+        } else {
+            skill.local_updated_at.clone()
+        };
+        let local_updated_at = prefer_newer_local_updated_at(
+            &fallback_local_updated_at,
+            latest_local_content_modified_at(skill_path),
+        );
+        if !local_updated_at.trim().is_empty() {
+            unlinked.local_updated_at = local_updated_at.clone();
+            unlinked.last_synced_at = local_updated_at;
+        }
+        unlinked.git_linked = false;
+        return unlinked;
+    }
+
+    let branch = run_git(skill_path, &["rev-parse", "--abbrev-ref", "HEAD"])
+        .unwrap_or_else(|| skill.branch.clone());
+    let commit_label = run_git(skill_path, &["rev-parse", "--short", "HEAD"])
+        .unwrap_or_else(|| skill.commit_label.clone());
+    let working_tree_signature =
+        run_git(skill_path, &["status", "--porcelain", "--", "."]).unwrap_or_default();
+    let working_tree_dirty = !working_tree_signature.trim().is_empty();
+    let fallback_local_updated_at = if skill.local_updated_at.trim().is_empty() {
+        skill.last_synced_at.clone()
+    } else {
+        skill.local_updated_at.clone()
+    };
+    let local_updated_at = prefer_newer_local_updated_at(
+        &fallback_local_updated_at,
+        if working_tree_dirty {
+            latest_local_content_modified_at(skill_path).or_else(|| latest_commit_time(skill_path))
+        } else {
+            latest_commit_time(skill_path).or_else(|| latest_local_content_modified_at(skill_path))
+        },
+    );
+
+    let mut enriched = skill.clone();
+    enriched.branch = branch;
+    enriched.commit_label = commit_label;
+    enriched.local_updated_at = local_updated_at.clone();
+    enriched.last_synced_at = local_updated_at;
+    enriched.git_linked = true;
+    if working_tree_dirty {
+        enriched.collab_status = STATUS_PENDING_PUSH.into();
+        enriched.status_text = "本地存在领先或未提交改动，可继续推送到团队仓库。".into();
+    }
+    enriched
+}
+
+pub fn local_git_state_signature(skill: &SkillSummary) -> LocalGitStateSignature {
+    let skill_path = Path::new(&skill.local_path);
+    let branch = if skill_path.exists() && repo_root(skill_path).is_some() {
+        run_git(skill_path, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap_or_default()
+    } else {
+        String::new()
+    };
+    let head = if skill_path.exists() && repo_root(skill_path).is_some() {
+        run_git(skill_path, &["rev-parse", "HEAD"]).unwrap_or_default()
+    } else {
+        String::new()
+    };
+    let working_tree_signature = if skill_path.exists() && repo_root(skill_path).is_some() {
+        run_git(skill_path, &["status", "--porcelain", "--", "."]).unwrap_or_default()
+    } else {
+        String::new()
+    };
+    let fallback_local_updated_at = if skill.local_updated_at.trim().is_empty() {
+        skill.last_synced_at.clone()
+    } else {
+        skill.local_updated_at.clone()
+    };
+    let local_updated_at = prefer_newer_local_updated_at(
+        &fallback_local_updated_at,
+        latest_local_content_modified_at(skill_path),
+    );
+
+    LocalGitStateSignature {
+        skill_name: skill.name.clone(),
+        local_path: skill.local_path.clone(),
+        branch,
+        head,
+        working_tree_signature,
+        local_updated_at,
+    }
 }
 
 pub fn clear_skill_update_cache(skill: &SkillSummary) {
