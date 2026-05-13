@@ -28,7 +28,6 @@ const MCP_SOURCE_URL_PREFETCH_COUNT = 8;
 const MCP_MARKETPLACE_RUNTIME_CACHE_KEY = "__SKILLM_MCP_MARKETPLACE_CACHE__";
 const MCP_MARKETPLACE_PERSISTED_CACHE_KEY = "skilldock.mcpMarketplaceCache";
 const MCP_MARKETPLACE_PERSISTED_CACHE_VERSION = 2;
-const MCP_MARKETPLACE_PERSISTED_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 type McpMarketplacePanelProps = {
   searchQuery: string;
@@ -37,7 +36,6 @@ type McpMarketplacePanelProps = {
 
 type McpMarketplaceRuntimeCache = {
   pageCache: Map<number, McpMarketplaceServer[]>;
-  searchPageCache: Map<string, Map<number, McpMarketplaceServer[]>>;
   workspacePromise: Promise<Set<string>> | null;
 };
 
@@ -51,6 +49,7 @@ type PersistedMcpMarketplaceCache = {
   version: number;
   timestamp: number;
   pages: Record<string, McpMarketplaceServer[]>;
+  servers?: McpMarketplaceServer[];
 };
 
 declare global {
@@ -62,7 +61,6 @@ declare global {
 function createMcpMarketplaceRuntimeCache(): McpMarketplaceRuntimeCache {
   return {
     pageCache: new Map<number, McpMarketplaceServer[]>(),
-    searchPageCache: new Map<string, Map<number, McpMarketplaceServer[]>>(),
     workspacePromise: null,
   };
 }
@@ -150,30 +148,30 @@ function readPersistedMcpMarketplaceCache(): PersistedMcpMarketplaceCache | null
 
   try {
     const parsed = JSON.parse(payload) as Partial<PersistedMcpMarketplaceCache>;
+    const parsedPages = parsed.pages && typeof parsed.pages === "object"
+      ? parsed.pages
+      : {};
+    const parsedServers = Array.isArray(parsed.servers) ? parsed.servers : undefined;
     if (
       parsed.version !== MCP_MARKETPLACE_PERSISTED_CACHE_VERSION ||
       typeof parsed.timestamp !== "number" ||
-      !parsed.pages ||
-      typeof parsed.pages !== "object"
+      (!parsedServers && Object.keys(parsedPages).length === 0)
     ) {
-      return null;
-    }
-
-    if (Date.now() - parsed.timestamp > MCP_MARKETPLACE_PERSISTED_CACHE_TTL_MS) {
       return null;
     }
 
     return {
       version: parsed.version,
       timestamp: parsed.timestamp,
-      pages: parsed.pages,
+      pages: parsedPages,
+      servers: parsedServers,
     };
   } catch {
     return null;
   }
 }
 
-function writePersistedMcpMarketplaceCache(pageCache: Map<number, McpMarketplaceServer[]>) {
+function writePersistedMcpMarketplaceCache(servers: McpMarketplaceServer[]) {
   if (
     typeof window === "undefined" ||
     typeof window.localStorage?.setItem !== "function"
@@ -181,13 +179,13 @@ function writePersistedMcpMarketplaceCache(pageCache: Map<number, McpMarketplace
     return;
   }
 
-  const pages = Object.fromEntries(
-    Array.from(pageCache.entries()).map(([page, servers]) => [String(page), servers]),
-  );
   const payload: PersistedMcpMarketplaceCache = {
     version: MCP_MARKETPLACE_PERSISTED_CACHE_VERSION,
     timestamp: Date.now(),
-    pages,
+    pages: {
+      "1": servers,
+    },
+    servers,
   };
   window.localStorage.setItem(MCP_MARKETPLACE_PERSISTED_CACHE_KEY, JSON.stringify(payload));
 }
@@ -203,47 +201,43 @@ function hydrateRuntimeCacheFromPersistence() {
     return;
   }
 
-  for (const [page, servers] of Object.entries(persistedCache.pages)) {
-    const pageNumber = Number(page);
-    if (!Number.isInteger(pageNumber) || pageNumber < 1 || !Array.isArray(servers)) {
-      continue;
-    }
-    cache.pageCache.set(pageNumber, servers);
+  const firstPageServers = persistedCache.servers ?? persistedCache.pages["1"];
+  if (Array.isArray(firstPageServers)) {
+    cache.pageCache.set(1, firstPageServers);
   }
 }
 
 function getCachedMcpPageMap(query: string) {
-  const cache = getMcpMarketplaceRuntimeCache();
   const cacheKey = normalizeMcpCacheKey(query);
-  if (!cacheKey) {
-    hydrateRuntimeCacheFromPersistence();
+  if (cacheKey) {
+    return undefined;
   }
-  return cacheKey ? cache.searchPageCache.get(cacheKey) : cache.pageCache;
+
+  const cache = getMcpMarketplaceRuntimeCache();
+  hydrateRuntimeCacheFromPersistence();
+  return cache.pageCache;
 }
 
 function getOrCreateCachedMcpPageMap(query: string) {
-  const cache = getMcpMarketplaceRuntimeCache();
   const cacheKey = normalizeMcpCacheKey(query);
-  if (!cacheKey) {
-    return cache.pageCache;
+  if (cacheKey) {
+    return undefined;
   }
 
-  const cachedSearchPages = cache.searchPageCache.get(cacheKey);
-  if (cachedSearchPages) {
-    return cachedSearchPages;
-  }
-
-  const nextSearchPages = new Map<number, McpMarketplaceServer[]>();
-  cache.searchPageCache.set(cacheKey, nextSearchPages);
-  return nextSearchPages;
+  return getMcpMarketplaceRuntimeCache().pageCache;
 }
 
 function writeCachedMcpPage(query: string, page: number, servers: McpMarketplaceServer[]) {
-  const cachedPages = getOrCreateCachedMcpPageMap(query);
-  cachedPages.set(page, servers);
-  if (!normalizeMcpCacheKey(query)) {
-    writePersistedMcpMarketplaceCache(cachedPages);
+  if (page !== 1 || normalizeMcpCacheKey(query)) {
+    return;
   }
+
+  const cachedPages = getOrCreateCachedMcpPageMap(query);
+  if (!cachedPages) {
+    return;
+  }
+  cachedPages.set(page, servers);
+  writePersistedMcpMarketplaceCache(servers);
 }
 
 function readCachedMcpSnapshot(query: string): CachedMcpSnapshot | null {
@@ -258,17 +252,10 @@ function readCachedMcpSnapshot(query: string): CachedMcpSnapshot | null {
     return null;
   }
 
-  const cachedPageEntries = Array.from(cachedPages.entries())
-    .filter(([cachedPage]) => cachedPage >= 1)
-    .sort(([leftPage], [rightPage]) => leftPage - rightPage);
-  const lastCachedEntry = cachedPageEntries[cachedPageEntries.length - 1];
-  const lastCachedPage = lastCachedEntry?.[0] ?? 1;
-  const lastCachedServers = lastCachedEntry?.[1] ?? cachedFirstPage;
-
   return {
-    servers: cachedPageEntries.flatMap(([, pageServers]) => pageServers),
-    page: lastCachedPage,
-    hasMore: cacheKey ? lastCachedServers.length >= MCP_MARKETPLACE_PAGE_SIZE : lastCachedServers.length > 0,
+    servers: cachedFirstPage,
+    page: 1,
+    hasMore: cachedFirstPage.length >= MCP_MARKETPLACE_PAGE_SIZE,
   };
 }
 
@@ -558,7 +545,6 @@ export function McpMarketplacePanel(props: McpMarketplacePanelProps) {
         limit: MCP_MARKETPLACE_PAGE_SIZE,
         query: normalizedQuery,
       });
-      writeCachedMcpPage(normalizedQuery, nextPage, nextServers);
       setServers((current) => [...current, ...applyCachedServerConfigs(nextServers)]);
       setPage(nextPage);
       setHasMore(isSearching ? nextServers.length >= MCP_MARKETPLACE_PAGE_SIZE : nextServers.length > 0);

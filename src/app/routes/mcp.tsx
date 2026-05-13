@@ -270,6 +270,22 @@ function McpServerMonogram({ server }: { server: McpServerSummary }) {
   const statusClassName = server.enabledAppCount > 0 ? "is-active" : "is-inactive";
   return (
     <div className="link-badge link-badge--mcp-monogram" aria-hidden="true">
+      <span className="link-badge__type-mark link-badge__type-mark--mcp">
+        <svg viewBox="0 0 12 12" fill="none">
+          <path
+            d="M4.2 4.2 2.8 5.6a2 2 0 0 0 2.8 2.8L7 7"
+            stroke="currentColor"
+            strokeWidth="1.45"
+            strokeLinecap="round"
+          />
+          <path
+            d="M7.8 7.8 9.2 6.4a2 2 0 0 0-2.8-2.8L5 5"
+            stroke="currentColor"
+            strokeWidth="1.45"
+            strokeLinecap="round"
+          />
+        </svg>
+      </span>
       <span className="link-badge__label">{getMonogramLabel(server.name || server.id)}</span>
       <span className={`link-badge__status-dot ${statusClassName}`} />
     </div>

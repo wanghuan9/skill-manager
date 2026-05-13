@@ -25,6 +25,14 @@ const SUMMARY_DESCRIPTION_LIMIT = 76;
 function SkillMonogram({ name }: { name: string }) {
   return (
     <div className="link-badge link-badge--monogram" aria-hidden="true">
+      <span className="link-badge__type-mark link-badge__type-mark--skill">
+        <svg viewBox="0 0 12 12" fill="none">
+          <path
+            d="M6 1.5 7.1 4.9 10.5 6 7.1 7.1 6 10.5 4.9 7.1 1.5 6 4.9 4.9 6 1.5Z"
+            fill="currentColor"
+          />
+        </svg>
+      </span>
       <span className="link-badge__label">{getMonogramLabel(name)}</span>
     </div>
   );
