@@ -1,7 +1,7 @@
 import { useDeferredValue, useMemo, useState } from "react";
 import { waitForNextPaint } from "@/app/utils/wait-for-next-paint";
 import { openExternalLink } from "@/features/skills/api/skill-client";
-import { filterSkills } from "@/features/skills/state/skill-selectors";
+import { filterSkills, hasEnabledTool } from "@/features/skills/state/skill-selectors";
 import { SkillCard } from "@/features/skills/components/SkillCard";
 import { useSkillWorkspace } from "@/features/skills/state/skill-workspace";
 import { groupSkillsBySource } from "@/features/skills/utils/skill-groups";
@@ -25,6 +25,8 @@ const skillStatusFilterOptions: Array<{ value: SkillStatusFilter; label: string 
   { value: "all", label: "全部" },
   { value: "update-available", label: "可更新" },
   { value: "pending-push", label: "待推送" },
+  { value: "diverged", label: "冲突" },
+  { value: "disabled", label: "未启用" },
 ];
 
 function GridIcon() {
@@ -139,6 +141,7 @@ export function SkillListToolbar(props: SkillToolbarProps) {
       "update-available": installedSkills.filter((skill) => skill.collabStatus === "update-available").length,
       "pending-push": installedSkills.filter((skill) => skill.collabStatus === "pending-push").length,
       diverged: installedSkills.filter((skill) => skill.collabStatus === "diverged").length,
+      disabled: installedSkills.filter((skill) => !hasEnabledTool(skill)).length,
     }),
     [installedSkills],
   );

@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { SkillListToolbar } from "@/features/skills/components/SkillListPage";
 import { installedSkillFixtures } from "@/features/skills/state/skill-fixtures";
+import type { SkillSummary } from "@/features/skills/state/skill-store";
 import { useSkillWorkspace } from "@/features/skills/state/skill-workspace";
 
 vi.mock("@/features/skills/state/skill-workspace", () => ({
@@ -9,6 +10,12 @@ vi.mock("@/features/skills/state/skill-workspace", () => ({
 }));
 
 const mockedUseSkillWorkspace = vi.mocked(useSkillWorkspace);
+
+const disabledSkillFixture: SkillSummary = {
+  ...installedSkillFixtures[0],
+  name: "disabled-skill",
+  tools: [{ name: "Codex", statusLabel: "未启用" }],
+};
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -61,7 +68,7 @@ test("notifies status filter changes", () => {
   const onStatusFilterChange = vi.fn();
 
   mockedUseSkillWorkspace.mockReturnValue({
-    installedSkills: installedSkillFixtures,
+    installedSkills: [...installedSkillFixtures, disabledSkillFixture],
     isLoading: false,
     refreshWorkspace: vi.fn(),
     updateAllSkills: vi.fn(),
@@ -82,9 +89,10 @@ test("notifies status filter changes", () => {
     target: { value: "update-available" },
   });
 
-  expect(screen.getByRole("option", { name: "全部 (4)" })).toBeInTheDocument();
+  expect(screen.getByRole("option", { name: "全部 (5)" })).toBeInTheDocument();
   expect(screen.getByRole("option", { name: "可更新 (1)" })).toBeInTheDocument();
-  expect(screen.queryByRole("option", { name: /冲突/ })).not.toBeInTheDocument();
+  expect(screen.getByRole("option", { name: "冲突 (0)" })).toBeInTheDocument();
+  expect(screen.getByRole("option", { name: "未启用 (1)" })).toBeInTheDocument();
   expect(screen.queryByRole("option", { name: "已同步 (1)" })).not.toBeInTheDocument();
   expect(onStatusFilterChange).toHaveBeenCalledWith("update-available");
 });
