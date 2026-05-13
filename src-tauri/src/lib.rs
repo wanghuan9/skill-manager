@@ -21,6 +21,7 @@ pub fn run() {
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             app.handle()
                 .plugin(tauri_plugin_updater::Builder::new().build())?;
+            let _ = library::migrate_legacy_skill_symlinks_from_all_tools();
             let _ = library::remove_reserved_workspace_symlinks_from_all_tools();
             Ok(())
         })

@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 
 use crate::models::SkillSummary;
 use crate::workspace;
+use crate::workspace::normalize_workspace_path;
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 
@@ -1433,6 +1434,61 @@ fn is_managed_workspace_path(path: &Path) -> bool {
     target_path.starts_with(&workspace_root)
 }
 
+fn migrate_legacy_skill_symlink(entry_path: &Path) -> Result<bool, String> {
+    let metadata = match fs::symlink_metadata(entry_path) {
+        Ok(metadata) => metadata,
+        Err(_) => return Ok(false),
+    };
+    if !metadata.file_type().is_symlink() {
+        return Ok(false);
+    }
+
+    let link_target =
+        fs::read_link(entry_path).map_err(|error| format!("读取旧技能链接失败: {error}"))?;
+    let normalized_target = normalize_workspace_path(&link_target.to_string_lossy());
+    if normalized_target == link_target.to_string_lossy() {
+        return Ok(false);
+    }
+
+    let replacement_target = PathBuf::from(&normalized_target);
+    if !replacement_target.is_dir() || !replacement_target.join("SKILL.md").is_file() {
+        return Ok(false);
+    }
+
+    fs::remove_file(entry_path).map_err(|error| format!("删除旧技能链接失败: {error}"))?;
+
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(&replacement_target, entry_path)
+            .map_err(|error| format!("迁移旧技能链接失败: {error}"))?;
+    }
+
+    #[cfg(windows)]
+    {
+        std::os::windows::fs::symlink_dir(&replacement_target, entry_path)
+            .map_err(|error| format!("迁移旧技能链接失败: {error}"))?;
+    }
+
+    Ok(true)
+}
+
+pub fn migrate_legacy_skill_symlinks(tool_skills_path: &str) -> Result<(), String> {
+    let tool_path = PathBuf::from(tool_skills_path);
+    if !tool_path.exists() {
+        return Ok(());
+    }
+
+    let entries =
+        fs::read_dir(&tool_path).map_err(|error| format!("读取工具 skills 目录失败: {error}"))?;
+    for entry in entries {
+        let entry = entry.map_err(|error| format!("读取工具 skills 条目失败: {error}"))?;
+        let entry_path = entry.path();
+        let _ = migrate_legacy_skill_symlink(&entry_path)?;
+    }
+
+    Ok(())
+}
+
 pub fn remove_skill_symlink(tool_skills_path: &str, skill_name: &str) -> Result<(), String> {
     let tool_path = PathBuf::from(tool_skills_path);
     let symlink_path = tool_path.join(skill_name);
@@ -1532,6 +1588,7 @@ pub fn reconcile_tool_skill_symlinks(
         fs::create_dir_all(&tool_path)
             .map_err(|error| format!("创建工具 skills 目录失败: {error}"))?;
     }
+    migrate_legacy_skill_symlinks(tool_skills_path)?;
 
     let expected_skill_names = enabled_skills
         .iter()
@@ -1652,7 +1709,18 @@ pub fn remove_skill_symlinks_from_all_tools(skill_name: &str) -> Result<(), Stri
 pub fn remove_reserved_workspace_symlinks_from_all_tools() -> Result<(), String> {
     for tool_id in tool_ids() {
         if let Ok(tool_skills_path) = get_tool_skills_path(tool_id) {
+            let _ = migrate_legacy_skill_symlinks(&tool_skills_path);
             let _ = remove_reserved_workspace_entries(&tool_skills_path);
+        }
+    }
+
+    Ok(())
+}
+
+pub fn migrate_legacy_skill_symlinks_from_all_tools() -> Result<(), String> {
+    for tool_id in tool_ids() {
+        if let Ok(tool_skills_path) = get_tool_skills_path(tool_id) {
+            let _ = migrate_legacy_skill_symlinks(&tool_skills_path);
         }
     }
 
@@ -1742,9 +1810,9 @@ fn git_worktree_root(path: &Path) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::{
-        clone_branch_for_resolved_path, create_skill_symlink, reconcile_tool_skill_symlinks,
-        remove_reserved_workspace_entries, skill_dir_match_score, MarketSourceSpec,
-        ResolvedRemoteSkillPath,
+        clone_branch_for_resolved_path, create_skill_symlink, migrate_legacy_skill_symlinks,
+        reconcile_tool_skill_symlinks, remove_reserved_workspace_entries, skill_dir_match_score,
+        MarketSourceSpec, ResolvedRemoteSkillPath,
     };
     use crate::models::SkillSummary;
     use crate::workspace::TEST_ENV_LOCK;
@@ -1930,6 +1998,56 @@ mod tests {
             }
         } else {
             // SAFETY: restore HOME after the test mutation above.
+            unsafe {
+                std::env::remove_var("HOME");
+            }
+        }
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn migrate_legacy_skill_symlinks_retargets_skilldock_workspace() {
+        let _guard = TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let temp_dir = temp_test_dir("migrate-legacy-symlink");
+        let home_dir = temp_dir.join("home");
+        let tool_skills_dir = temp_dir.join("tool-skills");
+        let current_skill_dir = home_dir.join(".skilldock/skills/demo-skill");
+        fs::create_dir_all(&current_skill_dir).expect("create managed skill dir");
+        fs::write(current_skill_dir.join("SKILL.md"), "# demo-skill").expect("write SKILL.md");
+        fs::create_dir_all(&tool_skills_dir).expect("create tool skills dir");
+
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(
+            home_dir.join(".skillm/skills/demo-skill"),
+            tool_skills_dir.join("demo-skill"),
+        )
+        .expect("create legacy symlink");
+
+        let original_home = std::env::var_os("HOME");
+        unsafe {
+            std::env::set_var("HOME", &home_dir);
+        }
+
+        migrate_legacy_skill_symlinks(tool_skills_dir.to_string_lossy().as_ref())
+            .expect("migrate legacy skill symlinks");
+
+        assert_eq!(
+            tool_skills_dir
+                .join("demo-skill")
+                .canonicalize()
+                .expect("canonicalize migrated symlink"),
+            current_skill_dir
+                .canonicalize()
+                .expect("canonicalize managed skill dir")
+        );
+
+        if let Some(home) = original_home {
+            unsafe {
+                std::env::set_var("HOME", home);
+            }
+        } else {
             unsafe {
                 std::env::remove_var("HOME");
             }

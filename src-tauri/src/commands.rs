@@ -2819,7 +2819,9 @@ fn repository_root_path(skill_path: &str) -> Result<String, String> {
         return Err("无法识别 canonical repo 工作区。".into());
     }
 
-    Ok(root)
+    let canonical_root =
+        fs::canonicalize(&root).unwrap_or_else(|_| PathBuf::from(root.trim()));
+    Ok(canonical_root.to_string_lossy().to_string())
 }
 
 fn open_target_path_for_skill(skill_path: &str) -> String {
@@ -2979,7 +2981,8 @@ fn intellij_config_dirs() -> Result<Vec<PathBuf>, String> {
 }
 
 fn trust_intellij_project_path(project_path: &str) -> Result<(), String> {
-    let project_path = PathBuf::from(project_path);
+    let project_path =
+        fs::canonicalize(project_path).unwrap_or_else(|_| PathBuf::from(project_path));
     let trusted_path = intellij_trusted_location_for_project(&project_path);
     let trusted_path = path_to_jetbrains_macro(&trusted_path);
     for config_dir in intellij_config_dirs()? {
@@ -3019,6 +3022,14 @@ fn is_editor_running(app_display_name: &str) -> bool {
 /// - If editor is not running: use CLI to launch and open directory (reliable cold start)
 fn open_path_with_editor(path: &str, editor_id: &str) -> Result<(), String> {
     let info = resolve_editor_open_info(editor_id)?;
+
+    // JetBrains' command-line launcher opens projects in a trusted headless flow.
+    // Prefer it consistently so IDEA does not fall back to Finder-style open behavior.
+    if editor_id == "intellij" {
+        if let Some(ref cli_path) = info.cli_path {
+            return open_path_with_cli(cli_path, path);
+        }
+    }
 
     // If we have a display name, check if the app is already running
     if let Some(ref app_name) = info.app_display_name {
@@ -4388,14 +4399,22 @@ pub fn open_skill_in_editor(skill_name: &str, editor_id: &str) -> Result<(), Str
     let (installed_skills, skill_index) = find_skill_by_name(skill_name)?;
     let skill = &installed_skills[skill_index];
     let target_path = open_target_path_for_skill(&skill.local_path);
+    let resolved_target_path = if editor_id == "intellij" {
+        fs::canonicalize(&target_path)
+            .unwrap_or_else(|_| PathBuf::from(&target_path))
+            .to_string_lossy()
+            .to_string()
+    } else {
+        target_path
+    };
     if editor_id == "finder" {
-        return open_path_with_finder(&target_path);
+        return open_path_with_finder(&resolved_target_path);
     }
     if editor_id == "intellij" {
-        trust_intellij_project_path(&target_path)?;
+        trust_intellij_project_path(&resolved_target_path)?;
     }
 
-    open_path_with_editor(&target_path, editor_id)
+    open_path_with_editor(&resolved_target_path, editor_id)
 }
 
 #[tauri::command]
