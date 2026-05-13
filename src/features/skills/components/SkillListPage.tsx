@@ -25,7 +25,6 @@ const skillStatusFilterOptions: Array<{ value: SkillStatusFilter; label: string 
   { value: "all", label: "全部" },
   { value: "update-available", label: "可更新" },
   { value: "pending-push", label: "待推送" },
-  { value: "diverged", label: "冲突" },
   { value: "disabled", label: "未启用" },
 ];
 
