@@ -32,7 +32,7 @@ test("updates directly from list action when skill has remote update", async () 
   expect(screen.queryByText("将拉取提交")).not.toBeInTheDocument();
 });
 
-test("shows remote and local updated time on skill card", () => {
+test("shows description in the list summary and keeps update metadata in details", async () => {
   const skill = installedSkillFixtures.find((item) => item.name === "drawio-diagram");
   if (!skill) {
     throw new Error("missing drawio-diagram fixture");
@@ -40,9 +40,29 @@ test("shows remote and local updated time on skill card", () => {
 
   renderSkillCardWithProviders(skill);
 
-  expect(screen.getByText("更新时间：")).toBeInTheDocument();
+  expect(screen.getByText("将结构描述转成可编辑的 Draw.io 图表。")).toBeInTheDocument();
+  expect(screen.queryByText("更新时间：")).not.toBeInTheDocument();
   expect(screen.queryByText("远端更新时间：")).not.toBeInTheDocument();
   expect(screen.queryByText("更新人：")).not.toBeInTheDocument();
+
+  await userEvent.click(screen.getByRole("button", { name: /展开 drawio-diagram/ }));
+
+  expect(screen.getByText("远端更新时间")).toBeInTheDocument();
+  expect(screen.getByText("本地更新时间")).toBeInTheDocument();
+});
+
+test("truncates long descriptions in the list summary", () => {
+  const skill = installedSkillFixtures.find((item) => item.name === "drawio-diagram");
+  if (!skill) {
+    throw new Error("missing drawio-diagram fixture");
+  }
+  const longDescription = "You MUST use this before any Java/Kotlin/XML/JS/TS code edit. Read company-standards.md and personal-standards.md first. Trigger: 优化, 重构, 修改, 改进, 实现, 调整, 类, 方法, 接口, optimize, refactor, modify, improve, method, class, function";
+  const expectedSummary = `${longDescription.slice(0, 76).trimEnd()}...`;
+
+  renderSkillCardWithProviders({ ...skill, description: longDescription });
+
+  expect(screen.getByText(expectedSummary)).toBeInTheDocument();
+  expect(screen.queryByText(longDescription)).not.toBeInTheDocument();
 });
 
 test("hides remote updated time for local skill details", async () => {
@@ -108,6 +128,58 @@ test("shows fixed open action button on skill card", () => {
   renderSkillCardWithProviders(skill);
 
   expect(screen.getByRole("button", { name: /打开 drawio-diagram 目录/ })).toBeInTheDocument();
+});
+
+test("renders enabled tools as a compact summary pill", async () => {
+  const skill = installedSkillFixtures.find((item) => item.name === "multi-search-engine");
+  if (!skill) {
+    throw new Error("missing multi-search-engine fixture");
+  }
+
+  const { container } = renderSkillCardWithProviders(skill);
+  const enabledToolsButton = screen.getByRole("button", {
+    name: "已启用工具：Claude Code、Codex、Cursor、Windsurf",
+  });
+
+  expect(enabledToolsButton).toHaveTextContent("已启用 4");
+  expect(container.querySelectorAll(".skill-card__tool-icon")).toHaveLength(0);
+
+  await userEvent.click(enabledToolsButton);
+
+  expect(container.querySelectorAll(".skill-card__tool-icon")).toHaveLength(4);
+  expect(container.querySelector(".skill-card__title-row .skill-card__summary-tools")).toBeInTheDocument();
+});
+
+test("keeps expanded enabled tools in a stable shared order", async () => {
+  const skill = installedSkillFixtures.find((item) => item.name === "multi-search-engine");
+  if (!skill) {
+    throw new Error("missing multi-search-engine fixture");
+  }
+  const skillWithManyTools = {
+    ...skill,
+    tools: [
+      { name: "Windsurf", statusLabel: "已同步" },
+      { name: "Continue", statusLabel: "已同步" },
+      { name: "Cursor", statusLabel: "已同步" },
+      { name: "Antigravity", statusLabel: "已同步" },
+      { name: "Gemini CLI", statusLabel: "已同步" },
+      { name: "OpenCode", statusLabel: "已同步" },
+      { name: "Codex", statusLabel: "已同步" },
+      { name: "Claude Code", statusLabel: "已同步" },
+    ],
+  };
+
+  const { container } = renderSkillCardWithProviders(skillWithManyTools);
+  const enabledToolsButton = screen.getByRole("button", {
+    name: "已启用工具：Claude Code、Codex、OpenCode、Cursor、Gemini CLI、Antigravity、Windsurf、Continue",
+  });
+
+  expect(enabledToolsButton).toHaveTextContent("已启用 8");
+
+  await userEvent.click(enabledToolsButton);
+
+  expect(container.querySelectorAll(".skill-card__tool-icon")).toHaveLength(8);
+  expect(container.querySelector(".skill-card__title-row .skill-card__summary-tools")).toBeInTheDocument();
 });
 
 test("uses inline confirmation before deleting a skill", async () => {
