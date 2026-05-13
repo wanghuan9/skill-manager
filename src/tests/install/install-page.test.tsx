@@ -424,6 +424,9 @@ test("loads appended MCP marketplace avatars eagerly after scrolling", async () 
   fireEvent.load(avatarImage);
 
   expect(avatarImage).toHaveClass("is-loaded");
+  const cachedPayload = JSON.parse(window.localStorage.getItem("skilldock.mcpMarketplaceCache") ?? "{}");
+  expect(Object.keys(cachedPayload.pages ?? {})).toEqual(["1"]);
+  expect(JSON.stringify(cachedPayload)).not.toContain("server-25");
   fetchMcpMarketplaceServersSpy.mockRestore();
 });
 
@@ -497,7 +500,7 @@ test("hydrates MCP marketplace from persisted cache on first open", async () => 
     "skilldock.mcpMarketplaceCache",
     JSON.stringify({
       version: 2,
-      timestamp: Date.now(),
+      timestamp: 0,
       pages: {
         "1": mcpMarketplaceServerFixtures,
       },
