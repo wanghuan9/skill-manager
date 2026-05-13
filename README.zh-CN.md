@@ -1,13 +1,11 @@
 <p align="center">
-  <img src="src-tauri/icons/icon.png" width="160" alt="SkillDock" />
+  <img src="src-tauri/icons/icon.png" width="150" alt="SkillDock" />
 </p>
 
 <h1 align="center">SkillDock</h1>
 
----
-
 <p align="center">
-  一个应用，统一管理 Skills、MCP Servers、Git 更新和 Coding Agent 同步状态。
+  一个 macOS 应用，统一管理 AI Skills、MCP Servers、Git 更新和 Coding Agent 同步状态。
 </p>
 
 <p align="center">
@@ -20,26 +18,55 @@
   <img alt="Preview" src="https://img.shields.io/badge/source-closed%20preview-lightgrey" />
 </p>
 
-## 功能
+## 它能做什么
 
-- **Skills 管理** — 安装、更新、删除、编辑和查看本地 skills。
-- **完整 Git 工作流** — 每个 Git 来源的 skill 都保留为真实仓库，支持远端更新检测、本地修改检测、待推送状态、更新预览和推送预览。
+SkillDock 是面向 AI Coding 工具的桌面管理台。它把本地 Skills 和 MCP 配置集中展示、编辑和同步，让你不再手动在多个工具目录之间复制文件。
+
+- **Skills 管理** — 安装、更新、删除、编辑、查看和同步本地 skills。
+- **完整 Git 工作流** — Git 来源的 skill 会保留为真实仓库，支持远端更新检测、本地修改检测、待推送状态，以及更新和推送前预览。
 - **市场安装** — 从 `skills.sh`、`skillsmp` 等来源浏览并安装 skills。
-- **Git 仓库安装** — 从 GitHub、GitLab、Gitee 等兼容仓库发现并安装 skills。
-- **本地导入** — 扫描已有本地 skills 目录，并纳入 SkillDock 管理。
-- **多工具同步** — 将 skills 同步到 29 个内置 Coding Agent / IDE 工具目录。
-- **MCP 管理** — 浏览、安装、导入、启用、停用和同步 MCP server 配置。
-- **MCP tools 探测** — 探测 MCP server 暴露的 tools，判断配置是否可用。
+- **Git 和本地导入** — 从 GitHub、GitLab、Gitee 等兼容仓库，或已有本地目录安装 skills。
+- **多工具同步** — 将 skills 应用到内置 Coding Agent / IDE 工具目录，不需要手动复制。
+- **MCP 管理** — 浏览、导入、编辑、启用、停用、同步和查看 MCP server 配置。
+- **MCP tools 探测** — 探测 MCP server 暴露的 tools，并追踪配置是否可用。
 
-## Git-Aware Skills
+## Skills
 
-SkillDock 不会把 Git skill 拍平成普通复制目录，而是保留完整 Git 元信息。
+查看所有已安装 skill，按状态筛选，检查来源信息，并一眼看到 Git 协作状态。
 
-- 检查 skill 是否有远端更新。
-- 查看本地 skill 是否有未提交修改。
-- 更新前预览将要拉取的变更。
-- 推送前预览将要提交的变更。
-- 为团队维护的 skills 保留来源仓库信息。
+![Skills 列表](docs/images/skill_list.png)
+
+![Skill 详情和工具同步](docs/images/skill_detail.png)
+
+SkillDock 会保留每个 skill 的来源和工具启用状态。团队维护的 skill 可以继续关联上游仓库，同时按需同步到 Claude Code、Codex、Cursor、Gemini CLI、Windsurf 等工具。
+
+## MCP
+
+MCP server 和 skills 放在同一个工作台中管理。SkillDock 会扫描受支持应用的配置文件，展示 server 命令、来源和 tools，并允许按工具启用或停用同步。
+
+![SkillDock MCP 列表](docs/images/mcp_list.png)
+
+![MCP 详情和 tools](docs/images/mcp_detail.png)
+
+## 工具
+
+SkillDock 会检测受支持的 Coding 工具，展示每个工具的 Skills 路径和 MCP 配置路径，并集中管理同步目标。
+
+![支持的工具](docs/images/tools_list.png)
+
+## 安装
+
+从市场源、Git 仓库或本地目录安装 skills。MCP 市场也被独立拆分出来，便于按 MCP server 生命周期安装和管理。
+
+![从市场安装 Skills](docs/images/skill_install.png)
+
+![安装 MCP Servers](docs/images/mcp_install.png)
+
+## 设置
+
+配置应用存储目录、默认编辑器、更新检查、默认安装行为和工具支持状态。
+
+![SkillDock 设置](docs/images/settings.png)
 
 ## 支持的工具
 
@@ -63,7 +90,7 @@ Claude Code · Codex · Cursor · Windsurf · IntelliJ IDEA · OpenCode · Gemin
 
 ## 路线图
 
-- [ ] 公开安装包和截图。
+- [ ] 公开安装包。
 - [ ] 更清晰的 skill 状态：可更新、本地已修改、待推送、冲突。
 - [ ] 更完整的 MCP 生命周期：安装、参数配置、tools 探测、跨工具同步。
 - [ ] 更好的 Git 流程：分支选择、团队仓库回推、PR/MR 交接。

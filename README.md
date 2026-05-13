@@ -1,13 +1,11 @@
 <p align="center">
-  <img src="src-tauri/icons/icon.png" width="160" alt="SkillDock" />
+  <img src="src-tauri/icons/icon.png" width="150" alt="SkillDock" />
 </p>
 
 <h1 align="center">SkillDock</h1>
 
----
-
 <p align="center">
-  One app to manage Skills, MCP servers, Git updates, and coding-agent sync.
+  Manage AI Skills, MCP servers, Git updates, and coding-agent sync from one macOS app.
 </p>
 
 <p align="center">
@@ -20,26 +18,55 @@
   <img alt="Preview" src="https://img.shields.io/badge/source-closed%20preview-lightgrey" />
 </p>
 
-## Features
+## What It Does
 
-- **Skills management** — Install, update, delete, edit, and inspect local skills.
-- **Complete Git workflow** — Keep each Git-based skill as a real repository, with upstream update checks, local change detection, pending push state, update previews, and push previews.
-- **Marketplace install** — Browse and install skills from `skills.sh`, `skillsmp`, and other sources.
-- **Git repository install** — Discover and install skills from GitHub, GitLab, Gitee, and compatible repositories.
-- **Local import** — Scan existing local skill folders and bring them into SkillDock.
-- **Multi-tool sync** — Sync skills to 29 built-in coding-agent / IDE tool directories.
-- **MCP management** — Browse, install, import, enable, disable, and sync MCP server configs.
-- **MCP tools discovery** — Detect tools exposed by MCP servers and check whether configs are usable.
+SkillDock is a desktop control center for AI coding tools. It keeps your local Skills and MCP configurations visible, editable, and synced across the tools you use every day.
 
-## Git-Aware Skills
+- **Skills library** — Install, update, delete, edit, inspect, and sync local skills.
+- **Git-aware workflow** — Keep Git-based skills as real repositories, detect upstream updates, local edits, pending pushes, and preview changes before pulling or pushing.
+- **Marketplace install** — Browse and install skills from `skills.sh`, `skillsmp`, and other supported sources.
+- **Git and local import** — Install skills from GitHub, GitLab, Gitee, compatible Git repos, or existing local folders.
+- **Multi-tool sync** — Enable skills for built-in coding tools and IDEs without hand-copying files.
+- **MCP management** — Browse, import, edit, enable, disable, sync, and inspect MCP server configs.
+- **MCP tools discovery** — Detect exposed MCP tools and track whether each server config is usable.
 
-SkillDock keeps Git metadata instead of flattening skills into plain copied folders.
+## Skills
 
-- Check whether a skill has upstream updates.
-- See whether a local skill has uncommitted changes.
-- Preview update changes before pulling.
-- Preview push changes before sending them back.
-- Preserve source repository information for team-maintained skills.
+View every installed skill, filter by status, inspect source metadata, and see Git collaboration state at a glance.
+
+![Skills list](docs/images/skill_list.png)
+
+![Skill details and tool sync](docs/images/skill_detail.png)
+
+SkillDock preserves source information and tool enablement per skill, so a team-maintained skill can stay connected to its upstream repository while still being applied selectively to Claude Code, Codex, Cursor, Gemini CLI, Windsurf, and other tools.
+
+## MCP
+
+Manage MCP servers in the same workspace as skills. SkillDock scans supported app config files, shows the server command and source, and lets you enable or disable server sync per tool.
+
+![SkillDock MCP list](docs/images/mcp_list.png)
+
+![MCP server details and tools](docs/images/mcp_detail.png)
+
+## Tools
+
+SkillDock detects supported coding tools, shows their skill and MCP config locations, and gives you one place to manage sync targets.
+
+![Supported tools](docs/images/tools_list.png)
+
+## Install
+
+Install skills from marketplace sources, Git repositories, or local folders. SkillDock also separates MCP marketplace discovery so MCP servers can be installed and managed through their own lifecycle.
+
+![Install skills from marketplace](docs/images/skill_install.png)
+
+![Install MCP servers](docs/images/mcp_install.png)
+
+## Settings
+
+Configure the app storage directory, default editor, update checks, default install behavior, and tool support status.
+
+![SkillDock settings](docs/images/settings.png)
 
 ## Supported Tools
 
@@ -63,8 +90,8 @@ Installers will be published on the [Releases](../../releases) page.
 
 ## Roadmap
 
-- [ ] Public installers and screenshots.
-- [ ] Better skill states: updateable, locally modified, pending push, conflicted.
+- [ ] Public installers.
+- [ ] Clearer skill states: updateable, locally modified, pending push, conflicted.
 - [ ] Fuller MCP lifecycle: install, configure, discover tools, and sync across tools.
 - [ ] Better Git flows: branch selection, team repository pushback, PR/MR handoff.
 - [ ] Windows support after the macOS workflow is stable.
