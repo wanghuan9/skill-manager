@@ -31,6 +31,7 @@ vi.mock("@/features/skills/api/skill-client", async () => {
     fetchGitAccount: vi.fn(),
     fetchAppSettings: vi.fn(),
     fetchGitStates: vi.fn(),
+    updateAppSettings: vi.fn(),
   };
 });
 
@@ -40,6 +41,7 @@ const mockedFetchToolConfigs = vi.mocked(skillClient.fetchToolConfigs);
 const mockedFetchGitAccount = vi.mocked(skillClient.fetchGitAccount);
 const mockedFetchAppSettings = vi.mocked(skillClient.fetchAppSettings);
 const mockedFetchGitStates = vi.mocked(skillClient.fetchGitStates);
+const mockedUpdateAppSettings = vi.mocked(skillClient.updateAppSettings);
 
 function createDeferred<T>() {
   let resolve!: (value: T) => void;
@@ -69,6 +71,12 @@ function RefreshProbe() {
       <span data-testid="skill-name">{installedSkills[0]?.name ?? "none"}</span>
     </div>
   );
+}
+
+function DefaultOpenToolProbe() {
+  const { defaultOpenToolId } = useSkillWorkspace();
+
+  return <span data-testid="default-open-tool-id">{defaultOpenToolId}</span>;
 }
 
 beforeEach(() => {
@@ -142,4 +150,51 @@ test("refresh resolves after startup skills without waiting for ancillary reques
   await act(async () => {
     await Promise.resolve();
   });
+});
+
+test("does not overwrite saved default open tool while settings are still loading", async () => {
+  const savedSettings: AppSettings = {
+    ...appSettingsFixture,
+    defaultOpenToolId: "windsurf",
+  };
+  const pendingSettings = createDeferred<AppSettings>();
+
+  mockedFetchStartupInstalledSkills.mockResolvedValue(installedSkillFixtures);
+  mockedFetchLocalSkillCandidates.mockResolvedValue(localSkillFixtures);
+  mockedFetchToolConfigs.mockResolvedValue(toolConfigFixtures);
+  mockedFetchGitAccount.mockResolvedValue(gitAccountFixture);
+  mockedFetchAppSettings.mockReturnValue(pendingSettings.promise);
+  mockedFetchGitStates.mockResolvedValue(installedSkillFixtures);
+  mockedUpdateAppSettings.mockImplementation(async ({ settings }) => settings);
+  window.localStorage.setItem(
+    "skilldock.startupWorkspaceCache",
+    JSON.stringify({
+      installedSkills: installedSkillFixtures,
+      localCandidates: localSkillFixtures,
+      toolConfigs: toolConfigFixtures,
+      gitAccount: gitAccountFixture,
+    }),
+  );
+
+  render(
+    <SkillWorkspaceProvider>
+      <DefaultOpenToolProbe />
+    </SkillWorkspaceProvider>,
+  );
+
+  await act(async () => {
+    vi.advanceTimersByTime(32);
+    await Promise.resolve();
+  });
+
+  expect(mockedUpdateAppSettings).not.toHaveBeenCalled();
+
+  pendingSettings.resolve(savedSettings);
+
+  await act(async () => {
+    await Promise.resolve();
+  });
+
+  expect(screen.getByTestId("default-open-tool-id").textContent).toBe("windsurf");
+  expect(mockedUpdateAppSettings).not.toHaveBeenCalled();
 });

@@ -412,20 +412,6 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
   const defaultOpenToolId = appSettings.defaultOpenToolId;
 
   useEffect(() => {
-    if (toolConfigs.length === 0) {
-      return;
-    }
-
-    const availableTools = buildOpenToolOptions(toolConfigs);
-    const availableToolIds = new Set(availableTools.map((tool) => tool.id));
-    if (availableToolIds.has(defaultOpenToolId)) {
-      return;
-    }
-
-    void handleSetDefaultOpenToolId(availableTools[0]?.id ?? FALLBACK_OPEN_TOOL_ID);
-  }, [defaultOpenToolId, toolConfigs]);
-
-  useEffect(() => {
     if (usesFixtureData || !gitAccount) {
       return;
     }
