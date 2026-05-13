@@ -4,7 +4,7 @@ import { ToolsRoute } from "@/app/routes/tools";
 import { McpRoute } from "@/app/routes/mcp";
 import { MarketRoute, type InstallTab } from "@/app/routes/market";
 import { SettingsRoute } from "@/app/routes/settings";
-import { FeedbackRoute } from "@/app/routes/feedback";
+import { AboutRoute } from "@/app/routes/about";
 import { NotificationProvider } from "@/app/notifications";
 import { waitForNextPaint } from "@/app/utils/wait-for-next-paint";
 import { AppUpdateAutoPrompt } from "@/features/app-update/AppUpdateAutoPrompt";
@@ -17,7 +17,7 @@ import {
   writeSkillViewModePreference,
 } from "@/features/skills/utils/skill-view-preference";
 
-type RouteKey = "skills" | "tools" | "install" | "settings" | "feedback";
+type RouteKey = "skills" | "tools" | "install" | "settings" | "about";
 type SkillsSectionKey = "skills" | "mcp";
 
 type RouteDefinition = {
@@ -31,7 +31,7 @@ const routes: RouteDefinition[] = [
   { key: "tools", label: "工具", description: "检测可打开的编辑器工具并设置默认打开方式" },
   { key: "install", label: "安装", description: "通过安装源、Git 仓库或本地目录纳入新的 skill 和 MCP" },
   { key: "settings", label: "设置", description: "配置默认打开工具、GitHub 账号和基础偏好" },
-  { key: "feedback", label: "反馈", description: "提交问题、建议和工具适配需求" },
+  { key: "about", label: "关于", description: "查看版本信息、项目仓库和反馈入口" },
 ];
 
 function isMacOSWindow() {
@@ -91,17 +91,25 @@ function NavRouteIcon(props: { route: RouteKey }) {
     );
   }
 
-  if (route === "feedback") {
+  if (route === "about") {
     return (
       <svg viewBox="0 0 24 24" aria-hidden="true">
         <path
-          d="M6 5h12a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H9l-4 3v-3H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2Z"
+          d="M12 21a9 9 0 1 0 0-18a9 9 0 0 0 0 18Z"
           fill="none"
           stroke="currentColor"
           strokeWidth="1.8"
           strokeLinecap="round"
           strokeLinejoin="round"
         />
+        <path
+          d="M12 10.5v5"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.8"
+          strokeLinecap="round"
+        />
+        <path d="M12 7.6h.01" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" />
       </svg>
     );
   }
@@ -134,8 +142,8 @@ function renderRoute(
   if (route === "settings") {
     return <SettingsRoute />;
   }
-  if (route === "feedback") {
-    return <FeedbackRoute />;
+  if (route === "about") {
+    return <AboutRoute />;
   }
 
   if (activeSkillsSection === "mcp") {
