@@ -10,7 +10,8 @@
     "test:watch": "vitest",
     "desktop:dev": "cargo tauri dev",
     "desktop:build": "cargo tauri build",
-    "tauri:check": "cd src-tauri && cargo check"
+    "tauri:check": "cd src-tauri && cargo check",
+    "release:publish": "bash scripts/publish-release.sh"
   },
   "dependencies": {
     "@tauri-apps/api": "2.10.1",
