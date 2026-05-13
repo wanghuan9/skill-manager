@@ -15,6 +15,7 @@ use zip::ZipArchive;
 use crate::git_state::{
     clear_skill_update_cache, enrich_newly_installed_skill_with_git_state,
     enrich_skill_with_cached_update_state, enrich_skill_with_git_state,
+    enrich_skill_with_local_git_state, local_git_state_signature,
 };
 use crate::library::{
     clone_repo_for_discovery, clone_repo_for_discovery_with_sparse_paths, clone_repo_skill,
@@ -25,8 +26,9 @@ use crate::library::{
     skill_directory,
 };
 use crate::models::{
-    AppSettings, GitAccountSummary, GitChangeFile, LocalInstallSkillCandidate, LocalSkillCandidate,
-    MarketplaceSkill, PushBranchOption, PushPreviewSnapshot, PushTargetSnapshot,
+    AppSettings, GitAccountSummary, GitChangeFile, LocalGitStateSignature,
+    LocalInstallSkillCandidate, LocalSkillCandidate, MarketplaceSkill, PushBranchOption,
+    PushPreviewSnapshot, PushTargetSnapshot,
     RepoSkillCandidate, SkillFileBrowserSnapshot, SkillFileDocument, SkillFileEntry, SkillSummary,
     ToolConfig, ToolSyncStatus, UpdatePreviewSnapshot, WorkspaceSnapshot,
 };
@@ -2924,6 +2926,38 @@ fn insert_trusted_project_path(xml: &str, trusted_path: &str) -> String {
     )
 }
 
+fn remove_trusted_project_paths<F>(xml: &str, should_remove: F) -> String
+where
+    F: Fn(&str) -> bool,
+{
+    let mut filtered_lines = Vec::new();
+    for line in xml.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("<entry key=\"") {
+            let key_start = trimmed.find("key=\"").map(|index| index + 5);
+            let key_end =
+                key_start.and_then(|start| trimmed[start..].find('"').map(|end| start + end));
+            if let (Some(start), Some(end)) = (key_start, key_end) {
+                let key = trimmed[start..end]
+                    .replace("&quot;", "\"")
+                    .replace("&lt;", "<")
+                    .replace("&gt;", ">")
+                    .replace("&amp;", "&");
+                if should_remove(&key) {
+                    continue;
+                }
+            }
+        }
+        filtered_lines.push(line);
+    }
+
+    let mut next_xml = filtered_lines.join("\n");
+    if xml.ends_with('\n') {
+        next_xml.push('\n');
+    }
+    next_xml
+}
+
 fn upsert_trusted_project_path(config_path: &Path, trusted_path: &str) -> Result<(), String> {
     if let Some(parent) = config_path.parent() {
         fs::create_dir_all(parent).map_err(|error| format!("创建 IDEA 配置目录失败: {error}"))?;
@@ -2943,18 +2977,36 @@ fn upsert_trusted_project_path(config_path: &Path, trusted_path: &str) -> Result
     fs::write(config_path, next_xml).map_err(|error| format!("写入 IDEA 信任配置失败: {error}"))
 }
 
-fn intellij_trusted_location_for_project(project_path: &Path) -> PathBuf {
+fn remove_trusted_project_paths_by_prefix(config_path: &Path, prefix: &str) -> Result<(), String> {
+    if !config_path.exists() {
+        return Ok(());
+    }
+
+    let current_xml = fs::read_to_string(config_path)
+        .map_err(|error| format!("读取 IDEA 信任配置失败: {error}"))?;
+    let next_xml = remove_trusted_project_paths(&current_xml, |path| path.starts_with(prefix));
+    if next_xml == current_xml {
+        return Ok(());
+    }
+
+    fs::write(config_path, next_xml).map_err(|error| format!("写入 IDEA 信任配置失败: {error}"))
+}
+
+fn intellij_trusted_locations_for_project(project_path: &Path) -> Vec<PathBuf> {
     if let Ok(managed_skills_root) = workspace::managed_skill_library_root() {
         if project_path.starts_with(&managed_skills_root) {
-            return managed_skills_root;
+            return vec![managed_skills_root];
         }
     }
 
+    let mut trusted_locations = Vec::new();
     if project_path.join(".git").exists() {
-        return project_path.to_path_buf();
+        trusted_locations.push(project_path.to_path_buf());
+    } else {
+        trusted_locations.push(project_path.parent().unwrap_or(project_path).to_path_buf());
     }
 
-    project_path.parent().unwrap_or(project_path).to_path_buf()
+    trusted_locations
 }
 
 fn intellij_config_dirs() -> Result<Vec<PathBuf>, String> {
@@ -2980,14 +3032,31 @@ fn intellij_config_dirs() -> Result<Vec<PathBuf>, String> {
     Ok(config_dirs)
 }
 
+fn ensure_intellij_managed_skills_root_trusted() -> Result<(), String> {
+    let managed_skills_root = workspace::managed_skill_library_root()?;
+    let managed_skills_root_macro = path_to_jetbrains_macro(&managed_skills_root);
+    let managed_skill_prefix = format!("{managed_skills_root_macro}/");
+    for config_dir in intellij_config_dirs()? {
+        let trusted_paths_path = config_dir.join("options/trusted-paths.xml");
+        remove_trusted_project_paths_by_prefix(&trusted_paths_path, &managed_skill_prefix)?;
+        upsert_trusted_project_path(&trusted_paths_path, &managed_skills_root_macro)?;
+    }
+
+    Ok(())
+}
+
 fn trust_intellij_project_path(project_path: &str) -> Result<(), String> {
     let project_path =
         fs::canonicalize(project_path).unwrap_or_else(|_| PathBuf::from(project_path));
-    let trusted_path = intellij_trusted_location_for_project(&project_path);
-    let trusted_path = path_to_jetbrains_macro(&trusted_path);
+    let trusted_paths = intellij_trusted_locations_for_project(&project_path)
+        .into_iter()
+        .map(|path| path_to_jetbrains_macro(&path))
+        .collect::<Vec<_>>();
     for config_dir in intellij_config_dirs()? {
         let trusted_paths_path = config_dir.join("options/trusted-paths.xml");
-        upsert_trusted_project_path(&trusted_paths_path, &trusted_path)?;
+        for trusted_path in &trusted_paths {
+            upsert_trusted_project_path(&trusted_paths_path, trusted_path)?;
+        }
     }
 
     Ok(())
@@ -3461,7 +3530,15 @@ pub fn list_local_skill_candidates() -> Vec<LocalSkillCandidate> {
 
 #[tauri::command]
 pub fn list_tool_configs() -> Vec<ToolConfig> {
-    build_tool_configs()
+    let tool_configs = build_tool_configs();
+    if tool_configs
+        .iter()
+        .any(|tool| tool.id == "intellij" && tool.status_label == "已安装")
+    {
+        let _ = ensure_intellij_managed_skills_root_trusted();
+    }
+
+    tool_configs
 }
 
 #[tauri::command]
@@ -3487,6 +3564,32 @@ pub async fn refresh_git_states() -> Vec<SkillSummary> {
         .map(normalize_skill_tools)
         .map(|skill| enrich_skill_with_git_state(&skill))
         .collect()
+}
+
+#[tauri::command]
+pub async fn refresh_local_git_states() -> Vec<SkillSummary> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let skills = load_installed_skills(&default_installed_skills());
+        skills
+            .iter()
+            .map(normalize_skill_tools)
+            .map(|skill| enrich_skill_with_local_git_state(&skill))
+            .collect()
+    })
+    .await
+    .unwrap_or_default()
+}
+
+#[tauri::command]
+pub async fn get_local_git_state_signatures() -> Vec<LocalGitStateSignature> {
+    tauri::async_runtime::spawn_blocking(|| {
+        load_installed_skills(&default_installed_skills())
+            .iter()
+            .map(|skill| local_git_state_signature(skill))
+            .collect()
+    })
+    .await
+    .unwrap_or_default()
 }
 
 #[tauri::command]
@@ -4307,6 +4410,29 @@ pub fn get_push_preview_snapshot(
 }
 
 #[tauri::command]
+pub fn push_skill_to_current_branch(skill_name: &str) -> Result<SkillSummary, String> {
+    let (installed_skills, skill_index) = find_skill_by_name(skill_name)?;
+    let skill = &installed_skills[skill_index];
+    let current_branch = current_branch_name(&skill.local_path)?;
+    if current_branch == "HEAD" {
+        return Err("当前仓库处于 detached HEAD，无法直接推送到当前分支。".into());
+    }
+
+    let local_changes = collect_working_tree_changes(&skill.local_path)?;
+    if !local_changes.is_empty() {
+        run_git_command(&skill.local_path, &["add", "--", "."])?;
+        let commit_message = format!("chore: update {}", skill.name);
+        run_git_command(&skill.local_path, &["commit", "-m", &commit_message, "--", "."])?;
+    }
+
+    run_git_command(
+        &skill.local_path,
+        &["push", ORIGIN_REMOTE, &current_branch],
+    )?;
+    refresh_and_persist_skill(skill_name)
+}
+
+#[tauri::command]
 pub fn get_update_preview_snapshot(skill_name: &str) -> Result<UpdatePreviewSnapshot, String> {
     let (installed_skills, skill_index) = find_skill_by_name(skill_name)?;
     let skill = &installed_skills[skill_index];
@@ -4746,7 +4872,8 @@ mod tests {
     use super::{
         build_local_candidates, build_repo_skill_source_url, collect_local_skill_dirs,
         collect_skills_manager_cached_items, import_local_skill, insert_trusted_project_path,
-        install_selected_local_skill_dirs, intellij_trusted_location_for_project,
+        install_selected_local_skill_dirs, intellij_trusted_locations_for_project,
+        remove_trusted_project_paths,
         normalize_installed_skill_source_url, open_target_path_for_skill, parse_repo_install_spec,
         parse_skills_sh_homepage_items, scan_local_install_skill_candidates,
         scan_repo_skill_candidates, should_use_skills_sh_homepage_page,
@@ -5047,14 +5174,14 @@ mod tests {
     }
 
     #[test]
-    fn trusts_managed_skill_root_for_intellij_projects() {
+    fn trusts_managed_skill_locations_for_intellij_projects() {
         let home_dir = env::var_os("HOME").expect("HOME should exist in tests");
-        let expected_root = PathBuf::from(&home_dir).join(".skilldock/skills");
-        let project_path = expected_root.join("drawio-diagram/skills/drawio-diagram");
+        let managed_root = PathBuf::from(&home_dir).join(".skilldock/skills");
+        let project_path = managed_root.join("drawio-diagram/skills/drawio-diagram");
 
         assert_eq!(
-            intellij_trusted_location_for_project(&project_path),
-            expected_root
+            intellij_trusted_locations_for_project(&project_path),
+            vec![managed_root]
         );
     }
 
@@ -5065,9 +5192,36 @@ mod tests {
         fs::create_dir_all(project_path.join(".git")).expect("create .git marker");
 
         assert_eq!(
-            intellij_trusted_location_for_project(&project_path),
-            project_path
+            intellij_trusted_locations_for_project(&project_path),
+            vec![project_path]
         );
+    }
+
+    #[test]
+    fn removes_managed_skill_entries_but_keeps_managed_root() {
+        let xml = concat!(
+            "<application>\n",
+            "  <component name=\"Trusted.Paths\">\n",
+            "    <option name=\"TRUSTED_PROJECT_PATHS\">\n",
+            "      <map>\n",
+            "        <entry key=\"$USER_HOME$/.skilldock/skills\" value=\"true\" />\n",
+            "        <entry key=\"$USER_HOME$/.skilldock/skills/lark-calendar\" value=\"true\" />\n",
+            "        <entry key=\"$USER_HOME$/.skilldock/skills/planning-with-files-zh\" value=\"true\" />\n",
+            "        <entry key=\"$USER_HOME$/data/workspace/macos-skill-manager\" value=\"true\" />\n",
+            "      </map>\n",
+            "    </option>\n",
+            "  </component>\n",
+            "</application>\n"
+        );
+
+        let next_xml = remove_trusted_project_paths(xml, |path| {
+            path.starts_with("$USER_HOME$/.skilldock/skills/")
+        });
+
+        assert!(next_xml.contains("<entry key=\"$USER_HOME$/.skilldock/skills\" value=\"true\" />"));
+        assert!(!next_xml.contains("lark-calendar"));
+        assert!(!next_xml.contains("planning-with-files-zh"));
+        assert!(next_xml.contains("$USER_HOME$/data/workspace/macos-skill-manager"));
     }
 
     #[test]
