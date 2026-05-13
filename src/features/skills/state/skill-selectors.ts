@@ -14,8 +14,20 @@ const statusPriority: Record<SkillSummary["collabStatus"], number> = {
   clean: 3,
 };
 
-function hasEnabledTool(skill: SkillSummary) {
+export function hasEnabledTool(skill: SkillSummary) {
   return skill.tools.some((tool) => isToolEnabledStatus(tool.statusLabel));
+}
+
+function matchesStatusFilter(skill: SkillSummary, status: SkillStatusFilter) {
+  if (status === "all") {
+    return true;
+  }
+
+  if (status === "disabled") {
+    return !hasEnabledTool(skill);
+  }
+
+  return skill.collabStatus === status;
 }
 
 export function filterSkills(skills: SkillSummary[], options: FilterOptions) {
@@ -28,7 +40,7 @@ export function filterSkills(skills: SkillSummary[], options: FilterOptions) {
       skill.sourceLabel.toLowerCase().includes(normalizedQuery) ||
       skill.description.toLowerCase().includes(normalizedQuery) ||
       skill.sourceType.toLowerCase().includes(normalizedQuery);
-    const matchesStatus = options.status === "all" || skill.collabStatus === options.status;
+    const matchesStatus = matchesStatusFilter(skill, options.status);
 
     return matchesQuery && matchesStatus;
   });

@@ -1,5 +1,5 @@
 export type SkillCollabStatus = "clean" | "update-available" | "pending-push" | "diverged";
-export type SkillStatusFilter = "all" | SkillCollabStatus;
+export type SkillStatusFilter = "all" | SkillCollabStatus | "disabled";
 
 export type SourceType = "github" | "gitlab" | "gitee" | "local";
 export type MarketplaceSourceSite = "skills.sh" | "skillsmp";

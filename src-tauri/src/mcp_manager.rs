@@ -276,7 +276,7 @@ pub async fn list_mcp_marketplace_servers(
     let normalized_query = query.unwrap_or_default().trim().to_string();
     let is_searching = !normalized_query.is_empty();
 
-    if !refresh.unwrap_or(false) && !is_searching {
+    if !refresh.unwrap_or(false) && !is_searching && safe_page == 1 {
         if let Some(cached_page) = load_mcp_marketplace_cache_page(safe_page) {
             return Ok(cached_page);
         }
@@ -328,7 +328,7 @@ pub async fn list_mcp_marketplace_servers(
         });
     }
 
-    if !is_searching && !servers.is_empty() {
+    if !is_searching && safe_page == 1 && !servers.is_empty() {
         save_mcp_marketplace_cache_page(safe_page, &servers);
     }
 
@@ -3485,15 +3485,6 @@ fn load_mcp_marketplace_cache_page(page: usize) -> Option<Vec<McpMarketplaceServ
         .and_then(Value::as_u64)
         .unwrap_or_default();
     if version < 1 {
-        return None;
-    }
-
-    let timestamp = cached
-        .get("timestamp")
-        .and_then(Value::as_u64)
-        .unwrap_or_default();
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_secs();
-    if now.saturating_sub(timestamp) > 3600 {
         return None;
     }
 

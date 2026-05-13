@@ -56,18 +56,26 @@ test("shows only installed MCP-ready apps in enable-to-tool controls", async () 
   expect(expandContext7Button.querySelector(".link-badge")).not.toBeNull();
   expect(screen.queryByText("简介")).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Claude Code" })).not.toBeInTheDocument();
+  expect(screen.getByText("Up-to-date code documentation for LLMs and AI code editors")).not.toHaveAttribute(
+    "data-tooltip",
+  );
 
   await userEvent.click(expandContext7Button);
 
   expect(screen.getByRole("button", { name: "收起 context7" })).toHaveAttribute("aria-expanded", "true");
   expect(screen.getByText("基本信息")).toBeInTheDocument();
   expect(screen.getByText("简介")).toBeInTheDocument();
-  expect(screen.getByText("Up-to-date code documentation for LLMs and AI code editors")).toBeInTheDocument();
-  expect(screen.getByText("安装时间")).toBeInTheDocument();
+  expect(screen.getAllByText("Up-to-date code documentation for LLMs and AI code editors")).toHaveLength(2);
+  const installedAtLabel = screen.getByText("安装时间");
+  expect(installedAtLabel).toBeInTheDocument();
   expect(screen.getByText("2026/5/10 16:30:00")).toBeInTheDocument();
-  expect(screen.getByText("来源类型")).toBeInTheDocument();
-  expect(screen.getByText("GitHub")).toBeInTheDocument();
-  expect(screen.getByText("来源")).toBeInTheDocument();
+  expect(screen.queryByText("来源类型")).not.toBeInTheDocument();
+  expect(screen.queryByText("GitHub")).not.toBeInTheDocument();
+  expect(screen.getByText("完整命令")).toBeInTheDocument();
+  expect(screen.getByText("npx -y @upstash/context7-mcp")).not.toHaveAttribute("data-tooltip");
+  const sourceLabel = screen.getByText("来源");
+  expect(sourceLabel).toBeInTheDocument();
+  expect(Boolean(installedAtLabel.compareDocumentPosition(sourceLabel) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true);
   expect(screen.getByText("https://github.com/upstash/context7")).toBeInTheDocument();
   expect(screen.getByText("启用到工具")).toBeInTheDocument();
   expect(screen.getAllByRole("button", { name: "Claude Code" })[0]).toHaveClass("tool-pill");

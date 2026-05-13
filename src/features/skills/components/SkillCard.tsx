@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import type { MouseEvent as ReactMouseEvent } from "react";
 import { useNotifications } from "@/app/notifications";
 import { SkillStatusBadge } from "@/features/skills/components/SkillStatusBadge";
 import { SkillFileDialog } from "@/features/skills/components/SkillFileDialog";
@@ -11,6 +12,7 @@ import { formatSkillLastEditor } from "@/features/skills/utils/skill-editor";
 import { formatSkillSourceLabel } from "@/features/skills/utils/skill-source";
 import { mergeSkillToolsWithInstalledTools } from "@/features/skills/utils/skill-tools";
 import { formatSkillUpdatedAt } from "@/features/skills/utils/skill-time";
+import { getToolDisplayRank, resolveToolLogoUrl } from "@/features/skills/utils/tool-logo";
 import { isToolEnabledStatus } from "@/features/skills/utils/tool-status";
 import { getMonogramLabel } from "@/features/skills/utils/monogram";
 
@@ -18,12 +20,61 @@ type SkillCardProps = {
   skill: SkillSummary;
 };
 
+const SUMMARY_DESCRIPTION_LIMIT = 76;
+
 function SkillMonogram({ name }: { name: string }) {
   return (
     <div className="link-badge link-badge--monogram" aria-hidden="true">
+      <span className="link-badge__type-mark link-badge__type-mark--skill">
+        <svg viewBox="0 0 12 12" fill="none">
+          <path
+            d="M6 1.5 7.1 4.9 10.5 6 7.1 7.1 6 10.5 4.9 7.1 1.5 6 4.9 4.9 6 1.5Z"
+            fill="currentColor"
+          />
+        </svg>
+      </span>
       <span className="link-badge__label">{getMonogramLabel(name)}</span>
     </div>
   );
+}
+
+function SummaryToolIcon({ toolName }: { toolName: string }) {
+  const [logoLoadFailed, setLogoLoadFailed] = useState(false);
+  const logoUrl = resolveToolLogoUrl(toolName);
+  const fallbackLabel = getMonogramLabel(toolName);
+
+  return (
+    <span className="skill-card__tool-icon" title={toolName} aria-hidden="true">
+      {logoUrl && !logoLoadFailed ? (
+        <img
+          src={logoUrl}
+          alt=""
+          loading="lazy"
+          onError={() => setLogoLoadFailed(true)}
+        />
+      ) : (
+        <span>{fallbackLabel}</span>
+      )}
+    </span>
+  );
+}
+
+function compareToolsByDisplayOrder(left: { name: string }, right: { name: string }) {
+  const rankDelta = getToolDisplayRank(left.name) - getToolDisplayRank(right.name);
+  if (rankDelta !== 0) {
+    return rankDelta;
+  }
+
+  return left.name.localeCompare(right.name);
+}
+
+function formatSummaryDescription(description: string) {
+  const normalizedDescription = formatSkillDescription(description).replace(/\s+/g, " ");
+  if (normalizedDescription.length <= SUMMARY_DESCRIPTION_LIMIT) {
+    return normalizedDescription;
+  }
+
+  return `${normalizedDescription.slice(0, SUMMARY_DESCRIPTION_LIMIT).trimEnd()}...`;
 }
 
 function isHttpUrl(value: string) {
@@ -107,6 +158,7 @@ export function SkillCard({ skill }: SkillCardProps) {
   const [isDeleteConfirming, setIsDeleteConfirming] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
+  const [showEnabledTools, setShowEnabledTools] = useState(false);
   const deleteActionRef = useRef<HTMLButtonElement | null>(null);
   const skillTools = mergeSkillToolsWithInstalledTools(skill.tools, toolConfigs);
   const sourceLabel = formatSkillSourceLabel(skill.sourceLabel, {
@@ -114,12 +166,16 @@ export function SkillCard({ skill }: SkillCardProps) {
     sourceUrl: skill.sourceUrl,
   });
   const skillDescription = formatSkillDescription(skill.description);
+  const summaryDescription = formatSummaryDescription(skill.description);
   const remoteUpdatedAt = formatSkillUpdatedAt(skill.remoteUpdatedAt);
   const localUpdatedAt = formatSkillUpdatedAt(skill.localUpdatedAt);
   const remoteUpdater = formatSkillLastEditor(skill.lastEditor) || "未获取";
-  const enabledTools = skillTools.filter((tool) => isToolEnabledStatus(tool.statusLabel));
-  const visibleTools = enabledTools.slice(0, 2);
-  const hiddenToolCount = Math.max(enabledTools.length - visibleTools.length, 0);
+  const enabledTools = skillTools
+    .filter((tool) => isToolEnabledStatus(tool.statusLabel))
+    .sort(compareToolsByDisplayOrder);
+  const summaryToolsLabel = enabledTools.length > 0
+    ? `已启用工具：${enabledTools.map((tool) => tool.name).join("、")}`
+    : "已启用工具：无";
   const showDetailAction = skill.collabStatus === "update-available";
   const showRemoteUpdateInfo = skill.sourceType !== "local";
 
@@ -204,6 +260,15 @@ export function SkillCard({ skill }: SkillCardProps) {
     }
   }
 
+  function handleEnabledToolsToggle(event: ReactMouseEvent<HTMLButtonElement>) {
+    event.stopPropagation();
+    if (enabledTools.length === 0) {
+      return;
+    }
+
+    setShowEnabledTools((value) => !value);
+  }
+
   const updateTooltipLabel = isUpdating ? "正在更新" : "更新 skill";
   const deleteConfirmTooltipLabel = isDeleting ? "正在删除" : "再次点击删除";
 
@@ -211,12 +276,9 @@ export function SkillCard({ skill }: SkillCardProps) {
     <>
       <article className={`skill-card skill-card--list${expanded ? " is-expanded" : ""}`}>
         <div className="skill-card__header">
-          <button
+          <div
             className="skill-card__summary-button"
-            type="button"
             onClick={() => setExpanded((value) => !value)}
-            aria-expanded={expanded}
-            aria-label={`${expanded ? "收起" : "展开"} ${skill.name}`}
           >
             <div className="skill-card__summary-content">
               <div className="skill-card__summary-top">
@@ -225,34 +287,30 @@ export function SkillCard({ skill }: SkillCardProps) {
                   <div className="skill-card__title-stack">
                     <div className="skill-card__title-row">
                       <h3>{skill.name}</h3>
-                    </div>
-                    <div className="skill-card__list-meta">
-                      <span className="skill-card__meta-label-inline">来源：</span>
-                      <span className="skill-card__meta-value">{sourceLabel}</span>
-                      <span className="skill-card__meta-label-inline skill-card__meta-label-inline--section">更新时间：</span>
-                      <span className="skill-card__meta-value">{localUpdatedAt || "未获取"}</span>
-                    </div>
-                  </div>
-                </div>
-                <div className="skill-card__summary-tools" aria-label="已启用工具">
-                  {visibleTools.length > 0 ? (
-                    <>
-                      {visibleTools.map((tool) => (
-                        <span key={tool.name} className="skill-card__tool-tag">
-                          {tool.name}
-                        </span>
-                      ))}
-                      {hiddenToolCount > 0 ? (
-                        <span className="skill-card__tool-tag skill-card__tool-tag--extra">+{hiddenToolCount}</span>
+                      <button
+                        className={`status-badge tone-info skill-card__enabled-toggle${enabledTools.length > 0 ? "" : " is-empty"}`}
+                        type="button"
+                        onClick={handleEnabledToolsToggle}
+                        aria-expanded={showEnabledTools}
+                        aria-label={summaryToolsLabel}
+                        disabled={enabledTools.length === 0}
+                      >
+                        {enabledTools.length > 0 ? `已启用 ${enabledTools.length}` : "未启用"}
+                      </button>
+                      {showEnabledTools && enabledTools.length > 0 ? (
+                        <div className="skill-card__summary-tools" aria-label={summaryToolsLabel}>
+                          {enabledTools.map((tool) => (
+                            <SummaryToolIcon key={tool.name} toolName={tool.name} />
+                          ))}
+                        </div>
                       ) : null}
-                    </>
-                  ) : (
-                    <span className="skill-card__tool-empty">未启用到工具</span>
-                  )}
+                    </div>
+                    <p className="skill-card__summary-description">{summaryDescription}</p>
+                  </div>
                 </div>
               </div>
             </div>
-          </button>
+          </div>
           <div className="skill-card__list-actions">
             <SkillStatusBadge status={skill.collabStatus} />
             {showDetailAction ? (
@@ -309,9 +367,17 @@ export function SkillCard({ skill }: SkillCardProps) {
                 <DeleteIcon />
               </button>
             )}
-            <span className="skill-card__chevron" aria-hidden="true">
+            <button
+              className="skill-card__chevron-button"
+              type="button"
+              onClick={() => setExpanded((value) => !value)}
+              aria-expanded={expanded}
+              aria-label={`${expanded ? "收起" : "展开"} ${skill.name}`}
+            >
+              <span className="skill-card__chevron" aria-hidden="true">
               {expanded ? "⌄" : "›"}
-            </span>
+              </span>
+            </button>
           </div>
         </div>
         {expanded ? (

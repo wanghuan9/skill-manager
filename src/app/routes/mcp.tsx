@@ -1,4 +1,5 @@
 import { startTransition, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import type { MouseEvent as ReactMouseEvent } from "react";
 import { createPortal } from "react-dom";
 import { useNotifications } from "@/app/notifications";
 import { waitForNextPaint } from "@/app/utils/wait-for-next-paint";
@@ -20,9 +21,8 @@ import type {
   McpTargetApp,
   McpWorkspaceSnapshot,
 } from "@/features/skills/state/skill-store";
-import { getToolLogoUrl } from "@/features/skills/utils/tool-logo";
+import { getToolDisplayRank, getToolLogoUrl } from "@/features/skills/utils/tool-logo";
 import { getMonogramLabel } from "@/features/skills/utils/monogram";
-import { formatSkillSourceLabel } from "@/features/skills/utils/skill-source";
 import { formatSkillUpdatedAt } from "@/features/skills/utils/skill-time";
 import {
   cacheMcpWorkspace,
@@ -40,6 +40,7 @@ type McpFormState = {
 const MCP_CONFIG_PLACEHOLDER_PATTERN = /<[^>]*(?:YOUR|TOKEN|KEY|SECRET|PASSWORD|API)[^>]*>|^(?:your[_ -]?(?:api[_ -]?)?(?:key|token|secret|password)|replace[_ -]?me|change[_ -]?me|changeme|todo)$/i;
 const MCP_MISSING_ENV_PATTERN = /缺少环境变量\s+([A-Z0-9_]+)/i;
 const MCP_CONFIG_PARAM_FIELDS = ["env", "headers"];
+const MCP_SUMMARY_APP_ICON_LIMIT = 7;
 
 const EMPTY_FORM_STATE: McpFormState = {
   id: "",
@@ -269,6 +270,22 @@ function McpServerMonogram({ server }: { server: McpServerSummary }) {
   const statusClassName = server.enabledAppCount > 0 ? "is-active" : "is-inactive";
   return (
     <div className="link-badge link-badge--mcp-monogram" aria-hidden="true">
+      <span className="link-badge__type-mark link-badge__type-mark--mcp">
+        <svg viewBox="0 0 12 12" fill="none">
+          <path
+            d="M4.2 4.2 2.8 5.6a2 2 0 0 0 2.8 2.8L7 7"
+            stroke="currentColor"
+            strokeWidth="1.45"
+            strokeLinecap="round"
+          />
+          <path
+            d="M7.8 7.8 9.2 6.4a2 2 0 0 0-2.8-2.8L5 5"
+            stroke="currentColor"
+            strokeWidth="1.45"
+            strokeLinecap="round"
+          />
+        </svg>
+      </span>
       <span className="link-badge__label">{getMonogramLabel(server.name || server.id)}</span>
       <span className={`link-badge__status-dot ${statusClassName}`} />
     </div>
@@ -379,6 +396,15 @@ type McpToolLogoProps = {
   appName: string;
 };
 
+function compareAppsByDisplayOrder(left: { appId: string; appName: string }, right: { appId: string; appName: string }) {
+  const rankDelta = getToolDisplayRank(left.appName) - getToolDisplayRank(right.appName);
+  if (rankDelta !== 0) {
+    return rankDelta;
+  }
+
+  return left.appName.localeCompare(right.appName);
+}
+
 function McpToolLogo({ appId, appName }: McpToolLogoProps) {
   const [logoLoadFailed, setLogoLoadFailed] = useState(false);
   const logoUrl = getToolLogoUrl(appId);
@@ -401,6 +427,62 @@ function McpToolLogo({ appId, appName }: McpToolLogoProps) {
         onError={() => setLogoLoadFailed(true)}
       />
     </span>
+  );
+}
+
+function McpEnabledAppSummary({ apps }: { apps: McpAppStatus[] }) {
+  const [showEnabledApps, setShowEnabledApps] = useState(false);
+  const enabledApps = apps.filter((app) => app.isEnabled).sort(compareAppsByDisplayOrder);
+  const visibleApps = enabledApps.slice(0, MCP_SUMMARY_APP_ICON_LIMIT);
+  const hiddenAppCount = Math.max(enabledApps.length - visibleApps.length, 0);
+  const summaryLabel = enabledApps.length > 0
+    ? `已启用工具：${enabledApps.map((app) => app.appName).join("、")}`
+    : "未启用";
+
+  function handleEnabledAppsToggle(event: ReactMouseEvent<HTMLButtonElement>) {
+    event.stopPropagation();
+    if (enabledApps.length === 0) {
+      return;
+    }
+
+    setShowEnabledApps((value) => !value);
+  }
+
+  if (enabledApps.length === 0) {
+    return (
+      <button
+        className="status-badge tone-info skill-card__enabled-toggle is-empty"
+        type="button"
+        aria-label={summaryLabel}
+        disabled
+      >
+        {summaryLabel}
+      </button>
+    );
+  }
+
+  return (
+    <>
+      <button
+        className="status-badge tone-info skill-card__enabled-toggle"
+        type="button"
+        onClick={handleEnabledAppsToggle}
+        aria-expanded={showEnabledApps}
+        aria-label={summaryLabel}
+      >
+        已启用 {enabledApps.length}
+      </button>
+      {showEnabledApps ? (
+        <span className="mcp-enabled-app-summary" aria-label={summaryLabel}>
+          {visibleApps.map((app) => (
+            <McpToolLogo key={app.appId} appId={app.appId} appName={app.appName} />
+          ))}
+          {hiddenAppCount > 0 ? (
+            <span className="skill-card__tool-tag skill-card__tool-tag--extra">+{hiddenAppCount}</span>
+          ) : null}
+        </span>
+      ) : null}
+    </>
   );
 }
 
@@ -876,7 +958,9 @@ export function McpRoute() {
         {filteredServers.map((server) => {
           const isExpanded = expandedServerIds[server.id] ?? false;
           const isToolSectionCollapsed = collapsedToolSectionIds[server.id] ?? false;
-          const visibleApps = server.apps.filter((app) => installedAppIdSet.has(app.appId));
+          const visibleApps = server.apps
+            .filter((app) => installedAppIdSet.has(app.appId))
+            .sort(compareAppsByDisplayOrder);
           const enabledVisibleAppCount = visibleApps.filter((app) => app.isEnabled).length;
           const disabledVisibleAppCount = visibleApps.length - enabledVisibleAppCount;
           const appBulkAction = pendingAppKey === `${server.id}:apps:enable`
@@ -894,26 +978,27 @@ export function McpRoute() {
             : server.toolsDiscoveryError
               ? "获取失败"
               : "未获取 tools";
-          const enabledAppSummaryLabel = enabledVisibleAppCount > 0
-            ? `已启用 ${enabledVisibleAppCount}`
-            : "未启用";
           const serverDescription = formatMcpDescription(server);
           const isDeleteConfirming = deleteConfirmingServerId === server.id;
           const isDeleting = deletingServerId === server.id;
           const deleteConfirmTooltipLabel = isDeleting ? "正在删除" : "再次点击删除";
-          const sourceTypeLabel = formatSkillSourceLabel("自定义仓库", {
-            sourceUrl: server.sourceUrl,
-          });
           const requiredConfigParamNames = getRequiredMcpConfigParamNames(server);
           const requiredConfigTooltip = formatRequiredMcpConfigTooltip(requiredConfigParamNames);
 
           return (
             <article key={server.id} className={`mcp-server-card${isExpanded ? " is-expanded" : ""}`}>
               <div className="mcp-server-card__header">
-                <button
+                <div
                   className="mcp-server-card__summary-button"
-                  type="button"
+                  role="button"
+                  tabIndex={0}
                   onClick={() => toggleServerExpanded(server.id)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      toggleServerExpanded(server.id);
+                    }
+                  }}
                   aria-expanded={isExpanded}
                   aria-label={`${isExpanded ? "收起" : "展开"} ${server.name}`}
                 >
@@ -926,9 +1011,7 @@ export function McpRoute() {
                           <span className="status-badge tone-neutral">
                             {toolSummaryLabel}
                           </span>
-                          <span className="status-badge tone-info">
-                            {enabledAppSummaryLabel}
-                          </span>
+                          <McpEnabledAppSummary apps={visibleApps} />
                           {requiredConfigParamNames.length > 0 ? (
                             <span
                               className="status-badge tone-warning"
@@ -938,16 +1021,13 @@ export function McpRoute() {
                             </span>
                           ) : null}
                         </div>
-                        <div
-                          className="mcp-server-card__subtitle"
-                          data-tooltip={server.commandLabel || server.id}
-                        >
-                          {server.commandLabel || server.id}
+                        <div className="mcp-server-card__subtitle">
+                          {serverDescription}
                         </div>
                       </div>
                     </div>
                   </div>
-                </button>
+                </div>
                 <div className="skill-card__list-actions mcp-server-card__actions">
                   <button
                     className="skill-card__icon-button"
@@ -1003,68 +1083,49 @@ export function McpRoute() {
                     <dl className="detail-grid detail-grid--single">
                       <div>
                         <dt>完整命令</dt>
-                        <dd
-                          className="detail-grid__single-line detail-grid__single-line--tooltip"
-                          data-tooltip={server.commandLabel || server.id}
-                        >
+                        <dd className="detail-grid__single-line">
                           {server.commandLabel || server.id}
                         </dd>
                       </div>
                     </dl>
-                    {server.sourceUrl ? (
-                      <dl className="detail-grid detail-grid--source">
-                        <div>
-                          <dt>来源类型</dt>
-                          <dd>{sourceTypeLabel}</dd>
-                        </div>
-                        <div>
-                          <dt>来源</dt>
-                          <dd className="detail-grid__source-value">
-                            {isHttpUrl(server.sourceUrl) ? (
-                              <a
-                                className="detail-grid__source-link detail-grid__single-line"
-                                data-tooltip={server.sourceUrl}
-                                href={server.sourceUrl}
-                                onClick={(event) => {
-                                  event.preventDefault();
-                                  void openExternalLink(server.sourceUrl);
-                                }}
-                              >
-                                {server.sourceUrl}
-                              </a>
-                            ) : (
-                              <span className="detail-grid__single-line" data-tooltip={server.sourceUrl}>
-                                {server.sourceUrl}
-                              </span>
-                            )}
-                            <span className="detail-git-badge is-linked">git</span>
-                          </dd>
-                        </div>
-                      </dl>
-                    ) : server.installedAt ? (
-                      <dl className="detail-grid detail-grid--single">
-                        <div>
-                          <dt>安装时间</dt>
-                          <dd
-                            className="detail-grid__single-line detail-grid__single-line--tooltip"
-                            data-tooltip={formatSkillUpdatedAt(server.installedAt)}
-                          >
-                            {formatSkillUpdatedAt(server.installedAt)}
-                          </dd>
-                        </div>
-                      </dl>
-                    ) : null}
-                    {server.sourceUrl && server.installedAt ? (
-                      <dl className="detail-grid detail-grid--single">
-                        <div>
-                          <dt>安装时间</dt>
-                          <dd
-                            className="detail-grid__single-line detail-grid__single-line--tooltip"
-                            data-tooltip={formatSkillUpdatedAt(server.installedAt)}
-                          >
-                            {formatSkillUpdatedAt(server.installedAt)}
-                          </dd>
-                        </div>
+                    {server.sourceUrl || server.installedAt ? (
+                      <dl className="detail-grid detail-grid--mcp-meta">
+                        {server.installedAt ? (
+                          <div>
+                            <dt>安装时间</dt>
+                            <dd
+                              className="detail-grid__single-line detail-grid__single-line--tooltip"
+                              data-tooltip={formatSkillUpdatedAt(server.installedAt)}
+                            >
+                              {formatSkillUpdatedAt(server.installedAt)}
+                            </dd>
+                          </div>
+                        ) : null}
+                        {server.sourceUrl ? (
+                          <div>
+                            <dt>来源</dt>
+                            <dd className="detail-grid__source-value">
+                              {isHttpUrl(server.sourceUrl) ? (
+                                <a
+                                  className="detail-grid__source-link detail-grid__single-line"
+                                  data-tooltip={server.sourceUrl}
+                                  href={server.sourceUrl}
+                                  onClick={(event) => {
+                                    event.preventDefault();
+                                    void openExternalLink(server.sourceUrl);
+                                  }}
+                                >
+                                  {server.sourceUrl}
+                                </a>
+                              ) : (
+                                <span className="detail-grid__single-line" data-tooltip={server.sourceUrl}>
+                                  {server.sourceUrl}
+                                </span>
+                              )}
+                              <span className="detail-git-badge is-linked">git</span>
+                            </dd>
+                          </div>
+                        ) : null}
                       </dl>
                     ) : null}
                   </section>

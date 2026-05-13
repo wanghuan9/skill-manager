@@ -1103,22 +1103,6 @@ fn load_marketplace_cache(source: &str) -> Option<Vec<MarketplaceSkill>> {
     let sources = cached.get("sources")?.as_object()?;
     let source_entry = sources.get(&source_key)?;
     let skills_array = source_entry.get("skills").and_then(|v| v.as_array())?;
-    let timestamp = cached
-        .get("timestamp")
-        .or_else(|| source_entry.get("timestamp"))
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
-
-    // 缓存有效期 1 小时
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .ok()?
-        .as_secs();
-
-    if now - timestamp > 3600 {
-        return None;
-    }
-
     Some(
         skills_array
             .iter()
@@ -1230,11 +1214,9 @@ async fn build_marketplace_skills(
     let source = source_site.unwrap_or_default();
     let is_searching = query.is_some() && !query.unwrap_or_default().trim().is_empty();
 
-    if !refresh && !is_searching && source == "skills.sh" {
+    if !refresh && !is_searching && source == "skills.sh" && page == 1 {
         if let Some(cached_page) = load_marketplace_cache_page(source, page, limit) {
-            if page == 1 || cached_page.len() >= limit {
-                return cached_page;
-            }
+            return cached_page;
         }
     }
 
@@ -1264,16 +1246,20 @@ async fn build_marketplace_skills(
             Ok(homepage_items) => {
                 let homepage_skills = map_skills_sh_items_to_marketplace(homepage_items);
                 if !homepage_skills.is_empty() {
-                    save_marketplace_cache(source, &homepage_skills);
                     let homepage_page = paginate_marketplace_skills(&homepage_skills, page, limit);
+                    if page == 1 && !homepage_page.is_empty() {
+                        save_marketplace_cache(source, &homepage_page);
+                    }
                     if should_use_skills_sh_homepage_page(page, homepage_page.len(), limit) {
                         return homepage_page;
                     }
                 }
             }
             Err(error) => {
-                if let Some(cached_page) = load_marketplace_cache_page(source, page, limit) {
-                    return cached_page;
+                if page == 1 {
+                    if let Some(cached_page) = load_marketplace_cache_page(source, page, limit) {
+                        return cached_page;
+                    }
                 }
                 eprintln!("Failed to load live skills.sh homepage leaderboard: {error}");
             }

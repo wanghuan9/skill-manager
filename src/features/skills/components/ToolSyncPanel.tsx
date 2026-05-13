@@ -2,32 +2,13 @@ import { useEffect, useRef, useState } from "react";
 import { waitForNextPaint } from "@/app/utils/wait-for-next-paint";
 import type { SkillToolSyncStatus } from "@/features/skills/state/skill-store";
 import { useSkillWorkspace } from "@/features/skills/state/skill-workspace";
-import { getToolLogoUrl } from "@/features/skills/utils/tool-logo";
+import { resolveToolLogoUrl } from "@/features/skills/utils/tool-logo";
 import { isToolEnabledStatus } from "@/features/skills/utils/tool-status";
 
 type ToolSyncPanelProps = {
   skillName: string;
   tools: SkillToolSyncStatus[];
 };
-
-const TOOL_NAME_IDS: Record<string, string> = {
-  "Claude Code": "claude-code",
-  "Gemini CLI": "gemini",
-  "GitHub Copilot": "github-copilot",
-  "IntelliJ IDEA": "intellij",
-  "Kilo Code": "kilo-code",
-  OpenCode: "opencode",
-  OpenClaw: "openclaw",
-  "Qwen Code": "qwen-code",
-  "Roo Code": "roo-code",
-  "Trae CN": "trae-cn",
-};
-
-function resolveToolLogoUrl(toolName: string) {
-  const toolId = TOOL_NAME_IDS[toolName] ?? toolName.toLowerCase().replace(/\s+/g, "-");
-
-  return getToolLogoUrl(toolId);
-}
 
 function patchToolStatuses(
   tools: SkillToolSyncStatus[],

@@ -92,4 +92,30 @@ describe("filterSkills", () => {
 
     expect(skills.map((skill) => skill.name)).toEqual(["diagram-helper"]);
   });
+
+  it("filters skills that are not enabled in any tool", () => {
+    const skills = filterSkills(
+      [
+        createSkill({
+          name: "enabled-skill",
+          tools: [{ name: "Codex", statusLabel: "已同步" }],
+        }),
+        createSkill({
+          name: "resync-skill",
+          tools: [{ name: "Codex", statusLabel: "需要重同步" }],
+        }),
+        createSkill({
+          name: "disabled-skill",
+          tools: [{ name: "Codex", statusLabel: "未启用" }],
+        }),
+        createSkill({
+          name: "empty-tool-skill",
+          tools: [],
+        }),
+      ],
+      { query: "", status: "disabled" },
+    );
+
+    expect(skills.map((skill) => skill.name)).toEqual(["disabled-skill", "empty-tool-skill"]);
+  });
 });

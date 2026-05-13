@@ -1,137 +1,103 @@
-# SkillDock
+<p align="center">
+  <img src="src-tauri/icons/icon.png" width="150" alt="SkillDock" />
+</p>
 
-一个基于 Tauri + React 的桌面技能工作台，用于管理和组织各种开发工具、AI 助手技能与 MCP 配置。
+<h1 align="center">SkillDock</h1>
 
-## 🚀 功能特性
+<p align="center">
+  Manage AI Skills, MCP servers, Git updates, and coding-agent sync from one macOS app.
+</p>
 
-- **技能管理**: 安装、更新、删除各种开发工具和 AI 助手技能
-- **市场集成**: 从技能市场浏览和安装新技能
-- **本地导入**: 导入和管理本地技能包
-- **Git 集成**: 管理技能的 Git 状态和更新
-- **工具同步**: 同步和管理各种开发工具的配置
+<p align="center">
+  <a href="./README.zh-CN.md">中文说明</a> · <a href="#download">Download</a>
+</p>
 
-## 🛠️ 技术栈
+<p align="center">
+  <img alt="Version" src="https://img.shields.io/badge/version-0.1.0-blue" />
+  <img alt="Platform" src="https://img.shields.io/badge/platform-macOS%20now%20%7C%20Windows%20planned-lightgrey" />
+  <img alt="Preview" src="https://img.shields.io/badge/source-closed%20preview-lightgrey" />
+</p>
 
-- **前端**: React 18 + TypeScript + Vite
-- **后端**: Tauri (Rust)
-- **测试**: Vitest + React Testing Library
-- **构建**: Vite + Tauri CLI
+## What It Does
 
-## 📦 安装和运行
+SkillDock is a desktop control center for AI coding tools. It keeps your local Skills and MCP configurations visible, editable, and synced across the tools you use every day.
 
-### 环境要求
+- **Skills library** — Install, update, delete, edit, inspect, and sync local skills.
+- **Git-aware workflow** — Keep Git-based skills as real repositories, detect upstream updates, local edits, pending pushes, and preview changes before pulling or pushing.
+- **Marketplace install** — Browse and install skills from `skills.sh`, `skillsmp`, and other supported sources.
+- **Git and local import** — Install skills from GitHub, GitLab, Gitee, compatible Git repos, or existing local folders.
+- **Multi-tool sync** — Enable skills for built-in coding tools and IDEs without hand-copying files.
+- **MCP management** — Browse, import, edit, enable, disable, sync, and inspect MCP server configs.
+- **MCP tools discovery** — Detect exposed MCP tools and track whether each server config is usable.
 
-- Node.js >= 18
-- Rust >= 1.70
-- macOS 10.15+ (应用目标平台)
+## Skills
 
-### 开发环境设置
+View every installed skill, filter by status, inspect source metadata, and see Git collaboration state at a glance.
 
-1. 克隆仓库
+![Skills list](docs/images/skill_list.png)
 
-```bash
-git clone https://github.com/wanghuan9/skill-manager.git
-cd skill-manager
-```
+![Skill details and tool sync](docs/images/skill_detail.png)
 
-2. 安装依赖
+SkillDock preserves source information and tool enablement per skill, so a team-maintained skill can stay connected to its upstream repository while still being applied selectively to Claude Code, Codex, Cursor, Gemini CLI, Windsurf, and other tools.
 
-```bash
-npm install
-```
+## MCP
 
-3. 启动开发服务器
+Manage MCP servers in the same workspace as skills. SkillDock scans supported app config files, shows the server command and source, and lets you enable or disable server sync per tool.
 
-```bash
-npm run desktop:dev
-```
+![SkillDock MCP list](docs/images/mcp_list.png)
 
-### 构建生产版本
+![MCP server details and tools](docs/images/mcp_detail.png)
 
-```bash
-npm run desktop:build
-```
+## Tools
 
-## 🧪 测试
+SkillDock detects supported coding tools, shows their skill and MCP config locations, and gives you one place to manage sync targets.
 
-```bash
-# 运行测试
-npm run test
+![Supported tools](docs/images/tools_list.png)
 
-# 监听模式
-npm run test:watch
-```
+## Install
 
-## 📁 项目结构
+Install skills from marketplace sources, Git repositories, or local folders. SkillDock also separates MCP marketplace discovery so MCP servers can be installed and managed through their own lifecycle.
 
-```text
-skill-manager/
-├── src/                    # React 前端源码
-│   ├── app/               # 应用主组件和路由
-│   ├── features/          # 功能模块
-│   │   ├── install/       # 安装功能
-│   │   ├── skills/        # 技能管理
-│   │   └── local-skills/  # 本地技能
-│   ├── styles/            # 样式文件
-│   └── tests/             # 前端测试
-├── src-tauri/             # Tauri 后端源码
-│   ├── src/               # Rust 源码
-│   └── icons/             # 应用图标
-├── public/                # 静态资源
-│   └── tool-logos/        # 工具图标
-├── docs/                  # 项目文档
-└── dist/                  # 构建输出
-```
+![Install skills from marketplace](docs/images/skill_install.png)
 
-## 🎯 核心功能模块
+![Install MCP servers](docs/images/mcp_install.png)
 
-### 技能管理
-- 技能卡片展示和状态管理
-- 技能安装、更新、卸载
-- 技能配置和设置
+## Settings
 
-### 市场集成
-- 技能市场浏览
-- 技能搜索和筛选
-- 一键安装功能
+Configure the app storage directory, default editor, update checks, default install behavior, and tool support status.
 
-### Git 集成
-- 技能仓库状态监控
-- 变更预览
-- 版本管理
+![SkillDock settings](docs/images/settings.png)
 
-### 工具管理
-- 开发工具同步
-- 配置文件管理
-- 工具状态监控
+## Supported Tools
 
-## 🔧 开发脚本
+Claude Code · Codex · Cursor · Windsurf · IntelliJ IDEA · OpenCode · Gemini · Antigravity · Continue · GitHub Copilot · Qwen Code · Trae · Trae CN · Cline · Roo Code · Kilo Code · Kiro · Goose · Junie · Augment · CodeBuddy · Droid · OpenClaw · CommandCode · Crush · Qoder · Zencoder · Hermes · iFlow
 
-```bash
-# 开发
-npm run dev              # 启动前端开发服务器
-npm run desktop:dev      # 启动桌面应用开发模式
+## Download
 
-# 构建
-npm run build            # 构建前端
-npm run desktop:build    # 构建桌面应用
+Installers will be published on the [Releases](../../releases) page.
 
-# 测试
-npm run test             # 运行测试
-npm run test:watch       # 监听模式测试
+| Platform | Status |
+| --- | --- |
+| macOS | Coming soon |
+| Windows | Planned |
 
-# Rust
-npm run tauri:check      # 检查 Rust 代码
-```
+## Getting Started
 
-## 📄 许可证
+1. Download and open SkillDock.
+2. Install skills from a marketplace, Git repository, or local folder.
+3. Enable skills and MCP servers for your coding tools.
+4. Use Git-aware status to review updates, local edits, and push previews.
 
-MIT License
+## Roadmap
 
-## 🤝 贡献
+- [ ] Public installers.
+- [ ] Clearer skill states: updateable, locally modified, pending push, conflicted.
+- [ ] Fuller MCP lifecycle: install, configure, discover tools, and sync across tools.
+- [ ] Better Git flows: branch selection, team repository pushback, PR/MR handoff.
+- [ ] Windows support after the macOS workflow is stable.
 
-欢迎提交 Issue 和 Pull Request！
+## Source Availability
 
-## 📞 联系方式
+SkillDock is currently distributed as a closed-source preview.
 
-如有问题或建议，请通过 GitHub Issues 联系我。
+Source code may be opened later after the first public release stabilizes.
