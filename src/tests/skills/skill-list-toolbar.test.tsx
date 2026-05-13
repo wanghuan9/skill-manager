@@ -84,6 +84,7 @@ test("notifies status filter changes", () => {
 
   expect(screen.getByRole("option", { name: "全部 (4)" })).toBeInTheDocument();
   expect(screen.getByRole("option", { name: "可更新 (1)" })).toBeInTheDocument();
+  expect(screen.queryByRole("option", { name: /冲突/ })).not.toBeInTheDocument();
   expect(screen.queryByRole("option", { name: "已同步 (1)" })).not.toBeInTheDocument();
   expect(onStatusFilterChange).toHaveBeenCalledWith("update-available");
 });
