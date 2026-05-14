@@ -12,6 +12,7 @@
     "desktop:build": "cargo tauri build",
     "tauri:check": "cd src-tauri && cargo check",
     "release:check": "bash scripts/check-release-secrets.sh",
+    "release:notes": "node scripts/generate-release-notes.cjs",
     "release:publish": "bash scripts/publish-release.sh"
   },
   "dependencies": {
