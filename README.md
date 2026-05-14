@@ -23,6 +23,7 @@
 SkillDock is a desktop control center for AI coding tools. It keeps your local Skills and MCP configurations visible, editable, and synced across the tools you use every day.
 
 - **Skills library** — Install, update, delete, edit, inspect, and sync local skills.
+- **Source grouping** — Group installed skills by repository or local source so team-maintained skill sets stay easy to scan.
 - **Git-aware workflow** — Keep Git-based skills as real repositories, detect upstream updates, local edits, pending pushes, and preview changes before pulling or pushing.
 - **Marketplace install** — Browse and install skills from `skills.sh`, `skillsmp`, and other supported sources.
 - **Git and local import** — Install skills from GitHub, GitLab, Gitee, compatible Git repos, or existing local folders.
@@ -32,9 +33,11 @@ SkillDock is a desktop control center for AI coding tools. It keeps your local S
 
 ## Skills
 
-View every installed skill, filter by status, inspect source metadata, and see Git collaboration state at a glance.
+View every installed skill by source group, filter by status, inspect source metadata, and see Git collaboration state at a glance.
 
 ![Skills list](docs/images/skill_list.png)
+
+![Skill groups by source](docs/images/skill_groups.png)
 
 ![Skill details and tool sync](docs/images/skill_detail.png)
 
@@ -60,6 +63,8 @@ Install skills from marketplace sources, Git repositories, or local folders. Ski
 
 ![Install skills from marketplace](docs/images/skill_install.png)
 
+![Install skills from Git repositories](docs/images/skill_git_install.png)
+
 ![Install MCP servers](docs/images/mcp_install.png)
 
 ## Settings
@@ -78,7 +83,7 @@ Installers will be published on the [Releases](../../releases) page.
 
 | Platform | Status |
 | --- | --- |
-| macOS | Coming soon |
+| macOS | Released |
 | Windows | Planned |
 
 ## Getting Started
