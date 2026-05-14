@@ -2,10 +2,10 @@
   <img src="src-tauri/icons/icon.png" width="150" alt="SkillDock" />
 </p>
 
-<h1 align="center">SkillDock</h1>
+<h1 align="center">SkillDock - AI Skills & MCP Manager</h1>
 
 <p align="center">
-  一个 macOS 应用，统一管理 AI Skills、MCP Servers、Git 更新和 Coding Agent 同步状态。
+  一个桌面应用，统一管理 AI Skills 和 MCP Servers，支持 Git-aware 更新、市场安装、来源分组，并同步到 Claude Code、Codex、Cursor、Windsurf、Gemini CLI、GitHub Copilot 等工具。
 </p>
 
 <p align="center">
@@ -20,9 +20,10 @@
 
 ## 它能做什么
 
-SkillDock 是面向 AI Coding 工具的桌面管理台。它把本地 Skills 和 MCP 配置集中展示、编辑和同步，让你不再手动在多个工具目录之间复制文件。
+SkillDock 是面向 AI Coding 工具的桌面管理台。它把本地 Skills 和 MCP 配置集中展示、编辑，并同步到 Claude Code、Codex、Cursor、Windsurf、Gemini CLI、GitHub Copilot 等常用工具，让你不再手动在多个工具目录之间复制文件。
 
 - **Skills 管理** — 安装、更新、删除、编辑、查看和同步本地 skills。
+- **来源分组** — 按仓库或本地来源对已安装 skills 分组，团队维护的 skill 集合更容易浏览。
 - **完整 Git 工作流** — Git 来源的 skill 会保留为真实仓库，支持远端更新检测、本地修改检测、待推送状态，以及更新和推送前预览。
 - **市场安装** — 从 `skills.sh`、`skillsmp` 等来源浏览并安装 skills。
 - **Git 和本地导入** — 从 GitHub、GitLab、Gitee 等兼容仓库，或已有本地目录安装 skills。
@@ -32,9 +33,11 @@ SkillDock 是面向 AI Coding 工具的桌面管理台。它把本地 Skills 和
 
 ## Skills
 
-查看所有已安装 skill，按状态筛选，检查来源信息，并一眼看到 Git 协作状态。
+查看所有已安装 skill，按来源分组、按状态筛选，检查来源信息，并一眼看到 Git 协作状态。
 
 ![Skills 列表](docs/images/skill_list.png)
+
+![按来源分组展示 Skills](docs/images/skill_groups.png)
 
 ![Skill 详情和工具同步](docs/images/skill_detail.png)
 
@@ -60,6 +63,8 @@ SkillDock 会检测受支持的 Coding 工具，展示每个工具的 Skills 路
 
 ![从市场安装 Skills](docs/images/skill_install.png)
 
+![从 Git 仓库安装 Skills](docs/images/skill_git_install.png)
+
 ![安装 MCP Servers](docs/images/mcp_install.png)
 
 ## 设置
@@ -78,7 +83,7 @@ Claude Code · Codex · Cursor · Windsurf · IntelliJ IDEA · OpenCode · Gemin
 
 | 平台 | 状态 |
 | --- | --- |
-| macOS | 即将发布 |
+| macOS | 已发布 |
 | Windows | 计划支持 |
 
 ## 快速开始

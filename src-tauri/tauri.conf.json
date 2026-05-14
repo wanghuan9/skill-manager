@@ -48,7 +48,7 @@
       "icons/icon.ico"
     ],
     "macOS": {
-      "signingIdentity": null,
+      "signingIdentity": "-",
       "entitlements": null,
       "providerShortName": null,
       "minimumSystemVersion": "10.13"
