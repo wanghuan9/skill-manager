@@ -933,6 +933,16 @@ code {
   font-weight: 650;
 }
 
+.empty-state h3 {
+  font-size: 0.86rem;
+  line-height: 1.35;
+}
+
+.empty-state p {
+  font-size: 0.84rem;
+  line-height: 1.48;
+}
+
 .page-content,
 .skills-page,
 .market-route,
