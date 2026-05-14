@@ -2,10 +2,10 @@
   <img src="src-tauri/icons/icon.png" width="150" alt="SkillDock" />
 </p>
 
-<h1 align="center">SkillDock</h1>
+<h1 align="center">SkillDock - AI Skills & MCP Manager</h1>
 
 <p align="center">
-  一个 macOS 应用，统一管理 AI Skills、MCP Servers、Git 更新和 Coding Agent 同步状态。
+  一个桌面应用，统一管理 AI Skills 和 MCP Servers，支持 Git-aware 更新、市场安装、来源分组，并同步到 Claude Code、Codex、Cursor、Windsurf、Gemini CLI、GitHub Copilot 等工具。
 </p>
 
 <p align="center">
@@ -20,7 +20,7 @@
 
 ## 它能做什么
 
-SkillDock 是面向 AI Coding 工具的桌面管理台。它把本地 Skills 和 MCP 配置集中展示、编辑和同步，让你不再手动在多个工具目录之间复制文件。
+SkillDock 是面向 AI Coding 工具的桌面管理台。它把本地 Skills 和 MCP 配置集中展示、编辑，并同步到 Claude Code、Codex、Cursor、Windsurf、Gemini CLI、GitHub Copilot 等常用工具，让你不再手动在多个工具目录之间复制文件。
 
 - **Skills 管理** — 安装、更新、删除、编辑、查看和同步本地 skills。
 - **来源分组** — 按仓库或本地来源对已安装 skills 分组，团队维护的 skill 集合更容易浏览。

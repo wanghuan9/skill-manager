@@ -2,10 +2,10 @@
   <img src="src-tauri/icons/icon.png" width="150" alt="SkillDock" />
 </p>
 
-<h1 align="center">SkillDock</h1>
+<h1 align="center">SkillDock - AI Skills & MCP Manager</h1>
 
 <p align="center">
-  Manage AI Skills, MCP servers, Git updates, and coding-agent sync from one macOS app.
+  Manage AI Skills and MCP servers in one desktop app, with Git-aware updates, marketplace install, source grouping, and sync across Claude Code, Codex, Cursor, Windsurf, Gemini CLI, GitHub Copilot, and more.
 </p>
 
 <p align="center">
@@ -20,7 +20,7 @@
 
 ## What It Does
 
-SkillDock is a desktop control center for AI coding tools. It keeps your local Skills and MCP configurations visible, editable, and synced across the tools you use every day.
+SkillDock is a desktop control center for AI coding tools. It keeps your local Skills and MCP configurations visible, editable, and synced across Claude Code, Codex, Cursor, Windsurf, Gemini CLI, GitHub Copilot, and the tools you use every day.
 
 - **Skills library** — Install, update, delete, edit, inspect, and sync local skills.
 - **Source grouping** — Group installed skills by repository or local source so team-maintained skill sets stay easy to scan.
