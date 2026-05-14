@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="./README.zh-CN.md">中文说明</a> · <a href="#download">Download</a>
+  <a href="./README.zh-CN.md">中文说明</a> · <a href="#download">Download</a> · <a href="./docs/install-troubleshooting.zh-CN.md">Install issue?</a>
 </p>
 
 <p align="center">

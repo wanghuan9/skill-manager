@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="./README.md">English</a> · <a href="#下载">下载</a>
+  <a href="./README.md">English</a> · <a href="#下载">下载</a> · <a href="./docs/install-troubleshooting.zh-CN.md">安装失败？</a>
 </p>
 
 <p align="center">
