@@ -16,11 +16,15 @@ type AppNotification = {
   exiting: boolean;
   message: string;
   tone: NotificationTone;
+  actionLabel?: string;
+  onAction?: () => void;
 };
 
 type NotifyInput = {
   message: string;
   tone?: NotificationTone;
+  actionLabel?: string;
+  onAction?: () => void;
 };
 
 type NotificationContextValue = {
@@ -28,6 +32,7 @@ type NotificationContextValue = {
 };
 
 const AUTO_DISMISS_DELAY_MS = 4500;
+const ACTION_AUTO_DISMISS_DELAY_MS = 12000;
 const EXIT_ANIMATION_DELAY_MS = 180;
 const NotificationContext = createContext<NotificationContextValue | null>(null);
 
@@ -67,10 +72,15 @@ export function NotificationProvider({ children }: NotificationProviderProps) {
       exiting: false,
       message: input.message,
       tone: input.tone ?? "info",
+      actionLabel: input.actionLabel,
+      onAction: input.onAction,
     };
 
     setNotifications((current) => [...current, notification]);
-    const timerId = window.setTimeout(() => dismiss(notificationId), AUTO_DISMISS_DELAY_MS);
+    const timerId = window.setTimeout(
+      () => dismiss(notificationId),
+      input.actionLabel ? ACTION_AUTO_DISMISS_DELAY_MS : AUTO_DISMISS_DELAY_MS,
+    );
     dismissTimers.current.set(notificationId, timerId);
   }, [dismiss]);
 
@@ -97,6 +107,18 @@ export function NotificationProvider({ children }: NotificationProviderProps) {
           >
             <NotificationIcon tone={notification.tone} />
             <span className="app-notification__message">{notification.message}</span>
+            {notification.actionLabel ? (
+              <button
+                className="app-notification__action"
+                type="button"
+                onClick={() => {
+                  notification.onAction?.();
+                  dismiss(notification.id);
+                }}
+              >
+                {notification.actionLabel}
+              </button>
+            ) : null}
             <button
               className="app-notification__close"
               type="button"

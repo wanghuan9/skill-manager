@@ -193,7 +193,7 @@ code {
 
 .app-notification {
   display: grid;
-  grid-template-columns: 22px minmax(0, 1fr) 24px;
+  grid-template-columns: 22px minmax(0, 1fr) auto 24px;
   align-items: center;
   gap: 10px;
   min-height: 50px;
@@ -273,6 +273,7 @@ code {
 }
 
 .app-notification__close {
+  grid-column: 4;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -284,6 +285,29 @@ code {
   background: transparent;
   color: var(--muted);
   cursor: pointer;
+}
+
+.app-notification__action {
+  grid-column: 3;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid rgba(59, 130, 246, 0.3);
+  border-radius: 6px;
+  background: rgba(59, 130, 246, 0.08);
+  color: var(--accent);
+  font-size: 0.76rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.app-notification__action:hover {
+  border-color: rgba(59, 130, 246, 0.48);
+  background: rgba(59, 130, 246, 0.14);
+  color: var(--accent-strong);
 }
 
 .app-notification__close:hover {

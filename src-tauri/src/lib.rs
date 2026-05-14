@@ -1,4 +1,5 @@
 mod commands;
+mod diagnostics;
 mod git_state;
 mod library;
 mod mcp_manager;
@@ -52,6 +53,7 @@ pub fn run() {
             commands::get_update_preview_snapshot,
             commands::open_skill_repository,
             commands::open_external_link,
+            diagnostics::record_failure_feedback,
             commands::open_tool_skills_folder,
             commands::open_path_in_finder,
             commands::open_tool_mcp_config,
