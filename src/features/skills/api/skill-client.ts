@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
   appSettingsFixture,
   gitAccountFixture,
@@ -18,6 +19,8 @@ import {
 } from "@/features/skills/state/skill-fixtures";
 import type {
   AppSettings,
+  FailureFeedbackInput,
+  FeedbackIssueDraft,
   GitAccountSummary,
   LocalSkillCandidate,
   LocalInstallSkillCandidate,
@@ -25,6 +28,7 @@ import type {
   MarketplaceSourceSite,
   McpMarketplaceServer,
   McpMarketplaceSourceSite,
+  McpImportProgress,
   McpServerRecord,
   McpWorkspaceSnapshot,
   PushPreviewSnapshot,
@@ -141,8 +145,70 @@ type LegacySkillSummary = Partial<SkillSummary> & {
   lastSyncedAt?: string;
 };
 
+export type McpImportSessionSnapshot = {
+  isImporting: boolean;
+  progress: McpImportProgress | null;
+};
+
+type McpImportSessionListener = (snapshot: McpImportSessionSnapshot) => void;
+
+let mcpImportSession: McpImportSessionSnapshot = {
+  isImporting: false,
+  progress: null,
+};
+let activeMcpImportPromise: Promise<number> | null = null;
+let mcpImportProgressUnlisten: UnlistenFn | null = null;
+let mcpImportProgressListenerPromise: Promise<void> | null = null;
+const mcpImportSessionListeners = new Set<McpImportSessionListener>();
+
 export function shouldUseFixtureData() {
   return !(window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
+}
+
+function emitMcpImportSessionChange() {
+  const snapshot = getMcpImportSessionSnapshot();
+  for (const listener of mcpImportSessionListeners) {
+    listener(snapshot);
+  }
+}
+
+function setMcpImportSession(nextSession: McpImportSessionSnapshot) {
+  mcpImportSession = nextSession;
+  emitMcpImportSessionChange();
+}
+
+function ensureMcpImportProgressListener() {
+  if (shouldUseFixtureData() || mcpImportProgressUnlisten || mcpImportProgressListenerPromise) {
+    return;
+  }
+
+  mcpImportProgressListenerPromise = listen<McpImportProgress>("mcp-import-progress", (event) => {
+    setMcpImportSession({
+      isImporting: mcpImportSession.isImporting,
+      progress: event.payload,
+    });
+  })
+    .then((unlisten) => {
+      mcpImportProgressUnlisten = unlisten;
+      mcpImportProgressListenerPromise = null;
+    })
+    .catch((error) => {
+      mcpImportProgressListenerPromise = null;
+      console.warn("Failed to listen for MCP import progress", error);
+    });
+}
+
+export function getMcpImportSessionSnapshot(): McpImportSessionSnapshot {
+  return { ...mcpImportSession };
+}
+
+export function subscribeMcpImportSessionChange(listener: McpImportSessionListener) {
+  mcpImportSessionListeners.add(listener);
+  listener(getMcpImportSessionSnapshot());
+
+  return () => {
+    mcpImportSessionListeners.delete(listener);
+  };
 }
 
 async function invokeOrFallback<T>(command: string, args: Record<string, unknown>, fallback: T) {
@@ -500,6 +566,53 @@ export async function openExternalLink(url: string): Promise<void> {
   return invokeOrFallback("open_external_link", { url }, undefined);
 }
 
+export async function recordFailureFeedback(input: FailureFeedbackInput): Promise<FeedbackIssueDraft> {
+  const title = `[Bug] ${input.operation} 失败: ${input.message}`.slice(0, 120);
+  const context = input.context ?? {};
+  const body = [
+    "## 问题描述",
+    "请描述你刚才点击了什么、期望发生什么、实际发生了什么。",
+    "",
+    "## 本次失败日志（自动过滤）",
+    "```text",
+    `operation: ${input.operation}`,
+    `error: ${input.message}`,
+    `time: ${new Date().toISOString()}`,
+    "localLog: ~/.skilldock/logs/errors.jsonl",
+    typeof context.route === "string" ? `route: ${context.route}` : "",
+    typeof context.serverCount === "number" ? `knownMcpServers: ${context.serverCount}` : "",
+    "```",
+    "",
+    "## 补充信息",
+    "以上是 SkillDock 自动提取的关键错误信息；完整诊断仅保存在用户本机日志文件中。",
+  ].filter(Boolean).join("\n");
+  const urlBody = body.length > 1400
+    ? `${body.slice(0, 1400)}\n\n...摘要过长，已截断。`
+    : body;
+  const issueUrl = buildSafeIssueUrl(title, urlBody);
+  const fallback: FeedbackIssueDraft = {
+    title,
+    body,
+    issueUrl,
+    logPath: "~/.skilldock/logs/errors.jsonl",
+  };
+
+  return invokeOrFallback("record_failure_feedback", { input }, fallback);
+}
+
+function buildSafeIssueUrl(title: string, body: string) {
+  let nextBody = body;
+  while (nextBody.length > 400) {
+    const issueUrl = `https://github.com/wanghuan9/skill-manager/issues/new?title=${encodeURIComponent(title)}&body=${encodeURIComponent(nextBody)}`;
+    if (issueUrl.length <= 6000) {
+      return issueUrl;
+    }
+    nextBody = `${nextBody.slice(0, Math.max(400, nextBody.length - 200))}\n\n...自动诊断摘要过长，已截断。`;
+  }
+
+  return `https://github.com/wanghuan9/skill-manager/issues/new?title=${encodeURIComponent(title)}&body=${encodeURIComponent(nextBody)}`;
+}
+
 export async function resolveMcpMarketplaceSourceUrl(server: McpMarketplaceServer): Promise<string> {
   const fallbackSourceUrl = server.sourceUrl || server.marketplaceUrl || "";
   if (shouldUseFixtureData()) {
@@ -744,6 +857,42 @@ export async function installMcpServerFromMarketplace(
 
 export async function importMcpServersFromApps(): Promise<number> {
   return invokeOrFallback("import_mcp_servers_from_apps", {}, 2);
+}
+
+export function startMcpServersImport(
+  runner: () => Promise<number> = importMcpServersFromApps,
+): Promise<number> {
+  if (activeMcpImportPromise) {
+    return activeMcpImportPromise;
+  }
+
+  ensureMcpImportProgressListener();
+  setMcpImportSession({
+    isImporting: true,
+    progress: null,
+  });
+  activeMcpImportPromise = runner()
+    .finally(() => {
+      activeMcpImportPromise = null;
+      setMcpImportSession({
+        isImporting: false,
+        progress: mcpImportSession.progress,
+      });
+    });
+
+  return activeMcpImportPromise;
+}
+
+export async function listenMcpImportProgress(
+  handler: (progress: McpImportProgress) => void,
+): Promise<UnlistenFn> {
+  if (shouldUseFixtureData()) {
+    return () => undefined;
+  }
+
+  return listen<McpImportProgress>("mcp-import-progress", (event) => {
+    handler(event.payload);
+  });
 }
 
 export async function saveMcpServer(server: McpServerRecord): Promise<McpWorkspaceSnapshot> {

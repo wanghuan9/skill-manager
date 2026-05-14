@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 import { App } from "@/app/App";
@@ -20,7 +20,7 @@ test("renders MCP toolbar in the page header and hides the app matrix", async ()
   expect(screen.getByRole("button", { name: "刷新" })).toBeInTheDocument();
 });
 
-test("guides empty MCP library to marketplace install", async () => {
+test("guides empty MCP library to scan import before marketplace install", async () => {
   window.localStorage.clear();
   const workspace = await skillClient.fetchMcpWorkspace();
   const fetchSpy = vi.spyOn(skillClient, "fetchMcpWorkspace").mockResolvedValue({
@@ -32,10 +32,18 @@ test("guides empty MCP library to marketplace install", async () => {
 
   await userEvent.click(screen.getByRole("button", { name: "MCP" }));
 
-  expect(await screen.findByRole("heading", { name: "还没有安装 MCP" })).toBeInTheDocument();
-  expect(screen.getByText("去商店安装 MCP 服务，安装后可在这里统一管理和启用。")).toBeInTheDocument();
+  const emptyHeading = await screen.findByRole("heading", { name: "还没有安装 MCP" });
+  const emptyState = emptyHeading.closest<HTMLElement>(".empty-state");
+  if (!emptyState) {
+    throw new Error("missing MCP empty state");
+  }
+  expect(within(emptyState).getByText("扫描导入已有工具配置，或去商店安装 MCP 服务，之后可在这里统一管理和启用。")).toBeInTheDocument();
 
-  await userEvent.click(screen.getByRole("button", { name: "去商店安装" }));
+  const scanImportButton = within(emptyState).getByRole("button", { name: "扫描导入" });
+  const marketplaceButton = within(emptyState).getByRole("button", { name: "去商店安装" });
+  expect(Boolean(scanImportButton.compareDocumentPosition(marketplaceButton) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true);
+
+  await userEvent.click(marketplaceButton);
 
   expect(screen.getByRole("heading", { name: "安装", level: 1 })).toBeInTheDocument();
   expect(screen.getByRole("tab", { name: "MCP" })).toHaveAttribute("aria-selected", "true");
@@ -59,6 +67,70 @@ test("refreshes MCP workspace from the toolbar", async () => {
   await waitFor(() => {
     expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
+});
+
+test("keeps MCP import progress state when switching away and back", async () => {
+  window.localStorage.clear();
+  let resolveImport: ((count: number) => void) | undefined;
+  const importSpy = vi.spyOn(skillClient, "importMcpServersFromApps").mockImplementation(
+    () =>
+      new Promise((resolve) => {
+        resolveImport = resolve;
+      }),
+  );
+
+  render(<App />);
+
+  await userEvent.click(screen.getByRole("button", { name: "MCP" }));
+  await userEvent.click(await screen.findByRole("button", { name: "扫描导入" }));
+
+  expect(await screen.findByRole("button", { name: "扫描中..." })).toBeDisabled();
+
+  await userEvent.click(screen.getByRole("button", { name: "工具" }));
+  await userEvent.click(screen.getByRole("button", { name: "MCP" }));
+
+  expect(await screen.findByRole("button", { name: "扫描中..." })).toBeDisabled();
+
+  const finishImport = resolveImport;
+  if (!finishImport) {
+    throw new Error("import handler was not called");
+  }
+  finishImport(1);
+
+  await waitFor(() => {
+    expect(screen.getByRole("button", { name: "扫描导入" })).toBeEnabled();
+  });
+
+  importSpy.mockRestore();
+});
+
+test("opens a prefilled feedback issue from MCP import failures", async () => {
+  window.localStorage.clear();
+  const importSpy = vi
+    .spyOn(skillClient, "importMcpServersFromApps")
+    .mockRejectedValueOnce("Codex MCP 配置解析失败");
+  const feedbackSpy = vi.spyOn(skillClient, "recordFailureFeedback").mockResolvedValueOnce({
+    title: "[Bug] import_mcp_servers_from_apps 失败",
+    body: "diagnostics",
+    issueUrl: "https://github.com/wanghuan9/skill-manager/issues/new?title=test",
+    logPath: "~/.skilldock/logs/errors.jsonl",
+  });
+  const openSpy = vi.spyOn(skillClient, "openExternalLink").mockResolvedValueOnce(undefined);
+  render(<App />);
+
+  await userEvent.click(screen.getByRole("button", { name: "MCP" }));
+  await userEvent.click(await screen.findByRole("button", { name: "扫描导入" }));
+  await userEvent.click(await screen.findByRole("button", { name: "反馈" }));
+
+  expect(feedbackSpy).toHaveBeenCalledWith(expect.objectContaining({
+    operation: "import_mcp_servers_from_apps",
+    message: "Codex MCP 配置解析失败",
+  }));
+  expect(openSpy).toHaveBeenCalledWith("https://github.com/wanghuan9/skill-manager/issues/new?title=test");
+
+  importSpy.mockRestore();
+  feedbackSpy.mockRestore();
+  openSpy.mockRestore();
 });
 
 test("shows supported MCP apps in enable-to-tool controls", async () => {

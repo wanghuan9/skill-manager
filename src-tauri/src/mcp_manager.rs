@@ -13,6 +13,7 @@ use std::process::{Command, Stdio};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use tauri::{AppHandle, Emitter};
 
 use crate::state::{load_app_settings, normalize_mcp_install_activation};
 use crate::workspace::{
@@ -32,6 +33,7 @@ const APP_OPENCLAW: &str = "openclaw";
 const APP_CURSOR: &str = "cursor";
 const APP_WINDSURF: &str = "windsurf";
 const APP_CONTINUE: &str = "continue";
+const MCP_IMPORT_PROGRESS_EVENT: &str = "mcp-import-progress";
 static MCP_NPM_METADATA_CACHE: OnceLock<Mutex<HashMap<String, McpResolvedMetadata>>> =
     OnceLock::new();
 static README_MARKDOWN_LINK_REGEX: OnceLock<Regex> = OnceLock::new();
@@ -123,6 +125,20 @@ pub struct McpWorkspaceSnapshot {
     pub storage_path: String,
     pub apps: Vec<McpTargetApp>,
     pub servers: Vec<McpServerSummary>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpImportProgress {
+    pub app_id: String,
+    pub app_name: String,
+    pub server_id: String,
+    pub server_name: String,
+    pub imported_count: usize,
+    pub scanned_count: usize,
+    pub phase: String,
+    pub changed: bool,
+    pub workspace: McpWorkspaceSnapshot,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, Default)]
@@ -394,10 +410,11 @@ pub async fn install_mcp_server_from_marketplace(
 }
 
 #[tauri::command]
-pub async fn import_mcp_servers_from_apps() -> Result<usize, String> {
+pub async fn import_mcp_servers_from_apps(app_handle: AppHandle) -> Result<usize, String> {
     let mut records = load_mcp_records()?;
     let metadata_client = mcp_metadata_client();
     let mut imported_count = 0;
+    let mut scanned_count = 0;
 
     for app in target_app_specs()? {
         let servers = match read_servers_from_app(&app) {
@@ -409,14 +426,65 @@ pub async fn import_mcp_servers_from_apps() -> Result<usize, String> {
         };
 
         for (id, server) in servers {
-            validate_mcp_server(&id, &server)?;
-            imported_count +=
-                upsert_imported_record(&mut records, &id, &app, server, metadata_client.as_ref())
-                    .await?;
+            validate_mcp_server(&id, &server).map_err(|error| {
+                format!(
+                    "导入 {} MCP \"{}\" 失败: {}（配置：{}）",
+                    app.name,
+                    id,
+                    error,
+                    app.config_path.to_string_lossy()
+                )
+            })?;
+            scanned_count += 1;
+            let basic_upsert = upsert_imported_record_basic(&mut records, &id, &app, server)
+                .map_err(|error| {
+                    format!(
+                        "导入 {} MCP \"{}\" 失败: {}（配置：{}）",
+                        app.name,
+                        id,
+                        error,
+                        app.config_path.to_string_lossy()
+                    )
+                })?;
+            if basic_upsert.changed {
+                imported_count += 1;
+            }
+            save_and_emit_mcp_import_progress(
+                &app_handle,
+                &records,
+                &app,
+                &id,
+                imported_count,
+                scanned_count,
+                "imported",
+                basic_upsert.changed,
+            )?;
+
+            let hydrated_changed = hydrate_imported_record_by_id(
+                &mut records,
+                &id,
+                metadata_client.as_ref(),
+                basic_upsert.should_refresh_tools,
+            )
+            .await?;
+            if hydrated_changed {
+                if !basic_upsert.changed {
+                    imported_count += 1;
+                }
+                save_and_emit_mcp_import_progress(
+                    &app_handle,
+                    &records,
+                    &app,
+                    &id,
+                    imported_count,
+                    scanned_count,
+                    "hydrated",
+                    true,
+                )?;
+            }
         }
     }
 
-    save_mcp_records(&records)?;
     Ok(imported_count)
 }
 
@@ -1333,13 +1401,18 @@ fn agent_json_to_unified(server: &Value) -> Result<Value, String> {
     Ok(Value::Object(out))
 }
 
-async fn upsert_imported_record(
+#[derive(Clone, Debug)]
+struct ImportedRecordUpsert {
+    changed: bool,
+    should_refresh_tools: bool,
+}
+
+fn upsert_imported_record_basic(
     records: &mut Vec<McpServerRecord>,
     id: &str,
     app: &McpTargetAppSpec,
     server: Value,
-    metadata_client: Option<&Client>,
-) -> Result<usize, String> {
+) -> Result<ImportedRecordUpsert, String> {
     let existing_index = records.iter().position(|item| item.id == id);
     let previous_record = existing_index.and_then(|index| records.get(index).cloned());
     let mut next_record = if let Some(previous) = previous_record.clone() {
@@ -1381,7 +1454,6 @@ async fn upsert_imported_record(
         .as_ref()
         .map(|previous| previous.server != next_record.server || previous.tools.is_empty())
         .unwrap_or(true);
-    hydrate_imported_record(&mut next_record, metadata_client, should_refresh_tools).await;
 
     let has_changed = previous_record
         .as_ref()
@@ -1393,6 +1465,7 @@ async fn upsert_imported_record(
                 || previous.enabled_app_ids != next_record.enabled_app_ids
                 || previous.tools != next_record.tools
                 || previous.tools_discovered_at != next_record.tools_discovered_at
+                || previous.tools_discovery_error != next_record.tools_discovery_error
         })
         .unwrap_or(true);
 
@@ -1406,7 +1479,79 @@ async fn upsert_imported_record(
         records.push(next_record);
     }
     sort_records(records);
-    Ok(usize::from(has_changed))
+    Ok(ImportedRecordUpsert {
+        changed: has_changed,
+        should_refresh_tools,
+    })
+}
+
+async fn hydrate_imported_record_by_id(
+    records: &mut Vec<McpServerRecord>,
+    id: &str,
+    metadata_client: Option<&Client>,
+    should_refresh_tools: bool,
+) -> Result<bool, String> {
+    let Some(index) = records.iter().position(|item| item.id == id) else {
+        return Ok(false);
+    };
+    let previous = records[index].clone();
+    let mut next_record = previous.clone();
+    hydrate_imported_record(&mut next_record, metadata_client, should_refresh_tools).await;
+
+    let has_changed = previous.name != next_record.name
+        || previous.server != next_record.server
+        || previous.description != next_record.description
+        || previous.source_url != next_record.source_url
+        || previous.enabled_app_ids != next_record.enabled_app_ids
+        || previous.tools != next_record.tools
+        || previous.tools_discovered_at != next_record.tools_discovered_at
+        || previous.tools_discovery_error != next_record.tools_discovery_error;
+
+    if has_changed {
+        next_record.updated_at = now_label();
+        records[index] = next_record;
+        sort_records(records);
+    }
+
+    Ok(has_changed)
+}
+
+fn save_and_emit_mcp_import_progress(
+    app_handle: &AppHandle,
+    records: &[McpServerRecord],
+    app: &McpTargetAppSpec,
+    server_id: &str,
+    imported_count: usize,
+    scanned_count: usize,
+    phase: &str,
+    changed: bool,
+) -> Result<(), String> {
+    save_mcp_records(records)?;
+    let workspace = build_mcp_workspace_snapshot()?;
+    let server_name = workspace
+        .servers
+        .iter()
+        .find(|server| server.id == server_id)
+        .map(|server| server.name.clone())
+        .unwrap_or_else(|| server_id.to_string());
+    if let Err(error) = app_handle.emit(
+        MCP_IMPORT_PROGRESS_EVENT,
+        McpImportProgress {
+            app_id: app.id.to_string(),
+            app_name: app.name.to_string(),
+            server_id: server_id.to_string(),
+            server_name,
+            imported_count,
+            scanned_count,
+            phase: phase.to_string(),
+            changed,
+            workspace,
+        },
+    ) {
+        log::warn!("广播 MCP 导入进度失败: {}", error);
+    }
+
+    Ok(())
 }
 
 async fn hydrate_imported_record(

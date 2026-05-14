@@ -6,11 +6,15 @@ import { waitForNextPaint } from "@/app/utils/wait-for-next-paint";
 import {
   deleteMcpServer,
   fetchMcpWorkspace,
+  getMcpImportSessionSnapshot,
   importMcpServersFromApps,
   openExternalLink,
+  recordFailureFeedback,
   refreshMcpServerTools,
   saveMcpServer,
   shouldUseFixtureData,
+  startMcpServersImport,
+  subscribeMcpImportSessionChange,
   toggleMcpServerApp,
   toggleMcpServerTool,
 } from "@/features/skills/api/skill-client";
@@ -48,6 +52,39 @@ const EMPTY_FORM_STATE: McpFormState = {
   serverJson: "{\n  \"command\": \"npx\",\n  \"args\": []\n}",
   enabledAppIds: [],
 };
+
+function errorToMessage(error: unknown, fallback: string) {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  if (typeof error === "string" && error.trim()) {
+    return error;
+  }
+
+  return fallback;
+}
+
+function buildMcpFeedbackContext(workspace: McpWorkspaceSnapshot | null) {
+  return {
+    route: "mcp",
+    storagePath: workspace?.storagePath ?? "",
+    appConfigs: (workspace?.apps ?? []).map((app) => ({
+      id: app.id,
+      name: app.name,
+      configPath: app.configPath,
+      statusLabel: app.statusLabel,
+    })),
+    serverCount: workspace?.servers.length ?? 0,
+    servers: (workspace?.servers ?? []).map((server) => ({
+      id: server.id,
+      name: server.name,
+      serverType: server.serverType,
+      enabledAppCount: server.enabledAppCount,
+      toolsCount: server.tools.length,
+      toolsDiscoveryError: server.toolsDiscoveryError,
+    })),
+  };
+}
 
 function buildFormState(server: McpServerSummary): McpFormState {
   return {
@@ -499,7 +536,7 @@ export function McpRoute(props: McpRouteProps = {}) {
   const [isCreating, setIsCreating] = useState(false);
   const [pendingAppKey, setPendingAppKey] = useState("");
   const [pendingToolKey, setPendingToolKey] = useState("");
-  const [isImporting, setIsImporting] = useState(false);
+  const [importSession, setImportSession] = useState(getMcpImportSessionSnapshot);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
   const [toolbarContainer, setToolbarContainer] = useState<HTMLElement | null>(null);
@@ -508,6 +545,7 @@ export function McpRoute(props: McpRouteProps = {}) {
   const [deleteConfirmingServerId, setDeleteConfirmingServerId] = useState("");
   const [deletingServerId, setDeletingServerId] = useState("");
   const deleteActionRef = useRef<HTMLButtonElement | null>(null);
+  const isMountedRef = useRef(false);
   const toolsRefreshRef = useRef<Set<string>>(new Set());
 
   function commitWorkspace(snapshot: McpWorkspaceSnapshot | null) {
@@ -516,6 +554,25 @@ export function McpRoute(props: McpRouteProps = {}) {
       setWorkspace(snapshot);
     });
   }
+
+  async function openFeedbackIssue(draftPromise: Promise<{ issueUrl: string }>) {
+    try {
+      const draft = await draftPromise;
+      await openExternalLink(draft.issueUrl);
+    } catch (feedbackError) {
+      notify({
+        tone: "error",
+        message: errorToMessage(feedbackError, "打开反馈页面失败"),
+      });
+    }
+  }
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -548,6 +605,13 @@ export function McpRoute(props: McpRouteProps = {}) {
     startTransition(() => {
       setWorkspace(snapshot);
     });
+  }), []);
+
+  useEffect(() => subscribeMcpImportSessionChange((snapshot) => {
+    setImportSession(snapshot);
+    if (snapshot.progress) {
+      commitWorkspace(snapshot.progress.workspace);
+    }
   }), []);
 
   useEffect(() => {
@@ -634,25 +698,40 @@ export function McpRoute(props: McpRouteProps = {}) {
   }, [workspace?.servers]);
 
   async function handleImport() {
-    if (isImporting) {
+    if (importSession.isImporting) {
       return;
     }
 
     setDeleteConfirmingServerId("");
-    setIsImporting(true);
+    await waitForNextPaint();
     try {
-      const count = await importMcpServersFromApps();
+      const count = await startMcpServersImport(importMcpServersFromApps);
       const snapshot = await fetchMcpWorkspace();
-      commitWorkspace(snapshot);
+      if (isMountedRef.current) {
+        commitWorkspace(snapshot);
+      } else {
+        cacheMcpWorkspace(snapshot);
+      }
       notify({
         tone: "success",
         message: count > 0 ? `已导入 ${count} 项 MCP 启用状态` : "没有发现新的 MCP 配置",
       });
     } catch (error) {
-      const message = error instanceof Error ? error.message : "导入 MCP 配置失败";
-      notify({ tone: "error", message });
-    } finally {
-      setIsImporting(false);
+      const message = errorToMessage(error, "导入 MCP 配置失败");
+      const feedbackDraftPromise = recordFailureFeedback({
+        operation: "import_mcp_servers_from_apps",
+        message,
+        context: buildMcpFeedbackContext(workspace),
+      });
+      void feedbackDraftPromise.catch(() => undefined);
+      notify({
+        tone: "error",
+        message,
+        actionLabel: "反馈",
+        onAction: () => {
+          void openFeedbackIssue(feedbackDraftPromise);
+        },
+      });
     }
   }
 
@@ -906,6 +985,13 @@ export function McpRoute(props: McpRouteProps = {}) {
     () => (activeEditingServer ? buildFormState(activeEditingServer) : EMPTY_FORM_STATE),
     [activeEditingServer],
   );
+  const isImporting = importSession.isImporting;
+  const importProgress = importSession.progress;
+  const importButtonLabel = isImporting
+    ? importProgress
+      ? `已导入 ${importProgress.importedCount}`
+      : "扫描中..."
+    : "扫描导入";
   const toolbar = (
     <section className="mcp-toolbar skills-header-bar__tools" aria-label="MCP 工具栏">
       <label className="search-field search-field--header mcp-toolbar__search">
@@ -933,11 +1019,14 @@ export function McpRoute(props: McpRouteProps = {}) {
         type="button"
         onClick={() => void handleImport()}
         disabled={isImporting}
+        aria-label={isImporting && importProgress
+          ? `正在导入 MCP，已扫描 ${importProgress.scannedCount} 项，已导入 ${importProgress.importedCount} 项`
+          : undefined}
       >
         <span aria-hidden="true" className="skills-toolbar-button__icon">
           <ImportIcon isSpinning={isImporting} />
         </span>
-        <span>{isImporting ? "导入中..." : "扫描导入"}</span>
+        <span>{importButtonLabel}</span>
       </button>
       <button
         className="secondary-button secondary-button--compact skills-toolbar-button"
@@ -1269,9 +1358,17 @@ export function McpRoute(props: McpRouteProps = {}) {
             {workspace.servers.length === 0 ? (
               <>
                 <h3>还没有安装 MCP</h3>
-                <p>去商店安装 MCP 服务，安装后可在这里统一管理和启用。</p>
+                <p>扫描导入已有工具配置，或去商店安装 MCP 服务，之后可在这里统一管理和启用。</p>
                 <div className="empty-state__actions">
-                  <button className="primary-button" type="button" onClick={props.onInstallFromMarketplace}>
+                  <button
+                    className="primary-button"
+                    type="button"
+                    onClick={() => void handleImport()}
+                    disabled={isImporting}
+                  >
+                    {importButtonLabel}
+                  </button>
+                  <button className="secondary-button" type="button" onClick={props.onInstallFromMarketplace}>
                     去商店安装
                   </button>
                 </div>

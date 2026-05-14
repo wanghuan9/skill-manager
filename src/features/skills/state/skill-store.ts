@@ -218,3 +218,28 @@ export type McpWorkspaceSnapshot = {
   apps: McpTargetApp[];
   servers: McpServerSummary[];
 };
+
+export type McpImportProgress = {
+  appId: string;
+  appName: string;
+  serverId: string;
+  serverName: string;
+  importedCount: number;
+  scannedCount: number;
+  phase: "imported" | "hydrated";
+  changed: boolean;
+  workspace: McpWorkspaceSnapshot;
+};
+
+export type FailureFeedbackInput = {
+  operation: string;
+  message: string;
+  context?: Record<string, unknown>;
+};
+
+export type FeedbackIssueDraft = {
+  title: string;
+  body: string;
+  issueUrl: string;
+  logPath: string;
+};
