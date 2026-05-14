@@ -250,13 +250,23 @@ export function SkillListToolbar(props: SkillToolbarProps) {
 }
 
 type SkillListPageProps = {
+  onImportFromLocal?: () => void;
+  onInstallFromGit?: () => void;
+  onInstallFromMarketplace?: () => void;
   query: string;
   statusFilter: SkillStatusFilter;
   showGroupView: boolean;
 };
 
 export function SkillListPage(props: SkillListPageProps) {
-  const { query, statusFilter, showGroupView } = props;
+  const {
+    onImportFromLocal,
+    onInstallFromGit,
+    onInstallFromMarketplace,
+    query,
+    statusFilter,
+    showGroupView,
+  } = props;
   const { installedSkills, isLoading } = useSkillWorkspace();
   const deferredQuery = useDeferredValue(query);
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>(readSkillGroupCollapsedState);
@@ -378,8 +388,28 @@ export function SkillListPage(props: SkillListPageProps) {
           )
         ) : (
           <div className="panel-card empty-state">
-            <h3>暂无匹配的技能</h3>
-            <p>调整搜索词或状态筛选后，这里会重新展示可操作的 skill。</p>
+            {installedSkills.length === 0 ? (
+              <>
+                <h3>还没有安装 Skill</h3>
+                <p>去商店安装推荐 Skill，或通过 Git 安装、本地导入添加已有 Skill。</p>
+                <div className="empty-state__actions">
+                  <button className="primary-button" type="button" onClick={onInstallFromMarketplace}>
+                    去商店安装
+                  </button>
+                  <button className="secondary-button" type="button" onClick={onInstallFromGit}>
+                    Git 安装
+                  </button>
+                  <button className="secondary-button" type="button" onClick={onImportFromLocal}>
+                    本地导入
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <h3>暂无匹配的技能</h3>
+                <p>调整搜索词或状态筛选后，这里会重新展示可操作的 skill。</p>
+              </>
+            )}
           </div>
         )}
       </div>

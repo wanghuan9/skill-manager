@@ -5,7 +5,7 @@ import { App } from "@/app/App";
 test("renders installed tools only with manage action", async () => {
   window.localStorage.clear();
   render(<App />);
-  await userEvent.click(screen.getByRole("button", { name: /工具/ }));
+  await userEvent.click(screen.getByRole("button", { name: "工具" }));
   expect(screen.getByText("Claude Code")).toBeInTheDocument();
   expect(screen.queryByText("IntelliJ IDEA")).not.toBeInTheDocument();
   expect(screen.queryByText("Amp")).not.toBeInTheDocument();
@@ -24,7 +24,7 @@ test("can open a tool skills folder from the tools page", async () => {
   window.localStorage.clear();
   render(<App />);
 
-  await userEvent.click(screen.getByRole("button", { name: /工具/ }));
+  await userEvent.click(screen.getByRole("button", { name: "工具" }));
   await userEvent.click(screen.getByRole("button", { name: "打开 Claude Code Skills 文件夹" }));
 
   expect(screen.getByRole("button", { name: "打开 Claude Code Skills 文件夹" })).toBeEnabled();
@@ -34,7 +34,7 @@ test("can open a tool MCP config from the tools page", async () => {
   window.localStorage.clear();
   render(<App />);
 
-  await userEvent.click(screen.getByRole("button", { name: /工具/ }));
+  await userEvent.click(screen.getByRole("button", { name: "工具" }));
   await userEvent.click(screen.getByRole("button", { name: "打开 Claude Code MCP 配置" }));
 
   expect(screen.getByRole("button", { name: "打开 Claude Code MCP 配置" })).toBeEnabled();
@@ -44,7 +44,7 @@ test("can enable all visible skills from tool manage dialog", async () => {
   window.localStorage.clear();
   render(<App />);
 
-  await userEvent.click(screen.getByRole("button", { name: /工具/ }));
+  await userEvent.click(screen.getByRole("button", { name: "工具" }));
   const claudeToolCard = screen.getByText("Claude Code").closest("article");
   expect(claudeToolCard).not.toBeNull();
   await userEvent.click(within(claudeToolCard as HTMLElement).getByRole("button", { name: "管理" }));
@@ -67,7 +67,7 @@ test("can toggle MCP servers from tool manage dialog", async () => {
   window.localStorage.clear();
   render(<App />);
 
-  await userEvent.click(screen.getByRole("button", { name: /工具/ }));
+  await userEvent.click(screen.getByRole("button", { name: "工具" }));
   const claudeToolCard = screen.getByText("Claude Code").closest("article");
   expect(claudeToolCard).not.toBeNull();
   await userEvent.click(within(claudeToolCard as HTMLElement).getByRole("button", { name: "管理" }));
@@ -85,7 +85,7 @@ test("keeps skill rows in a stable order when toggling", async () => {
   window.localStorage.clear();
   render(<App />);
 
-  await userEvent.click(screen.getByRole("button", { name: /工具/ }));
+  await userEvent.click(screen.getByRole("button", { name: "工具" }));
   const claudeToolCard = screen.getByText("Claude Code").closest("article");
   expect(claudeToolCard).not.toBeNull();
   await userEvent.click(within(claudeToolCard as HTMLElement).getByRole("button", { name: "管理" }));

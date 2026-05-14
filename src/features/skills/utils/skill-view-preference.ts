@@ -23,7 +23,7 @@ export function resolveSkillViewModePreference(savedMode: string | null, skillCo
     return savedMode;
   }
 
-  return skillCount < SKILL_GROUPED_DEFAULT_THRESHOLD ? "grouped" : "flat";
+  return skillCount > SKILL_GROUPED_DEFAULT_THRESHOLD ? "grouped" : "flat";
 }
 
 export function readSkillViewModePreference(): SkillViewMode | null {

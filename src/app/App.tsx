@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from
 import { SkillsRoute } from "@/app/routes/skills";
 import { ToolsRoute } from "@/app/routes/tools";
 import { McpRoute } from "@/app/routes/mcp";
-import { MarketRoute, type InstallTab } from "@/app/routes/market";
+import { MarketRoute, type InstallCategory, type InstallTab } from "@/app/routes/market";
 import { SettingsRoute } from "@/app/routes/settings";
 import { AboutRoute } from "@/app/routes/about";
 import { NotificationProvider } from "@/app/notifications";
@@ -129,15 +129,28 @@ function renderRoute(
   skillQuery: string,
   skillStatusFilter: SkillStatusFilter,
   showGroupView: boolean,
+  activeInstallCategory: InstallCategory,
   activeInstallTab: InstallTab,
+  onInstallCategoryChange: (category: InstallCategory) => void,
   onInstallTabChange: (tab: InstallTab) => void,
+  onInstallSkillFromGit: () => void,
+  onInstallSkillFromLocal: () => void,
+  onInstallSkillFromMarketplace: () => void,
+  onInstallMcpFromMarketplace: () => void,
   activeSkillsSection: SkillsSectionKey,
 ) {
   if (route === "tools") {
     return <ToolsRoute />;
   }
   if (route === "install") {
-    return <MarketRoute activeInstallTab={activeInstallTab} onInstallTabChange={onInstallTabChange} />;
+    return (
+      <MarketRoute
+        activeInstallCategory={activeInstallCategory}
+        activeInstallTab={activeInstallTab}
+        onInstallCategoryChange={onInstallCategoryChange}
+        onInstallTabChange={onInstallTabChange}
+      />
+    );
   }
   if (route === "settings") {
     return <SettingsRoute />;
@@ -147,10 +160,19 @@ function renderRoute(
   }
 
   if (activeSkillsSection === "mcp") {
-    return <McpRoute />;
+    return <McpRoute onInstallFromMarketplace={onInstallMcpFromMarketplace} />;
   }
 
-  return <SkillsRoute query={skillQuery} statusFilter={skillStatusFilter} showGroupView={showGroupView} />;
+  return (
+    <SkillsRoute
+      onImportFromLocal={onInstallSkillFromLocal}
+      onInstallFromGit={onInstallSkillFromGit}
+      onInstallFromMarketplace={onInstallSkillFromMarketplace}
+      query={skillQuery}
+      statusFilter={skillStatusFilter}
+      showGroupView={showGroupView}
+    />
+  );
 }
 
 function McpNavIcon() {
@@ -228,6 +250,7 @@ function AppContent() {
     () => resolveSkillViewModePreference(initialSkillViewMode, installedSkills.length) === "grouped",
   );
   const [hasSavedSkillViewPreference, setHasSavedSkillViewPreference] = useState(initialSkillViewMode !== null);
+  const [activeInstallCategory, setActiveInstallCategory] = useState<InstallCategory>("skill");
   const [activeInstallTab, setActiveInstallTab] = useState<InstallTab>("market");
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [sidebarHandleTop, setSidebarHandleTop] = useState<number | null>(null);
@@ -310,6 +333,18 @@ function AppContent() {
     setShowGroupView(nextShowGroupView);
     setHasSavedSkillViewPreference(true);
     writeSkillViewModePreference(nextShowGroupView ? "grouped" : "flat");
+  }
+
+  function handleOpenSkillInstall(tab: InstallTab) {
+    setActiveRoute("install");
+    setActiveInstallCategory("skill");
+    setActiveInstallTab(tab);
+  }
+
+  function handleOpenMcpInstall() {
+    setActiveRoute("install");
+    setActiveInstallCategory("mcp");
+    setActiveInstallTab("market");
   }
 
   return (
@@ -496,8 +531,14 @@ function AppContent() {
             skillQuery,
             skillStatusFilter,
             showGroupView,
+            activeInstallCategory,
             activeInstallTab,
+            setActiveInstallCategory,
             setActiveInstallTab,
+            () => handleOpenSkillInstall("git"),
+            () => handleOpenSkillInstall("local"),
+            () => handleOpenSkillInstall("market"),
+            handleOpenMcpInstall,
             activeSkillsSection,
           )}
         </section>

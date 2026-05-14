@@ -176,7 +176,7 @@ function isMcpAppSupported(app: McpTargetApp | McpAppStatus) {
 }
 
 function isMcpAppReady(app: McpTargetApp | McpAppStatus) {
-  return isMcpAppSupported(app) && app.statusLabel === "已安装";
+  return isMcpAppSupported(app);
 }
 
 function formatMcpDescription(server: McpServerSummary) {
@@ -486,7 +486,11 @@ function McpEnabledAppSummary({ apps }: { apps: McpAppStatus[] }) {
   );
 }
 
-export function McpRoute() {
+type McpRouteProps = {
+  onInstallFromMarketplace?: () => void;
+};
+
+export function McpRoute(props: McpRouteProps = {}) {
   const { notify } = useNotifications();
   const [workspace, setWorkspace] = useState<McpWorkspaceSnapshot | null>(null);
   const [query, setQuery] = useState("");
@@ -1262,8 +1266,22 @@ export function McpRoute() {
         })}
         {workspace && filteredServers.length === 0 ? (
           <div className="panel-card empty-state">
-            <h3>暂无匹配的 MCP</h3>
-            <p>调整搜索词，或扫描导入已有工具配置后再查看。</p>
+            {workspace.servers.length === 0 ? (
+              <>
+                <h3>还没有安装 MCP</h3>
+                <p>去商店安装 MCP 服务，安装后可在这里统一管理和启用。</p>
+                <div className="empty-state__actions">
+                  <button className="primary-button" type="button" onClick={props.onInstallFromMarketplace}>
+                    去商店安装
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <h3>暂无匹配的 MCP</h3>
+                <p>调整搜索词，或扫描导入已有工具配置后再查看。</p>
+              </>
+            )}
           </div>
         ) : null}
       </section>

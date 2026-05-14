@@ -832,15 +832,7 @@ fn validate_app_is_ready(app: &McpTargetAppSpec) -> Result<(), String> {
         return Err(format!("{} 暂未支持 MCP 配置同步", app.name));
     }
 
-    if app.config_dir.exists() || app.config_path.exists() {
-        return Ok(());
-    }
-
-    Err(format!(
-        "{} 尚未初始化，未找到配置目录：{}",
-        app.name,
-        app.config_dir.display()
-    ))
+    Ok(())
 }
 
 fn read_json_mcp_servers(

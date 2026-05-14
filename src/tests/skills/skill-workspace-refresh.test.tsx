@@ -14,6 +14,7 @@ import type {
   AppSettings,
   GitAccountSummary,
   LocalSkillCandidate,
+  MarketplaceSkill,
   SkillSummary,
   ToolConfig,
 } from "@/features/skills/state/skill-store";
@@ -31,6 +32,7 @@ vi.mock("@/features/skills/api/skill-client", async () => {
     fetchGitAccount: vi.fn(),
     fetchAppSettings: vi.fn(),
     fetchGitStates: vi.fn(),
+    fetchMarketplaceSkillsByPage: vi.fn(),
     updateAppSettings: vi.fn(),
   };
 });
@@ -41,6 +43,7 @@ const mockedFetchToolConfigs = vi.mocked(skillClient.fetchToolConfigs);
 const mockedFetchGitAccount = vi.mocked(skillClient.fetchGitAccount);
 const mockedFetchAppSettings = vi.mocked(skillClient.fetchAppSettings);
 const mockedFetchGitStates = vi.mocked(skillClient.fetchGitStates);
+const mockedFetchMarketplaceSkillsByPage = vi.mocked(skillClient.fetchMarketplaceSkillsByPage);
 const mockedUpdateAppSettings = vi.mocked(skillClient.updateAppSettings);
 
 function createDeferred<T>() {
@@ -77,6 +80,44 @@ function DefaultOpenToolProbe() {
   const { defaultOpenToolId } = useSkillWorkspace();
 
   return <span data-testid="default-open-tool-id">{defaultOpenToolId}</span>;
+}
+
+function MarketplaceProbe() {
+  const { loadInitialMarketplaceSkills, marketplaceSkills } = useSkillWorkspace();
+  const [loadState, setLoadState] = useState("idle");
+
+  async function handleLoad() {
+    await loadInitialMarketplaceSkills("skillsmp");
+    setLoadState("done");
+  }
+
+  return (
+    <div>
+      <button type="button" onClick={() => void handleLoad()}>
+        加载 skillsmp
+      </button>
+      <span data-testid="marketplace-load-state">{loadState}</span>
+      <span data-testid="marketplace-skill-names">
+        {marketplaceSkills.map((skill) => skill.name).join(",")}
+      </span>
+    </div>
+  );
+}
+
+function createMarketplaceSkill(name: string): MarketplaceSkill {
+  return {
+    id: `skillsmp-${name}`,
+    name,
+    sourceType: "github",
+    sourceSite: "skillsmp",
+    description: name,
+    maintainer: "skillsmp",
+    updatedAt: "",
+    installLabel: "默认按热度排序",
+    sourceUrl: `https://github.com/team/repo/tree/main/skills/${name}`,
+    popularityLabel: "1.0K",
+    avatarUrl: null,
+  };
 }
 
 beforeEach(() => {
@@ -197,4 +238,50 @@ test("does not overwrite saved default open tool while settings are still loadin
 
   expect(screen.getByTestId("default-open-tool-id").textContent).toBe("windsurf");
   expect(mockedUpdateAppSettings).not.toHaveBeenCalled();
+});
+
+test("refreshes skillsmp marketplace after serving the initial cached page", async () => {
+  mockedFetchStartupInstalledSkills.mockResolvedValue(installedSkillFixtures);
+  mockedFetchLocalSkillCandidates.mockResolvedValue(localSkillFixtures);
+  mockedFetchToolConfigs.mockResolvedValue(toolConfigFixtures);
+  mockedFetchGitAccount.mockResolvedValue(gitAccountFixture);
+  mockedFetchAppSettings.mockResolvedValue(appSettingsFixture);
+  mockedFetchGitStates.mockResolvedValue(installedSkillFixtures);
+  mockedFetchMarketplaceSkillsByPage
+    .mockResolvedValueOnce([createMarketplaceSkill("cached-skill")])
+    .mockResolvedValueOnce([createMarketplaceSkill("fresh-skill")]);
+
+  render(
+    <SkillWorkspaceProvider>
+      <MarketplaceProbe />
+    </SkillWorkspaceProvider>,
+  );
+
+  await act(async () => {
+    vi.advanceTimersByTime(32);
+    await Promise.resolve();
+  });
+
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "加载 skillsmp" }));
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+
+  expect(screen.getByTestId("marketplace-load-state").textContent).toBe("done");
+  expect(mockedFetchMarketplaceSkillsByPage).toHaveBeenCalledTimes(2);
+  expect(mockedFetchMarketplaceSkillsByPage).toHaveBeenNthCalledWith(1, {
+    sourceSite: "skillsmp",
+    page: 1,
+    limit: 18,
+    refresh: undefined,
+  });
+  expect(mockedFetchMarketplaceSkillsByPage).toHaveBeenNthCalledWith(2, {
+    sourceSite: "skillsmp",
+    page: 1,
+    limit: 18,
+    refresh: true,
+  });
+  expect(screen.getByTestId("marketplace-skill-names").textContent).toBe("fresh-skill");
 });

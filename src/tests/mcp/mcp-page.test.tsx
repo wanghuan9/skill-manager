@@ -20,6 +20,30 @@ test("renders MCP toolbar in the page header and hides the app matrix", async ()
   expect(screen.getByRole("button", { name: "刷新" })).toBeInTheDocument();
 });
 
+test("guides empty MCP library to marketplace install", async () => {
+  window.localStorage.clear();
+  const workspace = await skillClient.fetchMcpWorkspace();
+  const fetchSpy = vi.spyOn(skillClient, "fetchMcpWorkspace").mockResolvedValue({
+    ...workspace,
+    servers: [],
+  });
+
+  render(<App />);
+
+  await userEvent.click(screen.getByRole("button", { name: "MCP" }));
+
+  expect(await screen.findByRole("heading", { name: "还没有安装 MCP" })).toBeInTheDocument();
+  expect(screen.getByText("去商店安装 MCP 服务，安装后可在这里统一管理和启用。")).toBeInTheDocument();
+
+  await userEvent.click(screen.getByRole("button", { name: "去商店安装" }));
+
+  expect(screen.getByRole("heading", { name: "安装", level: 1 })).toBeInTheDocument();
+  expect(screen.getByRole("tab", { name: "MCP" })).toHaveAttribute("aria-selected", "true");
+  expect(screen.getByRole("heading", { name: "安装源", level: 2 })).toBeInTheDocument();
+
+  fetchSpy.mockRestore();
+});
+
 test("refreshes MCP workspace from the toolbar", async () => {
   window.localStorage.clear();
   const fetchSpy = vi.spyOn(skillClient, "fetchMcpWorkspace");
@@ -37,7 +61,7 @@ test("refreshes MCP workspace from the toolbar", async () => {
   });
 });
 
-test("shows only installed MCP-ready apps in enable-to-tool controls", async () => {
+test("shows supported MCP apps in enable-to-tool controls", async () => {
   window.localStorage.clear();
   render(<App />);
 
@@ -111,6 +135,38 @@ test("shows only installed MCP-ready apps in enable-to-tool controls", async () 
   expect((screen.getByLabelText("JSON 配置") as HTMLTextAreaElement).value).not.toContain("\"type\": \"stdio\"");
   expect(screen.queryByText("Antigravity")).not.toBeInTheDocument();
   expect(screen.queryByText("CodeBuddy")).not.toBeInTheDocument();
+});
+
+test("shows MCP-supported apps even when their config has not been initialized", async () => {
+  window.localStorage.clear();
+  const workspace = await skillClient.fetchMcpWorkspace();
+  const workspaceWithUninitializedCursor = {
+    ...workspace,
+    apps: workspace.apps.map((app) => (
+      app.id === "cursor" ? { ...app, statusLabel: "未安装" } : app
+    )),
+    servers: workspace.servers.map((server) => ({
+      ...server,
+      apps: server.apps.map((app) => (
+        app.appId === "cursor" ? { ...app, statusLabel: "未安装" } : app
+      )),
+    })),
+  };
+  vi.spyOn(skillClient, "fetchMcpWorkspace").mockResolvedValueOnce(workspaceWithUninitializedCursor);
+
+  render(<App />);
+
+  await userEvent.click(screen.getByRole("button", { name: "MCP" }));
+  await userEvent.click(await screen.findByRole("button", { name: "展开 context7" }));
+
+  expect(screen.getByRole("button", { name: "Cursor" })).toBeInTheDocument();
+
+  await userEvent.click(screen.getByRole("button", { name: "新增 MCP" }));
+
+  await waitFor(() => {
+    expect(screen.getByRole("dialog", { name: "新增 MCP" })).toBeInTheDocument();
+  });
+  expect(screen.getByText("Cursor（未安装）")).toBeInTheDocument();
 });
 
 test("creates MCP without asking the user for an ID", async () => {

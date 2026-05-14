@@ -10,7 +10,7 @@ import { buildInstalledMarketplaceSkillIds } from "@/features/skills/utils/skill
 import { dedupeMarketplaceSkills } from "@/features/skills/utils/marketplace-skills";
 
 export type InstallTab = "market" | "git" | "local";
-type InstallCategory = "skill" | "mcp";
+export type InstallCategory = "skill" | "mcp";
 
 export const installTabs: { key: InstallTab; label: string }[] = [
   { key: "market", label: "市场安装" },
@@ -68,12 +68,17 @@ function InstallTabIcon(props: { tab: InstallTab }) {
 }
 
 type MarketRouteProps = {
+  activeInstallCategory?: InstallCategory;
   activeInstallTab?: InstallTab;
+  onInstallCategoryChange?: (category: InstallCategory) => void;
   onInstallTabChange?: (tab: InstallTab) => void;
 };
 
 export function MarketRoute(props: MarketRouteProps) {
-  const { activeInstallTab: controlledInstallTab } = props;
+  const {
+    activeInstallCategory: controlledInstallCategory,
+    activeInstallTab: controlledInstallTab,
+  } = props;
   const {
     marketplaceSkills,
     installedSkills,
@@ -85,7 +90,8 @@ export function MarketRoute(props: MarketRouteProps) {
     hasMoreMarketplaceSkillsBySource,
   } = useSkillWorkspace();
   const [internalInstallTab, setInternalInstallTab] = useState<InstallTab>("market");
-  const [activeInstallCategory, setActiveInstallCategory] = useState<InstallCategory>("skill");
+  const [internalInstallCategory, setInternalInstallCategory] = useState<InstallCategory>("skill");
+  const activeInstallCategory = controlledInstallCategory ?? internalInstallCategory;
   const activeInstallTab = controlledInstallTab ?? internalInstallTab;
   const [activeSourceSite, setActiveSourceSite] = useState<MarketplaceSourceSite>("skills.sh");
   const [searchQuery, setSearchQuery] = useState("");
@@ -183,6 +189,9 @@ export function MarketRoute(props: MarketRouteProps) {
   const loadMoreMarketplaceSkillsRef = useRef(loadMoreMarketplaceSkills);
   const isMarketplaceLoading = isMarketplaceLoadingBySource[activeSourceSite] ?? false;
   const hasMoreMarketplaceSkills = hasMoreMarketplaceSkillsBySource[activeSourceSite] ?? false;
+  const isMarketplaceInitializing =
+    !isSearching && stableTabSkills.length === 0 && (isMarketplaceLoading || hasMoreMarketplaceSkills);
+  const isMarketplaceSearchInitializing = isSearching && isSearchLoading && !searchDone;
 
   useEffect(() => {
     isMarketplaceLoadingRef.current = isMarketplaceLoadingBySource;
@@ -235,10 +244,10 @@ export function MarketRoute(props: MarketRouteProps) {
   }, [activeInstallTab, isSearching, handleScroll]);
 
   const categorySwitcher = (
-    <InstallCategorySwitcher
-      activeCategory={activeInstallCategory}
-      onCategoryChange={setActiveInstallCategory}
-    />
+            <InstallCategorySwitcher
+              activeCategory={activeInstallCategory}
+              onCategoryChange={props.onInstallCategoryChange ?? setInternalInstallCategory}
+            />
   );
 
   return (
@@ -262,7 +271,7 @@ export function MarketRoute(props: MarketRouteProps) {
                 onSearchQueryChange={setSearchQuery}
                 isSearching={isSearching}
                 isSearchLoading={isSearchLoading}
-                isInitialLoading={false}
+                isInitialLoading={isMarketplaceSearchInitializing || isMarketplaceInitializing}
                 isLoadingMore={isSearching ? false : isMarketplaceLoading}
                 hasMore={isSearching ? false : hasMoreMarketplaceSkills}
                 installedMarketplaceSkillIds={installedMarketplaceSkillIds}

@@ -106,11 +106,20 @@ export function MarketplaceInstallPanel(props: MarketplaceInstallPanelProps) {
       <div className="install-grid">
         {isInitialLoading ? (
           <section className="placeholder-card">
-            <h3>正在搜索可安装技能</h3>
+            <h3 className="install-loading-title">
+              <span>{isSearching ? "正在搜索可安装技能" : "正在努力加载 skill 中"}</span>
+              {!isSearching ? (
+                <span className="loading-ellipsis" aria-hidden="true">
+                  <span>.</span>
+                  <span>.</span>
+                  <span>.</span>
+                </span>
+              ) : null}
+            </h3>
             <p>
               {isSearching
                 ? `正在从所有安装源搜索 “${searchQuery.trim()}”...`
-                : `正在搜索 ${activeSourceSite} 中的 skill，并按网站默认顺序展示。`}
+                : `正在加载 ${activeSourceSite} 中的 skill，请稍等。`}
             </p>
           </section>
         ) : marketplaceSkills.length > 0 ? (

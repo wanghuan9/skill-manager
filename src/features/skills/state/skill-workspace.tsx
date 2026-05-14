@@ -670,11 +670,8 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
 
   async function handleLoadInitialMarketplaceSkills(sourceSite: MarketplaceSourceSite) {
     await loadMarketplacePage(sourceSite, 1, false);
-    if (sourceSite !== "skills.sh") {
-      return;
-    }
 
-    // skills.sh 先用缓存兜底首屏，再后台刷新并写回缓存，避免空白页和长期陈旧数据。
+    // 安装源先用缓存兜底首屏，再后台刷新并写回缓存，避免空白页和长期陈旧数据。
     void loadMarketplacePage(sourceSite, 1, false, { refresh: true }).catch((error) => {
       console.error(`Failed to refresh ${sourceSite} marketplace skills:`, error);
     });

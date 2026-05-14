@@ -9,7 +9,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use regex::{Regex, RegexBuilder};
 use reqwest::Client;
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 use zip::ZipArchive;
 
 use crate::git_state::{
@@ -28,9 +28,9 @@ use crate::library::{
 use crate::models::{
     AppSettings, GitAccountSummary, GitChangeFile, LocalGitStateSignature,
     LocalInstallSkillCandidate, LocalSkillCandidate, MarketplaceSkill, PushBranchOption,
-    PushPreviewSnapshot, PushTargetSnapshot,
-    RepoSkillCandidate, SkillFileBrowserSnapshot, SkillFileDocument, SkillFileEntry, SkillSummary,
-    ToolConfig, ToolSyncStatus, UpdatePreviewSnapshot, WorkspaceSnapshot,
+    PushPreviewSnapshot, PushTargetSnapshot, RepoSkillCandidate, SkillFileBrowserSnapshot,
+    SkillFileDocument, SkillFileEntry, SkillSummary, ToolConfig, ToolSyncStatus,
+    UpdatePreviewSnapshot, WorkspaceSnapshot,
 };
 use crate::state::{
     load_app_settings, load_installed_skills, normalize_skill_install_activation,
@@ -180,20 +180,22 @@ struct SkillsShSkill {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct SkillsMpResponse {
-    skills: Vec<SkillsMpSkill>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
 struct SkillsMpSkill {
+    #[serde(default)]
     id: String,
+    #[serde(default)]
     name: String,
+    #[serde(default)]
     author: String,
+    #[serde(default, alias = "author_avatar")]
     author_avatar: String,
+    #[serde(default)]
     description: String,
+    #[serde(default, alias = "github_url")]
     github_url: String,
+    #[serde(default, deserialize_with = "deserialize_u64_or_string")]
     stars: u64,
+    #[serde(default, alias = "updated_at")]
     updated_at: String,
 }
 
@@ -218,6 +220,25 @@ fn format_compact_number(value: u64) -> String {
     } else {
         value.to_string()
     }
+}
+
+fn deserialize_u64_or_string<'de, D>(deserializer: D) -> Result<u64, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    if let Some(number) = value.as_u64() {
+        return Ok(number);
+    }
+    if let Some(label) = value.as_str() {
+        return Ok(label
+            .trim()
+            .replace(',', "")
+            .parse::<u64>()
+            .unwrap_or_default());
+    }
+
+    Ok(0)
 }
 
 fn source_type_for_url(source_url: &str) -> &'static str {
@@ -1034,7 +1055,7 @@ async fn fetch_skillsmp_marketplace(
     if let Some(normalized_query) = normalize_marketplace_query(query) {
         request = request.query(&[("search", normalized_query)]);
     }
-    let response: SkillsMpResponse = request
+    let payload: serde_json::Value = request
         .send()
         .await
         .map_err(|error| format!("请求 skillsmp 失败: {error}"))?
@@ -1044,34 +1065,91 @@ async fn fetch_skillsmp_marketplace(
         .await
         .map_err(|error| format!("解析 skillsmp 技能列表失败: {error}"))?;
 
-    Ok(response
-        .skills
+    Ok(map_skillsmp_items_to_marketplace(collect_skillsmp_items(
+        &payload,
+    )))
+}
+
+fn collect_skillsmp_items(payload: &serde_json::Value) -> Vec<SkillsMpSkill> {
+    let items = payload
+        .as_array()
+        .or_else(|| payload.get("skills").and_then(|value| value.as_array()))
+        .or_else(|| payload.get("items").and_then(|value| value.as_array()))
+        .or_else(|| payload.get("data").and_then(|value| value.as_array()))
+        .or_else(|| {
+            payload
+                .get("data")
+                .and_then(|value| value.get("skills"))
+                .and_then(|value| value.as_array())
+        });
+
+    items
         .into_iter()
-        .map(|item| {
+        .flatten()
+        .filter_map(|item| serde_json::from_value(item.clone()).ok())
+        .collect()
+}
+
+fn map_skillsmp_items_to_marketplace(items: Vec<SkillsMpSkill>) -> Vec<MarketplaceSkill> {
+    items
+        .into_iter()
+        .filter_map(|item| {
+            let name = item.name.trim();
+            let source_url = item.github_url.trim();
+            if name.is_empty() || source_url.is_empty() {
+                return None;
+            }
+
             // 尝试从 github_url 解析 skill 路径
-            let skill_path = if let Ok(spec) = parse_market_source_url(&item.github_url) {
+            let skill_path = if let Ok(spec) = parse_market_source_url(source_url) {
                 spec.relative_path
                     .map(|p| p.to_string_lossy().to_string())
                     .unwrap_or_default()
             } else {
                 String::new()
             };
-            MarketplaceSkill {
-                id: format!("skillsmp-{}", item.id),
-                name: item.name,
-                source_type: source_type_for_url(&item.github_url).into(),
+            let marketplace_id = if item.id.trim().is_empty() {
+                sanitize_storage_name(name)
+            } else {
+                item.id.trim().to_string()
+            };
+            let description = if item.description.trim().is_empty() {
+                format!("来自 skillsmp 的公开 skill（{name}）")
+            } else {
+                item.description.trim().to_string()
+            };
+            let maintainer = if item.author.trim().is_empty() {
+                let fallback = maintainer_from_source(&normalize_repo_key_from_url(source_url));
+                if fallback.trim().is_empty() {
+                    "skillsmp".to_string()
+                } else {
+                    fallback
+                }
+            } else {
+                item.author.trim().to_string()
+            };
+            let avatar_url = item.author_avatar.trim();
+
+            Some(MarketplaceSkill {
+                id: format!("skillsmp-{marketplace_id}"),
+                name: name.to_string(),
+                source_type: source_type_for_url(source_url).into(),
                 source_site: "skillsmp".into(),
-                description: item.description,
-                maintainer: item.author,
-                updated_at: item.updated_at,
+                description,
+                maintainer,
+                updated_at: item.updated_at.trim().to_string(),
                 install_label: "默认按热度排序".into(),
-                source_url: item.github_url,
+                source_url: source_url.to_string(),
                 popularity_label: format_compact_number(item.stars),
-                avatar_url: Some(item.author_avatar),
+                avatar_url: if avatar_url.is_empty() {
+                    None
+                } else {
+                    Some(avatar_url.to_string())
+                },
                 skill_path,
-            }
+            })
         })
-        .collect())
+        .collect()
 }
 
 fn marketplace_cache_file() -> Option<PathBuf> {
@@ -1214,25 +1292,9 @@ async fn build_marketplace_skills(
     let source = source_site.unwrap_or_default();
     let is_searching = query.is_some() && !query.unwrap_or_default().trim().is_empty();
 
-    if !refresh && !is_searching && source == "skills.sh" && page == 1 {
+    if !refresh && !is_searching && page == 1 {
         if let Some(cached_page) = load_marketplace_cache_page(source, page, limit) {
             return cached_page;
-        }
-    }
-
-    // 如果是第一页且不是搜索，尝试从缓存读取
-    if !refresh && page == 1 && !is_searching && source != "skills.sh" {
-        if let Some(cached_skills) = load_marketplace_cache(source) {
-            let filtered: Vec<MarketplaceSkill> = cached_skills
-                .into_iter()
-                .filter(|skill| matches_marketplace_query(skill, query))
-                .filter(|skill| source.is_empty() || skill.source_site == source)
-                .take(limit)
-                .collect();
-
-            if !filtered.is_empty() {
-                return filtered;
-            }
         }
     }
 
@@ -1306,18 +1368,21 @@ async fn build_marketplace_skills(
     }
 
     let result = if skills.is_empty() {
-        default_marketplace_skills()
-            .into_iter()
-            .filter(|skill| source.is_empty() || skill.source_site == source)
-            .filter(|skill| matches_marketplace_query(skill, query))
-            .take(limit.max(1))
-            .collect()
+        if page == 1 && !is_searching {
+            if let Some(cached_page) = load_marketplace_cache_page(source, page, limit) {
+                cached_page
+            } else {
+                Vec::new()
+            }
+        } else {
+            Vec::new()
+        }
     } else {
         skills
     };
 
     // 如果是第一页且不是搜索，保存到缓存
-    if page == 1 && !is_searching && source != "skills.sh" && !result.is_empty() {
+    if page == 1 && !is_searching && !result.is_empty() {
         save_marketplace_cache(source, &result);
     }
 
@@ -1428,9 +1493,10 @@ fn software_exists(spec: &SoftwareDetectionSpec) -> bool {
 fn detect_tool_installation_label(
     config_paths: &[PathBuf],
     software_spec: &SoftwareDetectionSpec,
+    requires_software_detection: bool,
 ) -> String {
     let has_config = config_paths.is_empty() || config_paths.iter().any(|path| path.exists());
-    if has_config && software_exists(software_spec) {
+    if has_config && (!requires_software_detection || software_exists(software_spec)) {
         "已安装".to_string()
     } else {
         "未安装".to_string()
@@ -1807,7 +1873,11 @@ fn build_tool_configs() -> Vec<ToolConfig> {
                     name: name.into(),
                     skills_path: skills_path.to_string_lossy().to_string(),
                     mcp_config_path: mcp_config_path.to_string_lossy().to_string(),
-                    status_label: detect_tool_installation_label(&config_paths, &software_spec),
+                    status_label: detect_tool_installation_label(
+                        &config_paths,
+                        &software_spec,
+                        primary_type == "editor",
+                    ),
                     is_enabled,
                     primary_type: primary_type.into(),
                     surface_types: surface_types.into_iter().map(|item| item.into()).collect(),
@@ -2807,8 +2877,7 @@ fn repository_root_path(skill_path: &str) -> Result<String, String> {
         return Err("无法识别 canonical repo 工作区。".into());
     }
 
-    let canonical_root =
-        fs::canonicalize(&root).unwrap_or_else(|_| PathBuf::from(root.trim()));
+    let canonical_root = fs::canonicalize(&root).unwrap_or_else(|_| PathBuf::from(root.trim()));
     Ok(canonical_root.to_string_lossy().to_string())
 }
 
@@ -4408,13 +4477,13 @@ pub fn push_skill_to_current_branch(skill_name: &str) -> Result<SkillSummary, St
     if !local_changes.is_empty() {
         run_git_command(&skill.local_path, &["add", "--", "."])?;
         let commit_message = format!("chore: update {}", skill.name);
-        run_git_command(&skill.local_path, &["commit", "-m", &commit_message, "--", "."])?;
+        run_git_command(
+            &skill.local_path,
+            &["commit", "-m", &commit_message, "--", "."],
+        )?;
     }
 
-    run_git_command(
-        &skill.local_path,
-        &["push", ORIGIN_REMOTE, &current_branch],
-    )?;
+    run_git_command(&skill.local_path, &["push", ORIGIN_REMOTE, &current_branch])?;
     refresh_and_persist_skill(skill_name)
 }
 
@@ -4857,14 +4926,15 @@ mod tests {
 
     use super::{
         build_local_candidates, build_repo_skill_source_url, collect_local_skill_dirs,
-        collect_skills_manager_cached_items, import_local_skill, insert_trusted_project_path,
-        install_selected_local_skill_dirs, intellij_trusted_locations_for_project,
-        remove_trusted_project_paths,
-        normalize_installed_skill_source_url, open_target_path_for_skill, parse_repo_install_spec,
-        parse_skills_sh_homepage_items, scan_local_install_skill_candidates,
+        collect_skills_manager_cached_items, collect_skillsmp_items, import_local_skill,
+        insert_trusted_project_path, install_selected_local_skill_dirs,
+        intellij_trusted_locations_for_project, load_marketplace_cache_page,
+        map_skillsmp_items_to_marketplace, normalize_installed_skill_source_url,
+        open_target_path_for_skill, parse_repo_install_spec, parse_skills_sh_homepage_items,
+        remove_trusted_project_paths, save_marketplace_cache, scan_local_install_skill_candidates,
         scan_repo_skill_candidates, should_use_skills_sh_homepage_page,
     };
-    use crate::models::SkillSummary;
+    use crate::models::{MarketplaceSkill, SkillSummary};
     use crate::workspace::TEST_ENV_LOCK;
     use std::env;
     use std::fs;
@@ -5050,6 +5120,113 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(names, vec!["first-skill", "second-skill", "third-skill"]);
+    }
+
+    #[test]
+    fn maps_skillsmp_current_api_payload() {
+        let payload = json!({
+            "skills": [
+                {
+                    "id": "openclaw-openclaw-agents-skills-clawsweeper-skill-md",
+                    "name": "clawsweeper",
+                    "author": "openclaw",
+                    "authorAvatar": "https://avatars.githubusercontent.com/u/252820863?v=4",
+                    "description": "Use for ClawSweeper work.",
+                    "githubUrl": "https://github.com/openclaw/openclaw/tree/main/.agents/skills/clawsweeper",
+                    "stars": 370546,
+                    "updatedAt": "1778307787"
+                }
+            ]
+        });
+
+        let skills = map_skillsmp_items_to_marketplace(collect_skillsmp_items(&payload));
+
+        assert_eq!(skills.len(), 1);
+        assert_eq!(
+            skills[0].id,
+            "skillsmp-openclaw-openclaw-agents-skills-clawsweeper-skill-md"
+        );
+        assert_eq!(skills[0].name, "clawsweeper");
+        assert_eq!(skills[0].source_site, "skillsmp");
+        assert_eq!(skills[0].maintainer, "openclaw");
+        assert_eq!(skills[0].popularity_label, "370.5K");
+        assert_eq!(skills[0].skill_path, ".agents/skills/clawsweeper");
+    }
+
+    #[test]
+    fn maps_skillsmp_legacy_or_partial_payload_without_dropping_page() {
+        let payload = json!({
+            "data": {
+                "skills": [
+                    {
+                        "id": "legacy-id",
+                        "name": "legacy-skill",
+                        "author_avatar": "",
+                        "description": "",
+                        "github_url": "https://github.com/team/repo/tree/main/skills/legacy-skill",
+                        "stars": "1,024",
+                        "updated_at": "2026-05-14"
+                    },
+                    {
+                        "id": "missing-url",
+                        "name": "missing-url"
+                    }
+                ]
+            }
+        });
+
+        let skills = map_skillsmp_items_to_marketplace(collect_skillsmp_items(&payload));
+
+        assert_eq!(skills.len(), 1);
+        assert_eq!(skills[0].id, "skillsmp-legacy-id");
+        assert_eq!(
+            skills[0].description,
+            "来自 skillsmp 的公开 skill（legacy-skill）"
+        );
+        assert_eq!(skills[0].maintainer, "team");
+        assert_eq!(skills[0].popularity_label, "1.0K");
+        assert_eq!(skills[0].avatar_url, None);
+    }
+
+    #[test]
+    fn marketplace_cache_pages_skillsmp_source() {
+        let _guard = TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let temp_dir = temp_test_dir("marketplace-cache-skillsmp");
+        let home_dir = temp_dir.join("home");
+        fs::create_dir_all(&home_dir).expect("create home dir");
+        let original_home = env::var_os("HOME");
+        // SAFETY: this test holds ENV_LOCK and restores HOME before returning.
+        unsafe {
+            env::set_var("HOME", &home_dir);
+        }
+
+        let skills = vec![MarketplaceSkill {
+            id: "skillsmp-demo".into(),
+            name: "demo".into(),
+            source_type: "github".into(),
+            source_site: "skillsmp".into(),
+            description: "cached".into(),
+            maintainer: "team".into(),
+            updated_at: "2026-05-14".into(),
+            install_label: "默认按热度排序".into(),
+            source_url: "https://github.com/team/repo/tree/main/skills/demo".into(),
+            popularity_label: "1.0K".into(),
+            avatar_url: None,
+            skill_path: "skills/demo".into(),
+        }];
+
+        save_marketplace_cache("skillsmp", &skills);
+        let cached = load_marketplace_cache_page("skillsmp", 1, 18).expect("load cache page");
+
+        restore_env_var("HOME", original_home);
+
+        assert_eq!(cached.len(), 1);
+        assert_eq!(cached[0].id, "skillsmp-demo");
+        assert_eq!(cached[0].source_site, "skillsmp");
+
+        let _ = fs::remove_dir_all(temp_dir);
     }
 
     #[test]
