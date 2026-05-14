@@ -16,6 +16,13 @@ target/
 .env.test.local
 .env.production.local
 
+# Release secrets and signing material
+*.key
+*.pem
+*.p12
+certificate-base64.txt
+.skilldock-release/
+
 # IDE
 .vscode/
 .idea/
