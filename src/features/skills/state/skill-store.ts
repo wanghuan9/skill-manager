@@ -234,6 +234,7 @@ export type McpImportProgress = {
 export type FailureFeedbackInput = {
   operation: string;
   message: string;
+  kind?: "business" | "unknown";
   context?: Record<string, unknown>;
 };
 

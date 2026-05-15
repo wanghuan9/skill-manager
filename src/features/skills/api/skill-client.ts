@@ -203,6 +203,15 @@ export function getMcpImportSessionSnapshot(): McpImportSessionSnapshot {
   return { ...mcpImportSession };
 }
 
+export function resetMcpImportSessionForTests() {
+  activeMcpImportPromise = null;
+  mcpImportSession = {
+    isImporting: false,
+    progress: null,
+  };
+  mcpImportSessionListeners.clear();
+}
+
 export function subscribeMcpImportSessionChange(listener: McpImportSessionListener) {
   mcpImportSessionListeners.add(listener);
   listener(getMcpImportSessionSnapshot());
@@ -568,7 +577,8 @@ export async function openExternalLink(url: string): Promise<void> {
 }
 
 export async function recordFailureFeedback(input: FailureFeedbackInput): Promise<FeedbackIssueDraft> {
-  const title = `[Bug] ${input.operation} 失败: ${input.message}`.slice(0, 120);
+  const failureKind = input.kind === "business" ? "业务异常" : "未知异常";
+  const title = `[Bug] ${input.operation} ${failureKind}: ${input.message}`.slice(0, 120);
   const context = input.context ?? {};
   const body = [
     "## 问题描述",
@@ -576,6 +586,7 @@ export async function recordFailureFeedback(input: FailureFeedbackInput): Promis
     "",
     "## 本次失败日志（自动过滤）",
     "```text",
+    `kind: ${input.kind ?? "unknown"}`,
     `operation: ${input.operation}`,
     `error: ${input.message}`,
     `time: ${new Date().toISOString()}`,

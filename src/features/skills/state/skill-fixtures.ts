@@ -568,3 +568,69 @@ export const workspaceSnapshotFixture: WorkspaceSnapshot = {
   toolConfigs: toolConfigFixtures,
   gitAccount: gitAccountFixture,
 };
+
+const initialFixtureState = structuredClone({
+  installedSkillFixtures,
+  marketplaceSkillFixtures,
+  mcpMarketplaceServerFixtures,
+  localSkillFixtures,
+  repoSkillCandidateFixtures,
+  localInstallSkillCandidateFixtures,
+  toolConfigFixtures,
+  mcpWorkspaceFixture,
+  gitAccountFixture,
+  appSettingsFixture,
+  pushTargetFixtures,
+  pushPreviewFixtures,
+  skillFileBrowserFixtures,
+  skillFileDocumentFixtures,
+});
+
+function resetArrayFixture<T>(target: T[], source: T[]) {
+  target.splice(0, target.length, ...structuredClone(source));
+}
+
+function resetObjectFixture<T extends Record<string, unknown>>(target: T, source: T) {
+  for (const key of Object.keys(target)) {
+    if (!(key in source)) {
+      delete target[key as keyof T];
+    }
+  }
+
+  Object.assign(target, structuredClone(source));
+}
+
+function resetRecordFixture<T>(target: Record<string, T>, source: Record<string, T>) {
+  for (const key of Object.keys(target)) {
+    if (!(key in source)) {
+      delete target[key];
+    }
+  }
+
+  for (const [key, value] of Object.entries(source)) {
+    target[key] = structuredClone(value);
+  }
+}
+
+export function resetSkillFixtureState() {
+  resetArrayFixture(installedSkillFixtures, initialFixtureState.installedSkillFixtures);
+  resetArrayFixture(marketplaceSkillFixtures, initialFixtureState.marketplaceSkillFixtures);
+  resetArrayFixture(mcpMarketplaceServerFixtures, initialFixtureState.mcpMarketplaceServerFixtures);
+  resetArrayFixture(localSkillFixtures, initialFixtureState.localSkillFixtures);
+  resetRecordFixture(repoSkillCandidateFixtures, initialFixtureState.repoSkillCandidateFixtures);
+  resetRecordFixture(localInstallSkillCandidateFixtures, initialFixtureState.localInstallSkillCandidateFixtures);
+  resetArrayFixture(toolConfigFixtures, initialFixtureState.toolConfigFixtures);
+  resetObjectFixture(mcpWorkspaceFixture, initialFixtureState.mcpWorkspaceFixture);
+  resetObjectFixture(gitAccountFixture, initialFixtureState.gitAccountFixture);
+  resetObjectFixture(appSettingsFixture, initialFixtureState.appSettingsFixture);
+  resetRecordFixture(pushTargetFixtures, initialFixtureState.pushTargetFixtures);
+  resetRecordFixture(pushPreviewFixtures, initialFixtureState.pushPreviewFixtures);
+  resetRecordFixture(skillFileBrowserFixtures, initialFixtureState.skillFileBrowserFixtures);
+  resetRecordFixture(skillFileDocumentFixtures, initialFixtureState.skillFileDocumentFixtures);
+
+  workspaceSnapshotFixture.installedSkills = installedSkillFixtures;
+  workspaceSnapshotFixture.marketplaceSkills = marketplaceSkillFixtures;
+  workspaceSnapshotFixture.localCandidates = localSkillFixtures;
+  workspaceSnapshotFixture.toolConfigs = toolConfigFixtures;
+  workspaceSnapshotFixture.gitAccount = gitAccountFixture;
+}

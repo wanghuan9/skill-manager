@@ -1,8 +1,14 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { vi } from "vitest";
+import { beforeEach, vi } from "vitest";
 import { App } from "@/app/App";
 import * as skillClient from "@/features/skills/api/skill-client";
+
+beforeEach(() => {
+  window.localStorage.clear();
+  delete (window as Window & { __SKILLM_MCP_WORKSPACE__?: unknown }).__SKILLM_MCP_WORKSPACE__;
+  skillClient.resetMcpImportSessionForTests();
+});
 
 test("renders MCP toolbar in the page header and hides the app matrix", async () => {
   window.localStorage.clear();
@@ -13,8 +19,8 @@ test("renders MCP toolbar in the page header and hides the app matrix", async ()
   const toolbar = await screen.findByLabelText("MCP 工具栏");
   expect(toolbar).toBeInTheDocument();
   expect(toolbar.closest(".page-header__row")).not.toBeNull();
+  expect(await screen.findByText(/扫描、编辑并同步 \d+ 个 MCP，覆盖 \d+ 个工具配置/)).toBeInTheDocument();
   expect(screen.queryByLabelText("MCP 目标软件")).not.toBeInTheDocument();
-  expect(toolbar).not.toHaveTextContent("个 MCP");
   expect(toolbar).not.toHaveTextContent("工具可同步");
   expect(screen.getByRole("searchbox", { name: "搜索 MCP" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "刷新" })).toBeInTheDocument();
@@ -69,6 +75,132 @@ test("refreshes MCP workspace from the toolbar", async () => {
   });
 });
 
+test("refresh retries failed MCP tools discovery only", async () => {
+  window.localStorage.clear();
+  const workspace = await skillClient.fetchMcpWorkspace();
+  const failedWorkspace = {
+    ...workspace,
+    servers: workspace.servers.map((server) => (
+      server.id === "linear"
+        ? {
+            ...server,
+            tools: [],
+            toolsDiscoveredAt: "2026/5/10 22:39:32",
+            toolsDiscoveryError: "MCP tools 探测超时",
+          }
+        : server
+    )),
+  };
+  const fetchSpy = vi
+    .spyOn(skillClient, "fetchMcpWorkspace")
+    .mockResolvedValue(workspace)
+    .mockResolvedValueOnce(workspace)
+    .mockResolvedValueOnce(failedWorkspace);
+  const refreshSpy = vi.spyOn(skillClient, "refreshMcpServerTools").mockResolvedValue(failedWorkspace);
+  const fixtureSpy = vi.spyOn(skillClient, "shouldUseFixtureData").mockReturnValue(false);
+
+  try {
+    render(<App />);
+
+    await userEvent.click(screen.getByRole("button", { name: "MCP" }));
+    await screen.findByText("context7");
+
+    await userEvent.click(screen.getByRole("button", { name: "刷新" }));
+
+    await waitFor(() => {
+      expect(refreshSpy).toHaveBeenCalledWith("linear");
+    });
+    expect(refreshSpy).not.toHaveBeenCalledWith("context7");
+  } finally {
+    fixtureSpy.mockRestore();
+    refreshSpy.mockRestore();
+    fetchSpy.mockRestore();
+  }
+});
+
+test("imports MCP servers and probes every server that still lacks tools", async () => {
+  window.localStorage.clear();
+  const workspace = await skillClient.fetchMcpWorkspace();
+  const emptyToolsWorkspace = {
+    ...workspace,
+    servers: workspace.servers.map((server) => (
+      server.id === "context7" || server.id === "linear"
+        ? {
+            ...server,
+            tools: [],
+            toolsDiscoveredAt: "",
+            toolsDiscoveryError: "",
+          }
+        : server
+    )),
+  };
+  const importSpy = vi.spyOn(skillClient, "importMcpServersFromApps").mockResolvedValueOnce(0);
+  const fetchSpy = vi
+    .spyOn(skillClient, "fetchMcpWorkspace")
+    .mockResolvedValue(emptyToolsWorkspace)
+    .mockResolvedValueOnce(emptyToolsWorkspace);
+  const refreshSpy = vi.spyOn(skillClient, "refreshMcpServerTools").mockResolvedValue(emptyToolsWorkspace);
+  const fixtureSpy = vi.spyOn(skillClient, "shouldUseFixtureData").mockReturnValue(false);
+
+  try {
+    render(<App />);
+
+    await userEvent.click(screen.getByRole("button", { name: "MCP" }));
+    await userEvent.click(await screen.findByRole("button", { name: "扫描导入" }));
+
+    await waitFor(() => {
+      expect(refreshSpy).toHaveBeenCalledWith("context7");
+      expect(refreshSpy).toHaveBeenCalledWith("linear");
+    });
+  } finally {
+    fixtureSpy.mockRestore();
+    refreshSpy.mockRestore();
+    fetchSpy.mockRestore();
+    importSpy.mockRestore();
+  }
+});
+
+test("imports MCP servers and reprobes partial tools that were not discovered", async () => {
+  window.localStorage.clear();
+  const workspace = await skillClient.fetchMcpWorkspace();
+  const partialToolsWorkspace = {
+    ...workspace,
+    servers: workspace.servers.map((server) => (
+      server.id === "linear"
+        ? {
+            ...server,
+            tools: server.tools.slice(0, 1),
+            toolsDiscoveredAt: "",
+            toolsDiscoveryError: "",
+          }
+        : server
+    )),
+  };
+  const importSpy = vi.spyOn(skillClient, "importMcpServersFromApps").mockResolvedValueOnce(0);
+  const fetchSpy = vi
+    .spyOn(skillClient, "fetchMcpWorkspace")
+    .mockResolvedValue(partialToolsWorkspace)
+    .mockResolvedValueOnce(partialToolsWorkspace);
+  const refreshSpy = vi.spyOn(skillClient, "refreshMcpServerTools").mockResolvedValue(partialToolsWorkspace);
+  const fixtureSpy = vi.spyOn(skillClient, "shouldUseFixtureData").mockReturnValue(false);
+
+  try {
+    render(<App />);
+
+    await userEvent.click(screen.getByRole("button", { name: "MCP" }));
+    await userEvent.click(await screen.findByRole("button", { name: "扫描导入" }));
+
+    await waitFor(() => {
+      expect(refreshSpy).toHaveBeenCalledWith("linear");
+    });
+  } finally {
+    fixtureSpy.mockRestore();
+    refreshSpy.mockRestore();
+    fetchSpy.mockRestore();
+    importSpy.mockRestore();
+  }
+});
+
 test("keeps MCP import progress state when switching away and back", async () => {
   window.localStorage.clear();
   let resolveImport: ((count: number) => void) | undefined;
@@ -82,6 +214,7 @@ test("keeps MCP import progress state when switching away and back", async () =>
   render(<App />);
 
   await userEvent.click(screen.getByRole("button", { name: "MCP" }));
+  await screen.findByText("context7");
   await userEvent.click(await screen.findByRole("button", { name: "扫描导入" }));
 
   expect(await screen.findByRole("button", { name: "扫描中..." })).toBeDisabled();
@@ -104,11 +237,134 @@ test("keeps MCP import progress state when switching away and back", async () =>
   importSpy.mockRestore();
 });
 
+test("shows MCP import scan and update counts separately", async () => {
+  window.localStorage.clear();
+  const progressWorkspace = await skillClient.fetchMcpWorkspace();
+  const importingSnapshot: skillClient.McpImportSessionSnapshot = {
+    isImporting: true,
+    progress: {
+      appId: "codex",
+      appName: "Codex",
+      serverId: "filesystem",
+      serverName: "filesystem",
+      importedCount: 0,
+      scannedCount: 3,
+      phase: "imported",
+      changed: false,
+      workspace: progressWorkspace,
+    },
+  };
+  const snapshotSpy = vi
+    .spyOn(skillClient, "getMcpImportSessionSnapshot")
+    .mockReturnValue(importingSnapshot);
+  const subscribeSpy = vi
+    .spyOn(skillClient, "subscribeMcpImportSessionChange")
+    .mockImplementation((listener) => {
+      listener(importingSnapshot);
+      return () => undefined;
+    });
+
+  try {
+    render(<App />);
+
+    await userEvent.click(screen.getByRole("button", { name: "MCP" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("已扫描 3")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "正在导入 MCP，已扫描 3 项，已新增 0 项" })).toBeDisabled();
+    });
+  } finally {
+    subscribeSpy.mockRestore();
+    snapshotSpy.mockRestore();
+  }
+});
+
+test("auto refreshes existing MCP servers that still lack tools after a repeat scan", async () => {
+  window.localStorage.clear();
+  const workspace = await skillClient.fetchMcpWorkspace();
+  const existingWithoutTools = {
+    ...workspace,
+    servers: workspace.servers.map((server) => (
+      server.id === "linear"
+        ? {
+            ...server,
+            tools: [],
+            toolsDiscoveredAt: "",
+            toolsDiscoveryError: "",
+          }
+        : server
+    )),
+  };
+  const importSpy = vi.spyOn(skillClient, "importMcpServersFromApps").mockResolvedValueOnce(0);
+  const fetchSpy = vi
+    .spyOn(skillClient, "fetchMcpWorkspace")
+    .mockResolvedValue(existingWithoutTools);
+  const refreshSpy = vi.spyOn(skillClient, "refreshMcpServerTools").mockResolvedValue(existingWithoutTools);
+  const fixtureSpy = vi.spyOn(skillClient, "shouldUseFixtureData").mockReturnValue(false);
+
+  try {
+    render(<App />);
+
+    await userEvent.click(screen.getByRole("button", { name: "MCP" }));
+    await userEvent.click(await screen.findByRole("button", { name: "扫描导入" }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "扫描导入" })).toBeEnabled();
+      expect(refreshSpy).toHaveBeenCalledWith("linear");
+    });
+  } finally {
+    fixtureSpy.mockRestore();
+    refreshSpy.mockRestore();
+    fetchSpy.mockRestore();
+    importSpy.mockRestore();
+  }
+});
+
+test("does not retry failed MCP tools discovery until the user refreshes", async () => {
+  window.localStorage.clear();
+  const workspace = await skillClient.fetchMcpWorkspace();
+  const failedWorkspace = {
+    ...workspace,
+    servers: workspace.servers.map((server) => (
+      server.id === "linear"
+        ? {
+            ...server,
+            tools: [],
+            toolsDiscoveredAt: "2026/5/10 22:39:32",
+            toolsDiscoveryError: "MCP tools 探测超时",
+          }
+        : server
+    )),
+  };
+  const fetchSpy = vi
+    .spyOn(skillClient, "fetchMcpWorkspace")
+    .mockResolvedValue(failedWorkspace);
+  const refreshSpy = vi.spyOn(skillClient, "refreshMcpServerTools").mockResolvedValue(failedWorkspace);
+  const fixtureSpy = vi.spyOn(skillClient, "shouldUseFixtureData").mockReturnValue(false);
+
+  try {
+    render(<App />);
+
+    await userEvent.click(screen.getByRole("button", { name: "MCP" }));
+    await screen.findByText("context7");
+
+    expect(refreshSpy).not.toHaveBeenCalled();
+
+    await userEvent.click(screen.getByRole("button", { name: "刷新" }));
+
+    await waitFor(() => {
+      expect(refreshSpy).toHaveBeenCalledWith("linear");
+    });
+  } finally {
+    fixtureSpy.mockRestore();
+    refreshSpy.mockRestore();
+    fetchSpy.mockRestore();
+  }
+});
+
 test("opens a prefilled feedback issue from MCP import failures", async () => {
   window.localStorage.clear();
-  const importSpy = vi
-    .spyOn(skillClient, "importMcpServersFromApps")
-    .mockRejectedValueOnce("Codex MCP 配置解析失败");
+  vi.spyOn(skillClient, "importMcpServersFromApps").mockRejectedValueOnce(new Error("Codex MCP 配置解析失败"));
   const feedbackSpy = vi.spyOn(skillClient, "recordFailureFeedback").mockResolvedValueOnce({
     title: "[Bug] import_mcp_servers_from_apps 失败",
     body: "diagnostics",
@@ -120,15 +376,22 @@ test("opens a prefilled feedback issue from MCP import failures", async () => {
 
   await userEvent.click(screen.getByRole("button", { name: "MCP" }));
   await userEvent.click(await screen.findByRole("button", { name: "扫描导入" }));
-  await userEvent.click(await screen.findByRole("button", { name: "反馈" }));
 
-  expect(feedbackSpy).toHaveBeenCalledWith(expect.objectContaining({
-    operation: "import_mcp_servers_from_apps",
-    message: "Codex MCP 配置解析失败",
-  }));
-  expect(openSpy).toHaveBeenCalledWith("https://github.com/wanghuan9/skill-manager/issues/new?title=test");
+  await waitFor(() => {
+    expect(screen.getByRole("alert")).toHaveTextContent("Codex MCP 配置解析失败");
+    expect(screen.getByRole("button", { name: "反馈" })).toBeInTheDocument();
+  });
 
-  importSpy.mockRestore();
+  await userEvent.click(screen.getByRole("button", { name: "反馈" }));
+
+  await waitFor(() => {
+    expect(feedbackSpy).toHaveBeenCalledWith(expect.objectContaining({
+      operation: "import_mcp_servers_from_apps",
+      message: "Codex MCP 配置解析失败",
+    }));
+    expect(openSpy).toHaveBeenCalledWith("https://github.com/wanghuan9/skill-manager/issues/new?title=test");
+  });
+
   feedbackSpy.mockRestore();
   openSpy.mockRestore();
 });
@@ -280,18 +543,15 @@ test("creates MCP without asking the user for an ID", async () => {
 
 test("opens GitHub source url from MCP details", async () => {
   window.localStorage.clear();
-  const openSpy = vi.spyOn(window, "open").mockImplementation(() => null);
+  const openSpy = vi.spyOn(skillClient, "openExternalLink").mockResolvedValueOnce(undefined);
   render(<App />);
 
   await userEvent.click(screen.getByRole("button", { name: "MCP" }));
   await userEvent.click(await screen.findByRole("button", { name: "展开 context7" }));
   await userEvent.click(screen.getByRole("link", { name: "https://github.com/upstash/context7" }));
 
-  expect(openSpy).toHaveBeenCalledWith(
-    "https://github.com/upstash/context7",
-    "_blank",
-    "noopener,noreferrer",
-  );
+  expect(openSpy).toHaveBeenCalledWith("https://github.com/upstash/context7");
+  openSpy.mockRestore();
 });
 
 test("filters MCP servers by description", async () => {

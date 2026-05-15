@@ -9,7 +9,7 @@ import {
   type ReactNode,
 } from "react";
 
-type NotificationTone = "success" | "error" | "info";
+export type NotificationTone = "success" | "error" | "info";
 
 type AppNotification = {
   id: number;
@@ -20,7 +20,7 @@ type AppNotification = {
   onAction?: () => void;
 };
 
-type NotifyInput = {
+export type NotifyInput = {
   message: string;
   tone?: NotificationTone;
   actionLabel?: string;

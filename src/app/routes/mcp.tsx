@@ -2,6 +2,8 @@ import { startTransition, useDeferredValue, useEffect, useMemo, useRef, useState
 import type { MouseEvent as ReactMouseEvent } from "react";
 import { createPortal } from "react-dom";
 import { useNotifications } from "@/app/notifications";
+import { BusinessError } from "@/app/errors";
+import { useFailureReporter } from "@/app/failure-feedback";
 import { waitForNextPaint } from "@/app/utils/wait-for-next-paint";
 import {
   deleteMcpServer,
@@ -9,7 +11,6 @@ import {
   getMcpImportSessionSnapshot,
   importMcpServersFromApps,
   openExternalLink,
-  recordFailureFeedback,
   refreshMcpServerTools,
   saveMcpServer,
   shouldUseFixtureData,
@@ -53,17 +54,6 @@ const EMPTY_FORM_STATE: McpFormState = {
   enabledAppIds: [],
 };
 
-function errorToMessage(error: unknown, fallback: string) {
-  if (error instanceof Error) {
-    return error.message;
-  }
-  if (typeof error === "string" && error.trim()) {
-    return error;
-  }
-
-  return fallback;
-}
-
 function buildMcpFeedbackContext(workspace: McpWorkspaceSnapshot | null) {
   return {
     route: "mcp",
@@ -98,7 +88,7 @@ function buildFormState(server: McpServerSummary): McpFormState {
 function parseServerJson(value: string): Record<string, unknown> {
   const parsed = JSON.parse(value) as unknown;
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error("MCP 配置必须是 JSON 对象");
+    throw new BusinessError("MCP 配置必须是 JSON 对象");
   }
 
   return parsed as Record<string, unknown>;
@@ -529,6 +519,7 @@ type McpRouteProps = {
 
 export function McpRoute(props: McpRouteProps = {}) {
   const { notify } = useNotifications();
+  const reportFailure = useFailureReporter();
   const [workspace, setWorkspace] = useState<McpWorkspaceSnapshot | null>(null);
   const [query, setQuery] = useState("");
   const deferredQuery = useDeferredValue(query);
@@ -544,27 +535,22 @@ export function McpRoute(props: McpRouteProps = {}) {
   const [collapsedToolSectionIds, setCollapsedToolSectionIds] = useState<Record<string, boolean>>({});
   const [deleteConfirmingServerId, setDeleteConfirmingServerId] = useState("");
   const [deletingServerId, setDeletingServerId] = useState("");
+  const [saveErrorMessage, setSaveErrorMessage] = useState("");
   const deleteActionRef = useRef<HTMLButtonElement | null>(null);
   const isMountedRef = useRef(false);
-  const toolsRefreshRef = useRef<Set<string>>(new Set());
+  const toolsRefreshQueueRef = useRef<string[]>([]);
+  const toolsRefreshActiveRef = useRef(false);
+  const toolsLoadedRef = useRef(new Set<string>());
+  const importActionLockedRef = useRef(false);
+  const refreshActionLockedRef = useRef(false);
 
-  function commitWorkspace(snapshot: McpWorkspaceSnapshot | null) {
+  function commitWorkspace(
+    snapshot: McpWorkspaceSnapshot | null,
+  ) {
     cacheMcpWorkspace(snapshot);
     startTransition(() => {
       setWorkspace(snapshot);
     });
-  }
-
-  async function openFeedbackIssue(draftPromise: Promise<{ issueUrl: string }>) {
-    try {
-      const draft = await draftPromise;
-      await openExternalLink(draft.issueUrl);
-    } catch (feedbackError) {
-      notify({
-        tone: "error",
-        message: errorToMessage(feedbackError, "打开反馈页面失败"),
-      });
-    }
   }
 
   useEffect(() => {
@@ -573,6 +559,57 @@ export function McpRoute(props: McpRouteProps = {}) {
       isMountedRef.current = false;
     };
   }, []);
+
+  function queueMcpToolRefreshes(snapshot: McpWorkspaceSnapshot | null) {
+    if (toolsRefreshActiveRef.current || shouldUseFixtureData() || !snapshot) {
+      return;
+    }
+
+    toolsRefreshQueueRef.current = snapshot.servers
+      .filter((server) => {
+        if (server.tools.length > 0 && server.toolsDiscoveredAt.trim()) {
+          toolsLoadedRef.current.add(server.id);
+          return false;
+        }
+        return !toolsLoadedRef.current.has(server.id);
+      })
+      .map((server) => server.id);
+
+    if (toolsRefreshQueueRef.current.length > 0) {
+      void drainToolsRefreshQueue();
+    }
+  }
+
+  async function drainToolsRefreshQueue() {
+    if (toolsRefreshActiveRef.current || shouldUseFixtureData()) {
+      return;
+    }
+
+    toolsRefreshActiveRef.current = true;
+    try {
+      while (toolsRefreshQueueRef.current.length > 0) {
+        const serverId = toolsRefreshQueueRef.current.shift();
+        if (!serverId || toolsLoadedRef.current.has(serverId)) {
+          continue;
+        }
+        try {
+          const snapshot = await refreshMcpServerTools(serverId);
+          if (!isMountedRef.current) {
+            return;
+          }
+          const refreshedServer = snapshot.servers.find((server) => server.id === serverId);
+          if ((refreshedServer?.tools.length ?? 0) > 0) {
+            toolsLoadedRef.current.add(serverId);
+          }
+          commitWorkspace(snapshot);
+        } catch (error) {
+          console.warn(`Failed to refresh MCP tools for ${serverId}`, error);
+        }
+      }
+    } finally {
+      toolsRefreshActiveRef.current = false;
+    }
+  }
 
   useEffect(() => {
     let active = true;
@@ -664,43 +701,11 @@ export function McpRoute(props: McpRouteProps = {}) {
     });
   }, [deferredQuery, workspace?.servers]);
 
-  useEffect(() => {
-    if (shouldUseFixtureData()) {
-      return;
-    }
-    const serverIds = (workspace?.servers ?? [])
-      .filter((item) => item.tools.length === 0 && !item.toolsDiscoveredAt && !toolsRefreshRef.current.has(item.id))
-      .map((item) => item.id);
-    if (serverIds.length === 0) {
-      return;
-    }
-    serverIds.forEach((serverId) => toolsRefreshRef.current.add(serverId));
-
-    let active = true;
-    async function refreshTools() {
-      for (const serverId of serverIds) {
-        try {
-          const snapshot = await refreshMcpServerTools(serverId);
-          if (!active) {
-            return;
-          }
-          commitWorkspace(snapshot);
-        } catch (error) {
-          console.warn(`Failed to refresh MCP tools for ${serverId}`, error);
-        }
-      }
-    }
-
-    void refreshTools();
-    return () => {
-      active = false;
-    };
-  }, [workspace?.servers]);
-
   async function handleImport() {
-    if (importSession.isImporting) {
+    if (importSession.isImporting || importActionLockedRef.current) {
       return;
     }
+    importActionLockedRef.current = true;
 
     setDeleteConfirmingServerId("");
     await waitForNextPaint();
@@ -709,36 +714,30 @@ export function McpRoute(props: McpRouteProps = {}) {
       const snapshot = await fetchMcpWorkspace();
       if (isMountedRef.current) {
         commitWorkspace(snapshot);
+        queueMcpToolRefreshes(snapshot);
       } else {
         cacheMcpWorkspace(snapshot);
       }
       notify({
         tone: "success",
-        message: count > 0 ? `已导入 ${count} 项 MCP 启用状态` : "没有发现新的 MCP 配置",
+        message: count > 0 ? `已新增 ${count} 个 MCP 配置` : "没有发现新的 MCP 配置",
       });
     } catch (error) {
-      const message = errorToMessage(error, "导入 MCP 配置失败");
-      const feedbackDraftPromise = recordFailureFeedback({
+      reportFailure(error, {
         operation: "import_mcp_servers_from_apps",
-        message,
+        fallbackMessage: "导入 MCP 配置失败",
         context: buildMcpFeedbackContext(workspace),
       });
-      void feedbackDraftPromise.catch(() => undefined);
-      notify({
-        tone: "error",
-        message,
-        actionLabel: "反馈",
-        onAction: () => {
-          void openFeedbackIssue(feedbackDraftPromise);
-        },
-      });
+    } finally {
+      importActionLockedRef.current = false;
     }
   }
 
   async function handleRefreshWorkspace() {
-    if (isRefreshing) {
+    if (isRefreshing || refreshActionLockedRef.current) {
       return;
     }
+    refreshActionLockedRef.current = true;
 
     setDeleteConfirmingServerId("");
     setIsRefreshing(true);
@@ -746,11 +745,15 @@ export function McpRoute(props: McpRouteProps = {}) {
     try {
       const snapshot = await fetchMcpWorkspace();
       commitWorkspace(snapshot);
+      queueMcpToolRefreshes(snapshot);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "刷新 MCP 配置失败";
-      notify({ tone: "error", message });
+      reportFailure(error, {
+        operation: "refresh_mcp_workspace",
+        fallbackMessage: "刷新 MCP 配置失败",
+      });
     } finally {
       setIsRefreshing(false);
+      refreshActionLockedRef.current = false;
     }
   }
 
@@ -773,10 +776,11 @@ export function McpRoute(props: McpRouteProps = {}) {
       commitWorkspace(snapshot);
     } catch (error) {
       commitWorkspace(previousWorkspace);
-      const message = error instanceof Error
-        ? error.message
-        : String(error || "更新 MCP 启用状态失败");
-      notify({ tone: "error", message });
+      reportFailure(error, {
+        operation: "toggle_mcp_server_app",
+        fallbackMessage: "更新 MCP 启用状态失败",
+        context: { serverId: server.id, appId, enabled },
+      });
     } finally {
       setPendingAppKey("");
     }
@@ -810,8 +814,11 @@ export function McpRoute(props: McpRouteProps = {}) {
       commitWorkspace(patchWorkspaceAppState(snapshot, server.id, targetAppIds, enabled));
     } catch (error) {
       commitWorkspace(previousWorkspace);
-      const message = error instanceof Error ? error.message : "批量更新 MCP 启用状态失败";
-      notify({ tone: "error", message });
+      reportFailure(error, {
+        operation: "toggle_all_mcp_server_apps",
+        fallbackMessage: "批量更新 MCP 启用状态失败",
+        context: { serverId: server.id, appIds: targetAppIds, enabled },
+      });
     } finally {
       setPendingAppKey("");
     }
@@ -836,8 +843,11 @@ export function McpRoute(props: McpRouteProps = {}) {
       commitWorkspace(snapshot);
     } catch (error) {
       commitWorkspace(previousWorkspace);
-      const message = error instanceof Error ? error.message : "更新 MCP tool 启用状态失败";
-      notify({ tone: "error", message });
+      reportFailure(error, {
+        operation: "toggle_mcp_server_tool",
+        fallbackMessage: "更新 MCP tool 启用状态失败",
+        context: { serverId: server.id, toolName, enabled },
+      });
     } finally {
       setPendingToolKey("");
     }
@@ -883,8 +893,11 @@ export function McpRoute(props: McpRouteProps = {}) {
       );
     } catch (error) {
       commitWorkspace(previousWorkspace);
-      const message = error instanceof Error ? error.message : "批量更新 MCP tools 启用状态失败";
-      notify({ tone: "error", message });
+      reportFailure(error, {
+        operation: "toggle_all_mcp_server_tools",
+        fallbackMessage: "批量更新 MCP tools 启用状态失败",
+        context: { serverId: server.id, toolNames: targetTools.map((tool) => tool.name), enabled },
+      });
     } finally {
       setPendingToolKey("");
     }
@@ -907,8 +920,11 @@ export function McpRoute(props: McpRouteProps = {}) {
       commitWorkspace(snapshot);
       notify({ tone: "success", message: `已删除 ${server.name}` });
     } catch (error) {
-      const message = error instanceof Error ? error.message : "删除 MCP 失败";
-      notify({ tone: "error", message });
+      reportFailure(error, {
+        operation: "delete_mcp_server",
+        fallbackMessage: "删除 MCP 失败",
+        context: { serverId: server.id },
+      });
     } finally {
       setDeletingServerId("");
     }
@@ -930,12 +946,20 @@ export function McpRoute(props: McpRouteProps = {}) {
       installedAt: activeEditingServer?.installedAt ?? "",
       updatedAt: "",
     };
-    const snapshot = await saveMcpServer(serverRecord);
-    commitWorkspace(snapshot);
-    setIsCreating(false);
-    setEditingServer(null);
-    setDeleteConfirmingServerId("");
-    notify({ tone: "success", message: `已保存 ${serverRecord.name}` });
+    try {
+      const snapshot = await saveMcpServer(serverRecord);
+      commitWorkspace(snapshot);
+      setIsCreating(false);
+      setEditingServer(null);
+      setDeleteConfirmingServerId("");
+      notify({ tone: "success", message: `已保存 ${serverRecord.name}` });
+    } catch (error) {
+      reportFailure(error, {
+        operation: "save_mcp_server",
+        fallbackMessage: "保存 MCP 失败",
+        context: { serverId, name: serverRecord.name },
+      });
+    }
   }
 
   function handleEdit(server: McpServerSummary) {
@@ -986,7 +1010,7 @@ export function McpRoute(props: McpRouteProps = {}) {
   const importProgress = importSession.progress;
   const importButtonLabel = isImporting
     ? importProgress
-      ? `已导入 ${importProgress.importedCount}`
+      ? `已扫描 ${importProgress.scannedCount}`
       : "扫描中..."
     : "扫描导入";
   const toolbar = (
@@ -1017,7 +1041,7 @@ export function McpRoute(props: McpRouteProps = {}) {
         onClick={() => void handleImport()}
         disabled={isImporting}
         aria-label={isImporting && importProgress
-          ? `正在导入 MCP，已扫描 ${importProgress.scannedCount} 项，已导入 ${importProgress.importedCount} 项`
+          ? `正在导入 MCP，已扫描 ${importProgress.scannedCount} 项，已新增 ${importProgress.importedCount} 项`
           : undefined}
       >
         <span aria-hidden="true" className="skills-toolbar-button__icon">

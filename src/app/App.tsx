@@ -6,6 +6,8 @@ import { MarketRoute, type InstallCategory, type InstallTab } from "@/app/routes
 import { SettingsRoute } from "@/app/routes/settings";
 import { AboutRoute } from "@/app/routes/about";
 import { NotificationProvider } from "@/app/notifications";
+import { useFailureReporter } from "@/app/failure-feedback";
+import { FailureTracker } from "@/app/failure-tracker";
 import { waitForNextPaint } from "@/app/utils/wait-for-next-paint";
 import { AppUpdateAutoPrompt } from "@/features/app-update/AppUpdateAutoPrompt";
 import { SkillWorkspaceProvider, useSkillWorkspace } from "@/features/skills/state/skill-workspace";
@@ -16,6 +18,10 @@ import {
   resolveSkillViewModePreference,
   writeSkillViewModePreference,
 } from "@/features/skills/utils/skill-view-preference";
+import {
+  getCachedMcpWorkspace,
+  subscribeMcpWorkspaceChange,
+} from "@/features/skills/utils/mcp-workspace-cache";
 
 type RouteKey = "skills" | "tools" | "install" | "settings" | "about";
 type SkillsSectionKey = "skills" | "mcp";
@@ -239,6 +245,7 @@ function SidebarToggleButton(props: {
 
 function AppContent() {
   const { installedSkills, refreshWorkspace, toolConfigs } = useSkillWorkspace();
+  const reportFailure = useFailureReporter();
   const initialSkillViewMode = readSkillViewModePreference();
   const isMacOS = isMacOSWindow();
   const brandIconRef = useRef<HTMLDivElement | null>(null);
@@ -255,6 +262,7 @@ function AppContent() {
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [sidebarHandleTop, setSidebarHandleTop] = useState<number | null>(null);
   const [isToolsRefreshing, setIsToolsRefreshing] = useState(false);
+  const [mcpServerCount, setMcpServerCount] = useState(() => getCachedMcpWorkspace()?.servers.length ?? 0);
   const activeDefinition = routes.find((route) => route.key === activeRoute) ?? routes[0];
   const updatableSkillCount = installedSkills.filter((skill) => skill.collabStatus === "update-available").length;
   const pendingPushSkillCount = installedSkills.filter((skill) => skill.collabStatus === "pending-push").length;
@@ -264,10 +272,14 @@ function AppContent() {
     activeRoute === "skills" && activeSkillsSection === "skills"
       ? `已安装的 ${installedSkills.length} 个技能，可更新 ${updatableSkillCount} 个，待推送 ${pendingPushSkillCount} 个`
       : activeRoute === "skills"
-        ? `扫描、编辑并同步 ${mcpToolCount} 个工具的 MCP 配置`
+        ? `扫描、编辑并同步 ${mcpServerCount} 个 MCP，覆盖 ${mcpToolCount} 个工具配置`
       : activeRoute === "tools"
         ? `已安装 ${installedToolCount} 个工具`
       : activeDefinition.description;
+
+  useEffect(() => subscribeMcpWorkspaceChange((snapshot) => {
+    setMcpServerCount(snapshot?.servers.length ?? 0);
+  }), []);
 
   useEffect(() => {
     if (hasSavedSkillViewPreference) {
@@ -322,8 +334,10 @@ function AppContent() {
     try {
       await refreshWorkspace();
     } catch (error) {
-      const message = error instanceof Error ? error.message : "刷新失败";
-      window.alert(message);
+      reportFailure(error, {
+        operation: "refresh_workspace_from_app_shell",
+        fallbackMessage: "刷新失败",
+      });
     } finally {
       setIsToolsRefreshing(false);
     }
@@ -551,8 +565,10 @@ export function App() {
   return (
     <SkillWorkspaceProvider>
       <NotificationProvider>
-        <AppUpdateAutoPrompt />
-        <AppContent />
+        <FailureTracker>
+          <AppUpdateAutoPrompt />
+          <AppContent />
+        </FailureTracker>
       </NotificationProvider>
     </SkillWorkspaceProvider>
   );

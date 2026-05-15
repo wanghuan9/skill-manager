@@ -51,6 +51,12 @@ struct McpStdioDiscoveryAttempt {
     tools: Vec<String>,
 }
 
+#[derive(Clone, Debug)]
+struct McpToolsListPage {
+    tools: Vec<String>,
+    next_cursor: Option<String>,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct McpTargetApp {
@@ -89,6 +95,8 @@ pub struct McpServerRecord {
     pub source_url: String,
     #[serde(default)]
     pub enabled_app_ids: Vec<String>,
+    #[serde(default)]
+    pub imported_from_app_ids: Vec<String>,
     #[serde(default)]
     pub tools: Vec<McpServerToolStatus>,
     #[serde(default)]
@@ -378,6 +386,7 @@ pub async fn install_mcp_server_from_marketplace(
         description: server.description.trim().to_string(),
         source_url,
         enabled_app_ids: Vec::new(),
+        imported_from_app_ids: Vec::new(),
         tools: Vec::new(),
         tools_discovered_at: String::new(),
         tools_discovery_error: String::new(),
@@ -413,8 +422,8 @@ pub async fn install_mcp_server_from_marketplace(
 pub async fn import_mcp_servers_from_apps(app_handle: AppHandle) -> Result<usize, String> {
     let mut records = load_mcp_records()?;
     let metadata_client = mcp_metadata_client();
-    let mut imported_count = 0;
-    let mut scanned_count = 0;
+    let mut added_server_ids = BTreeSet::new();
+    let mut scanned_server_ids = BTreeSet::new();
 
     for app in target_app_specs()? {
         let servers = match read_servers_from_app(&app) {
@@ -435,7 +444,7 @@ pub async fn import_mcp_servers_from_apps(app_handle: AppHandle) -> Result<usize
                     app.config_path.to_string_lossy()
                 )
             })?;
-            scanned_count += 1;
+            scanned_server_ids.insert(id.clone());
             let basic_upsert = upsert_imported_record_basic(&mut records, &id, &app, server)
                 .map_err(|error| {
                     format!(
@@ -446,16 +455,16 @@ pub async fn import_mcp_servers_from_apps(app_handle: AppHandle) -> Result<usize
                         app.config_path.to_string_lossy()
                     )
                 })?;
-            if basic_upsert.changed {
-                imported_count += 1;
+            if basic_upsert.was_created {
+                added_server_ids.insert(id.clone());
             }
             save_and_emit_mcp_import_progress(
                 &app_handle,
                 &records,
                 &app,
                 &id,
-                imported_count,
-                scanned_count,
+                added_server_ids.len(),
+                scanned_server_ids.len(),
                 "imported",
                 basic_upsert.changed,
             )?;
@@ -464,20 +473,16 @@ pub async fn import_mcp_servers_from_apps(app_handle: AppHandle) -> Result<usize
                 &mut records,
                 &id,
                 metadata_client.as_ref(),
-                basic_upsert.should_refresh_tools,
             )
             .await?;
             if hydrated_changed {
-                if !basic_upsert.changed {
-                    imported_count += 1;
-                }
                 save_and_emit_mcp_import_progress(
                     &app_handle,
                     &records,
                     &app,
                     &id,
-                    imported_count,
-                    scanned_count,
+                    added_server_ids.len(),
+                    scanned_server_ids.len(),
                     "hydrated",
                     true,
                 )?;
@@ -485,7 +490,7 @@ pub async fn import_mcp_servers_from_apps(app_handle: AppHandle) -> Result<usize
         }
     }
 
-    Ok(imported_count)
+    Ok(added_server_ids.len())
 }
 
 #[tauri::command]
@@ -500,10 +505,16 @@ pub async fn upsert_mcp_server(server: McpServerRecord) -> Result<McpWorkspaceSn
         if normalized.source_url.trim().is_empty() {
             normalized.source_url = previous.source_url.clone();
         }
+        if normalized.imported_from_app_ids.is_empty() {
+            normalized.imported_from_app_ids = previous.imported_from_app_ids.clone();
+        }
         if normalized.tools.is_empty() {
             normalized.tools = previous.tools.clone();
         }
     }
+    normalized
+        .imported_from_app_ids
+        .retain(|app_id| normalized.enabled_app_ids.iter().any(|enabled_app_id| enabled_app_id == app_id));
     enrich_mcp_record_metadata(&mut normalized, mcp_metadata_client().as_ref()).await;
 
     for app_id in &normalized.enabled_app_ids {
@@ -537,8 +548,10 @@ pub async fn delete_mcp_server(id: &str) -> Result<McpWorkspaceSnapshot, String>
         return Err(format!("未找到 MCP 服务器：{id}"));
     };
 
-    for app_id in record.enabled_app_ids {
-        remove_server_from_app(&app_id, id)?;
+    for app_id in &record.enabled_app_ids {
+        if should_remove_server_from_app(&record, app_id) {
+            remove_server_from_app(app_id, id)?;
+        }
     }
 
     records.retain(|item| item.id != id);
@@ -567,6 +580,7 @@ pub async fn toggle_mcp_server_app(
     } else {
         remove_server_from_app(app_id, &record.id)?;
         record.enabled_app_ids.retain(|item| item != app_id);
+        record.imported_from_app_ids.retain(|item| item != app_id);
     }
     record.updated_at = now_label();
 
@@ -1404,7 +1418,7 @@ fn agent_json_to_unified(server: &Value) -> Result<Value, String> {
 #[derive(Clone, Debug)]
 struct ImportedRecordUpsert {
     changed: bool,
-    should_refresh_tools: bool,
+    was_created: bool,
 }
 
 fn upsert_imported_record_basic(
@@ -1414,11 +1428,16 @@ fn upsert_imported_record_basic(
     server: Value,
 ) -> Result<ImportedRecordUpsert, String> {
     let existing_index = records.iter().position(|item| item.id == id);
+    let was_created = existing_index.is_none();
     let previous_record = existing_index.and_then(|index| records.get(index).cloned());
     let mut next_record = if let Some(previous) = previous_record.clone() {
         let mut enabled_app_ids = previous.enabled_app_ids;
         if !enabled_app_ids.iter().any(|item| item == app.id) {
             enabled_app_ids.push(app.id.to_string());
+        }
+        let mut imported_from_app_ids = previous.imported_from_app_ids;
+        if !imported_from_app_ids.iter().any(|item| item == app.id) {
+            imported_from_app_ids.push(app.id.to_string());
         }
         McpServerRecord {
             id: previous.id,
@@ -1427,6 +1446,7 @@ fn upsert_imported_record_basic(
             description: previous.description,
             source_url: previous.source_url,
             enabled_app_ids,
+            imported_from_app_ids,
             tools: previous.tools,
             tools_discovered_at: previous.tools_discovered_at,
             tools_discovery_error: previous.tools_discovery_error,
@@ -1441,6 +1461,7 @@ fn upsert_imported_record_basic(
             description: String::new(),
             source_url: String::new(),
             enabled_app_ids: vec![app.id.to_string()],
+            imported_from_app_ids: vec![app.id.to_string()],
             tools: Vec::new(),
             tools_discovered_at: String::new(),
             tools_discovery_error: String::new(),
@@ -1450,11 +1471,6 @@ fn upsert_imported_record_basic(
     };
 
     next_record = normalize_record(next_record)?;
-    let should_refresh_tools = previous_record
-        .as_ref()
-        .map(|previous| previous.server != next_record.server || previous.tools.is_empty())
-        .unwrap_or(true);
-
     let has_changed = previous_record
         .as_ref()
         .map(|previous| {
@@ -1481,7 +1497,7 @@ fn upsert_imported_record_basic(
     sort_records(records);
     Ok(ImportedRecordUpsert {
         changed: has_changed,
-        should_refresh_tools,
+        was_created,
     })
 }
 
@@ -1489,14 +1505,13 @@ async fn hydrate_imported_record_by_id(
     records: &mut Vec<McpServerRecord>,
     id: &str,
     metadata_client: Option<&Client>,
-    should_refresh_tools: bool,
 ) -> Result<bool, String> {
     let Some(index) = records.iter().position(|item| item.id == id) else {
         return Ok(false);
     };
     let previous = records[index].clone();
     let mut next_record = previous.clone();
-    hydrate_imported_record(&mut next_record, metadata_client, should_refresh_tools).await;
+    hydrate_imported_record(&mut next_record, metadata_client).await;
 
     let has_changed = previous.name != next_record.name
         || previous.server != next_record.server
@@ -1557,27 +1572,8 @@ fn save_and_emit_mcp_import_progress(
 async fn hydrate_imported_record(
     record: &mut McpServerRecord,
     metadata_client: Option<&Client>,
-    should_refresh_tools: bool,
 ) {
     enrich_mcp_record_metadata(record, metadata_client).await;
-    if !should_refresh_tools {
-        return;
-    }
-
-    match discover_mcp_server_tools(&record.server) {
-        Ok(discovered_tools) if !discovered_tools.is_empty() => {
-            record.tools = merge_discovered_mcp_tools(&record.tools, discovered_tools);
-            record.tools_discovered_at = now_label();
-            record.tools_discovery_error.clear();
-        }
-        Ok(_) => {
-            record.tools_discovery_error.clear();
-        }
-        Err(error) => {
-            log::warn!("导入时探测 {} MCP tools 失败: {}", record.name, error);
-            record.tools_discovery_error = error;
-        }
-    }
 }
 
 fn normalize_record(mut record: McpServerRecord) -> Result<McpServerRecord, String> {
@@ -1618,6 +1614,17 @@ fn normalize_record(mut record: McpServerRecord) -> Result<McpServerRecord, Stri
         .retain(|app_id| supported_app_ids.contains(app_id));
     record.enabled_app_ids.sort();
     record.enabled_app_ids.dedup();
+    record
+        .imported_from_app_ids
+        .retain(|app_id| {
+            supported_app_ids.contains(app_id)
+                && record
+                    .enabled_app_ids
+                    .iter()
+                    .any(|enabled_app_id| enabled_app_id == app_id)
+        });
+    record.imported_from_app_ids.sort();
+    record.imported_from_app_ids.dedup();
     normalize_mcp_tool_statuses(&mut record.tools);
     if record.tools.is_empty() {
         if record.tools_discovery_error.is_empty() {
@@ -1635,6 +1642,13 @@ fn normalize_record(mut record: McpServerRecord) -> Result<McpServerRecord, Stri
     }
     record.updated_at = now_label();
     Ok(record)
+}
+
+fn should_remove_server_from_app(record: &McpServerRecord, app_id: &str) -> bool {
+    !record
+        .imported_from_app_ids
+        .iter()
+        .any(|imported_app_id| imported_app_id == app_id)
 }
 
 fn validate_mcp_server(id: &str, server: &Value) -> Result<(), String> {
@@ -1806,7 +1820,7 @@ fn discover_stdio_mcp_tools_with_wire_format(
     let response = match read_mcp_response(&rx, 1) {
         Ok(_) => {
             write_mcp_stdio_message(&mut stdin, mcp_initialized_notification(), wire_format)?;
-            write_mcp_stdio_message(&mut stdin, mcp_tools_list_request(), wire_format)?;
+            write_mcp_stdio_message(&mut stdin, mcp_tools_list_request(2, None), wire_format)?;
             read_mcp_response(&rx, 2)?
         }
         Err(error) => {
@@ -1819,9 +1833,24 @@ fn discover_stdio_mcp_tools_with_wire_format(
             return Err(format_stdio_discovery_error(&error, &stderr));
         }
     };
+    let mut page = parse_mcp_tools_list_response(&response)?;
+    let mut tools = page.tools;
+    let mut request_id = 2;
+    while let Some(cursor) = page.next_cursor {
+        request_id += 1;
+        write_mcp_stdio_message(
+            &mut stdin,
+            mcp_tools_list_request(request_id, Some(cursor)),
+            wire_format,
+        )?;
+        let response = read_mcp_response(&rx, request_id)?;
+        page = parse_mcp_tools_list_response(&response)?;
+        tools.extend(page.tools);
+    }
+    tools.sort();
+    tools.dedup();
     let _ = child.kill();
     let _ = child.wait();
-    let tools = parse_mcp_tools_list_response(&response)?;
     let stderr = stderr_buffer
         .lock()
         .map(|buffer| buffer.trim().to_string())
@@ -1862,9 +1891,25 @@ fn discover_http_mcp_tools(server: &Value) -> Result<Vec<String>, String> {
         mcp_initialized_notification(),
     )?;
     let tools_response =
-        post_mcp_http_message(&client, url, server, &session_id, mcp_tools_list_request())?;
+        post_mcp_http_message(&client, url, server, &session_id, mcp_tools_list_request(2, None))?;
     let response = parse_mcp_http_json_response(tools_response)?;
-    parse_mcp_tools_list_response(&response)
+    let mut page = parse_mcp_tools_list_response(&response)?;
+    let mut tools = page.tools;
+    while let Some(cursor) = page.next_cursor {
+        let tools_response = post_mcp_http_message(
+            &client,
+            url,
+            server,
+            &session_id,
+            mcp_tools_list_request(2, Some(cursor)),
+        )?;
+        let response = parse_mcp_http_json_response(tools_response)?;
+        page = parse_mcp_tools_list_response(&response)?;
+        tools.extend(page.tools);
+    }
+    tools.sort();
+    tools.dedup();
+    Ok(tools)
 }
 
 fn write_mcp_stdio_message(
@@ -2096,19 +2141,26 @@ fn mcp_initialized_notification() -> Value {
     })
 }
 
-fn mcp_tools_list_request() -> Value {
+fn mcp_tools_list_request(id: i64, cursor: Option<String>) -> Value {
+    let mut params = Map::new();
+    if let Some(cursor) = cursor {
+        params.insert("cursor".to_string(), Value::String(cursor));
+    }
+
     json!({
         "jsonrpc": "2.0",
-        "id": 2,
+        "id": id,
         "method": "tools/list",
-        "params": {}
+        "params": params
     })
 }
 
-fn parse_mcp_tools_list_response(response: &Value) -> Result<Vec<String>, String> {
-    let tools = response
+fn parse_mcp_tools_list_response(response: &Value) -> Result<McpToolsListPage, String> {
+    let result = response
         .get("result")
-        .and_then(|result| result.get("tools"))
+        .ok_or_else(|| "MCP tools/list 响应缺少 result".to_string())?;
+    let tools = result
+        .get("tools")
         .and_then(Value::as_array)
         .ok_or_else(|| "MCP tools/list 响应缺少 tools".to_string())?;
     let mut names = tools
@@ -2121,7 +2173,17 @@ fn parse_mcp_tools_list_response(response: &Value) -> Result<Vec<String>, String
         .into_iter()
         .collect::<Vec<_>>();
     names.sort();
-    Ok(names)
+    let next_cursor = result
+        .get("nextCursor")
+        .or_else(|| result.get("next_cursor"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|cursor| !cursor.is_empty())
+        .map(ToString::to_string);
+    Ok(McpToolsListPage {
+        tools: names,
+        next_cursor,
+    })
 }
 
 fn merge_discovered_mcp_tools(
@@ -3420,11 +3482,7 @@ fn load_mcp_records() -> Result<Vec<McpServerRecord>, String> {
     };
     let persistence = serde_json::from_str::<McpPersistence>(&content)
         .map_err(|error| format!("解析 MCP 状态失败: {error}"))?;
-    persistence
-        .servers
-        .into_iter()
-        .map(normalize_record)
-        .collect()
+    persistence.servers.into_iter().map(normalize_record).collect()
 }
 
 fn save_mcp_records(records: &[McpServerRecord]) -> Result<(), String> {
@@ -4590,6 +4648,416 @@ A comprehensive GitLab MCP server for AI clients. Manage projects, merge request
     }
 
     #[test]
+    fn imported_upsert_reports_no_change_for_existing_server_and_app() {
+        let app = supported_app_spec(
+            APP_CODEX,
+            "Codex",
+            PathBuf::from("/tmp/codex/config.toml"),
+            PathBuf::from("/tmp/codex"),
+        );
+        let mut records = vec![McpServerRecord {
+            id: "filesystem".to_string(),
+            name: "filesystem".to_string(),
+            server: json!({
+                "type": "stdio",
+                "command": "npx",
+                "args": ["-y", "@modelcontextprotocol/server-filesystem"]
+            }),
+            description: "Existing filesystem MCP".to_string(),
+            source_url: "https://github.com/modelcontextprotocol/servers".to_string(),
+            enabled_app_ids: vec![APP_CODEX.to_string()],
+            imported_from_app_ids: vec![APP_CODEX.to_string()],
+            tools: Vec::new(),
+            tools_discovered_at: String::new(),
+            tools_discovery_error: String::new(),
+            installed_at: "2026/5/14 20:00:00".to_string(),
+            updated_at: "2026/5/14 20:00:00".to_string(),
+        }];
+
+        let upsert = upsert_imported_record_basic(
+            &mut records,
+            "filesystem",
+            &app,
+            json!({
+                "type": "stdio",
+                "command": "npx",
+                "args": ["-y", "@modelcontextprotocol/server-filesystem"]
+            }),
+        )
+        .unwrap();
+
+        assert!(!upsert.changed);
+        assert!(!upsert.was_created);
+        assert_eq!(records[0].enabled_app_ids, vec![APP_CODEX.to_string()]);
+        assert_eq!(records[0].imported_from_app_ids, vec![APP_CODEX.to_string()]);
+    }
+
+    #[test]
+    fn imported_server_delete_keeps_original_app_config_for_reimport() {
+        use crate::workspace::TEST_ENV_LOCK;
+
+        let _guard = TEST_ENV_LOCK
+            .lock()
+            .expect("test env lock should not be poisoned");
+        let temp_home = env::temp_dir().join(format!(
+            "skilldock-mcp-delete-reimport-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|duration| duration.as_nanos())
+                .unwrap_or_default()
+        ));
+        fs::create_dir_all(temp_home.join(".codex")).expect("create temp codex dir");
+        let original_home = env::var_os("HOME");
+        env::set_var("HOME", &temp_home);
+
+        let cleanup = || {
+            if let Some(home) = original_home.as_ref() {
+                env::set_var("HOME", home);
+            } else {
+                env::remove_var("HOME");
+            }
+            let _ = fs::remove_dir_all(&temp_home);
+        };
+
+        let server_id = "filesystem";
+        let codex_config_path = temp_home.join(".codex/config.toml");
+        let imported_server = json!({
+            "type": "stdio",
+            "command": "npx",
+            "args": ["-y", "@modelcontextprotocol/server-filesystem"]
+        });
+
+        if let Err(error) = upsert_codex_mcp_server(&codex_config_path, server_id, &imported_server) {
+            cleanup();
+            panic!("seed codex config failed: {error}");
+        }
+
+        let initial_records = vec![McpServerRecord {
+            id: server_id.to_string(),
+            name: server_id.to_string(),
+            server: imported_server.clone(),
+            description: String::new(),
+            source_url: String::new(),
+            enabled_app_ids: vec![APP_CODEX.to_string()],
+            imported_from_app_ids: vec![APP_CODEX.to_string()],
+            tools: Vec::new(),
+            tools_discovered_at: String::new(),
+            tools_discovery_error: String::new(),
+            installed_at: "2026/5/15 12:00:00".to_string(),
+            updated_at: "2026/5/15 12:00:00".to_string(),
+        }];
+
+        if let Err(error) = save_mcp_records(&initial_records) {
+            cleanup();
+            panic!("save initial records failed: {error}");
+        }
+
+        if let Err(error) = tauri::async_runtime::block_on(delete_mcp_server(server_id)) {
+            cleanup();
+            panic!("delete mcp server failed: {error}");
+        }
+
+        let codex_servers = match read_codex_mcp_servers(&codex_config_path) {
+            Ok(servers) => servers,
+            Err(error) => {
+                cleanup();
+                panic!("read codex servers after delete failed: {error}");
+            }
+        };
+        assert_eq!(codex_servers.len(), 1);
+        assert_eq!(codex_servers[0].0, server_id);
+
+        let imported_servers = match read_servers_from_app(&supported_app_spec(
+            APP_CODEX,
+            "Codex",
+            codex_config_path.clone(),
+            temp_home.join(".codex"),
+        )) {
+            Ok(servers) => servers,
+            Err(error) => {
+                cleanup();
+                panic!("read codex servers for reimport failed: {error}");
+            }
+        };
+        assert_eq!(imported_servers.len(), 1);
+
+        let mut reimported_records = match load_mcp_records() {
+            Ok(records) => records,
+            Err(error) => {
+                cleanup();
+                panic!("load records before reimport failed: {error}");
+            }
+        };
+        let upsert = match upsert_imported_record_basic(
+            &mut reimported_records,
+            server_id,
+            &supported_app_spec(
+                APP_CODEX,
+                "Codex",
+                codex_config_path.clone(),
+                temp_home.join(".codex"),
+            ),
+            imported_servers[0].1.clone(),
+        ) {
+            Ok(upsert) => upsert,
+            Err(error) => {
+                cleanup();
+                panic!("reimport upsert failed: {error}");
+            }
+        };
+        assert!(upsert.was_created);
+
+        let records = match reimported_records.first() {
+            Some(record) => record,
+            None => {
+                cleanup();
+                panic!("missing reimported record");
+            }
+        };
+        assert_eq!(records.id, server_id);
+        assert_eq!(records.enabled_app_ids, vec![APP_CODEX.to_string()]);
+        assert_eq!(records.imported_from_app_ids, vec![APP_CODEX.to_string()]);
+
+        if let Err(error) = save_mcp_records(&reimported_records) {
+            cleanup();
+            panic!("save reimported records failed: {error}");
+        }
+
+        let persisted_records = match load_mcp_records() {
+            Ok(records) => records,
+            Err(error) => {
+                cleanup();
+                panic!("load imported records failed: {error}");
+            }
+        };
+        assert_eq!(persisted_records.len(), 1);
+        assert_eq!(persisted_records[0].id, server_id);
+        assert_eq!(persisted_records[0].enabled_app_ids, vec![APP_CODEX.to_string()]);
+        assert_eq!(persisted_records[0].imported_from_app_ids, vec![APP_CODEX.to_string()]);
+
+        cleanup();
+    }
+
+    #[test]
+    fn managed_server_delete_removes_synced_app_config() {
+        use crate::workspace::TEST_ENV_LOCK;
+
+        let _guard = TEST_ENV_LOCK
+            .lock()
+            .expect("test env lock should not be poisoned");
+        let temp_home = env::temp_dir().join(format!(
+            "skilldock-mcp-delete-managed-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|duration| duration.as_nanos())
+                .unwrap_or_default()
+        ));
+        fs::create_dir_all(temp_home.join(".gemini")).expect("create temp gemini dir");
+        let original_home = env::var_os("HOME");
+        env::set_var("HOME", &temp_home);
+
+        let cleanup = || {
+            if let Some(home) = original_home.as_ref() {
+                env::set_var("HOME", home);
+            } else {
+                env::remove_var("HOME");
+            }
+            let _ = fs::remove_dir_all(&temp_home);
+        };
+
+        let server_id = "playwright";
+        let gemini_config_path = temp_home.join(".gemini/settings.json");
+        let managed_server = json!({
+            "type": "stdio",
+            "command": "npx",
+            "args": ["-y", "@playwright/mcp"]
+        });
+
+        if let Err(error) = upsert_gemini_mcp_server(&gemini_config_path, server_id, &managed_server) {
+            cleanup();
+            panic!("seed gemini config failed: {error}");
+        }
+
+        let initial_records = vec![McpServerRecord {
+            id: server_id.to_string(),
+            name: server_id.to_string(),
+            server: managed_server,
+            description: String::new(),
+            source_url: String::new(),
+            enabled_app_ids: vec![APP_GEMINI.to_string()],
+            imported_from_app_ids: Vec::new(),
+            tools: Vec::new(),
+            tools_discovered_at: String::new(),
+            tools_discovery_error: String::new(),
+            installed_at: "2026/5/15 12:00:00".to_string(),
+            updated_at: "2026/5/15 12:00:00".to_string(),
+        }];
+
+        if let Err(error) = save_mcp_records(&initial_records) {
+            cleanup();
+            panic!("save initial records failed: {error}");
+        }
+
+        if let Err(error) = tauri::async_runtime::block_on(delete_mcp_server(server_id)) {
+            cleanup();
+            panic!("delete managed mcp server failed: {error}");
+        }
+
+        let gemini_servers = match read_gemini_mcp_servers(&gemini_config_path) {
+            Ok(servers) => servers,
+            Err(error) => {
+                cleanup();
+                panic!("read gemini servers after delete failed: {error}");
+            }
+        };
+        assert!(gemini_servers.is_empty());
+
+        cleanup();
+    }
+
+    #[test]
+    fn disabling_imported_server_app_removes_source_config_and_source_marker() {
+        use crate::workspace::TEST_ENV_LOCK;
+
+        let _guard = TEST_ENV_LOCK
+            .lock()
+            .expect("test env lock should not be poisoned");
+        let temp_home = env::temp_dir().join(format!(
+            "skilldock-mcp-disable-imported-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|duration| duration.as_nanos())
+                .unwrap_or_default()
+        ));
+        fs::create_dir_all(temp_home.join(".codex")).expect("create temp codex dir");
+        let original_home = env::var_os("HOME");
+        env::set_var("HOME", &temp_home);
+
+        let cleanup = || {
+            if let Some(home) = original_home.as_ref() {
+                env::set_var("HOME", home);
+            } else {
+                env::remove_var("HOME");
+            }
+            let _ = fs::remove_dir_all(&temp_home);
+        };
+
+        let server_id = "filesystem";
+        let codex_config_path = temp_home.join(".codex/config.toml");
+        let imported_server = json!({
+            "type": "stdio",
+            "command": "npx",
+            "args": ["-y", "@modelcontextprotocol/server-filesystem"]
+        });
+
+        if let Err(error) = upsert_codex_mcp_server(&codex_config_path, server_id, &imported_server) {
+            cleanup();
+            panic!("seed codex config failed: {error}");
+        }
+
+        let initial_records = vec![McpServerRecord {
+            id: server_id.to_string(),
+            name: server_id.to_string(),
+            server: imported_server,
+            description: String::new(),
+            source_url: String::new(),
+            enabled_app_ids: vec![APP_CODEX.to_string()],
+            imported_from_app_ids: vec![APP_CODEX.to_string()],
+            tools: Vec::new(),
+            tools_discovered_at: String::new(),
+            tools_discovery_error: String::new(),
+            installed_at: "2026/5/15 12:00:00".to_string(),
+            updated_at: "2026/5/15 12:00:00".to_string(),
+        }];
+
+        if let Err(error) = save_mcp_records(&initial_records) {
+            cleanup();
+            panic!("save initial records failed: {error}");
+        }
+
+        let snapshot = match tauri::async_runtime::block_on(toggle_mcp_server_app(
+            server_id,
+            APP_CODEX,
+            false,
+        )) {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                cleanup();
+                panic!("disable imported mcp app failed: {error}");
+            }
+        };
+
+        let codex_servers = match read_codex_mcp_servers(&codex_config_path) {
+            Ok(servers) => servers,
+            Err(error) => {
+                cleanup();
+                panic!("read codex servers after disable failed: {error}");
+            }
+        };
+        assert!(codex_servers.is_empty());
+
+        let record = match snapshot.servers.iter().find(|server| server.id == server_id) {
+            Some(record) => record,
+            None => {
+                cleanup();
+                panic!("disabled server missing from snapshot");
+            }
+        };
+        assert!(record.enabled_app_count == 0);
+        assert!(record.apps.iter().any(|app| app.app_id == APP_CODEX && !app.is_enabled));
+
+        let persisted_records = match load_mcp_records() {
+            Ok(records) => records,
+            Err(error) => {
+                cleanup();
+                panic!("load persisted records failed: {error}");
+            }
+        };
+        assert!(persisted_records[0].imported_from_app_ids.is_empty());
+
+        cleanup();
+    }
+
+    #[test]
+    fn upsert_clears_imported_marker_for_disabled_apps() {
+        let server = McpServerRecord {
+            id: "playwright".to_string(),
+            name: "playwright".to_string(),
+            server: json!({
+                "type": "stdio",
+                "command": "npx",
+                "args": ["-y", "@playwright/mcp"]
+            }),
+            description: String::new(),
+            source_url: String::new(),
+            enabled_app_ids: Vec::new(),
+            imported_from_app_ids: vec![APP_GEMINI.to_string()],
+            tools: Vec::new(),
+            tools_discovered_at: String::new(),
+            tools_discovery_error: String::new(),
+            installed_at: "2026/5/15 12:00:00".to_string(),
+            updated_at: "2026/5/15 12:00:00".to_string(),
+        };
+
+        let normalized = normalize_record(server).expect("normalize record");
+        assert!(normalized.imported_from_app_ids.is_empty());
+    }
+
+    #[test]
+    fn import_progress_counts_unique_scanned_servers() {
+        let mut scanned_server_ids = BTreeSet::new();
+
+        scanned_server_ids.insert("filesystem".to_string());
+        scanned_server_ids.insert("filesystem".to_string());
+        scanned_server_ids.insert("memory".to_string());
+
+        assert_eq!(scanned_server_ids.len(), 2);
+    }
+
+    #[test]
     fn writes_and_reads_continue_yaml_mcp_server() {
         let dir = unique_continue_test_dir("write-read");
         let path = dir.join("config.yaml");
@@ -5221,7 +5689,7 @@ mcpServers:
         let mut output = Vec::new();
         write_mcp_stdio_message(
             &mut output,
-            mcp_tools_list_request(),
+            mcp_tools_list_request(2, None),
             McpStdioWireFormat::ContentLength,
         )
         .unwrap();
@@ -5303,7 +5771,7 @@ mcpServers:
         let mut output = Vec::new();
         write_mcp_stdio_message(
             &mut output,
-            mcp_tools_list_request(),
+            mcp_tools_list_request(2, None),
             McpStdioWireFormat::LineDelimitedJson,
         )
         .unwrap();
@@ -5312,6 +5780,41 @@ mcpServers:
             String::from_utf8(output).unwrap(),
             "{\"id\":2,\"jsonrpc\":\"2.0\",\"method\":\"tools/list\",\"params\":{}}\n"
         );
+    }
+
+    #[test]
+    fn writes_tools_list_cursor_when_present() {
+        let message = mcp_tools_list_request(3, Some("next-page".to_string()));
+
+        assert_eq!(
+            message,
+            json!({
+                "jsonrpc": "2.0",
+                "id": 3,
+                "method": "tools/list",
+                "params": { "cursor": "next-page" }
+            })
+        );
+    }
+
+    #[test]
+    fn parses_tools_list_next_cursor() {
+        let response = json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "result": {
+                "tools": [
+                    { "name": "beta" },
+                    { "name": "alpha" }
+                ],
+                "nextCursor": "next-page"
+            }
+        });
+
+        let page = parse_mcp_tools_list_response(&response).unwrap();
+
+        assert_eq!(page.tools, vec!["alpha".to_string(), "beta".to_string()]);
+        assert_eq!(page.next_cursor.as_deref(), Some("next-page"));
     }
 
     #[test]

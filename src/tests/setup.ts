@@ -1,4 +1,7 @@
 import "@testing-library/jest-dom";
+import { cleanup } from "@testing-library/react";
+import { afterEach } from "vitest";
+import { resetSkillFixtureState } from "@/features/skills/state/skill-fixtures";
 
 const storageState = new Map<string, string>();
 
@@ -21,3 +24,9 @@ if (typeof window !== "undefined") {
     },
   });
 }
+
+afterEach(() => {
+  cleanup();
+  delete (window as Window & { __SKILLM_MCP_WORKSPACE__?: unknown }).__SKILLM_MCP_WORKSPACE__;
+  resetSkillFixtureState();
+});
