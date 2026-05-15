@@ -96,7 +96,10 @@ test("refresh button stays locked until failed or undiscovered MCP tools reprobe
     )),
   };
   let resolveRefresh: ((snapshot: typeof undiscoveredWorkspace) => void) | undefined;
-  const fetchSpy = vi.spyOn(skillClient, "fetchMcpWorkspace").mockResolvedValue(undiscoveredWorkspace);
+  const fetchSpy = vi
+    .spyOn(skillClient, "fetchMcpWorkspace")
+    .mockResolvedValueOnce(workspace)
+    .mockResolvedValue(undiscoveredWorkspace);
   const refreshSpy = vi.spyOn(skillClient, "refreshMcpServerTools").mockImplementation(
     () =>
       new Promise((resolve) => {
@@ -297,6 +300,104 @@ test("keeps MCP import progress state when switching away and back", async () =>
   });
 
   importSpy.mockRestore();
+});
+
+test("does not restart undiscovered MCP probing on every import progress workspace update", async () => {
+  window.localStorage.clear();
+  const workspace = await skillClient.fetchMcpWorkspace();
+  const undiscoveredWorkspace = {
+    ...workspace,
+    servers: workspace.servers.map((server) => (
+      server.id === "linear"
+        ? {
+            ...server,
+            tools: [],
+            toolsDiscoveredAt: "",
+            toolsDiscoveryError: "",
+          }
+        : server
+    )),
+  };
+  let importListener: ((snapshot: skillClient.McpImportSessionSnapshot) => void) | undefined;
+  const importSpy = vi.spyOn(skillClient, "importMcpServersFromApps").mockImplementation(async () => {
+    importListener?.({
+      isImporting: true,
+      progress: {
+        appId: "codex",
+        appName: "Codex",
+        serverId: "linear",
+        serverName: "linear",
+        importedCount: 1,
+        scannedCount: 1,
+        phase: "imported",
+        changed: true,
+        workspace: undiscoveredWorkspace,
+      },
+    });
+    importListener?.({
+      isImporting: true,
+      progress: {
+        appId: "codex",
+        appName: "Codex",
+        serverId: "filesystem",
+        serverName: "filesystem",
+        importedCount: 2,
+        scannedCount: 2,
+        phase: "imported",
+        changed: true,
+        workspace: undiscoveredWorkspace,
+      },
+    });
+    importListener?.({
+      isImporting: false,
+      progress: {
+        appId: "codex",
+        appName: "Codex",
+        serverId: "filesystem",
+        serverName: "filesystem",
+        importedCount: 2,
+        scannedCount: 2,
+        phase: "hydrated",
+        changed: true,
+        workspace: undiscoveredWorkspace,
+      },
+    });
+    return 2;
+  });
+  const fetchSpy = vi.spyOn(skillClient, "fetchMcpWorkspace").mockResolvedValue(undiscoveredWorkspace);
+  const refreshSpy = vi.spyOn(skillClient, "refreshMcpServerTools").mockResolvedValue(undiscoveredWorkspace);
+  const fixtureSpy = vi.spyOn(skillClient, "shouldUseFixtureData").mockReturnValue(false);
+  const subscribeSpy = vi
+    .spyOn(skillClient, "subscribeMcpImportSessionChange")
+    .mockImplementation((listener) => {
+      importListener = listener;
+      listener(skillClient.getMcpImportSessionSnapshot());
+      return () => {
+        importListener = undefined;
+      };
+    });
+
+  try {
+    render(<App />);
+
+    await userEvent.click(screen.getByRole("button", { name: "MCP" }));
+    await screen.findByText("context7");
+
+    await userEvent.click(screen.getByRole("button", { name: "扫描导入" }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "扫描导入" })).toBeEnabled();
+    });
+
+    expect(refreshSpy).toHaveBeenCalledTimes(1);
+    expect(refreshSpy).toHaveBeenCalledWith("linear");
+  } finally {
+    subscribeSpy.mockRestore();
+    fixtureSpy.mockRestore();
+    refreshSpy.mockRestore();
+    fetchSpy.mockRestore();
+    importSpy.mockRestore();
+  }
 });
 
 test("shows MCP import scan and update counts separately", async () => {

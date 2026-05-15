@@ -545,7 +545,6 @@ export function McpRoute(props: McpRouteProps = {}) {
   const [importSession, setImportSession] = useState(getMcpImportSessionSnapshot);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
-  const [hasLoadedWorkspace, setHasLoadedWorkspace] = useState(false);
   const [toolbarContainer, setToolbarContainer] = useState<HTMLElement | null>(null);
   const [expandedServerId, setExpandedServerId] = useState("");
   const [collapsedToolSectionIds, setCollapsedToolSectionIds] = useState<Record<string, boolean>>({});
@@ -658,12 +657,10 @@ export function McpRoute(props: McpRouteProps = {}) {
         const snapshot = await fetchMcpWorkspace();
         if (active) {
           commitWorkspace(snapshot);
-          setHasLoadedWorkspace(true);
           void probeMcpTools(snapshot, shouldAutoRefreshMcpTools);
         }
       } catch (error) {
         if (active) {
-          setHasLoadedWorkspace(true);
           const message = error instanceof Error ? error.message : "读取 MCP 配置失败";
           setErrorMessage(message);
         }
@@ -681,24 +678,6 @@ export function McpRoute(props: McpRouteProps = {}) {
       setWorkspace(snapshot);
     });
   }), []);
-
-  useEffect(() => {
-    if (!workspace || !hasLoadedWorkspace || shouldUseFixtureData()) {
-      return;
-    }
-
-    const undiscoveredServerIds = workspace.servers
-      .filter((server) => shouldAutoRefreshMcpTools(server) && !probingToolServerIdsRef.current.has(server.id))
-      .map((server) => server.id);
-    if (undiscoveredServerIds.length === 0) {
-      return;
-    }
-
-    void probeMcpTools(
-      workspace,
-      (server) => undiscoveredServerIds.includes(server.id) && shouldAutoRefreshMcpTools(server),
-    );
-  }, [hasLoadedWorkspace, workspace]);
 
   useEffect(() => subscribeMcpImportSessionChange((snapshot) => {
     setImportSession(snapshot);
@@ -773,6 +752,7 @@ export function McpRoute(props: McpRouteProps = {}) {
       } else {
         cacheMcpWorkspace(snapshot);
       }
+      await probeMcpTools(snapshot, shouldAutoRefreshMcpTools);
       notify({
         tone: "success",
         message: count > 0 ? `已新增 ${count} 个 MCP 配置` : "没有发现新的 MCP 配置",
