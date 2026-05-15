@@ -4013,6 +4013,10 @@ fn install_local_skill_from_source_dir(
         .unwrap_or_else(|| "local-skill".into());
     let target_dir = skill_directory(&inferred_name)
         .map_err(|error| format!("无法确定 skill 安装目录: {error}"))?;
+    let cleanup_on_error = !matches!(
+        (source_dir.canonicalize(), target_dir.exists().then(|| target_dir.canonicalize())),
+        (Ok(source_canonical), Some(Ok(target_canonical))) if source_canonical == target_canonical
+    );
     let installed_local_path = copy_local_skill_dir(&source_dir, &target_dir)?;
 
     let installed_at = now_timestamp_label();
@@ -4039,15 +4043,17 @@ fn install_local_skill_from_source_dir(
         tools: vec![],
     };
 
-    let installed_skill = enrich_skill_with_git_state(&normalize_skill_tools(&installed_skill));
-    let mut installed_skills = load_installed_skills(&default_installed_skills());
-    let installed_skill = apply_skill_install_activation(installed_skill, &installed_skills)?;
-    persist_skill_timestamps(&installed_skill);
-    installed_skills.retain(|skill| skill.name != installed_skill.name);
-    installed_skills.insert(0, installed_skill.clone());
-    save_installed_skills(&installed_skills)?;
+    cleanup_local_skill_install_on_error(&target_dir, cleanup_on_error, || {
+        let installed_skill = enrich_skill_with_git_state(&normalize_skill_tools(&installed_skill));
+        let mut installed_skills = load_installed_skills(&default_installed_skills());
+        let installed_skill = apply_skill_install_activation(installed_skill, &installed_skills)?;
+        persist_skill_timestamps(&installed_skill);
+        installed_skills.retain(|skill| skill.name != installed_skill.name);
+        installed_skills.insert(0, installed_skill.clone());
+        save_installed_skills(&installed_skills)?;
 
-    Ok(installed_skill)
+        Ok(installed_skill)
+    })
 }
 
 fn discover_local_install_skills_blocking(
@@ -4316,8 +4322,24 @@ fn copy_local_skill_dir(source_dir: &Path, target_dir: &Path) -> Result<String, 
     if let Some(parent) = target_dir.parent() {
         fs::create_dir_all(parent).map_err(|error| format!("创建 skill 目录失败: {error}"))?;
     }
-    copy_dir_contents(&source_canonical, target_dir)?;
-    Ok(target_dir.to_string_lossy().to_string())
+    let install_result = copy_dir_contents(&source_canonical, target_dir)
+        .map(|_| target_dir.to_string_lossy().to_string());
+    if install_result.is_err() {
+        let _ = fs::remove_dir_all(target_dir);
+    }
+    install_result
+}
+
+fn cleanup_local_skill_install_on_error<T>(
+    target_dir: &Path,
+    cleanup_on_error: bool,
+    install: impl FnOnce() -> Result<T, String>,
+) -> Result<T, String> {
+    let install_result = install();
+    if install_result.is_err() && cleanup_on_error {
+        let _ = fs::remove_dir_all(target_dir);
+    }
+    install_result
 }
 
 fn copy_dir_contents(source_dir: &Path, target_dir: &Path) -> Result<(), String> {
@@ -4377,39 +4399,44 @@ pub fn import_local_skill(local_path: &str) -> Result<SkillSummary, String> {
         .unwrap_or_else(|| "imported-skill".into());
     let target_dir = skill_directory(&skill_name)
         .map_err(|error| format!("无法确定 skill 安装目录: {error}"))?;
+    let cleanup_on_error = !matches!(
+        (source_path.canonicalize(), target_dir.exists().then(|| target_dir.canonicalize())),
+        (Ok(source_canonical), Some(Ok(target_canonical))) if source_canonical == target_canonical
+    );
     let installed_local_path = copy_local_skill_dir(&source_path, &target_dir)?;
+    cleanup_local_skill_install_on_error(&target_dir, cleanup_on_error, || {
+        let installed_at = now_timestamp_label();
+        let mut installed_skills = load_installed_skills(&default_installed_skills());
+        let installed_skill = SkillSummary {
+            name: skill_name,
+            source_label: "本地导入".into(),
+            source_type: "local".into(),
+            source_url: local_path.into(),
+            description: read_skill_description(&Path::new(&installed_local_path).join("SKILL.md")),
+            local_path: installed_local_path,
+            branch: "local".into(),
+            collab_status: "clean".into(),
+            status_text: format!("本地技能已复制到 {APP_BRAND_NAME} 并纳入统一管理。"),
+            remote_updated_at: String::new(),
+            local_updated_at: installed_at.clone(),
+            last_synced_at: installed_at.clone(),
+            last_checked_at: "刚刚".into(),
+            synced_tool_count: 0,
+            last_editor: "".into(),
+            commit_label: "local-only".into(),
+            git_linked: false,
+            tools: vec![],
+        };
 
-    let installed_at = now_timestamp_label();
-    let mut installed_skills = load_installed_skills(&default_installed_skills());
-    let installed_skill = SkillSummary {
-        name: skill_name,
-        source_label: "本地导入".into(),
-        source_type: "local".into(),
-        source_url: local_path.into(),
-        description: read_skill_description(&Path::new(&installed_local_path).join("SKILL.md")),
-        local_path: installed_local_path,
-        branch: "local".into(),
-        collab_status: "clean".into(),
-        status_text: format!("本地技能已复制到 {APP_BRAND_NAME} 并纳入统一管理。"),
-        remote_updated_at: String::new(),
-        local_updated_at: installed_at.clone(),
-        last_synced_at: installed_at.clone(),
-        last_checked_at: "刚刚".into(),
-        synced_tool_count: 0,
-        last_editor: "".into(),
-        commit_label: "local-only".into(),
-        git_linked: false,
-        tools: vec![],
-    };
+        let installed_skill = enrich_skill_with_git_state(&normalize_skill_tools(&installed_skill));
+        let installed_skill = apply_skill_install_activation(installed_skill, &installed_skills)?;
+        persist_skill_timestamps(&installed_skill);
+        installed_skills.retain(|skill| skill.name != installed_skill.name);
+        installed_skills.insert(0, installed_skill.clone());
+        save_installed_skills(&installed_skills)?;
 
-    let installed_skill = enrich_skill_with_git_state(&normalize_skill_tools(&installed_skill));
-    let installed_skill = apply_skill_install_activation(installed_skill, &installed_skills)?;
-    persist_skill_timestamps(&installed_skill);
-    installed_skills.retain(|skill| skill.name != installed_skill.name);
-    installed_skills.insert(0, installed_skill.clone());
-    save_installed_skills(&installed_skills)?;
-
-    Ok(installed_skill)
+        Ok(installed_skill)
+    })
 }
 
 #[tauri::command]
@@ -4925,14 +4952,15 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        build_local_candidates, build_repo_skill_source_url, collect_local_skill_dirs,
-        collect_skills_manager_cached_items, collect_skillsmp_items, import_local_skill,
-        insert_trusted_project_path, install_selected_local_skill_dirs,
-        intellij_trusted_locations_for_project, load_marketplace_cache_page,
-        map_skillsmp_items_to_marketplace, normalize_installed_skill_source_url,
-        open_target_path_for_skill, parse_repo_install_spec, parse_skills_sh_homepage_items,
-        remove_trusted_project_paths, save_marketplace_cache, scan_local_install_skill_candidates,
-        scan_repo_skill_candidates, should_use_skills_sh_homepage_page,
+        build_local_candidates, build_repo_skill_source_url, cleanup_local_skill_install_on_error,
+        collect_local_skill_dirs, collect_skills_manager_cached_items, collect_skillsmp_items,
+        copy_local_skill_dir, import_local_skill, insert_trusted_project_path,
+        install_selected_local_skill_dirs, intellij_trusted_locations_for_project,
+        load_marketplace_cache_page, map_skillsmp_items_to_marketplace,
+        normalize_installed_skill_source_url, open_target_path_for_skill, parse_repo_install_spec,
+        parse_skills_sh_homepage_items, remove_trusted_project_paths, save_marketplace_cache,
+        scan_local_install_skill_candidates, scan_repo_skill_candidates,
+        should_use_skills_sh_homepage_page,
     };
     use crate::models::{MarketplaceSkill, SkillSummary};
     use crate::workspace::TEST_ENV_LOCK;
@@ -5661,6 +5689,47 @@ mod tests {
             .tools
             .iter()
             .any(|tool| { tool.name == "Codex" && tool.status_label == "已启用" }));
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn local_import_cleans_up_partial_skill_directory_on_failure() {
+        let _guard = TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let temp_dir = temp_test_dir("local-import-cleanup-on-failure");
+        let home_dir = temp_dir.join("home");
+        let legacy_skill_dir = temp_dir.join("legacy/broken-skill");
+        let codex_skills_dir = home_dir.join(".codex/skills");
+        let codex_skill_link = codex_skills_dir.join("broken-skill");
+        fs::create_dir_all(&legacy_skill_dir).expect("create legacy skill dir");
+        fs::create_dir_all(&codex_skills_dir).expect("create codex skills dir");
+        fs::write(
+            legacy_skill_dir.join("SKILL.md"),
+            "---\nname: broken-skill\ndescription: 测试失败回滚\n---",
+        )
+        .expect("write legacy skill file");
+        std::os::unix::fs::symlink(&legacy_skill_dir, &codex_skill_link)
+            .expect("create existing external symlink");
+
+        let original_home = env::var_os("HOME");
+        // SAFETY: this test holds ENV_LOCK and restores HOME before returning.
+        unsafe {
+            env::set_var("HOME", &home_dir);
+        }
+
+        let target_dir = home_dir.join(".skilldock/skills/broken-skill");
+        let result: Result<(), String> = cleanup_local_skill_install_on_error(&target_dir, true, || {
+            let _ = copy_local_skill_dir(&legacy_skill_dir, &target_dir)?;
+            Err("forced failure".into())
+        });
+
+        restore_env_var("HOME", original_home);
+
+        assert!(result.is_err());
+        assert!(!target_dir.exists());
 
         let _ = fs::remove_dir_all(temp_dir);
     }
