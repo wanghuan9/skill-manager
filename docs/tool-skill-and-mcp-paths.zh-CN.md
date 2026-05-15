@@ -26,7 +26,7 @@
 | Codex | `codex` | `~/.codex/skills` | 支持 | `~/.codex/config.toml` |
 | Cursor | `cursor` | `~/.cursor/skills` | 支持 | `~/.cursor/mcp.json` |
 | Windsurf | `windsurf` | `~/.codeium/windsurf/skills` | 支持 | `~/.codeium/windsurf/mcp_config.json` |
-| IntelliJ IDEA | `intellij` | `~/.intellij/skills` | 不支持 | - |
+| IntelliJ IDEA | `intellij` | `~/.junie/skills` | 不支持 | - |
 | OpenCode | `opencode` | `~/.config/opencode/skills` | 支持 | `~/.config/opencode/opencode.json` |
 | Gemini CLI | `gemini` | `~/.gemini/skills` | 支持 | `~/.gemini/settings.json` |
 | Antigravity | `antigravity` | `~/.gemini/antigravity/skills` | 支持 | `~/.gemini/antigravity/mcp_config.json` |
@@ -39,7 +39,7 @@
 | Roo Code | `roo-code` | `~/.roo/skills` | 支持 | `~/Library/Application Support/Code/User/globalStorage/RooVeterinaryInc.roo-cline/settings/mcp_settings.json` |
 | Kilo Code | `kilo-code` | `~/.kilocode/skills` | 支持 | `~/Library/Application Support/Code/User/globalStorage/kilocode.kilo-code/settings/mcp_settings.json` |
 | Kiro | `kiro` | `~/.kiro/skills` | 支持 | `~/.kiro/settings/mcp.json` |
-| Goose | `goose` | `~/.config/goose/skills` | 支持 | `~/.config/goose/config.yaml` |
+| Goose | `goose` | `~/.agents/skills` | 支持 | `~/.config/goose/config.yaml` |
 | Junie | `junie` | `~/.junie/skills` | 支持 | `~/.junie/mcp/mcp.json` |
 | Augment | `augment` | `~/.augment/skills` | 支持 | `~/.augment/settings.json` |
 | CodeBuddy | `codebuddy` | `~/.codebuddy/skills` | 支持 | `~/.codebuddy/.mcp.json` |
@@ -59,3 +59,4 @@
 - `Trae`、`Trae CN` 的 `skills` 路径与 MCP 路径不在同一目录，这属于当前实现的预期行为。
 - `Droid` 当前使用 `~/.factory/skills` 与 `~/.factory/mcp.json`。
 - `Antigravity` 当前复用 Gemini 家目录下的独立目录：`~/.gemini/antigravity/`。
+- `Goose` 当前以 `~/.agents/skills` 作为首选 skill 路径，同时兼容扫描旧路径 `~/.config/goose/skills`。

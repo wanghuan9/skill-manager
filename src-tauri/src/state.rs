@@ -186,6 +186,7 @@ pub fn scan_local_skill_candidates(installed_skills: &[SkillSummary]) -> Vec<(St
         home_dir.join(".qoder/skills"),
         home_dir.join(".qwen/skills"),
         home_dir.join(".roo/skills"),
+        home_dir.join(".agents/skills"),
         home_dir.join(".config/goose/skills"),
         home_dir.join(".openclaw/skills"),
         home_dir.join(".augment/skills"),
@@ -953,6 +954,40 @@ mod tests {
             let candidates = scan_local_skill_candidates(&installed_skills);
 
             assert!(candidates.is_empty());
+        });
+    }
+
+    #[test]
+    fn local_candidate_scan_prefers_goose_agents_directory_and_keeps_legacy_compatibility() {
+        with_temp_home(|temp_home| {
+            let agents_skill_dir = temp_home.join(".agents/skills/goose-modern");
+            let legacy_skill_dir = temp_home.join(".config/goose/skills/goose-legacy");
+            fs::create_dir_all(&agents_skill_dir).expect("create modern goose skill dir");
+            fs::create_dir_all(&legacy_skill_dir).expect("create legacy goose skill dir");
+            fs::write(agents_skill_dir.join("SKILL.md"), "# goose-modern")
+                .expect("write modern goose skill file");
+            fs::write(legacy_skill_dir.join("SKILL.md"), "# goose-legacy")
+                .expect("write legacy goose skill file");
+
+            let mut candidates = scan_local_skill_candidates(&[]);
+            candidates.sort();
+
+            assert_eq!(
+                candidates,
+                vec![
+                    (
+                        "goose-legacy".to_string(),
+                        temp_home
+                            .join(".config/goose/skills")
+                            .to_string_lossy()
+                            .to_string()
+                    ),
+                    (
+                        "goose-modern".to_string(),
+                        temp_home.join(".agents/skills").to_string_lossy().to_string()
+                    ),
+                ]
+            );
         });
     }
 }

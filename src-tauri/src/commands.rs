@@ -1661,7 +1661,7 @@ fn build_tool_configs() -> Vec<ToolConfig> {
         (
             "intellij",
             "IntelliJ IDEA",
-            home_path.join(".intellij/skills"),
+            home_path.join(".junie/skills"),
             true,
             "editor",
             vec!["editor"],
@@ -1789,7 +1789,7 @@ fn build_tool_configs() -> Vec<ToolConfig> {
         (
             "goose",
             "Goose",
-            home_path.join(".config/goose/skills"),
+            home_path.join(".agents/skills"),
             true,
             "cli",
             vec!["cli"],

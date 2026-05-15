@@ -1641,7 +1641,7 @@ pub fn get_tool_skills_path(tool_id: &str) -> Result<String, String> {
         "gemini" => home_path.join(".gemini/skills"),
         "antigravity" => home_path.join(".gemini/antigravity/skills"),
         "windsurf" => home_path.join(".codeium/windsurf/skills"),
-        "intellij" => home_path.join(".intellij/skills"),
+        "intellij" => home_path.join(".junie/skills"),
         "openclaw" => home_path.join(".openclaw/skills"),
         "continue" => home_path.join(".continue/skills"),
         "iflow" => home_path.join(".iflow/skills"),
@@ -1652,7 +1652,7 @@ pub fn get_tool_skills_path(tool_id: &str) -> Result<String, String> {
         "cline" => home_path.join(".cline/skills"),
         "commandcode" => home_path.join(".commandcode/skills"),
         "crush" => home_path.join(".config/crush/skills"),
-        "goose" => home_path.join(".config/goose/skills"),
+        "goose" => home_path.join(".agents/skills"),
         "junie" => home_path.join(".junie/skills"),
         "kilo-code" => home_path.join(".kilocode/skills"),
         "kiro" => home_path.join(".kiro/skills"),
@@ -1818,9 +1818,10 @@ fn git_worktree_root(path: &Path) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::{
-        clone_branch_for_resolved_path, create_skill_symlink, migrate_legacy_skill_symlinks,
-        reconcile_tool_skill_symlinks, remove_reserved_workspace_entries, skill_dir_match_score,
-        MarketSourceSpec, ResolvedRemoteSkillPath,
+        clone_branch_for_resolved_path, create_skill_symlink, get_tool_skills_path,
+        migrate_legacy_skill_symlinks, reconcile_tool_skill_symlinks,
+        remove_reserved_workspace_entries, skill_dir_match_score, MarketSourceSpec,
+        ResolvedRemoteSkillPath,
     };
     use crate::models::SkillSummary;
     use crate::workspace::TEST_ENV_LOCK;
@@ -2147,5 +2148,34 @@ mod tests {
             }
         }
         let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn tool_skill_paths_follow_updated_official_locations() {
+        let original_home = std::env::var_os("HOME");
+        let home_dir = temp_test_dir("tool-skill-paths-home");
+        unsafe {
+            std::env::set_var("HOME", &home_dir);
+        }
+
+        assert_eq!(
+            get_tool_skills_path("intellij").expect("intellij path"),
+            home_dir.join(".junie/skills").to_string_lossy().to_string()
+        );
+        assert_eq!(
+            get_tool_skills_path("goose").expect("goose path"),
+            home_dir.join(".agents/skills").to_string_lossy().to_string()
+        );
+
+        if let Some(home) = original_home {
+            unsafe {
+                std::env::set_var("HOME", home);
+            }
+        } else {
+            unsafe {
+                std::env::remove_var("HOME");
+            }
+        }
+        let _ = fs::remove_dir_all(home_dir);
     }
 }

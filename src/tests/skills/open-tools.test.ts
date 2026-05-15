@@ -24,7 +24,7 @@ test("adds Finder as a selectable default open tool", () => {
     buildToolConfig({
       id: "intellij",
       name: "IntelliJ IDEA",
-      skillsPath: "/Users/demo/.intellij/skills",
+      skillsPath: "/Users/demo/.junie/skills",
       mcpConfigPath: "",
       mcpConfigPathRecognized: false,
     }),

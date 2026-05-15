@@ -984,7 +984,7 @@ fn read_servers_from_app(app: &McpTargetAppSpec) -> Result<Vec<(String, Value)>,
         APP_CURSOR => read_json_mcp_servers(&app.config_path, "mcpServers", false),
         APP_OPENCODE => read_agent_json_mcp_servers(&app.config_path),
         APP_WINDSURF => read_json_mcp_servers(&app.config_path, "mcpServers", false),
-        APP_OPENCLAW => read_agent_json_mcp_servers(&app.config_path),
+        APP_OPENCLAW => read_openclaw_mcp_servers(&app.config_path),
         APP_CLINE => read_json_mcp_servers(&app.config_path, "mcpServers", false),
         APP_CODEBUDDY => read_codebuddy_mcp_servers(),
         APP_COMMANDCODE => read_json_mcp_servers(&app.config_path, "mcpServers", false),
@@ -1021,7 +1021,7 @@ fn sync_server_to_app(app_id: &str, server_id: &str, server: &Value) -> Result<(
         APP_CURSOR => upsert_json_mcp_server(&spec.config_path, "mcpServers", server_id, server),
         APP_OPENCODE => upsert_agent_json_mcp_server(&spec.config_path, server_id, server),
         APP_WINDSURF => upsert_json_mcp_server(&spec.config_path, "mcpServers", server_id, server),
-        APP_OPENCLAW => upsert_agent_json_mcp_server(&spec.config_path, server_id, server),
+        APP_OPENCLAW => upsert_openclaw_mcp_server(&spec.config_path, server_id, server),
         APP_CLINE => upsert_json_mcp_server(&spec.config_path, "mcpServers", server_id, server),
         APP_CODEBUDDY => upsert_codebuddy_mcp_server(server_id, server),
         APP_COMMANDCODE => {
@@ -1062,7 +1062,7 @@ fn remove_server_from_app(app_id: &str, server_id: &str) -> Result<(), String> {
         APP_CURSOR => remove_json_mcp_server(&spec.config_path, "mcpServers", server_id),
         APP_OPENCODE => remove_agent_json_mcp_server(&spec.config_path, server_id),
         APP_WINDSURF => remove_json_mcp_server(&spec.config_path, "mcpServers", server_id),
-        APP_OPENCLAW => remove_agent_json_mcp_server(&spec.config_path, server_id),
+        APP_OPENCLAW => remove_openclaw_mcp_server(&spec.config_path, server_id),
         APP_CLINE => remove_json_mcp_server(&spec.config_path, "mcpServers", server_id),
         APP_CODEBUDDY => remove_codebuddy_mcp_server(server_id),
         APP_COMMANDCODE => remove_json_mcp_server(&spec.config_path, "mcpServers", server_id),
@@ -1571,6 +1571,31 @@ fn upsert_agent_json_mcp_server(
 
 fn remove_agent_json_mcp_server(path: &Path, server_id: &str) -> Result<(), String> {
     remove_json_mcp_server(path, "mcp", server_id)
+}
+
+fn read_openclaw_mcp_servers(path: &Path) -> Result<Vec<(String, Value)>, String> {
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+
+    let root = read_json_value(path, true)?;
+    let servers = get_json_object_at_path(&root, "mcp.servers")
+        .cloned()
+        .unwrap_or_default();
+    let mut out = Vec::with_capacity(servers.len());
+    for (server_id, spec) in servers {
+        out.push((server_id, agent_json_to_unified(&spec)?));
+    }
+    Ok(out)
+}
+
+fn upsert_openclaw_mcp_server(path: &Path, server_id: &str, server: &Value) -> Result<(), String> {
+    let agent_server = unified_to_agent_json(server)?;
+    upsert_json_mcp_server(path, "mcp.servers", server_id, &agent_server)
+}
+
+fn remove_openclaw_mcp_server(path: &Path, server_id: &str) -> Result<(), String> {
+    remove_json_mcp_server(path, "mcp.servers", server_id)
 }
 
 fn read_continue_mcp_servers(path: &Path) -> Result<Vec<(String, Value)>, String> {
@@ -6661,5 +6686,77 @@ mcpServers:
             format_stdio_discovery_error("MCP tools 探测超时", stderr),
             "MCP server 启动失败：缺少环境变量 API_TOKEN"
         );
+    }
+
+    #[test]
+    fn openclaw_servers_are_written_under_nested_mcp_servers_key() {
+        let temp_dir = env::temp_dir().join(format!(
+            "skilldock-openclaw-config-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|duration| duration.as_nanos())
+                .unwrap_or_default()
+        ));
+        fs::create_dir_all(&temp_dir).expect("create temp config dir");
+        let config_path = temp_dir.join("openclaw.json");
+
+        upsert_openclaw_mcp_server(
+            &config_path,
+            "context7",
+            &json!({
+                "type": "stdio",
+                "command": "uvx",
+                "args": ["context7-mcp"]
+            }),
+        )
+        .expect("write openclaw mcp server");
+
+        let written = read_json_value(&config_path, false).expect("read openclaw config");
+        assert_eq!(
+            written,
+            json!({
+                "mcp": {
+                    "servers": {
+                        "context7": {
+                            "type": "local",
+                            "command": ["uvx", "context7-mcp"],
+                            "enabled": true
+                        }
+                    }
+                }
+            })
+        );
+
+        let raw_server = written
+            .get("mcp")
+            .and_then(Value::as_object)
+            .and_then(|mcp| mcp.get("servers"))
+            .and_then(Value::as_object)
+            .and_then(|servers| servers.get("context7"))
+            .cloned()
+            .expect("extract raw openclaw server");
+        assert_eq!(
+            agent_json_to_unified(&raw_server).expect("normalize openclaw server"),
+            json!({
+                "type": "stdio",
+                "command": "uvx",
+                "args": ["context7-mcp"]
+            })
+        );
+
+        let loaded = read_openclaw_mcp_servers(&config_path).expect("read openclaw servers");
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].0, "context7".to_string());
+        assert_eq!(
+            loaded[0].1,
+            json!({
+                "type": "stdio",
+                "command": "uvx",
+                "args": ["context7-mcp"]
+            })
+        );
+
+        let _ = fs::remove_dir_all(temp_dir);
     }
 }
