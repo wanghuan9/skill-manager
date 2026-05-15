@@ -679,6 +679,43 @@ test("opens a prefilled feedback issue from MCP import failures", async () => {
   openSpy.mockRestore();
 });
 
+test("keeps feedback entry for business-like MCP import failures and records diagnostics immediately", async () => {
+  window.localStorage.clear();
+  vi.spyOn(skillClient, "importMcpServersFromApps").mockRejectedValueOnce("导入 Cursor MCP \"feishu-mcp\" 失败: stdio 类型 MCP 服务器必须填写 command");
+  const feedbackSpy = vi.spyOn(skillClient, "recordFailureFeedback").mockResolvedValueOnce({
+    title: "[Bug] import_mcp_servers_from_apps 失败",
+    body: "diagnostics",
+    issueUrl: "https://github.com/wanghuan9/skill-manager/issues/new?title=test",
+    logPath: "~/.skilldock/logs/errors.jsonl",
+  });
+  const openSpy = vi.spyOn(skillClient, "openExternalLink").mockResolvedValueOnce(undefined);
+  render(<App />);
+
+  await userEvent.click(screen.getByRole("button", { name: "MCP" }));
+  await userEvent.click(await screen.findByRole("button", { name: "扫描导入" }));
+
+  await waitFor(() => {
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "导入 Cursor MCP \"feishu-mcp\" 失败: stdio 类型 MCP 服务器必须填写 command",
+    );
+    expect(screen.getByRole("button", { name: "反馈" })).toBeInTheDocument();
+    expect(feedbackSpy).toHaveBeenCalledWith(expect.objectContaining({
+      operation: "import_mcp_servers_from_apps",
+      kind: "unknown",
+      message: "导入 Cursor MCP \"feishu-mcp\" 失败: stdio 类型 MCP 服务器必须填写 command",
+    }));
+  });
+
+  await userEvent.click(screen.getByRole("button", { name: "反馈" }));
+
+  await waitFor(() => {
+    expect(openSpy).toHaveBeenCalledWith("https://github.com/wanghuan9/skill-manager/issues/new?title=test");
+  });
+
+  feedbackSpy.mockRestore();
+  openSpy.mockRestore();
+});
+
 test("shows supported MCP apps in enable-to-tool controls", async () => {
   window.localStorage.clear();
   render(<App />);
@@ -975,7 +1012,7 @@ test("bulk toggles MCP target apps from server details", async () => {
     expect(openCodeButton).toHaveAttribute("aria-pressed", "true");
     expect(openCodeButton).toBeEnabled();
   });
-  expect(screen.getByText("已启用 8")).toBeInTheDocument();
+  expect(screen.getByText("已启用 9")).toBeInTheDocument();
   expect(enableAllAppsButton).toBeDisabled();
 
   await userEvent.click(disableAllAppsButton);

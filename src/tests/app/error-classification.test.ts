@@ -10,7 +10,7 @@ test("classifies BusinessError as business", () => {
 
 test("classifies user-facing string errors as business", () => {
   expect(classifyError("请输入有效的 Git 仓库地址。", "fallback")).toEqual({
-    kind: "business",
+    kind: "unknown",
     message: "请输入有效的 Git 仓库地址。",
   });
 });
@@ -24,7 +24,7 @@ test("classifies system-like string errors as unknown", () => {
 
 test("keeps explicit business strings as business when they do not include known system markers", () => {
   expect(classifyError("Failed to install MCP server: 配置缺少 command 字段", "fallback")).toEqual({
-    kind: "business",
+    kind: "unknown",
     message: "Failed to install MCP server: 配置缺少 command 字段",
   });
 });

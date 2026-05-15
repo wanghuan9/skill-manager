@@ -55,10 +55,9 @@ function isSystemLikeMessage(message: string) {
 
 export function classifyError(error: unknown, fallbackMessage: string): FailureClassification {
   const message = normalizeErrorMessage(error, fallbackMessage);
-  const isBusinessStringError = typeof error === "string" && !isSystemLikeMessage(message);
 
   return {
-    kind: isBusinessError(error) || isBusinessStringError ? "business" : "unknown",
+    kind: isBusinessError(error) && !isSystemLikeMessage(message) ? "business" : "unknown",
     message,
   };
 }

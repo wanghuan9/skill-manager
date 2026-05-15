@@ -20,6 +20,14 @@ export function useFailureReporter() {
 
   return useCallback((error: unknown, input: UseFailureReporterInput) => {
     const classification = classifyError(error, input.fallbackMessage);
+    const feedbackInput: FailureFeedbackInput = {
+      operation: input.operation,
+      message: classification.message,
+      kind: classification.kind,
+      context: input.context,
+    };
+
+    const feedbackDraftPromise = recordFailureFeedback(feedbackInput).catch(() => null);
 
     if (classification.kind === "business") {
       notify({ tone: "error", message: classification.message });
@@ -31,17 +39,19 @@ export function useFailureReporter() {
       message: classification.message,
       actionLabel: "反馈",
       onAction: () => {
-        void openFailureFeedbackIssue({
-          operation: input.operation,
-          message: classification.message,
-          kind: "unknown",
-          context: input.context,
-        }).catch((feedbackError) => {
+        void feedbackDraftPromise
+          .then((draft) => {
+            if (draft) {
+              return openExternalLink(draft.issueUrl);
+            }
+            return openFailureFeedbackIssue(feedbackInput);
+          })
+          .catch((feedbackError) => {
           notify({
             tone: "error",
             message: normalizeErrorMessage(feedbackError, "打开反馈页面失败"),
           });
-        });
+          });
       },
     });
   }, [notify]);

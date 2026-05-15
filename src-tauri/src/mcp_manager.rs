@@ -33,6 +33,7 @@ const APP_OPENCLAW: &str = "openclaw";
 const APP_CURSOR: &str = "cursor";
 const APP_WINDSURF: &str = "windsurf";
 const APP_CONTINUE: &str = "continue";
+const APP_HERMES: &str = "hermes";
 const MCP_IMPORT_PROGRESS_EVENT: &str = "mcp-import-progress";
 static MCP_NPM_METADATA_CACHE: OnceLock<Mutex<HashMap<String, McpResolvedMetadata>>> =
     OnceLock::new();
@@ -434,7 +435,8 @@ pub async fn import_mcp_servers_from_apps(app_handle: AppHandle) -> Result<usize
             }
         };
 
-        for (id, server) in servers {
+        for (id, mut server) in servers {
+            normalize_imported_mcp_server(&mut server);
             validate_mcp_server(&id, &server).map_err(|error| {
                 format!(
                     "导入 {} MCP \"{}\" 失败: {}（配置：{}）",
@@ -803,6 +805,12 @@ fn target_app_specs() -> Result<Vec<McpTargetAppSpec>, String> {
             home_dir.join(".continue/config.yaml"),
             home_dir.join(".continue"),
         ),
+        supported_app_spec(
+            APP_HERMES,
+            "Hermes",
+            home_dir.join(".hermes/config.yaml"),
+            home_dir.join(".hermes"),
+        ),
         unsupported_app_spec("iflow", "iFlow", home_dir.join(".iflow")),
         unsupported_app_spec("codebuddy", "CodeBuddy", home_dir.join(".codebuddy")),
         unsupported_app_spec("trae", "Trae", home_dir.join(".trae")),
@@ -820,7 +828,6 @@ fn target_app_specs() -> Result<Vec<McpTargetAppSpec>, String> {
         unsupported_app_spec("roo-code", "Roo Code", home_dir.join(".roo")),
         unsupported_app_spec("zencoder", "Zencoder", home_dir.join(".zencoder")),
         unsupported_app_spec("trae-cn", "Trae CN", home_dir.join(".trae-cn")),
-        unsupported_app_spec("hermes", "Hermes", home_dir.join(".hermes")),
         unsupported_app_spec(
             "github-copilot",
             "GitHub Copilot",
@@ -868,6 +875,7 @@ fn read_servers_from_app(app: &McpTargetAppSpec) -> Result<Vec<(String, Value)>,
         APP_WINDSURF => read_json_mcp_servers(&app.config_path, "mcpServers", false),
         APP_OPENCLAW => read_agent_json_mcp_servers(&app.config_path),
         APP_CONTINUE => read_continue_mcp_servers(&app.config_path),
+        APP_HERMES => read_hermes_mcp_servers(&app.config_path),
         _ => Ok(Vec::new()),
     }
 }
@@ -886,6 +894,7 @@ fn sync_server_to_app(app_id: &str, server_id: &str, server: &Value) -> Result<(
         APP_WINDSURF => upsert_json_mcp_server(&spec.config_path, "mcpServers", server_id, server),
         APP_OPENCLAW => upsert_agent_json_mcp_server(&spec.config_path, server_id, server),
         APP_CONTINUE => upsert_continue_mcp_server(&spec.config_path, server_id, server),
+        APP_HERMES => upsert_hermes_mcp_server(&spec.config_path, server_id, server),
         _ => Err(format!("不支持的 MCP 应用：{app_id}")),
     }
 }
@@ -906,6 +915,7 @@ fn remove_server_from_app(app_id: &str, server_id: &str) -> Result<(), String> {
         APP_WINDSURF => remove_json_mcp_server(&spec.config_path, "mcpServers", server_id),
         APP_OPENCLAW => remove_agent_json_mcp_server(&spec.config_path, server_id),
         APP_CONTINUE => remove_continue_mcp_server(&spec.config_path, server_id),
+        APP_HERMES => remove_hermes_mcp_server(&spec.config_path, server_id),
         _ => Err(format!("不支持的 MCP 应用：{app_id}")),
     }
 }
@@ -935,11 +945,14 @@ fn read_json_mcp_servers(
     }
 
     let root = read_json_value(path, allow_json5)?;
-    let servers = root
+    let mut servers = root
         .get(field_name)
         .and_then(Value::as_object)
         .cloned()
         .unwrap_or_default();
+    for spec in servers.values_mut() {
+        normalize_imported_mcp_server(spec);
+    }
     Ok(servers.into_iter().collect())
 }
 
@@ -1341,6 +1354,101 @@ fn mcp_type_to_continue_transport(server_type: &str) -> Result<&'static str, Str
         "sse" => Ok("sse"),
         other => Err(format!("不支持的 MCP 类型：{other}")),
     }
+}
+
+fn read_hermes_mcp_servers(path: &Path) -> Result<Vec<(String, Value)>, String> {
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+
+    let root = read_yaml_value(path)?;
+    let servers = root
+        .get("mcp_servers")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    let mut out = Vec::new();
+    for (server_id, server) in servers {
+        out.push((server_id, hermes_mcp_server_to_unified(&server)?));
+    }
+    Ok(out)
+}
+
+fn upsert_hermes_mcp_server(path: &Path, server_id: &str, server: &Value) -> Result<(), String> {
+    let mut root = read_yaml_object_or_default(path)?;
+    let next_server = unified_to_hermes_mcp_server(server)?;
+    let entry = root
+        .entry("mcp_servers".to_string())
+        .or_insert_with(|| Value::Object(Map::new()));
+    let servers = entry
+        .as_object_mut()
+        .ok_or_else(|| "mcp_servers 必须是 YAML 对象".to_string())?;
+    servers.insert(server_id.to_string(), next_server);
+
+    write_yaml_value(path, &Value::Object(root))
+}
+
+fn remove_hermes_mcp_server(path: &Path, server_id: &str) -> Result<(), String> {
+    if !path.exists() {
+        return Ok(());
+    }
+
+    let mut root = read_yaml_object_or_default(path)?;
+    if let Some(servers) = root.get_mut("mcp_servers").and_then(Value::as_object_mut) {
+        servers.remove(server_id);
+    }
+    write_yaml_value(path, &Value::Object(root))
+}
+
+fn hermes_mcp_server_to_unified(server: &Value) -> Result<Value, String> {
+    let mut obj = server
+        .as_object()
+        .cloned()
+        .ok_or_else(|| "Hermes MCP 服务器定义必须为 YAML 对象".to_string())?;
+    if obj.get("type").is_none() {
+        let server_type = if obj.contains_key("command") {
+            "stdio"
+        } else if obj
+            .get("transport")
+            .and_then(Value::as_str)
+            .map(|value| value.eq_ignore_ascii_case("sse"))
+            .unwrap_or(false)
+        {
+            "sse"
+        } else if obj.contains_key("url") {
+            "http"
+        } else {
+            "stdio"
+        };
+        obj.insert("type".to_string(), Value::String(server_type.to_string()));
+    }
+    Ok(Value::Object(obj))
+}
+
+fn unified_to_hermes_mcp_server(server: &Value) -> Result<Value, String> {
+    let mut obj = server
+        .as_object()
+        .cloned()
+        .ok_or_else(|| "MCP 服务器定义必须为 JSON 对象".to_string())?;
+    let server_type = obj
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or("stdio")
+        .to_string();
+    match server_type.as_str() {
+        "stdio" => {
+            obj.remove("transport");
+        }
+        "http" => {
+            obj.remove("transport");
+        }
+        "sse" => {
+            obj.insert("transport".to_string(), Value::String("sse".to_string()));
+        }
+        other => return Err(format!("不支持的 MCP 类型：{other}")),
+    }
+    obj.remove("type");
+    Ok(Value::Object(obj))
 }
 
 fn unified_to_agent_json(server: &Value) -> Result<Value, String> {
@@ -4020,6 +4128,70 @@ fn normalize_npx_stdio_args(server: &mut Value) {
     }
 }
 
+fn normalize_imported_mcp_server(server: &mut Value) {
+    let Some(obj) = server.as_object_mut() else {
+        return;
+    };
+
+    if let Some(http_url) = obj.remove("httpUrl") {
+        obj.entry("url".to_string()).or_insert(http_url);
+    }
+
+    if let Some(environment) = obj.remove("environment") {
+        obj.entry("env".to_string()).or_insert(environment);
+    }
+
+    let inline_args = obj
+        .get("command")
+        .and_then(Value::as_array)
+        .cloned()
+        .and_then(|parts| {
+            let command = parts.first().and_then(Value::as_str)?.trim().to_string();
+            if command.is_empty() {
+                return None;
+            }
+            Some((command, parts.into_iter().skip(1).collect::<Vec<_>>()))
+        });
+    if let Some((command, inline_args)) = inline_args {
+        obj.insert("command".to_string(), Value::String(command));
+        if !inline_args.is_empty() {
+            let existing_args = obj
+                .remove("args")
+                .and_then(|value| value.as_array().cloned())
+                .unwrap_or_default();
+            let mut merged_args = inline_args;
+            merged_args.extend(existing_args);
+            obj.insert("args".to_string(), Value::Array(merged_args));
+        }
+    }
+
+    if let Some(server_type) = obj.get("type").and_then(Value::as_str) {
+        match server_type {
+            "streamable-http" => {
+                obj.insert("type".to_string(), Value::String("http".to_string()));
+            }
+            "local" => {
+                obj.insert("type".to_string(), Value::String("stdio".to_string()));
+            }
+            "remote" => {
+                obj.insert("type".to_string(), Value::String("sse".to_string()));
+            }
+            _ => {}
+        }
+    }
+
+    if !obj.contains_key("type") {
+        if obj.get("url").and_then(Value::as_str).is_some() {
+            obj.insert("type".to_string(), Value::String("http".to_string()));
+        } else if obj.get("command").and_then(Value::as_str).is_some() {
+            obj.insert("type".to_string(), Value::String("stdio".to_string()));
+        }
+    }
+
+    normalize_npx_stdio_args(server);
+    normalize_tableau_env_aliases(server);
+}
+
 #[cfg(test)]
 fn replace_npm_package_arg(server: &mut Value, replacement: &str) {
     let Some(args) = server
@@ -5146,6 +5318,82 @@ mcpServers:
         let _ = fs::remove_dir_all(dir);
     }
 
+    #[test]
+    fn writes_and_reads_hermes_yaml_mcp_server() {
+        let dir = unique_continue_test_dir("hermes-write-read");
+        let path = dir.join("config.yaml");
+        let server = json!({
+            "type": "stdio",
+            "command": "uvx",
+            "args": ["--from", "acme-mcp", "acme-server"],
+            "env": {
+                "API_TOKEN": "demo"
+            }
+        });
+
+        upsert_hermes_mcp_server(&path, "acme", &server).unwrap();
+
+        let content = fs::read_to_string(&path).unwrap();
+        assert!(content.contains("mcp_servers:"));
+        assert!(content.contains("acme:"));
+        assert!(content.contains("command: uvx"));
+
+        let servers = read_hermes_mcp_servers(&path).unwrap();
+        assert_eq!(
+            servers,
+            vec![(
+                "acme".to_string(),
+                json!({
+                    "type": "stdio",
+                    "command": "uvx",
+                    "args": ["--from", "acme-mcp", "acme-server"],
+                    "env": {
+                        "API_TOKEN": "demo"
+                    }
+                })
+            )]
+        );
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn removes_hermes_yaml_mcp_server() {
+        let dir = unique_continue_test_dir("hermes-remove");
+        let path = dir.join("config.yaml");
+        write_text_value(
+            &path,
+            r#"mcp_servers:
+  mem0:
+    command: npx
+    args:
+      - "-y"
+      - "@mem0/mcp"
+  context7:
+    transport: sse
+    url: https://mcp.context7.com/mcp
+"#,
+        )
+        .unwrap();
+
+        remove_hermes_mcp_server(&path, "context7").unwrap();
+
+        let servers = read_hermes_mcp_servers(&path).unwrap();
+        assert_eq!(
+            servers,
+            vec![(
+                "mem0".to_string(),
+                json!({
+                    "type": "stdio",
+                    "command": "npx",
+                    "args": ["-y", "@mem0/mcp"]
+                })
+            )]
+        );
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
     fn unique_continue_test_dir(label: &str) -> PathBuf {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -5670,6 +5918,30 @@ mcpServers:
                 "command": "npx",
                 "args": ["-y", "@sylphlab/pdf-reader-mcp"],
                 "description": "PDF Reader MCP"
+            })
+        );
+    }
+
+    #[test]
+    fn normalizes_imported_command_array_to_stdio_command_and_args() {
+        let mut server = json!({
+            "command": ["npx", "@larksuiteoapi/feishu-mcp"],
+            "environment": {
+                "APP_ID": "cli_xxx"
+            }
+        });
+
+        normalize_imported_mcp_server(&mut server);
+
+        assert_eq!(
+            server,
+            json!({
+                "type": "stdio",
+                "command": "npx",
+                "args": ["-y", "@larksuiteoapi/feishu-mcp"],
+                "env": {
+                    "APP_ID": "cli_xxx"
+                }
             })
         );
     }
