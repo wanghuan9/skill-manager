@@ -77,6 +77,12 @@ SkillDock 会检测受支持的 Coding 工具，展示每个工具的 Skills 路
 
 Claude Code · Codex · Cursor · Windsurf · IntelliJ IDEA · OpenCode · Gemini · Antigravity · Continue · GitHub Copilot · Qwen Code · Trae · Trae CN · Cline · Roo Code · Kilo Code · Kiro · Goose · Junie · Augment · CodeBuddy · Droid · OpenClaw · CommandCode · Crush · Qoder · Zencoder · Hermes · iFlow
 
+## 工作机制
+
+SkillDock 会把安装的 skills 统一放在本地托管库中，再通过软链接启用到各个工具自己的 skills 目录。这样既保留一个统一管理源，也让每个工具仍然从自己期望的位置读取 skills。
+
+MCP servers 使用的是另一套机制：SkillDock 会把它们作为统一配置记录管理，并在启用时写入对应工具的 MCP 配置文件。
+
 ## 下载
 
 安装包会发布在 [Releases](../../releases) 页面。

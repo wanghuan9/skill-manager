@@ -77,6 +77,12 @@ Configure the app storage directory, default editor, update checks, default inst
 
 Claude Code · Codex · Cursor · Windsurf · IntelliJ IDEA · OpenCode · Gemini · Antigravity · Continue · GitHub Copilot · Qwen Code · Trae · Trae CN · Cline · Roo Code · Kilo Code · Kiro · Goose · Junie · Augment · CodeBuddy · Droid · OpenClaw · CommandCode · Crush · Qoder · Zencoder · Hermes · iFlow
 
+## How It Works
+
+SkillDock keeps installed skills in a managed local library, then enables them for each supported tool by creating links into that tool's own skills directory. This keeps one source of truth while still letting each tool read skills from the location it expects.
+
+MCP servers use a different model: SkillDock manages them as shared configuration records and writes the enabled servers into each tool's MCP config file.
+
 ## Download
 
 Installers will be published on the [Releases](../../releases) page.
