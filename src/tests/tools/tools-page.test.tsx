@@ -23,9 +23,10 @@ test("renders installed tools only with manage action", async () => {
   expect(manageButtons[0]).toHaveClass("tool-card__manage-button");
   expect(screen.getByRole("button", { name: "打开 Claude Code Skills 文件夹" })).toBeInTheDocument();
   expect(screen.getAllByText("MCP 配置：").length).toBeGreaterThan(0);
-  expect(screen.getByText("/Users/wanghuan/.claude.json")).toBeInTheDocument();
+  expect(screen.getByText("/Users/demo/.claude.json")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "打开 Claude Code MCP 配置" })).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "打开 Antigravity MCP 配置" })).toBeDisabled();
+  expect(screen.getByText("/Users/demo/.gemini/antigravity/mcp_config.json")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "打开 Antigravity MCP 配置" })).toBeEnabled();
 });
 
 test("can open a tool skills folder from the tools page", async () => {
@@ -108,6 +109,21 @@ test("can toggle MCP servers from tool manage dialog", async () => {
 
   expect(await screen.findByText("Skills 3/4 · MCP 0/2")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "启用 context7" })).toBeInTheDocument();
+});
+
+test("shows managed MCP state for Antigravity", async () => {
+  window.localStorage.clear();
+  render(<App />);
+
+  await userEvent.click(screen.getByRole("button", { name: "工具" }));
+  const antigravityToolCard = screen.getByText("Antigravity").closest("article");
+  expect(antigravityToolCard).not.toBeNull();
+  await userEvent.click(within(antigravityToolCard as HTMLElement).getByRole("button", { name: "管理" }));
+
+  await userEvent.click(screen.getByRole("tab", { name: "MCP" }));
+
+  expect(await screen.findByText("context7")).toBeInTheDocument();
+  expect(screen.getByText(/MCP \d+\/\d+/)).toBeInTheDocument();
 });
 
 test("keeps skill rows in a stable order when toggling", async () => {

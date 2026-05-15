@@ -133,6 +133,8 @@ export type ToolConfig = {
   name: string;
   skillsPath: string;
   mcpConfigPath: string;
+  supportsMcp: boolean;
+  mcpConfigPathRecognized: boolean;
   statusLabel: string;
   isEnabled: boolean;
   primaryType: ToolType;

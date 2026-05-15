@@ -7,6 +7,8 @@ function buildToolConfig(overrides: Partial<ToolConfig>): ToolConfig {
     name: "Cursor",
     skillsPath: "/Users/demo/.cursor/skills",
     mcpConfigPath: "/Users/demo/.cursor/mcp.json",
+    supportsMcp: true,
+    mcpConfigPathRecognized: true,
     statusLabel: "已安装",
     isEnabled: true,
     primaryType: "editor",
@@ -24,6 +26,7 @@ test("adds Finder as a selectable default open tool", () => {
       name: "IntelliJ IDEA",
       skillsPath: "/Users/demo/.intellij/skills",
       mcpConfigPath: "",
+      mcpConfigPathRecognized: false,
     }),
   ]);
 

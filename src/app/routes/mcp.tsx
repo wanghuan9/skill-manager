@@ -1108,6 +1108,7 @@ export function McpRoute(props: McpRouteProps = {}) {
           const isExpanded = expandedServerId === server.id;
           const isToolSectionCollapsed = collapsedToolSectionIds[server.id] ?? false;
           const visibleApps = server.apps
+            .filter((app) => isMcpAppSupported(app))
             .filter((app) => installedAppIdSet.has(app.appId))
             .sort(compareAppsByDisplayOrder);
           const enabledVisibleAppCount = visibleApps.filter((app) => app.isEnabled).length;
@@ -1540,7 +1541,7 @@ function McpEditDialog(props: McpEditDialogProps) {
           <div className="mcp-form-field">
             <span>启用软件</span>
             <div className="mcp-form-apps">
-              {apps.map((app) => {
+              {apps.filter((app) => isMcpAppSupported(app)).map((app) => {
                 const checked = formState.enabledAppIds.includes(app.id);
                 const disabled = !isMcpAppReady(app);
 
@@ -1553,7 +1554,7 @@ function McpEditDialog(props: McpEditDialogProps) {
                       onChange={(event) => setEnabledApp(app.id, event.target.checked)}
                     />
                     <McpToolLogo appId={app.id} appName={app.name} />
-                    <span>{isMcpAppSupported(app) ? targetAppLabel(app) : `${app.name}（暂未支持）`}</span>
+                    <span>{targetAppLabel(app)}</span>
                   </label>
                 );
               })}

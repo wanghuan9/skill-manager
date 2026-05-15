@@ -1505,16 +1505,73 @@ fn detect_tool_installation_label(
 
 fn mcp_config_path_for_tool(tool_id: &str, home_path: &Path) -> PathBuf {
     match tool_id {
+        "augment" => home_path.join(".augment/settings.json"),
         "claude-code" => home_path.join(".claude.json"),
+        "cline" => home_path.join(".cline/data/settings/cline_mcp_settings.json"),
+        "codebuddy" => home_path.join(".codebuddy/.mcp.json"),
         "codex" => home_path.join(".codex/config.toml"),
+        "commandcode" => home_path.join(".commandcode/mcp.json"),
         "cursor" => home_path.join(".cursor/mcp.json"),
         "gemini" => home_path.join(".gemini/settings.json"),
+        "antigravity" => home_path.join(".gemini/antigravity/mcp_config.json"),
+        "github-copilot" => home_path.join(".copilot/mcp-config.json"),
+        "goose" => home_path.join(".config/goose/config.yaml"),
+        "hermes" => home_path.join(".hermes/config.yaml"),
+        "iflow" => home_path.join(".iflow/settings.json"),
+        "junie" => home_path.join(".junie/mcp/mcp.json"),
+        "kilo-code" => home_path.join(
+            "Library/Application Support/Code/User/globalStorage/kilocode.kilo-code/settings/mcp_settings.json",
+        ),
+        "kiro" => home_path.join(".kiro/settings/mcp.json"),
         "opencode" => home_path.join(".config/opencode/opencode.json"),
+        "qoder" => home_path.join(".config/Qoder/SharedClientCache/mcp.json"),
+        "qwen-code" => home_path.join(".qwen/settings.json"),
+        "roo-code" => home_path.join(
+            "Library/Application Support/Code/User/globalStorage/RooVeterinaryInc.roo-cline/settings/mcp_settings.json",
+        ),
+        "trae" => home_path.join("Library/Application Support/Trae/User/mcp.json"),
+        "trae-cn" => home_path.join("Library/Application Support/Trae CN/User/mcp.json"),
+        "droid" => home_path.join(".factory/mcp.json"),
         "windsurf" => home_path.join(".codeium/windsurf/mcp_config.json"),
         "openclaw" => home_path.join(".openclaw/openclaw.json"),
         "continue" => home_path.join(".continue/config.yaml"),
+        "crush" => home_path.join(".config/crush/crush.json"),
+        "zencoder" => home_path.join(".zencoder/settings.json"),
         _ => PathBuf::new(),
     }
+}
+
+fn supports_mcp_for_tool(tool_id: &str) -> bool {
+    matches!(
+        tool_id,
+        "augment"
+            | "claude-code"
+            | "cline"
+            | "codebuddy"
+            | "codex"
+            | "commandcode"
+            | "cursor"
+            | "gemini"
+            | "github-copilot"
+            | "goose"
+            | "hermes"
+            | "iflow"
+            | "junie"
+            | "kilo-code"
+            | "kiro"
+            | "opencode"
+            | "openclaw"
+            | "qoder"
+            | "qwen-code"
+            | "roo-code"
+            | "trae"
+            | "trae-cn"
+            | "windsurf"
+            | "zencoder"
+            | "droid"
+            | "crush"
+            | "antigravity"
+    )
 }
 
 fn build_tool_configs() -> Vec<ToolConfig> {
@@ -1867,12 +1924,16 @@ fn build_tool_configs() -> Vec<ToolConfig> {
                 software_spec,
             )| {
                 let mcp_config_path = mcp_config_path_for_tool(id, &home_path);
+                let supports_mcp = supports_mcp_for_tool(id);
+                let mcp_config_path_recognized = !mcp_config_path.as_os_str().is_empty();
 
                 ToolConfig {
                     id: id.into(),
                     name: name.into(),
                     skills_path: skills_path.to_string_lossy().to_string(),
                     mcp_config_path: mcp_config_path.to_string_lossy().to_string(),
+                    supports_mcp,
+                    mcp_config_path_recognized,
                     status_label: detect_tool_installation_label(
                         &config_paths,
                         &software_spec,

@@ -267,7 +267,9 @@ function AppContent() {
   const updatableSkillCount = installedSkills.filter((skill) => skill.collabStatus === "update-available").length;
   const pendingPushSkillCount = installedSkills.filter((skill) => skill.collabStatus === "pending-push").length;
   const installedToolCount = toolConfigs.filter((tool) => tool.statusLabel === "已安装").length;
-  const mcpToolCount = toolConfigs.filter((tool) => tool.statusLabel === "已安装" && tool.mcpConfigPath).length;
+  const mcpToolCount = toolConfigs.filter(
+    (tool) => tool.statusLabel === "已安装" && tool.supportsMcp && tool.mcpConfigPathRecognized,
+  ).length;
   const activeDescription =
     activeRoute === "skills" && activeSkillsSection === "skills"
       ? `已安装的 ${installedSkills.length} 个技能，可更新 ${updatableSkillCount} 个，待推送 ${pendingPushSkillCount} 个`

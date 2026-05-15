@@ -26,14 +26,32 @@ const MCP_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(12);
 const CANVA_REMOTE_MCP_URL: &str = "https://mcp.canva.com/mcp";
 const MEM0_REMOTE_MCP_URL: &str = "https://mcp.mem0.ai/mcp/";
 const APP_CLAUDE_CODE: &str = "claude-code";
+const APP_AUGMENT: &str = "augment";
 const APP_CODEX: &str = "codex";
 const APP_GEMINI: &str = "gemini";
 const APP_OPENCODE: &str = "opencode";
 const APP_OPENCLAW: &str = "openclaw";
 const APP_CURSOR: &str = "cursor";
 const APP_WINDSURF: &str = "windsurf";
+const APP_CLINE: &str = "cline";
+const APP_CODEBUDDY: &str = "codebuddy";
 const APP_CONTINUE: &str = "continue";
+const APP_COMMANDCODE: &str = "commandcode";
+const APP_CRUSH: &str = "crush";
+const APP_DROID: &str = "droid";
+const APP_GITHUB_COPILOT: &str = "github-copilot";
+const APP_GOOSE: &str = "goose";
 const APP_HERMES: &str = "hermes";
+const APP_IFLOW: &str = "iflow";
+const APP_JUNIE: &str = "junie";
+const APP_KILO_CODE: &str = "kilo-code";
+const APP_KIRO: &str = "kiro";
+const APP_QODER: &str = "qoder";
+const APP_QWEN_CODE: &str = "qwen-code";
+const APP_ROO_CODE: &str = "roo-code";
+const APP_TRAE: &str = "trae";
+const APP_TRAE_CN: &str = "trae-cn";
+const APP_ZENCODER: &str = "zencoder";
 const MCP_IMPORT_PROGRESS_EVENT: &str = "mcp-import-progress";
 static MCP_NPM_METADATA_CACHE: OnceLock<Mutex<HashMap<String, McpResolvedMetadata>>> =
     OnceLock::new();
@@ -753,10 +771,22 @@ fn target_app_specs() -> Result<Vec<McpTargetAppSpec>, String> {
 
     Ok(vec![
         supported_app_spec(
+            APP_AUGMENT,
+            "Augment",
+            home_dir.join(".augment/settings.json"),
+            home_dir.join(".augment"),
+        ),
+        supported_app_spec(
             APP_CLAUDE_CODE,
             "Claude Code",
             home_dir.join(".claude.json"),
             home_dir.join(".claude"),
+        ),
+        supported_app_spec(
+            APP_ZENCODER,
+            "Zencoder",
+            home_dir.join(".zencoder/settings.json"),
+            home_dir.join(".zencoder"),
         ),
         supported_app_spec(
             APP_CODEX,
@@ -782,9 +812,10 @@ fn target_app_specs() -> Result<Vec<McpTargetAppSpec>, String> {
             home_dir.join(".gemini/settings.json"),
             home_dir.join(".gemini"),
         ),
-        unsupported_app_spec(
+        supported_app_spec(
             "antigravity",
             "Antigravity",
+            home_dir.join(".gemini/antigravity/mcp_config.json"),
             home_dir.join(".gemini/antigravity"),
         ),
         supported_app_spec(
@@ -806,32 +837,110 @@ fn target_app_specs() -> Result<Vec<McpTargetAppSpec>, String> {
             home_dir.join(".continue"),
         ),
         supported_app_spec(
+            APP_CLINE,
+            "Cline",
+            home_dir.join(".cline/data/settings/cline_mcp_settings.json"),
+            home_dir.join(".cline"),
+        ),
+        supported_app_spec(
+            APP_CODEBUDDY,
+            "CodeBuddy",
+            home_dir.join(".codebuddy/.mcp.json"),
+            home_dir.join(".codebuddy"),
+        ),
+        supported_app_spec(
+            APP_COMMANDCODE,
+            "CommandCode",
+            home_dir.join(".commandcode/mcp.json"),
+            home_dir.join(".commandcode"),
+        ),
+        supported_app_spec(
+            APP_GITHUB_COPILOT,
+            "GitHub Copilot",
+            home_dir.join(".copilot/mcp-config.json"),
+            home_dir.join(".copilot"),
+        ),
+        supported_app_spec(
+            APP_GOOSE,
+            "Goose",
+            home_dir.join(".config/goose/config.yaml"),
+            home_dir.join(".config/goose"),
+        ),
+        supported_app_spec(
             APP_HERMES,
             "Hermes",
             home_dir.join(".hermes/config.yaml"),
             home_dir.join(".hermes"),
         ),
-        unsupported_app_spec("iflow", "iFlow", home_dir.join(".iflow")),
-        unsupported_app_spec("codebuddy", "CodeBuddy", home_dir.join(".codebuddy")),
-        unsupported_app_spec("trae", "Trae", home_dir.join(".trae")),
-        unsupported_app_spec("droid", "Droid", home_dir.join(".factory")),
-        unsupported_app_spec("augment", "Augment", home_dir.join(".augment")),
-        unsupported_app_spec("cline", "Cline", home_dir.join(".cline")),
-        unsupported_app_spec("commandcode", "CommandCode", home_dir.join(".commandcode")),
-        unsupported_app_spec("crush", "Crush", home_dir.join(".config/crush")),
-        unsupported_app_spec("goose", "Goose", home_dir.join(".config/goose")),
-        unsupported_app_spec("junie", "Junie", home_dir.join(".junie")),
-        unsupported_app_spec("kilo-code", "Kilo Code", home_dir.join(".kilocode")),
-        unsupported_app_spec("kiro", "Kiro", home_dir.join(".kiro")),
-        unsupported_app_spec("qoder", "Qoder", home_dir.join(".qoder")),
-        unsupported_app_spec("qwen-code", "Qwen Code", home_dir.join(".qwen")),
-        unsupported_app_spec("roo-code", "Roo Code", home_dir.join(".roo")),
-        unsupported_app_spec("zencoder", "Zencoder", home_dir.join(".zencoder")),
-        unsupported_app_spec("trae-cn", "Trae CN", home_dir.join(".trae-cn")),
-        unsupported_app_spec(
-            "github-copilot",
-            "GitHub Copilot",
-            home_dir.join(".copilot"),
+        supported_app_spec(
+            APP_IFLOW,
+            "iFlow",
+            home_dir.join(".iflow/settings.json"),
+            home_dir.join(".iflow"),
+        ),
+        supported_app_spec(
+            APP_TRAE,
+            "Trae",
+            home_dir.join("Library/Application Support/Trae/User/mcp.json"),
+            home_dir.join("Library/Application Support/Trae"),
+        ),
+        supported_app_spec(
+            APP_DROID,
+            "Droid",
+            home_dir.join(".factory/mcp.json"),
+            home_dir.join(".factory"),
+        ),
+        supported_app_spec(
+            APP_CRUSH,
+            "Crush",
+            home_dir.join(".config/crush/crush.json"),
+            home_dir.join(".config/crush"),
+        ),
+        supported_app_spec(
+            APP_JUNIE,
+            "Junie",
+            home_dir.join(".junie/mcp/mcp.json"),
+            home_dir.join(".junie"),
+        ),
+        supported_app_spec(
+            APP_KILO_CODE,
+            "Kilo Code",
+            home_dir.join(
+                "Library/Application Support/Code/User/globalStorage/kilocode.kilo-code/settings/mcp_settings.json",
+            ),
+            home_dir.join("Library/Application Support/Code/User/globalStorage/kilocode.kilo-code"),
+        ),
+        supported_app_spec(
+            APP_KIRO,
+            "Kiro",
+            home_dir.join(".kiro/settings/mcp.json"),
+            home_dir.join(".kiro"),
+        ),
+        supported_app_spec(
+            APP_QODER,
+            "Qoder",
+            home_dir.join(".config/Qoder/SharedClientCache/mcp.json"),
+            home_dir.join(".config/Qoder/SharedClientCache"),
+        ),
+        supported_app_spec(
+            APP_QWEN_CODE,
+            "Qwen Code",
+            home_dir.join(".qwen/settings.json"),
+            home_dir.join(".qwen"),
+        ),
+        supported_app_spec(
+            APP_ROO_CODE,
+            "Roo Code",
+            home_dir.join(
+                "Library/Application Support/Code/User/globalStorage/RooVeterinaryInc.roo-cline/settings/mcp_settings.json",
+            ),
+            home_dir.join("Library/Application Support/Code/User/globalStorage/RooVeterinaryInc.roo-cline"),
+        ),
+        supported_app_spec(
+            APP_TRAE_CN,
+            "Trae CN",
+            home_dir.join("Library/Application Support/Trae CN/User/mcp.json"),
+            home_dir.join("Library/Application Support/Trae CN"),
         ),
     ])
 }
@@ -867,15 +976,33 @@ fn unsupported_app_spec(
 
 fn read_servers_from_app(app: &McpTargetAppSpec) -> Result<Vec<(String, Value)>, String> {
     match app.id {
+        APP_AUGMENT => read_json_mcp_servers(&app.config_path, "mcpServers", false),
         APP_CLAUDE_CODE => read_json_mcp_servers(&app.config_path, "mcpServers", false),
-        APP_GEMINI => read_gemini_mcp_servers(&app.config_path),
+        APP_ZENCODER => read_json_mcp_servers(&app.config_path, "zencoder.mcpServers", false),
+        APP_GEMINI | "antigravity" => read_gemini_mcp_servers(&app.config_path),
         APP_CODEX => read_codex_mcp_servers(&app.config_path),
         APP_CURSOR => read_json_mcp_servers(&app.config_path, "mcpServers", false),
         APP_OPENCODE => read_agent_json_mcp_servers(&app.config_path),
         APP_WINDSURF => read_json_mcp_servers(&app.config_path, "mcpServers", false),
         APP_OPENCLAW => read_agent_json_mcp_servers(&app.config_path),
+        APP_CLINE => read_json_mcp_servers(&app.config_path, "mcpServers", false),
+        APP_CODEBUDDY => read_codebuddy_mcp_servers(),
+        APP_COMMANDCODE => read_json_mcp_servers(&app.config_path, "mcpServers", false),
         APP_CONTINUE => read_continue_mcp_servers(&app.config_path),
+        APP_GITHUB_COPILOT => read_json_mcp_servers(&app.config_path, "mcpServers", false),
+        APP_GOOSE => read_goose_mcp_servers(&app.config_path),
         APP_HERMES => read_hermes_mcp_servers(&app.config_path),
+        APP_IFLOW => read_iflow_mcp_servers(),
+        APP_JUNIE => read_json_mcp_servers(&app.config_path, "mcpServers", false),
+        APP_KILO_CODE => read_json_mcp_servers(&app.config_path, "mcpServers", false),
+        APP_KIRO => read_json_mcp_servers(&app.config_path, "mcpServers", false),
+        APP_QODER => read_json_mcp_servers(&app.config_path, "mcpServers", false),
+        APP_QWEN_CODE => read_gemini_mcp_servers(&app.config_path),
+        APP_ROO_CODE => read_json_mcp_servers(&app.config_path, "mcpServers", false),
+        APP_TRAE => read_json_mcp_servers(&app.config_path, "mcpServers", false),
+        APP_TRAE_CN => read_trae_cn_mcp_servers(),
+        APP_DROID => read_json_mcp_servers(&app.config_path, "mcpServers", false),
+        APP_CRUSH => read_json_mcp_servers(&app.config_path, "mcp", false),
         _ => Ok(Vec::new()),
     }
 }
@@ -884,17 +1011,37 @@ fn sync_server_to_app(app_id: &str, server_id: &str, server: &Value) -> Result<(
     let spec = find_app_spec(app_id)?;
     validate_app_is_ready(&spec)?;
     match app_id {
+        APP_AUGMENT => upsert_json_mcp_server(&spec.config_path, "mcpServers", server_id, server),
         APP_CLAUDE_CODE => {
             upsert_json_mcp_server(&spec.config_path, "mcpServers", server_id, server)
         }
-        APP_GEMINI => upsert_gemini_mcp_server(&spec.config_path, server_id, server),
+        APP_ZENCODER => upsert_json_mcp_server(&spec.config_path, "zencoder.mcpServers", server_id, server),
+        APP_GEMINI | "antigravity" => upsert_gemini_mcp_server(&spec.config_path, server_id, server),
         APP_CODEX => upsert_codex_mcp_server(&spec.config_path, server_id, server),
         APP_CURSOR => upsert_json_mcp_server(&spec.config_path, "mcpServers", server_id, server),
         APP_OPENCODE => upsert_agent_json_mcp_server(&spec.config_path, server_id, server),
         APP_WINDSURF => upsert_json_mcp_server(&spec.config_path, "mcpServers", server_id, server),
         APP_OPENCLAW => upsert_agent_json_mcp_server(&spec.config_path, server_id, server),
+        APP_CLINE => upsert_json_mcp_server(&spec.config_path, "mcpServers", server_id, server),
+        APP_CODEBUDDY => upsert_codebuddy_mcp_server(server_id, server),
+        APP_COMMANDCODE => {
+            upsert_json_mcp_server(&spec.config_path, "mcpServers", server_id, server)
+        }
         APP_CONTINUE => upsert_continue_mcp_server(&spec.config_path, server_id, server),
+        APP_GITHUB_COPILOT => upsert_json_mcp_server(&spec.config_path, "mcpServers", server_id, server),
+        APP_GOOSE => upsert_goose_mcp_server(&spec.config_path, server_id, server),
         APP_HERMES => upsert_hermes_mcp_server(&spec.config_path, server_id, server),
+        APP_IFLOW => upsert_iflow_mcp_server(server_id, server),
+        APP_JUNIE => upsert_json_mcp_server(&spec.config_path, "mcpServers", server_id, server),
+        APP_KILO_CODE => upsert_json_mcp_server(&spec.config_path, "mcpServers", server_id, server),
+        APP_KIRO => upsert_json_mcp_server(&spec.config_path, "mcpServers", server_id, server),
+        APP_QODER => upsert_json_mcp_server(&spec.config_path, "mcpServers", server_id, server),
+        APP_QWEN_CODE => upsert_gemini_mcp_server(&spec.config_path, server_id, server),
+        APP_ROO_CODE => upsert_json_mcp_server(&spec.config_path, "mcpServers", server_id, server),
+        APP_TRAE => upsert_json_mcp_server(&spec.config_path, "mcpServers", server_id, server),
+        APP_TRAE_CN => upsert_trae_cn_mcp_server(server_id, server),
+        APP_DROID => upsert_json_mcp_server(&spec.config_path, "mcpServers", server_id, server),
+        APP_CRUSH => upsert_json_mcp_server(&spec.config_path, "mcp", server_id, server),
         _ => Err(format!("不支持的 MCP 应用：{app_id}")),
     }
 }
@@ -907,15 +1054,33 @@ fn sync_record_to_app(app_id: &str, record: &McpServerRecord) -> Result<(), Stri
 fn remove_server_from_app(app_id: &str, server_id: &str) -> Result<(), String> {
     let spec = find_app_spec(app_id)?;
     match app_id {
+        APP_AUGMENT => remove_json_mcp_server(&spec.config_path, "mcpServers", server_id),
         APP_CLAUDE_CODE => remove_json_mcp_server(&spec.config_path, "mcpServers", server_id),
-        APP_GEMINI => remove_json_mcp_server(&spec.config_path, "mcpServers", server_id),
+        APP_ZENCODER => remove_json_mcp_server(&spec.config_path, "zencoder.mcpServers", server_id),
+        APP_GEMINI | "antigravity" => remove_json_mcp_server(&spec.config_path, "mcpServers", server_id),
         APP_CODEX => remove_codex_mcp_server(&spec.config_path, server_id),
         APP_CURSOR => remove_json_mcp_server(&spec.config_path, "mcpServers", server_id),
         APP_OPENCODE => remove_agent_json_mcp_server(&spec.config_path, server_id),
         APP_WINDSURF => remove_json_mcp_server(&spec.config_path, "mcpServers", server_id),
         APP_OPENCLAW => remove_agent_json_mcp_server(&spec.config_path, server_id),
+        APP_CLINE => remove_json_mcp_server(&spec.config_path, "mcpServers", server_id),
+        APP_CODEBUDDY => remove_codebuddy_mcp_server(server_id),
+        APP_COMMANDCODE => remove_json_mcp_server(&spec.config_path, "mcpServers", server_id),
         APP_CONTINUE => remove_continue_mcp_server(&spec.config_path, server_id),
+        APP_GITHUB_COPILOT => remove_json_mcp_server(&spec.config_path, "mcpServers", server_id),
+        APP_GOOSE => remove_goose_mcp_server(&spec.config_path, server_id),
         APP_HERMES => remove_hermes_mcp_server(&spec.config_path, server_id),
+        APP_IFLOW => remove_iflow_mcp_server(server_id),
+        APP_JUNIE => remove_json_mcp_server(&spec.config_path, "mcpServers", server_id),
+        APP_KILO_CODE => remove_json_mcp_server(&spec.config_path, "mcpServers", server_id),
+        APP_KIRO => remove_json_mcp_server(&spec.config_path, "mcpServers", server_id),
+        APP_QODER => remove_json_mcp_server(&spec.config_path, "mcpServers", server_id),
+        APP_QWEN_CODE => remove_json_mcp_server(&spec.config_path, "mcpServers", server_id),
+        APP_ROO_CODE => remove_json_mcp_server(&spec.config_path, "mcpServers", server_id),
+        APP_TRAE => remove_json_mcp_server(&spec.config_path, "mcpServers", server_id),
+        APP_TRAE_CN => remove_trae_cn_mcp_server(server_id),
+        APP_DROID => remove_json_mcp_server(&spec.config_path, "mcpServers", server_id),
+        APP_CRUSH => remove_json_mcp_server(&spec.config_path, "mcp", server_id),
         _ => Err(format!("不支持的 MCP 应用：{app_id}")),
     }
 }
@@ -945,15 +1110,22 @@ fn read_json_mcp_servers(
     }
 
     let root = read_json_value(path, allow_json5)?;
-    let mut servers = root
-        .get(field_name)
-        .and_then(Value::as_object)
-        .cloned()
-        .unwrap_or_default();
+    let mut servers = get_json_object_at_path(&root, field_name).cloned().unwrap_or_default();
     for spec in servers.values_mut() {
         normalize_imported_mcp_server(spec);
     }
     Ok(servers.into_iter().collect())
+}
+
+fn read_json_mcp_servers_or_missing(
+    path: &Path,
+    field_name: &str,
+    allow_json5: bool,
+) -> Result<Vec<(String, Value)>, String> {
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    read_json_mcp_servers(path, field_name, allow_json5)
 }
 
 fn upsert_json_mcp_server(
@@ -971,12 +1143,7 @@ fn upsert_json_mcp_server(
     let obj = root
         .as_object_mut()
         .ok_or_else(|| format!("{} 根节点必须是 JSON 对象", path.display()))?;
-    let entry = obj
-        .entry(field_name.to_string())
-        .or_insert_with(|| Value::Object(Map::new()));
-    let servers = entry
-        .as_object_mut()
-        .ok_or_else(|| format!("{field_name} 必须是 JSON 对象"))?;
+    let servers = ensure_json_object_path(obj, field_name)?;
     servers.insert(server_id.to_string(), server.clone());
     write_json_value(path, &root)
 }
@@ -987,10 +1154,192 @@ fn remove_json_mcp_server(path: &Path, field_name: &str, server_id: &str) -> Res
     }
 
     let mut root = read_json_value(path, false)?;
-    if let Some(servers) = root.get_mut(field_name).and_then(Value::as_object_mut) {
+    if let Some(servers) = get_json_object_mut_at_path(&mut root, field_name) {
         servers.remove(server_id);
     }
     write_json_value(path, &root)
+}
+
+fn json_field_segments(field_name: &str) -> impl Iterator<Item = &str> {
+    field_name.split('.').filter(|segment| !segment.is_empty())
+}
+
+fn get_json_object_at_path<'a>(root: &'a Value, field_name: &str) -> Option<&'a Map<String, Value>> {
+    let mut current = root;
+    for segment in json_field_segments(field_name) {
+        current = current.get(segment)?;
+    }
+    current.as_object()
+}
+
+fn get_json_object_mut_at_path<'a>(
+    root: &'a mut Value,
+    field_name: &str,
+) -> Option<&'a mut Map<String, Value>> {
+    let mut current = root;
+    for segment in json_field_segments(field_name) {
+        current = current.get_mut(segment)?;
+    }
+    current.as_object_mut()
+}
+
+fn ensure_json_object_path<'a>(
+    root: &'a mut Map<String, Value>,
+    field_name: &str,
+) -> Result<&'a mut Map<String, Value>, String> {
+    let segments = json_field_segments(field_name).collect::<Vec<_>>();
+    if segments.is_empty() {
+        return Err("JSON 字段路径不能为空".to_string());
+    }
+
+    let mut current = root;
+    for segment in &segments[..segments.len() - 1] {
+        let entry = current
+            .entry((*segment).to_string())
+            .or_insert_with(|| Value::Object(Map::new()));
+        current = entry
+            .as_object_mut()
+            .ok_or_else(|| format!("{field_name} 必须是 JSON 对象路径"))?;
+    }
+
+    let leaf = current
+        .entry(segments[segments.len() - 1].to_string())
+        .or_insert_with(|| Value::Object(Map::new()));
+    leaf.as_object_mut()
+        .ok_or_else(|| format!("{field_name} 必须是 JSON 对象"))
+}
+
+fn codebuddy_mcp_candidate_paths() -> Result<Vec<PathBuf>, String> {
+    let home_dir = home_dir()?;
+    Ok(vec![
+        home_dir.join(".codebuddy/.mcp.json"),
+        home_dir.join(".codebuddy/mcp.json"),
+        home_dir.join(".codebuddy.json"),
+    ])
+}
+
+fn resolve_codebuddy_mcp_path_for_write() -> Result<PathBuf, String> {
+    let candidates = codebuddy_mcp_candidate_paths()?;
+    if let Some(existing) = candidates.iter().find(|path| path.exists()) {
+        return Ok(existing.clone());
+    }
+    candidates
+        .into_iter()
+        .next()
+        .ok_or_else(|| "未找到 CodeBuddy MCP 配置路径".to_string())
+}
+
+fn read_codebuddy_mcp_servers() -> Result<Vec<(String, Value)>, String> {
+    for path in codebuddy_mcp_candidate_paths()? {
+        let servers = read_json_mcp_servers_or_missing(&path, "mcpServers", true)?;
+        if path.exists() {
+            return Ok(servers);
+        }
+    }
+    Ok(Vec::new())
+}
+
+fn iflow_mcp_candidate_paths() -> Result<Vec<PathBuf>, String> {
+    let home_dir = home_dir()?;
+    Ok(vec![
+        home_dir.join(".iflow/settings.json"),
+        home_dir.join(".iflow/mcp/config.json"),
+    ])
+}
+
+fn resolve_iflow_mcp_path_for_write() -> Result<PathBuf, String> {
+    let candidates = iflow_mcp_candidate_paths()?;
+    if let Some(existing) = candidates.iter().find(|path| path.exists()) {
+        return Ok(existing.clone());
+    }
+    candidates
+        .into_iter()
+        .next()
+        .ok_or_else(|| "未找到 iFlow MCP 配置路径".to_string())
+}
+
+fn read_iflow_mcp_servers() -> Result<Vec<(String, Value)>, String> {
+    for path in iflow_mcp_candidate_paths()? {
+        let servers = read_json_mcp_servers_or_missing(&path, "mcpServers", false)?;
+        if path.exists() {
+            return Ok(servers);
+        }
+    }
+    Ok(Vec::new())
+}
+
+fn upsert_iflow_mcp_server(server_id: &str, server: &Value) -> Result<(), String> {
+    let path = resolve_iflow_mcp_path_for_write()?;
+    upsert_json_mcp_server(&path, "mcpServers", server_id, server)
+}
+
+fn remove_iflow_mcp_server(server_id: &str) -> Result<(), String> {
+    let path = resolve_iflow_mcp_path_for_write()?;
+    remove_json_mcp_server(&path, "mcpServers", server_id)
+}
+
+fn upsert_codebuddy_mcp_server(server_id: &str, server: &Value) -> Result<(), String> {
+    let path = resolve_codebuddy_mcp_path_for_write()?;
+    upsert_json_mcp_server(&path, "mcpServers", server_id, server)
+}
+
+fn remove_codebuddy_mcp_server(server_id: &str) -> Result<(), String> {
+    let path = resolve_codebuddy_mcp_path_for_write()?;
+    remove_json_mcp_server(&path, "mcpServers", server_id)
+}
+
+fn trae_cn_mcp_candidate_paths() -> Result<Vec<PathBuf>, String> {
+    let home_dir = home_dir()?;
+    let root_path = home_dir.join("Library/Application Support/Trae CN/User/mcp.json");
+    let profiles_dir = home_dir.join("Library/Application Support/Trae CN/User/profiles");
+    let mut paths = vec![root_path];
+
+    if let Ok(entries) = fs::read_dir(profiles_dir) {
+        for entry in entries.flatten() {
+            paths.push(entry.path().join("mcp.json"));
+        }
+    }
+
+    Ok(paths)
+}
+
+fn trae_cn_existing_target_paths() -> Result<Vec<PathBuf>, String> {
+    let paths = trae_cn_mcp_candidate_paths()?;
+    let existing = paths
+        .iter()
+        .filter(|path| path.exists())
+        .cloned()
+        .collect::<Vec<_>>();
+    if existing.is_empty() {
+        Ok(vec![paths[0].clone()])
+    } else {
+        Ok(existing)
+    }
+}
+
+fn read_trae_cn_mcp_servers() -> Result<Vec<(String, Value)>, String> {
+    let mut merged = BTreeMap::new();
+    for path in trae_cn_mcp_candidate_paths()? {
+        let servers = read_json_mcp_servers_or_missing(&path, "mcpServers", false)?;
+        for (server_id, server) in servers {
+            merged.insert(server_id, server);
+        }
+    }
+    Ok(merged.into_iter().collect())
+}
+
+fn upsert_trae_cn_mcp_server(server_id: &str, server: &Value) -> Result<(), String> {
+    for path in trae_cn_existing_target_paths()? {
+        upsert_json_mcp_server(&path, "mcpServers", server_id, server)?;
+    }
+    Ok(())
+}
+
+fn remove_trae_cn_mcp_server(server_id: &str) -> Result<(), String> {
+    for path in trae_cn_existing_target_paths()? {
+        remove_json_mcp_server(&path, "mcpServers", server_id)?;
+    }
+    Ok(())
 }
 
 fn read_gemini_mcp_servers(path: &Path) -> Result<Vec<(String, Value)>, String> {
@@ -1354,6 +1703,148 @@ fn mcp_type_to_continue_transport(server_type: &str) -> Result<&'static str, Str
         "sse" => Ok("sse"),
         other => Err(format!("不支持的 MCP 类型：{other}")),
     }
+}
+
+fn read_goose_mcp_servers(path: &Path) -> Result<Vec<(String, Value)>, String> {
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+
+    let root = read_yaml_value(path)?;
+    let extensions = root
+        .get("extensions")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    let mut out = Vec::new();
+    for (server_id, extension) in extensions {
+        if extension
+            .get("type")
+            .and_then(Value::as_str)
+            .map(|value| value == "builtin")
+            .unwrap_or(false)
+        {
+            continue;
+        }
+        out.push((server_id, goose_extension_to_unified(&extension)?));
+    }
+    Ok(out)
+}
+
+fn upsert_goose_mcp_server(path: &Path, server_id: &str, server: &Value) -> Result<(), String> {
+    let mut root = read_yaml_object_or_default(path)?;
+    let next_extension = unified_to_goose_extension(server_id, server)?;
+    let entry = root
+        .entry("extensions".to_string())
+        .or_insert_with(|| Value::Object(Map::new()));
+    let extensions = entry
+        .as_object_mut()
+        .ok_or_else(|| "extensions 必须是 YAML 对象".to_string())?;
+    extensions.insert(server_id.to_string(), next_extension);
+
+    write_yaml_value(path, &Value::Object(root))
+}
+
+fn remove_goose_mcp_server(path: &Path, server_id: &str) -> Result<(), String> {
+    if !path.exists() {
+        return Ok(());
+    }
+
+    let mut root = read_yaml_object_or_default(path)?;
+    if let Some(extensions) = root.get_mut("extensions").and_then(Value::as_object_mut) {
+        extensions.remove(server_id);
+    }
+    write_yaml_value(path, &Value::Object(root))
+}
+
+fn goose_extension_to_unified(extension: &Value) -> Result<Value, String> {
+    let obj = extension
+        .as_object()
+        .cloned()
+        .ok_or_else(|| "Goose extension 定义必须为 YAML 对象".to_string())?;
+    let extension_type = obj
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or("stdio");
+    let mut out = Map::new();
+
+    match extension_type {
+        "stdio" => {
+            let command = obj
+                .get("cmd")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| "Goose stdio extension 缺少 cmd".to_string())?;
+            out.insert("type".to_string(), Value::String("stdio".to_string()));
+            out.insert("command".to_string(), Value::String(command.to_string()));
+            if let Some(args) = obj.get("args").and_then(Value::as_array) {
+                out.insert("args".to_string(), Value::Array(args.clone()));
+            }
+            if let Some(envs) = obj.get("envs").and_then(Value::as_object) {
+                out.insert("env".to_string(), Value::Object(envs.clone()));
+            }
+        }
+        "streamable_http" => {
+            let url = obj
+                .get("url")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| "Goose streamable_http extension 缺少 url".to_string())?;
+            out.insert("type".to_string(), Value::String("http".to_string()));
+            out.insert("url".to_string(), Value::String(url.to_string()));
+        }
+        other => return Err(format!("不支持的 Goose extension 类型：{other}")),
+    }
+
+    Ok(Value::Object(out))
+}
+
+fn unified_to_goose_extension(server_id: &str, server: &Value) -> Result<Value, String> {
+    let obj = server
+        .as_object()
+        .cloned()
+        .ok_or_else(|| "MCP 服务器定义必须为 JSON 对象".to_string())?;
+    let server_type = obj.get("type").and_then(Value::as_str).unwrap_or("stdio");
+    let mut out = Map::new();
+    out.insert("enabled".to_string(), Value::Bool(true));
+    out.insert("name".to_string(), Value::String(server_id.to_string()));
+
+    match server_type {
+        "stdio" => {
+            let command = obj
+                .get("command")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| "stdio 类型 MCP 服务器缺少 command".to_string())?;
+            out.insert("type".to_string(), Value::String("stdio".to_string()));
+            out.insert("cmd".to_string(), Value::String(command.to_string()));
+            if let Some(args) = obj.get("args").and_then(Value::as_array) {
+                out.insert("args".to_string(), Value::Array(args.clone()));
+            }
+            if let Some(env) = obj.get("env").and_then(Value::as_object) {
+                out.insert("envs".to_string(), Value::Object(env.clone()));
+            }
+        }
+        "http" => {
+            let url = obj
+                .get("url")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| "http 类型 MCP 服务器缺少 url".to_string())?;
+            out.insert(
+                "type".to_string(),
+                Value::String("streamable_http".to_string()),
+            );
+            out.insert("url".to_string(), Value::String(url.to_string()));
+        }
+        other => return Err(format!("不支持的 MCP 类型：{other}")),
+    }
+
+    Ok(Value::Object(out))
 }
 
 fn read_hermes_mcp_servers(path: &Path) -> Result<Vec<(String, Value)>, String> {

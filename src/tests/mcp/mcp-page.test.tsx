@@ -779,8 +779,8 @@ test("shows supported MCP apps in enable-to-tool controls", async () => {
   await userEvent.click(screen.getByRole("button", { name: "全部开启" }));
   expect(screen.getByText("2 tools")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "全部开启" })).toBeDisabled();
-  expect(screen.queryByText("Antigravity")).not.toBeInTheDocument();
-  expect(screen.queryByText("CodeBuddy")).not.toBeInTheDocument();
+  expect(screen.getAllByText("Antigravity").length).toBeGreaterThan(0);
+  expect(screen.getByText("CodeBuddy")).toBeInTheDocument();
 
   await userEvent.click(screen.getByRole("button", { name: "新增 MCP" }));
 
@@ -788,8 +788,8 @@ test("shows supported MCP apps in enable-to-tool controls", async () => {
     expect(screen.getByRole("dialog", { name: "新增 MCP" })).toBeInTheDocument();
   });
   expect((screen.getByLabelText("JSON 配置") as HTMLTextAreaElement).value).not.toContain("\"type\": \"stdio\"");
-  expect(screen.queryByText("Antigravity")).not.toBeInTheDocument();
-  expect(screen.queryByText("CodeBuddy")).not.toBeInTheDocument();
+  expect(screen.getAllByText("Antigravity").length).toBeGreaterThan(0);
+  expect(screen.getByText("CodeBuddy")).toBeInTheDocument();
 });
 
 test("expanding one MCP server collapses the previously opened server", async () => {
@@ -1012,7 +1012,7 @@ test("bulk toggles MCP target apps from server details", async () => {
     expect(openCodeButton).toHaveAttribute("aria-pressed", "true");
     expect(openCodeButton).toBeEnabled();
   });
-  expect(screen.getByText("已启用 9")).toBeInTheDocument();
+  expect(screen.getByText("已启用 28")).toBeInTheDocument();
   expect(enableAllAppsButton).toBeDisabled();
 
   await userEvent.click(disableAllAppsButton);

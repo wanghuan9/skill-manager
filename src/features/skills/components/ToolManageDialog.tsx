@@ -72,7 +72,8 @@ export function ToolManageDialog({ isOpen, onClose, tool }: ToolManageDialogProp
   const [mcpWorkspace, setMcpWorkspace] = useState<McpWorkspaceSnapshot | null>(null);
   const [isMcpLoading, setIsMcpLoading] = useState(false);
   const [mcpErrorMessage, setMcpErrorMessage] = useState("");
-  const supportsMcp = Boolean(tool.mcpConfigPath);
+  const supportsMcp = tool.supportsMcp;
+  const hasManagedMcpConfig = tool.supportsMcp && tool.mcpConfigPathRecognized;
   const normalizedQuery = query.trim().toLowerCase();
 
   useEffect(() => {
@@ -88,7 +89,7 @@ export function ToolManageDialog({ isOpen, onClose, tool }: ToolManageDialogProp
   }, [isOpen, tool.id]);
 
   useEffect(() => {
-    if (!isOpen || !supportsMcp) {
+    if (!isOpen || !hasManagedMcpConfig) {
       setMcpWorkspace(null);
       setIsMcpLoading(false);
       return;
@@ -119,7 +120,7 @@ export function ToolManageDialog({ isOpen, onClose, tool }: ToolManageDialogProp
     return () => {
       isCancelled = true;
     };
-  }, [isOpen, supportsMcp, tool.id]);
+  }, [hasManagedMcpConfig, isOpen, tool.id]);
 
   const skillRows = useMemo(() => {
     return installedSkills
@@ -151,7 +152,7 @@ export function ToolManageDialog({ isOpen, onClose, tool }: ToolManageDialogProp
   );
 
   const mcpRows = useMemo(() => {
-    if (!supportsMcp || !mcpWorkspace) {
+    if (!hasManagedMcpConfig || !mcpWorkspace) {
       return [];
     }
 
@@ -167,24 +168,26 @@ export function ToolManageDialog({ isOpen, onClose, tool }: ToolManageDialogProp
       .filter((item) => item.name.toLowerCase().includes(normalizedQuery))
       .filter((item) => (showEnabledOnly ? item.isEnabled : true))
       .sort(sortCapabilityRows);
-  }, [mcpWorkspace, normalizedQuery, showEnabledOnly, supportsMcp, tool.id]);
+  }, [hasManagedMcpConfig, mcpWorkspace, normalizedQuery, showEnabledOnly, tool.id]);
 
   const enabledMcpCount = useMemo(() => {
-    if (!supportsMcp || !mcpWorkspace) {
+    if (!hasManagedMcpConfig || !mcpWorkspace) {
       return 0;
     }
 
     return mcpWorkspace.servers.filter((server) =>
       server.apps.some((app) => app.appId === tool.id && app.isEnabled)
     ).length;
-  }, [mcpWorkspace, supportsMcp, tool.id]);
+  }, [mcpWorkspace, hasManagedMcpConfig, tool.id]);
 
   const activeRows = activeTab === "skills" ? skillRows : mcpRows;
   const disabledVisibleCount = activeRows.filter((item) => !item.isEnabled).length;
   const enabledVisibleCount = activeRows.filter((item) => item.isEnabled).length;
   const summaryLabel = supportsMcp
-    ? `Skills ${enabledSkillCount}/${installedSkills.length} · MCP ${enabledMcpCount}/${mcpWorkspace?.servers.length ?? 0}`
-    : `Skills ${enabledSkillCount}/${installedSkills.length} · MCP 未识别`;
+    ? hasManagedMcpConfig
+      ? `Skills ${enabledSkillCount}/${installedSkills.length} · MCP ${enabledMcpCount}/${mcpWorkspace?.servers.length ?? 0}`
+      : `Skills ${enabledSkillCount}/${installedSkills.length} · MCP 支持，路径未建模`
+    : `Skills ${enabledSkillCount}/${installedSkills.length} · MCP 不支持`;
 
   async function handleToggleSkill(skillName: string) {
     try {
@@ -436,15 +439,18 @@ export function ToolManageDialog({ isOpen, onClose, tool }: ToolManageDialogProp
 
         <div className="tool-manage-dialog__list">
           {activeTab === "mcp" && !supportsMcp ? (
-            <div className="tool-manage-dialog__empty">暂未识别 {tool.name} 的 MCP 配置路径。</div>
+            <div className="tool-manage-dialog__empty">{tool.name} 暂不支持 MCP 配置。</div>
           ) : null}
-          {activeTab === "mcp" && supportsMcp && isMcpLoading ? (
+          {activeTab === "mcp" && supportsMcp && !hasManagedMcpConfig ? (
+            <div className="tool-manage-dialog__empty">{tool.name} 支持 MCP，但暂未识别配置路径。</div>
+          ) : null}
+          {activeTab === "mcp" && hasManagedMcpConfig && isMcpLoading ? (
             <div className="tool-manage-dialog__empty">正在加载 MCP 列表...</div>
           ) : null}
-          {activeTab === "mcp" && supportsMcp && !isMcpLoading && mcpErrorMessage ? (
+          {activeTab === "mcp" && hasManagedMcpConfig && !isMcpLoading && mcpErrorMessage ? (
             <div className="tool-manage-dialog__empty">{mcpErrorMessage}</div>
           ) : null}
-          {(activeTab === "skills" || (activeTab === "mcp" && supportsMcp && !isMcpLoading && !mcpErrorMessage))
+          {(activeTab === "skills" || (activeTab === "mcp" && hasManagedMcpConfig && !isMcpLoading && !mcpErrorMessage))
             ? activeRows.map((item) => (
               <div
                 key={item.id}
@@ -473,7 +479,7 @@ export function ToolManageDialog({ isOpen, onClose, tool }: ToolManageDialogProp
               </div>
             ))
             : null}
-          {(activeTab === "skills" || (activeTab === "mcp" && supportsMcp && !isMcpLoading && !mcpErrorMessage)) &&
+          {(activeTab === "skills" || (activeTab === "mcp" && hasManagedMcpConfig && !isMcpLoading && !mcpErrorMessage)) &&
           activeRows.length === 0 ? (
             <div className="tool-manage-dialog__empty">
               {activeTab === "skills" ? "没有匹配的 Skill。" : "没有匹配的 MCP。"}

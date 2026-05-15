@@ -74,7 +74,7 @@ test("hides remote updated time for local skill details", async () => {
     ...skill,
     sourceLabel: "本地安装",
     sourceType: "local" as const,
-    sourceUrl: "/Users/wanghuan/.cursor/skills/drawio-diagram",
+    sourceUrl: "/Users/demo/.cursor/skills/drawio-diagram",
     remoteUpdatedAt: "2026/5/12 11:38:11",
     localUpdatedAt: "2026/5/12 09:20:00",
     lastEditor: "",

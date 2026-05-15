@@ -140,7 +140,11 @@ export function ToolsRoute() {
             const isDefault = tool.id === defaultOpenToolId;
             const isOpeningFolder = openingToolId === tool.id;
             const isOpeningMcpConfig = openingMcpToolId === tool.id;
-            const mcpConfigPath = tool.mcpConfigPath || "未识别";
+            const mcpConfigPath = !tool.supportsMcp
+              ? "不支持"
+              : !tool.mcpConfigPathRecognized
+                ? "支持，路径未建模"
+              : tool.mcpConfigPath || "未识别";
 
             return (
               <article key={tool.id} className="tool-card tool-card--simple">
@@ -195,7 +199,12 @@ export function ToolsRoute() {
                       onClick={() => void handleOpenMcpConfig(tool.id)}
                       aria-label={`打开 ${tool.name} MCP 配置`}
                       data-tooltip="用编辑器打开"
-                      disabled={Boolean(openingMcpToolId) || !tool.mcpConfigPath}
+                      disabled={
+                        Boolean(openingMcpToolId) ||
+                        !tool.supportsMcp ||
+                        !tool.mcpConfigPathRecognized ||
+                        !tool.mcpConfigPath
+                      }
                     >
                       <EditorOpenIcon />
                       <span className="sr-only">{isOpeningMcpConfig ? "正在打开" : "打开配置"}</span>

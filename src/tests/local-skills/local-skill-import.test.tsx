@@ -22,7 +22,7 @@ test("renders local skill import list", async () => {
   expect(within(excalidrawGroup).getByRole("button", { name: "导入 excalidraw-diagram" })).toBeInTheDocument();
   expect(within(excalidrawGroup).getByRole("button", { name: "展开 excalidraw-diagram" })).toBeInTheDocument();
   await userEvent.click(within(excalidrawGroup).getByText("3 个位置 · cursor / claude_code / windsurf"));
-  expect(within(excalidrawGroup).getByText("/Users/wanghuan/.cursor/skills/excalidraw-diagram")).toBeInTheDocument();
+  expect(within(excalidrawGroup).getByText("/Users/demo/.cursor/skills/excalidraw-diagram")).toBeInTheDocument();
   expect(within(excalidrawGroup).getAllByRole("button")).toHaveLength(2);
 
   await userEvent.click(screen.getByRole("button", { name: "收起列表" }));
@@ -59,8 +59,8 @@ test("imports local skills once per skill group", async () => {
     expect(importSpy).toHaveBeenCalledTimes(2);
   });
   expect(importSpy.mock.calls.map(([localPath]) => localPath)).toEqual([
-    "/Users/wanghuan/.cursor/skills/excalidraw-diagram",
-    "/Users/wanghuan/.codex/skills/technical-design",
+    "/Users/demo/.cursor/skills/excalidraw-diagram",
+    "/Users/demo/.codex/skills/technical-design",
   ]);
   importSpy.mockRestore();
 });
@@ -69,8 +69,8 @@ test("rescans from the empty local import state", async () => {
   const nextCandidate = {
     name: "new-local-skill",
     description: "新增的本地 skill。",
-    localPath: "/Users/wanghuan/.codex/skills/new-local-skill",
-    detectedFrom: "/Users/wanghuan/.codex/skills",
+    localPath: "/Users/demo/.codex/skills/new-local-skill",
+    detectedFrom: "/Users/demo/.codex/skills",
     sourceHint: "本地目录",
   };
   const fetchCandidatesSpy = vi
