@@ -270,6 +270,7 @@ export function SkillListPage(props: SkillListPageProps) {
   const { installedSkills, isLoading } = useSkillWorkspace();
   const deferredQuery = useDeferredValue(query);
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>(readSkillGroupCollapsedState);
+  const [expandedSkillName, setExpandedSkillName] = useState("");
   const skills = useMemo(
     () => filterSkills(installedSkills, { query: deferredQuery, status: statusFilter }),
     [deferredQuery, installedSkills, statusFilter],
@@ -289,6 +290,10 @@ export function SkillListPage(props: SkillListPageProps) {
       writeSkillGroupCollapsedState(nextState);
       return nextState;
     });
+  }
+
+  function handleSkillExpandedChange(skillName: string, expanded: boolean) {
+    setExpandedSkillName(expanded ? skillName : "");
   }
 
   return (
@@ -377,14 +382,28 @@ export function SkillListPage(props: SkillListPageProps) {
                 </div>
                 {!isCollapsed ? (
                   <div className="skill-group-section__list">
-                    {group.skills.map((skill) => <SkillCard key={skill.name} skill={skill} />)}
+                    {group.skills.map((skill) => (
+                      <SkillCard
+                        key={skill.name}
+                        skill={skill}
+                        expanded={expandedSkillName === skill.name}
+                        onExpandedChange={(expanded) => handleSkillExpandedChange(skill.name, expanded)}
+                      />
+                    ))}
                   </div>
                 ) : null}
               </section>
             );
           })
           ) : (
-            skills.map((skill) => <SkillCard key={skill.name} skill={skill} />)
+            skills.map((skill) => (
+              <SkillCard
+                key={skill.name}
+                skill={skill}
+                expanded={expandedSkillName === skill.name}
+                onExpandedChange={(expanded) => handleSkillExpandedChange(skill.name, expanded)}
+              />
+            ))
           )
         ) : (
           <div className="panel-card empty-state">

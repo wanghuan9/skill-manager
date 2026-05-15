@@ -18,6 +18,8 @@ import { getMonogramLabel } from "@/features/skills/utils/monogram";
 
 type SkillCardProps = {
   skill: SkillSummary;
+  expanded?: boolean;
+  onExpandedChange?: (expanded: boolean) => void;
 };
 
 const SUMMARY_DESCRIPTION_LIMIT = 76;
@@ -150,10 +152,10 @@ function DeleteIcon() {
   );
 }
 
-export function SkillCard({ skill }: SkillCardProps) {
+export function SkillCard({ skill, expanded: expandedProp, onExpandedChange }: SkillCardProps) {
   const { notify } = useNotifications();
   const { deleteSkill, openSkillWithDefaultTool, toolConfigs, updateSkill } = useSkillWorkspace();
-  const [expanded, setExpanded] = useState(false);
+  const [expandedState, setExpandedState] = useState(false);
   const [showFileDialog, setShowFileDialog] = useState(false);
   const [isDeleteConfirming, setIsDeleteConfirming] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -178,6 +180,7 @@ export function SkillCard({ skill }: SkillCardProps) {
     : "已启用工具：无";
   const showDetailAction = skill.collabStatus === "update-available";
   const showRemoteUpdateInfo = skill.sourceType !== "local";
+  const expanded = expandedProp ?? expandedState;
 
   useEffect(() => {
     if (!isDeleteConfirming) {
@@ -269,6 +272,13 @@ export function SkillCard({ skill }: SkillCardProps) {
     setShowEnabledTools((value) => !value);
   }
 
+  function handleExpandedChange(nextExpanded: boolean) {
+    if (expandedProp === undefined) {
+      setExpandedState(nextExpanded);
+    }
+    onExpandedChange?.(nextExpanded);
+  }
+
   const updateTooltipLabel = isUpdating ? "正在更新" : "更新 skill";
   const deleteConfirmTooltipLabel = isDeleting ? "正在删除" : "再次点击删除";
 
@@ -278,7 +288,7 @@ export function SkillCard({ skill }: SkillCardProps) {
         <div className="skill-card__header">
           <div
             className="skill-card__summary-button"
-            onClick={() => setExpanded((value) => !value)}
+            onClick={() => handleExpandedChange(!expanded)}
           >
             <div className="skill-card__summary-content">
               <div className="skill-card__summary-top">
@@ -370,7 +380,7 @@ export function SkillCard({ skill }: SkillCardProps) {
             <button
               className="skill-card__chevron-button"
               type="button"
-              onClick={() => setExpanded((value) => !value)}
+              onClick={() => handleExpandedChange(!expanded)}
               aria-expanded={expanded}
               aria-label={`${expanded ? "收起" : "展开"} ${skill.name}`}
             >

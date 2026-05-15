@@ -540,7 +540,7 @@ export function McpRoute(props: McpRouteProps = {}) {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
   const [toolbarContainer, setToolbarContainer] = useState<HTMLElement | null>(null);
-  const [expandedServerIds, setExpandedServerIds] = useState<Record<string, boolean>>({});
+  const [expandedServerId, setExpandedServerId] = useState("");
   const [collapsedToolSectionIds, setCollapsedToolSectionIds] = useState<Record<string, boolean>>({});
   const [deleteConfirmingServerId, setDeleteConfirmingServerId] = useState("");
   const [deletingServerId, setDeletingServerId] = useState("");
@@ -958,10 +958,7 @@ export function McpRoute(props: McpRouteProps = {}) {
   }
 
   function toggleServerExpanded(serverId: string) {
-    setExpandedServerIds((current) => ({
-      ...current,
-      [serverId]: !(current[serverId] ?? false),
-    }));
+    setExpandedServerId((current) => (current === serverId ? "" : serverId));
   }
 
   function toggleToolSectionCollapsed(serverId: string) {
@@ -1049,7 +1046,7 @@ export function McpRoute(props: McpRouteProps = {}) {
 
       <section className="mcp-server-list card-list">
         {filteredServers.map((server) => {
-          const isExpanded = expandedServerIds[server.id] ?? false;
+          const isExpanded = expandedServerId === server.id;
           const isToolSectionCollapsed = collapsedToolSectionIds[server.id] ?? false;
           const visibleApps = server.apps
             .filter((app) => installedAppIdSet.has(app.appId))

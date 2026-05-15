@@ -90,3 +90,23 @@ test("remembers the user's last grouped view selection", async () => {
   expect(screen.getByRole("button", { name: "展开来源分组 team-skills" })).toBeInTheDocument();
   expect(screen.queryByRole("heading", { name: "skill-publisher" })).not.toBeInTheDocument();
 });
+
+
+test("expanding one skill collapses the previously opened skill in flat view", async () => {
+  const user = userEvent.setup();
+
+  render(<App />);
+
+  await user.click(screen.getByRole("button", { name: "展开 drawio-diagram" }));
+  expect(screen.getByRole("button", { name: "收起 drawio-diagram" })).toHaveAttribute("aria-expanded", "true");
+  expect(screen.getByText("本地更新时间")).toBeInTheDocument();
+  expect(screen.getByText("https://gitlab.com/team/skills/drawio-diagram")).toBeInTheDocument();
+
+  await user.click(screen.getByRole("button", { name: "展开 excalidraw-diagram" }));
+
+  expect(screen.getByRole("button", { name: "展开 drawio-diagram" })).toHaveAttribute("aria-expanded", "false");
+  expect(screen.getByRole("button", { name: "收起 excalidraw-diagram" })).toHaveAttribute("aria-expanded", "true");
+  expect(screen.queryByText("https://gitlab.com/team/skills/drawio-diagram")).not.toBeInTheDocument();
+  expect(screen.getByText("https://github.com/xstongxue/best-skills/tree/main")).toBeInTheDocument();
+  expect(screen.getByText("更新人")).toBeInTheDocument();
+});

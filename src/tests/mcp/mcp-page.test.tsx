@@ -209,6 +209,24 @@ test("shows supported MCP apps in enable-to-tool controls", async () => {
   expect(screen.queryByText("CodeBuddy")).not.toBeInTheDocument();
 });
 
+test("expanding one MCP server collapses the previously opened server", async () => {
+  window.localStorage.clear();
+  render(<App />);
+
+  await userEvent.click(screen.getByRole("button", { name: "MCP" }));
+
+  await userEvent.click(await screen.findByRole("button", { name: "展开 context7" }));
+  expect(screen.getByRole("button", { name: "收起 context7" })).toHaveAttribute("aria-expanded", "true");
+  expect(screen.getByText("npx -y @upstash/context7-mcp")).toBeInTheDocument();
+
+  await userEvent.click(screen.getByRole("button", { name: "展开 linear" }));
+
+  expect(screen.getByRole("button", { name: "展开 context7" })).toHaveAttribute("aria-expanded", "false");
+  expect(screen.getByRole("button", { name: "收起 linear" })).toHaveAttribute("aria-expanded", "true");
+  expect(screen.queryByText("npx -y @upstash/context7-mcp")).not.toBeInTheDocument();
+  expect(screen.getByText("https://mcp.linear.app/sse")).toBeInTheDocument();
+});
+
 test("shows MCP-supported apps even when their config has not been initialized", async () => {
   window.localStorage.clear();
   const workspace = await skillClient.fetchMcpWorkspace();
