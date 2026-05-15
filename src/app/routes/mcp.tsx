@@ -54,6 +54,21 @@ const EMPTY_FORM_STATE: McpFormState = {
   enabledAppIds: [],
 };
 
+function shouldAutoRefreshMcpTools(server: Pick<McpServerSummary, "tools" | "toolsDiscoveredAt" | "toolsDiscoveryError">) {
+  return !server.toolsDiscoveredAt.trim()
+    && !server.toolsDiscoveryError.trim();
+}
+
+function shouldRefreshFailedMcpTools(server: Pick<McpServerSummary, "toolsDiscoveryError">) {
+  return !!server.toolsDiscoveryError.trim();
+}
+
+function shouldRefreshMcpToolsOnManualRefresh(
+  server: Pick<McpServerSummary, "tools" | "toolsDiscoveredAt" | "toolsDiscoveryError">,
+) {
+  return shouldAutoRefreshMcpTools(server) || shouldRefreshFailedMcpTools(server);
+}
+
 function buildMcpFeedbackContext(workspace: McpWorkspaceSnapshot | null) {
   return {
     route: "mcp",
@@ -530,6 +545,7 @@ export function McpRoute(props: McpRouteProps = {}) {
   const [importSession, setImportSession] = useState(getMcpImportSessionSnapshot);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
+  const [hasLoadedWorkspace, setHasLoadedWorkspace] = useState(false);
   const [toolbarContainer, setToolbarContainer] = useState<HTMLElement | null>(null);
   const [expandedServerId, setExpandedServerId] = useState("");
   const [collapsedToolSectionIds, setCollapsedToolSectionIds] = useState<Record<string, boolean>>({});
@@ -538,11 +554,9 @@ export function McpRoute(props: McpRouteProps = {}) {
   const [saveErrorMessage, setSaveErrorMessage] = useState("");
   const deleteActionRef = useRef<HTMLButtonElement | null>(null);
   const isMountedRef = useRef(false);
-  const toolsRefreshQueueRef = useRef<string[]>([]);
-  const toolsRefreshActiveRef = useRef(false);
-  const toolsLoadedRef = useRef(new Set<string>());
   const importActionLockedRef = useRef(false);
   const refreshActionLockedRef = useRef(false);
+  const probingToolServerIdsRef = useRef(new Set<string>());
 
   function commitWorkspace(
     snapshot: McpWorkspaceSnapshot | null,
@@ -560,55 +574,76 @@ export function McpRoute(props: McpRouteProps = {}) {
     };
   }, []);
 
-  function queueMcpToolRefreshes(snapshot: McpWorkspaceSnapshot | null) {
-    if (toolsRefreshActiveRef.current || shouldUseFixtureData() || !snapshot) {
-      return;
+  async function probeMcpTools(
+    snapshot: McpWorkspaceSnapshot | null,
+    predicate: (server: McpServerSummary) => boolean,
+  ) {
+    if (shouldUseFixtureData() || !snapshot) {
+      return snapshot;
     }
-
-    toolsRefreshQueueRef.current = snapshot.servers
-      .filter((server) => {
-        if (server.tools.length > 0 && server.toolsDiscoveredAt.trim()) {
-          toolsLoadedRef.current.add(server.id);
-          return false;
-        }
-        return !toolsLoadedRef.current.has(server.id);
-      })
-      .map((server) => server.id);
-
-    if (toolsRefreshQueueRef.current.length > 0) {
-      void drainToolsRefreshQueue();
-    }
-  }
-
-  async function drainToolsRefreshQueue() {
-    if (toolsRefreshActiveRef.current || shouldUseFixtureData()) {
-      return;
-    }
-
-    toolsRefreshActiveRef.current = true;
-    try {
-      while (toolsRefreshQueueRef.current.length > 0) {
-        const serverId = toolsRefreshQueueRef.current.shift();
-        if (!serverId || toolsLoadedRef.current.has(serverId)) {
-          continue;
-        }
-        try {
-          const snapshot = await refreshMcpServerTools(serverId);
-          if (!isMountedRef.current) {
-            return;
-          }
-          const refreshedServer = snapshot.servers.find((server) => server.id === serverId);
-          if ((refreshedServer?.tools.length ?? 0) > 0) {
-            toolsLoadedRef.current.add(serverId);
-          }
-          commitWorkspace(snapshot);
-        } catch (error) {
-          console.warn(`Failed to refresh MCP tools for ${serverId}`, error);
-        }
+    let nextSnapshot = snapshot;
+    for (const server of snapshot.servers) {
+      if (!predicate(server) || probingToolServerIdsRef.current.has(server.id)) {
+        continue;
       }
-    } finally {
-      toolsRefreshActiveRef.current = false;
+      probingToolServerIdsRef.current.add(server.id);
+      try {
+        nextSnapshot = await refreshMcpServerTools(server.id);
+        if (!isMountedRef.current) {
+          cacheMcpWorkspace(nextSnapshot);
+          return nextSnapshot;
+        }
+        commitWorkspace(nextSnapshot);
+      } catch (error) {
+        console.warn(`Failed to refresh MCP tools for ${server.id}`, error);
+        const message = error instanceof Error ? error.message : "MCP tools 探测失败";
+        const failedSnapshot: McpWorkspaceSnapshot = {
+          ...(nextSnapshot ?? snapshot),
+          servers: (nextSnapshot ?? snapshot)?.servers.map((item) => (
+            item.id === server.id
+              ? {
+                  ...item,
+                  tools: [],
+                  toolsDiscoveredAt: new Date().toISOString(),
+                  toolsDiscoveryError: message,
+                }
+              : item
+          )) ?? [],
+        };
+        try {
+          nextSnapshot = await saveMcpServer({
+            id: server.id,
+            name: server.name,
+            server: normalizeServerJsonForSave(server.serverJson),
+            description: server.description,
+            sourceUrl: server.sourceUrl,
+            enabledAppIds: server.apps.filter((app) => app.isEnabled).map((app) => app.appId),
+            tools: [],
+            toolsDiscoveredAt: new Date().toISOString(),
+            toolsDiscoveryError: message,
+            installedAt: server.installedAt,
+            updatedAt: new Date().toISOString(),
+          });
+          if (!isMountedRef.current) {
+            cacheMcpWorkspace(nextSnapshot);
+            return nextSnapshot;
+          }
+          commitWorkspace(nextSnapshot);
+        } catch (persistError) {
+          console.warn(`Failed to persist MCP tools error for ${server.id}`, persistError);
+          if (isMountedRef.current) {
+            commitWorkspace(failedSnapshot);
+          } else {
+            cacheMcpWorkspace(failedSnapshot);
+          }
+          nextSnapshot = failedSnapshot;
+        }
+      } finally {
+        probingToolServerIdsRef.current.delete(server.id);
+      }
     }
+
+    return nextSnapshot;
   }
 
   useEffect(() => {
@@ -623,9 +658,12 @@ export function McpRoute(props: McpRouteProps = {}) {
         const snapshot = await fetchMcpWorkspace();
         if (active) {
           commitWorkspace(snapshot);
+          setHasLoadedWorkspace(true);
+          void probeMcpTools(snapshot, shouldAutoRefreshMcpTools);
         }
       } catch (error) {
         if (active) {
+          setHasLoadedWorkspace(true);
           const message = error instanceof Error ? error.message : "读取 MCP 配置失败";
           setErrorMessage(message);
         }
@@ -643,6 +681,24 @@ export function McpRoute(props: McpRouteProps = {}) {
       setWorkspace(snapshot);
     });
   }), []);
+
+  useEffect(() => {
+    if (!workspace || !hasLoadedWorkspace || shouldUseFixtureData()) {
+      return;
+    }
+
+    const undiscoveredServerIds = workspace.servers
+      .filter((server) => shouldAutoRefreshMcpTools(server) && !probingToolServerIdsRef.current.has(server.id))
+      .map((server) => server.id);
+    if (undiscoveredServerIds.length === 0) {
+      return;
+    }
+
+    void probeMcpTools(
+      workspace,
+      (server) => undiscoveredServerIds.includes(server.id) && shouldAutoRefreshMcpTools(server),
+    );
+  }, [hasLoadedWorkspace, workspace]);
 
   useEffect(() => subscribeMcpImportSessionChange((snapshot) => {
     setImportSession(snapshot);
@@ -714,7 +770,6 @@ export function McpRoute(props: McpRouteProps = {}) {
       const snapshot = await fetchMcpWorkspace();
       if (isMountedRef.current) {
         commitWorkspace(snapshot);
-        queueMcpToolRefreshes(snapshot);
       } else {
         cacheMcpWorkspace(snapshot);
       }
@@ -745,7 +800,7 @@ export function McpRoute(props: McpRouteProps = {}) {
     try {
       const snapshot = await fetchMcpWorkspace();
       commitWorkspace(snapshot);
-      queueMcpToolRefreshes(snapshot);
+      await probeMcpTools(snapshot, shouldRefreshMcpToolsOnManualRefresh);
     } catch (error) {
       reportFailure(error, {
         operation: "refresh_mcp_workspace",

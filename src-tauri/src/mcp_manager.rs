@@ -630,6 +630,13 @@ pub async fn toggle_mcp_server_tool(
 
 #[tauri::command]
 pub async fn refresh_mcp_server_tools(server_id: &str) -> Result<McpWorkspaceSnapshot, String> {
+    let server_id = server_id.to_string();
+    tauri::async_runtime::spawn_blocking(move || refresh_mcp_server_tools_blocking(&server_id))
+        .await
+        .map_err(|error| format!("探测 MCP tools 任务失败: {error}"))?
+}
+
+fn refresh_mcp_server_tools_blocking(server_id: &str) -> Result<McpWorkspaceSnapshot, String> {
     let mut records = load_mcp_records()?;
     let record = records
         .iter_mut()
@@ -645,7 +652,8 @@ pub async fn refresh_mcp_server_tools(server_id: &str) -> Result<McpWorkspaceSna
             }
         }
         Ok(_) => {
-            record.tools_discovery_error.clear();
+            record.tools.clear();
+            record.tools_discovery_error = "MCP 未返回任何 tools".to_string();
         }
         Err(error) => {
             log::warn!("探测 {} MCP tools 失败: {}", record.name, error);
@@ -1626,11 +1634,7 @@ fn normalize_record(mut record: McpServerRecord) -> Result<McpServerRecord, Stri
     record.imported_from_app_ids.sort();
     record.imported_from_app_ids.dedup();
     normalize_mcp_tool_statuses(&mut record.tools);
-    if record.tools.is_empty() {
-        if record.tools_discovery_error.is_empty() {
-            record.tools_discovered_at.clear();
-        }
-    } else {
+    if !record.tools.is_empty() {
         record.tools_discovery_error.clear();
     }
     if record.installed_at.is_empty() {
@@ -2068,6 +2072,7 @@ fn post_mcp_http_message(
         .post(url)
         .header("accept", "application/json, text/event-stream")
         .header("content-type", "application/json")
+        .header("mcp-protocol-version", MCP_PROTOCOL_VERSION)
         .json(&message);
     if !session_id.is_empty() {
         request = request.header("mcp-session-id", session_id);
@@ -5591,6 +5596,58 @@ mcpServers:
                 "description": "Mem0 MCP"
             })
         );
+    }
+
+    #[test]
+    fn parses_context7_initialize_response_when_protocol_header_is_present() {
+        let payload = r#"data: {"result":{"protocolVersion":"2024-11-05","capabilities":{"tools":{"listChanged":true}},"serverInfo":{"name":"Context7","version":"2.2.5"}},"jsonrpc":"2.0","id":1}"#;
+
+        let value = serde_json::from_str::<Value>(
+            payload
+                .strip_prefix("data: ")
+                .expect("sse data prefix"),
+        )
+        .expect("parse context7 initialize payload");
+
+        let protocol_version = value
+            .get("result")
+            .and_then(|result| result.get("protocolVersion"))
+            .and_then(Value::as_str);
+        let server_name = value
+            .get("result")
+            .and_then(|result| result.get("serverInfo"))
+            .and_then(|info| info.get("name"))
+            .and_then(Value::as_str);
+
+        assert_eq!(protocol_version, Some(MCP_PROTOCOL_VERSION));
+        assert_eq!(server_name, Some("Context7"));
+    }
+
+    #[test]
+    fn normalize_record_keeps_discovered_at_for_empty_tools_without_error() {
+        let server = McpServerRecord {
+            id: "context7".to_string(),
+            name: "context7".to_string(),
+            server: json!({
+                "type": "http",
+                "url": "https://mcp.context7.com/mcp"
+            }),
+            description: "Context7 MCP".to_string(),
+            source_url: "https://mcp.directory/servers/context7".to_string(),
+            enabled_app_ids: Vec::new(),
+            imported_from_app_ids: Vec::new(),
+            tools: Vec::new(),
+            tools_discovered_at: "2026/5/15 14:16:46".to_string(),
+            tools_discovery_error: String::new(),
+            installed_at: "2026/5/15 13:15:18".to_string(),
+            updated_at: "2026/5/15 14:16:46".to_string(),
+        };
+
+        let normalized = normalize_record(server).expect("normalize record");
+
+        assert_eq!(normalized.tools, Vec::<McpServerToolStatus>::new());
+        assert_eq!(normalized.tools_discovery_error, "");
+        assert_eq!(normalized.tools_discovered_at, "2026/5/15 14:16:46");
     }
 
     #[test]

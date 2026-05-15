@@ -1,6 +1,6 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, vi } from "vitest";
+import { afterEach, beforeEach, vi } from "vitest";
 import { App } from "@/app/App";
 import * as skillClient from "@/features/skills/api/skill-client";
 
@@ -8,6 +8,10 @@ beforeEach(() => {
   window.localStorage.clear();
   delete (window as Window & { __SKILLM_MCP_WORKSPACE__?: unknown }).__SKILLM_MCP_WORKSPACE__;
   skillClient.resetMcpImportSessionForTests();
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
 });
 
 test("renders MCP toolbar in the page header and hides the app matrix", async () => {
@@ -73,6 +77,58 @@ test("refreshes MCP workspace from the toolbar", async () => {
   await waitFor(() => {
     expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
+});
+
+test("refresh button stays locked until failed or undiscovered MCP tools reprobe finishes", async () => {
+  window.localStorage.clear();
+  const workspace = await skillClient.fetchMcpWorkspace();
+  const undiscoveredWorkspace = {
+    ...workspace,
+    servers: workspace.servers.map((server) => (
+      server.id === "canva"
+        ? {
+            ...server,
+            tools: [],
+            toolsDiscoveredAt: "",
+            toolsDiscoveryError: "",
+          }
+        : server
+    )),
+  };
+  let resolveRefresh: ((snapshot: typeof undiscoveredWorkspace) => void) | undefined;
+  const fetchSpy = vi.spyOn(skillClient, "fetchMcpWorkspace").mockResolvedValue(undiscoveredWorkspace);
+  const refreshSpy = vi.spyOn(skillClient, "refreshMcpServerTools").mockImplementation(
+    () =>
+      new Promise((resolve) => {
+        resolveRefresh = resolve;
+      }),
+  );
+  const fixtureSpy = vi.spyOn(skillClient, "shouldUseFixtureData").mockReturnValue(false);
+
+  try {
+    render(<App />);
+
+    await userEvent.click(screen.getByRole("button", { name: "MCP" }));
+    await screen.findByText("context7");
+
+    const refreshButton = screen.getByRole("button", { name: "刷新" });
+    await userEvent.click(refreshButton);
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalled();
+      expect(refreshButton).toBeDisabled();
+    });
+
+    resolveRefresh?.(undiscoveredWorkspace);
+
+    await waitFor(() => {
+      expect(refreshButton).toBeEnabled();
+    });
+  } finally {
+    fixtureSpy.mockRestore();
+    refreshSpy.mockRestore();
+    fetchSpy.mockRestore();
+  }
 });
 
 test("refresh retries failed MCP tools discovery only", async () => {
@@ -215,14 +271,20 @@ test("keeps MCP import progress state when switching away and back", async () =>
 
   await userEvent.click(screen.getByRole("button", { name: "MCP" }));
   await screen.findByText("context7");
-  await userEvent.click(await screen.findByRole("button", { name: "扫描导入" }));
+  const toolbar = await screen.findByLabelText("MCP 工具栏");
+  const importButton = within(toolbar).getAllByRole("button")[1];
+  await userEvent.click(importButton);
 
-  expect(await screen.findByRole("button", { name: "扫描中..." })).toBeDisabled();
+  await waitFor(() => {
+    expect(within(toolbar).getByRole("button", { name: "扫描中..." })).toBeDisabled();
+  });
 
   await userEvent.click(screen.getByRole("button", { name: "工具" }));
   await userEvent.click(screen.getByRole("button", { name: "MCP" }));
 
-  expect(await screen.findByRole("button", { name: "扫描中..." })).toBeDisabled();
+  await waitFor(() => {
+    expect(within(screen.getByLabelText("MCP 工具栏")).getByRole("button", { name: "扫描中..." })).toBeDisabled();
+  });
 
   const finishImport = resolveImport;
   if (!finishImport) {
@@ -320,6 +382,60 @@ test("auto refreshes existing MCP servers that still lack tools after a repeat s
   }
 });
 
+test("auto refreshes newly installed MCP servers that still show undiscovered tools after page load", async () => {
+  window.localStorage.clear();
+  const workspace = await skillClient.fetchMcpWorkspace();
+  const installedWithoutTools = {
+    ...workspace,
+    servers: [
+      {
+        id: "canva",
+        name: "canva",
+        serverType: "http",
+        commandLabel: "https://mcp.canva.com/mcp",
+        description: "Canva MCP server",
+        sourceUrl: "https://mcp.directory/servers/canva",
+        serverJson: JSON.stringify({
+          type: "http",
+          url: "https://mcp.canva.com/mcp",
+        }, null, 2),
+        enabledAppCount: 0,
+        apps: workspace.apps.map((app) => ({
+          appId: app.id,
+          appName: app.name,
+          configPath: app.configPath,
+          statusLabel: app.statusLabel,
+          isEnabled: false,
+        })),
+        tools: [],
+        toolsDiscoveredAt: "",
+        toolsDiscoveryError: "",
+        installedAt: "2026/5/15 13:09:26",
+      },
+      ...workspace.servers.filter((server) => server.id !== "canva"),
+    ],
+  };
+  const fetchSpy = vi
+    .spyOn(skillClient, "fetchMcpWorkspace")
+    .mockResolvedValue(installedWithoutTools);
+  const refreshSpy = vi.spyOn(skillClient, "refreshMcpServerTools").mockResolvedValue(installedWithoutTools);
+  const fixtureSpy = vi.spyOn(skillClient, "shouldUseFixtureData").mockReturnValue(false);
+
+  try {
+    render(<App />);
+
+    await userEvent.click(screen.getByRole("button", { name: "MCP" }));
+
+    await waitFor(() => {
+      expect(refreshSpy).toHaveBeenCalledWith("canva");
+    });
+  } finally {
+    fixtureSpy.mockRestore();
+    refreshSpy.mockRestore();
+    fetchSpy.mockRestore();
+  }
+});
+
 test("does not retry failed MCP tools discovery until the user refreshes", async () => {
   window.localStorage.clear();
   const workspace = await skillClient.fetchMcpWorkspace();
@@ -354,6 +470,72 @@ test("does not retry failed MCP tools discovery until the user refreshes", async
 
     await waitFor(() => {
       expect(refreshSpy).toHaveBeenCalledWith("linear");
+    });
+  } finally {
+    fixtureSpy.mockRestore();
+    refreshSpy.mockRestore();
+    fetchSpy.mockRestore();
+  }
+});
+
+test("shows failed tools discovery reason after refreshing an undiscovered MCP", async () => {
+  window.localStorage.clear();
+  const workspace = await skillClient.fetchMcpWorkspace();
+  const canvaUndiscovered = {
+    ...workspace,
+    servers: [
+      {
+        id: "canva",
+        name: "canva",
+        serverType: "http",
+        commandLabel: "https://mcp.canva.com/mcp",
+        description: "Canva MCP server",
+        sourceUrl: "https://mcp.directory/servers/canva",
+        serverJson: JSON.stringify({
+          type: "http",
+          url: "https://mcp.canva.com/mcp",
+        }, null, 2),
+        enabledAppCount: 0,
+        apps: workspace.apps.map((app) => ({
+          appId: app.id,
+          appName: app.name,
+          configPath: app.configPath,
+          statusLabel: app.statusLabel,
+          isEnabled: false,
+        })),
+        tools: [],
+        toolsDiscoveredAt: "",
+        toolsDiscoveryError: "",
+        installedAt: "2026/5/15 13:09:26",
+      },
+      ...workspace.servers.filter((server) => server.id !== "canva"),
+    ],
+  };
+  const canvaFailed = {
+    ...canvaUndiscovered,
+    servers: canvaUndiscovered.servers.map((server) => (
+      server.id === "canva"
+        ? {
+            ...server,
+            toolsDiscoveredAt: "2026/5/15 13:16:46",
+            toolsDiscoveryError: "MCP tools 探测需要 OAuth 授权，请先在目标工具中完成登录",
+          }
+        : server
+    )),
+  };
+  const fetchSpy = vi.spyOn(skillClient, "fetchMcpWorkspace").mockResolvedValue(canvaUndiscovered);
+  const refreshSpy = vi.spyOn(skillClient, "refreshMcpServerTools").mockResolvedValue(canvaFailed);
+  const fixtureSpy = vi.spyOn(skillClient, "shouldUseFixtureData").mockReturnValue(false);
+
+  try {
+    render(<App />);
+
+    await userEvent.click(screen.getByRole("button", { name: "MCP" }));
+    await userEvent.click(await screen.findByRole("button", { name: "展开 canva" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("获取失败")).toBeInTheDocument();
+      expect(screen.getByText("获取 tools 失败：MCP tools 探测需要 OAuth 授权，请先在目标工具中完成登录")).toBeInTheDocument();
     });
   } finally {
     fixtureSpy.mockRestore();
