@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { NotificationProvider } from "@/app/notifications";
 import { SkillListToolbar } from "@/features/skills/components/SkillListPage";
 import { installedSkillFixtures } from "@/features/skills/state/skill-fixtures";
 import type { SkillSummary } from "@/features/skills/state/skill-store";
@@ -40,14 +41,16 @@ test("shows update-all loading state before running the update task", async () =
   } as unknown as ReturnType<typeof useSkillWorkspace>);
 
   render(
-    <SkillListToolbar
-      query=""
-      statusFilter="all"
-      onQueryChange={vi.fn()}
-      onStatusFilterChange={vi.fn()}
-      showGroupView
-      onShowGroupViewChange={vi.fn()}
-    />,
+    <NotificationProvider>
+      <SkillListToolbar
+        query=""
+        statusFilter="all"
+        onQueryChange={vi.fn()}
+        onStatusFilterChange={vi.fn()}
+        showGroupView
+        onShowGroupViewChange={vi.fn()}
+      />
+    </NotificationProvider>,
   );
 
   fireEvent.click(screen.getByRole("button", { name: "全部更新 (1)" }));
@@ -75,14 +78,16 @@ test("notifies status filter changes", () => {
   } as unknown as ReturnType<typeof useSkillWorkspace>);
 
   render(
-    <SkillListToolbar
-      query=""
-      statusFilter="all"
-      onQueryChange={vi.fn()}
-      onStatusFilterChange={onStatusFilterChange}
-      showGroupView
-      onShowGroupViewChange={vi.fn()}
-    />,
+    <NotificationProvider>
+      <SkillListToolbar
+        query=""
+        statusFilter="all"
+        onQueryChange={vi.fn()}
+        onStatusFilterChange={onStatusFilterChange}
+        showGroupView
+        onShowGroupViewChange={vi.fn()}
+      />
+    </NotificationProvider>,
   );
 
   fireEvent.change(screen.getByLabelText("按状态筛选技能"), {

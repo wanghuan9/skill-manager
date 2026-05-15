@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { flushSync } from "react-dom";
 import { useNotifications } from "@/app/notifications";
+import { useFailureReporter } from "@/app/failure-feedback";
 import { useSkillWorkspace } from "@/features/skills/state/skill-workspace";
 import type { RepoSkillCandidate } from "@/features/skills/state/skill-store";
 import { formatSkillDescription } from "@/features/skills/utils/skill-description";
@@ -46,6 +47,7 @@ function toggleSelection(current: string[], value: string) {
 export function RepoInstallPanel() {
   const { discoverRepoSkills, installFromRepo, installedSkills } = useSkillWorkspace();
   const { notify } = useNotifications();
+  const reportFailure = useFailureReporter();
   const [repoInput, setRepoInput] = useState("");
   const [candidates, setCandidates] = useState<RepoSkillCandidate[]>([]);
   const [selectedPaths, setSelectedPaths] = useState<string[]>([]);
@@ -85,9 +87,9 @@ export function RepoInstallPanel() {
     } catch (error) {
       setCandidates([]);
       setSelectedPaths([]);
-      notify({
-        message: error instanceof Error ? error.message : "读取仓库技能失败，请稍后重试。",
-        tone: "error",
+      reportFailure(error, {
+        operation: "discover_repo_skills",
+        fallbackMessage: "读取仓库技能失败，请稍后重试。",
       });
     } finally {
       setIsDiscovering(false);
@@ -107,9 +109,9 @@ export function RepoInstallPanel() {
       setCandidates([]);
       setSelectedPaths([]);
     } catch (error) {
-      notify({
-        message: error instanceof Error ? error.message : "安装选中技能失败，请稍后重试。",
-        tone: "error",
+      reportFailure(error, {
+        operation: "install_from_repo",
+        fallbackMessage: "安装选中技能失败，请稍后重试。",
       });
     } finally {
       setIsInstalling(false);

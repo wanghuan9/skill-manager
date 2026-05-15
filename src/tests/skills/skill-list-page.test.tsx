@@ -91,7 +91,6 @@ test("remembers the user's last grouped view selection", async () => {
   expect(screen.queryByRole("heading", { name: "skill-publisher" })).not.toBeInTheDocument();
 });
 
-
 test("expanding one skill collapses the previously opened skill in flat view", async () => {
   const user = userEvent.setup();
 

@@ -7,6 +7,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { BusinessError } from "@/app/errors";
 import {
   fetchAppSettings,
   deleteSkill,
@@ -708,7 +709,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
         result.status === "fulfilled" ? result.value : []
       );
       if (fulfilledResults.length === 0 && searchResults.some((result) => result.status === "rejected")) {
-        throw new Error("搜索安装源失败");
+        throw new BusinessError("搜索安装源失败");
       }
 
       const mergedSkills = dedupeMarketplaceSkills(fulfilledResults);
@@ -803,7 +804,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       .filter((item) => item.result.status === "rejected");
     if (failedUpdates.length > 0) {
       const failedSkillNames = failedUpdates.map((item) => item.skillName).join("、");
-      throw new Error(`已更新 ${updatedSkills.length} 个 skill，${failedUpdates.length} 个更新失败：${failedSkillNames}`);
+      throw new BusinessError(`已更新 ${updatedSkills.length} 个 skill，${failedUpdates.length} 个更新失败：${failedSkillNames}`);
     }
   }
 

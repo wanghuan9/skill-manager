@@ -1,4 +1,5 @@
 import { useEffect, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { useFailureReporter } from "@/app/failure-feedback";
 import { useNotifications } from "@/app/notifications";
 import { fetchMarketplaceSkillDescription, openExternalLink } from "@/features/skills/api/skill-client";
 import type { MarketplaceSkill, MarketplaceSourceSite } from "@/features/skills/state/skill-store";
@@ -40,6 +41,7 @@ export function MarketplaceInstallPanel(props: MarketplaceInstallPanelProps) {
   } = props;
   const { installingMarketplaceSkillIds, installFromMarket } = useSkillWorkspace();
   const { notify } = useNotifications();
+  const reportFailure = useFailureReporter();
   const [selectedSkill, setSelectedSkill] = useState<MarketplaceSkill | null>(null);
 
   async function handleInstallSkill(skill: MarketplaceSkill) {
@@ -47,9 +49,10 @@ export function MarketplaceInstallPanel(props: MarketplaceInstallPanelProps) {
       await installFromMarket(skill);
       notify({ message: `技能 "${skill.name}" 已安装`, tone: "success" });
     } catch (error) {
-      notify({
-        message: error instanceof Error ? error.message : "安装失败，请稍后重试。",
-        tone: "error",
+      reportFailure(error, {
+        operation: "install_marketplace_skill",
+        fallbackMessage: "安装失败，请稍后重试。",
+        context: { skillId: skill.id, skillName: skill.name, sourceSite: skill.sourceSite },
       });
     }
   }

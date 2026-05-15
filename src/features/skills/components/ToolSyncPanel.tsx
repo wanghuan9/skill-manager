@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { waitForNextPaint } from "@/app/utils/wait-for-next-paint";
+import { useFailureReporter } from "@/app/failure-feedback";
 import type { SkillToolSyncStatus } from "@/features/skills/state/skill-store";
 import { useSkillWorkspace } from "@/features/skills/state/skill-workspace";
 import { resolveToolLogoUrl } from "@/features/skills/utils/tool-logo";
@@ -42,6 +43,7 @@ function isMissingBulkCommandError(error: unknown) {
 
 export function ToolSyncPanel({ skillName, tools }: ToolSyncPanelProps) {
   const { setSkillAllToolStatuses, setToolSkillStatuses, toggleSkillTool } = useSkillWorkspace();
+  const reportFailure = useFailureReporter();
   const [isBulkUpdating, setIsBulkUpdating] = useState(false);
   const [bulkAction, setBulkAction] = useState<"enable" | "disable" | null>(null);
   const [displayTools, setDisplayTools] = useState(tools);
@@ -74,8 +76,11 @@ export function ToolSyncPanel({ skillName, tools }: ToolSyncPanelProps) {
       });
     } catch (error) {
       setDisplayTools((current) => patchToolStatuses(current, new Set([toolName]), previousEnabled));
-      const message = error instanceof Error ? error.message : "切换 Tool 启用状态失败";
-      window.alert(message);
+      reportFailure(error, {
+        operation: "toggle_skill_tool",
+        fallbackMessage: "切换 Tool 启用状态失败",
+        context: { skillName, toolName },
+      });
     } finally {
       setPendingToolNames((current) => current.filter((name) => name !== toolName));
     }
@@ -112,9 +117,11 @@ export function ToolSyncPanel({ skillName, tools }: ToolSyncPanelProps) {
 
     if (failedToolNames.length > 0) {
       setDisplayTools(latestToolsRef.current);
-      const successCount = toolNames.length - failedToolNames.length;
-      const actionLabel = enabled ? "开启" : "关闭";
-      window.alert(`已${actionLabel} ${successCount} 个工具，${failedToolNames.length} 个失败：${failedToolNames.join("、")}`);
+      reportFailure(new Error(`已${enabled ? "开启" : "关闭"} ${toolNames.length - failedToolNames.length} 个工具，${failedToolNames.length} 个失败：${failedToolNames.join("、")}`), {
+        operation: "sync_all_skill_tools",
+        fallbackMessage: "批量更新 Tool 启用状态失败",
+        context: { skillName, enabled, failedToolNames },
+      });
     }
   }
 

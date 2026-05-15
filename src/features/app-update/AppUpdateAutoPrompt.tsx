@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNotifications } from "@/app/notifications";
+import { useFailureReporter } from "@/app/failure-feedback";
 import {
   type AppUpdateCheckResult,
   type AppUpdateProgress,
@@ -10,8 +11,13 @@ const AUTO_UPDATE_CHECK_DELAY_MS = 2000;
 
 let autoUpdatePromptState: "idle" | "scheduled" | "running" | "done" = "idle";
 
+export function resetAutoUpdatePromptStateForTests() {
+  autoUpdatePromptState = "idle";
+}
+
 export function AppUpdateAutoPrompt() {
   const { notify } = useNotifications();
+  const reportFailure = useFailureReporter();
   const [update, setUpdate] = useState<AppUpdateCheckResult | null>(null);
   const [isPanelOpen, setIsPanelOpen] = useState(false);
   const [isInstalling, setIsInstalling] = useState(false);
@@ -32,8 +38,7 @@ export function AppUpdateAutoPrompt() {
           }
         })
         .catch((error) => {
-          const message = error instanceof Error ? error.message : "自动检查更新失败";
-          notify({ message, tone: "error" });
+          console.warn("Automatic app update check failed", error);
         })
         .finally(() => {
           autoUpdatePromptState = "done";
@@ -46,7 +51,7 @@ export function AppUpdateAutoPrompt() {
         autoUpdatePromptState = "idle";
       }
     };
-  }, [notify]);
+  }, []);
 
   const releaseNotes = useMemo(() => buildReleaseNotes(update), [update]);
 
@@ -69,8 +74,10 @@ export function AppUpdateAutoPrompt() {
       });
     } catch (error) {
       setIsInstalling(false);
-      const message = error instanceof Error ? error.message : "安装更新失败";
-      notify({ message, tone: "error" });
+      reportFailure(error, {
+        operation: "install_app_update",
+        fallbackMessage: "安装更新失败",
+      });
     }
   }
 

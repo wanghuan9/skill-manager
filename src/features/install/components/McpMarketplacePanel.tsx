@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { useFailureReporter } from "@/app/failure-feedback";
 import { useNotifications } from "@/app/notifications";
 import {
   fetchMcpMarketplaceServers,
@@ -292,6 +293,7 @@ async function ensureInstalledServerIdsLoaded() {
 export function McpMarketplacePanel(props: McpMarketplacePanelProps) {
   const { searchQuery, onSearchQueryChange } = props;
   const { notify } = useNotifications();
+  const reportFailure = useFailureReporter();
   const { appSettings } = useSkillWorkspace();
   const configCacheRef = useRef<Map<string, Record<string, unknown> | null>>(new Map());
   const resolvedSourceUrlCacheRef = useRef<Map<string, string>>(new Map());
@@ -551,7 +553,11 @@ export function McpMarketplacePanel(props: McpMarketplacePanelProps) {
     } catch (error) {
       const message = error instanceof Error ? error.message : "加载更多 MCP 失败，请稍后重试。";
       setErrorMessage(message);
-      notify({ message, tone: "error" });
+      reportFailure(error, {
+        operation: "load_more_mcp_marketplace_servers",
+        fallbackMessage: "加载更多 MCP 失败，请稍后重试。",
+        context: { page: nextPage, query: normalizedQuery },
+      });
     } finally {
       setIsLoadingMore(false);
     }
@@ -623,8 +629,11 @@ export function McpMarketplacePanel(props: McpMarketplacePanelProps) {
           .catch(() => undefined);
       }
     } catch (error) {
-      const message = error instanceof Error ? error.message : "安装 MCP 失败，请稍后重试。";
-      notify({ message, tone: "error" });
+      reportFailure(error, {
+        operation: "install_mcp_server_from_marketplace",
+        fallbackMessage: "安装 MCP 失败，请稍后重试。",
+        context: { serverId: server.id, serverName: server.name },
+      });
     } finally {
       setInstallingServerIds((current) => {
         const next = new Set(current);

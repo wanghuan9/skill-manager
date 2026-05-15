@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { LocalInstallPanel } from "@/features/install/components/LocalInstallPanel";
 import { useNotifications } from "@/app/notifications";
+import { useFailureReporter } from "@/app/failure-feedback";
 import { useSkillWorkspace } from "@/features/skills/state/skill-workspace";
 import type { LocalSkillCandidate } from "@/features/skills/state/skill-store";
 
@@ -63,6 +64,7 @@ function sourceLabel(candidate: LocalSkillCandidate) {
 export function LocalSkillImportList() {
   const { importCandidate, installedSkills, isLoading, localCandidates, refreshLocalCandidates } = useSkillWorkspace();
   const { notify } = useNotifications();
+  const reportFailure = useFailureReporter();
   const groups = useMemo(() => buildLocalSkillGroups(localCandidates), [localCandidates]);
   const [activeLocalTab, setActiveLocalTab] = useState<LocalInstallTab>("scan");
   const [isScanListExpanded, setIsScanListExpanded] = useState(true);
@@ -87,9 +89,9 @@ export function LocalSkillImportList() {
         if (cancelled) {
           return;
         }
-        notify({
-          message: error instanceof Error ? error.message : "扫描本地技能失败，请稍后重试。",
-          tone: "error",
+        reportFailure(error, {
+          operation: "refresh_local_candidates",
+          fallbackMessage: "扫描本地技能失败，请稍后重试。",
         });
       })
       .finally(() => {
@@ -114,9 +116,9 @@ export function LocalSkillImportList() {
       setIsScanListExpanded(true);
       setExpandedNames(new Set());
     } catch (error) {
-      notify({
-        message: error instanceof Error ? error.message : "扫描本地技能失败，请稍后重试。",
-        tone: "error",
+      reportFailure(error, {
+        operation: "refresh_local_candidates",
+        fallbackMessage: "扫描本地技能失败，请稍后重试。",
       });
     } finally {
       setIsRefreshing(false);
@@ -206,9 +208,10 @@ export function LocalSkillImportList() {
       return true;
     } catch (error) {
       if (shouldNotify) {
-        notify({
-          message: error instanceof Error ? error.message : `${group.name} 导入失败，请稍后重试。`,
-          tone: "error",
+        reportFailure(error, {
+          operation: "import_local_skill",
+          fallbackMessage: `${group.name} 导入失败，请稍后重试。`,
+          context: { skillName: group.name, localPath: candidate.localPath },
         });
       }
       return false;

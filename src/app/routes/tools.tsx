@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { ToolManageDialog } from "@/features/skills/components/ToolManageDialog";
+import { useFailureReporter } from "@/app/failure-feedback";
 import { openToolMcpConfig, openToolSkillsFolder } from "@/features/skills/api/skill-client";
 import { useSkillWorkspace } from "@/features/skills/state/skill-workspace";
 import { getToolLogoUrl } from "@/features/skills/utils/tool-logo";
@@ -84,6 +85,7 @@ function EditorOpenIcon() {
 
 export function ToolsRoute() {
   const { defaultOpenToolId, toolConfigs } = useSkillWorkspace();
+  const reportFailure = useFailureReporter();
   const installedTools = useMemo(
     () => sortToolCards(buildInstalledToolCards(toolConfigs), defaultOpenToolId),
     [defaultOpenToolId, toolConfigs],
@@ -102,8 +104,10 @@ export function ToolsRoute() {
     try {
       await openToolSkillsFolder({ toolId });
     } catch (error) {
-      const message = error instanceof Error ? error.message : "打开 Skills 文件夹失败";
-      window.alert(message);
+      reportFailure(error, {
+        operation: "open_tool_skills_folder",
+        fallbackMessage: "打开 Skills 文件夹失败",
+      });
     } finally {
       setOpeningToolId("");
     }
@@ -119,8 +123,10 @@ export function ToolsRoute() {
       const preferredEditorId = resolvePreferredEditorIdForTextFile(toolConfigs, defaultOpenToolId);
       await openToolMcpConfig({ toolId, editorId: preferredEditorId });
     } catch (error) {
-      const message = error instanceof Error ? error.message : "打开 MCP 配置失败";
-      window.alert(message);
+      reportFailure(error, {
+        operation: "open_tool_mcp_config",
+        fallbackMessage: "打开 MCP 配置失败",
+      });
     } finally {
       setOpeningMcpToolId("");
     }

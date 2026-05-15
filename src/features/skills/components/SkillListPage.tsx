@@ -1,5 +1,6 @@
 import { useDeferredValue, useMemo, useState } from "react";
 import { waitForNextPaint } from "@/app/utils/wait-for-next-paint";
+import { useFailureReporter } from "@/app/failure-feedback";
 import { openExternalLink } from "@/features/skills/api/skill-client";
 import { filterSkills, hasEnabledTool } from "@/features/skills/state/skill-selectors";
 import { SkillCard } from "@/features/skills/components/SkillCard";
@@ -131,6 +132,7 @@ function SkillGroupMonogram({ label }: { label: string }) {
 export function SkillListToolbar(props: SkillToolbarProps) {
   const { query, statusFilter, onQueryChange, onStatusFilterChange, showGroupView, onShowGroupViewChange } = props;
   const { installedSkills, isLoading, refreshWorkspace, updateAllSkills } = useSkillWorkspace();
+  const reportFailure = useFailureReporter();
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isUpdatingAll, setIsUpdatingAll] = useState(false);
   const statusFilterCounts = useMemo(
@@ -160,8 +162,10 @@ export function SkillListToolbar(props: SkillToolbarProps) {
     try {
       await refreshWorkspace();
     } catch (error) {
-      const message = error instanceof Error ? error.message : "刷新失败";
-      window.alert(message);
+      reportFailure(error, {
+        operation: "refresh_workspace",
+        fallbackMessage: "刷新失败",
+      });
     } finally {
       setIsRefreshing(false);
     }
@@ -177,8 +181,10 @@ export function SkillListToolbar(props: SkillToolbarProps) {
     try {
       await updateAllSkills();
     } catch (error) {
-      const message = error instanceof Error ? error.message : "批量更新失败";
-      window.alert(message);
+      reportFailure(error, {
+        operation: "update_all_skills",
+        fallbackMessage: "批量更新失败",
+      });
     } finally {
       setIsUpdatingAll(false);
     }

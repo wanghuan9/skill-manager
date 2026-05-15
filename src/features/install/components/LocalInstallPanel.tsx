@@ -2,7 +2,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import type { DragDropEvent } from "@tauri-apps/api/webview";
 import { open } from "@tauri-apps/plugin-dialog";
+import { isTauriRuntime } from "@/app/is-tauri-runtime";
 import { useNotifications } from "@/app/notifications";
+import { useFailureReporter } from "@/app/failure-feedback";
 import { useSkillWorkspace } from "@/features/skills/state/skill-workspace";
 import type { LocalInstallSkillCandidate } from "@/features/skills/state/skill-store";
 import { formatSkillDescription } from "@/features/skills/utils/skill-description";
@@ -18,10 +20,6 @@ type FileWithPath = File & {
 
 type DragDropPosition = Extract<DragDropEvent, { position: unknown }>["position"];
 
-type WindowWithTauriInternals = Window & {
-  __TAURI_INTERNALS__?: unknown;
-};
-
 function firstSelectedPath(selected: string | string[] | null) {
   if (Array.isArray(selected)) {
     return selected[0] ?? "";
@@ -35,7 +33,7 @@ function pathFromDroppedFile(file: FileWithPath | undefined) {
 }
 
 function canUseTauriDragDrop() {
-  return typeof window !== "undefined" && Boolean((window as WindowWithTauriInternals).__TAURI_INTERNALS__);
+  return isTauriRuntime();
 }
 
 function toggleSelection(current: string[], value: string) {
@@ -51,6 +49,7 @@ export function LocalInstallPanel(props: LocalInstallPanelProps) {
     installSelectedLocalSkills,
   } = useSkillWorkspace();
   const { notify } = useNotifications();
+  const reportFailure = useFailureReporter();
   const dropzoneRef = useRef<HTMLDivElement>(null);
   const [localPath, setLocalPath] = useState("");
   const [skillName, setSkillName] = useState("");
@@ -207,9 +206,9 @@ export function LocalInstallPanel(props: LocalInstallPanelProps) {
       setSelectedPaths([]);
       onInstalled?.();
     } catch (error) {
-      notify({
-        message: error instanceof Error ? error.message : "未识别到 skill，请选择包含 SKILL.md 的目录或压缩包。",
-        tone: "error",
+      reportFailure(error, {
+        operation: "discover_local_install_skills",
+        fallbackMessage: "未识别到 skill，请选择包含 SKILL.md 的目录或压缩包。",
       });
     } finally {
       setIsDiscovering(false);
@@ -231,9 +230,9 @@ export function LocalInstallPanel(props: LocalInstallPanelProps) {
       setSelectedPaths([]);
       onInstalled?.();
     } catch (error) {
-      notify({
-        message: error instanceof Error ? error.message : "安装选中本地技能失败，请稍后重试。",
-        tone: "error",
+      reportFailure(error, {
+        operation: "install_selected_local_skills",
+        fallbackMessage: "安装选中本地技能失败，请稍后重试。",
       });
     } finally {
       setIsInstalling(false);

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
+import { useFailureReporter } from "@/app/failure-feedback";
 import {
   type AppUpdateCheckResult,
   type AppUpdateProgress,
@@ -118,6 +119,7 @@ export function SettingsRoute() {
   >("idle");
   const [appUpdateMessage, setAppUpdateMessage] = useState("尚未检查更新");
   const [appUpdateProgress, setAppUpdateProgress] = useState<AppUpdateProgress | null>(null);
+  const reportFailure = useFailureReporter();
   const toolStatusPanelClassName = `panel-card placeholder-panel settings-panel settings-panel--tool-status${
     isToolStatusExpanded ? "" : " is-clickable"
   }`;
@@ -190,7 +192,12 @@ export function SettingsRoute() {
       setAppUpdateMessage("当前已经是最新版本");
     } catch (error) {
       setAppUpdateStatus("error");
-      setAppUpdateMessage(error instanceof Error ? error.message : "检查更新失败");
+      const message = error instanceof Error ? error.message : "检查更新失败";
+      setAppUpdateMessage(message);
+      reportFailure(error, {
+        operation: "check_for_app_update",
+        fallbackMessage: "检查更新失败",
+      });
     }
   }
 
@@ -208,7 +215,12 @@ export function SettingsRoute() {
       });
     } catch (error) {
       setAppUpdateStatus("error");
-      setAppUpdateMessage(error instanceof Error ? error.message : "安装更新失败");
+      const message = error instanceof Error ? error.message : "安装更新失败";
+      setAppUpdateMessage(message);
+      reportFailure(error, {
+        operation: "install_app_update",
+        fallbackMessage: "安装更新失败",
+      });
     }
   }
 

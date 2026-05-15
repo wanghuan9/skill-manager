@@ -1,6 +1,7 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, vi } from "vitest";
+import { NotificationProvider } from "@/app/notifications";
 import { ToolSyncPanel } from "@/features/skills/components/ToolSyncPanel";
 import { useSkillWorkspace } from "@/features/skills/state/skill-workspace";
 
@@ -36,14 +37,16 @@ test("enables all disabled tools for the current skill", async () => {
   } as unknown as ReturnType<typeof useSkillWorkspace>);
 
   render(
-    <ToolSyncPanel
-      skillName="drawio-diagram"
-      tools={[
-        { name: "Cursor", statusLabel: "已启用" },
-        { name: "Codex", statusLabel: "未启用" },
-        { name: "Claude Code", statusLabel: "未启用" },
-      ]}
-    />,
+    <NotificationProvider>
+      <ToolSyncPanel
+        skillName="drawio-diagram"
+        tools={[
+          { name: "Cursor", statusLabel: "已启用" },
+          { name: "Codex", statusLabel: "未启用" },
+          { name: "Claude Code", statusLabel: "未启用" },
+        ]}
+      />
+    </NotificationProvider>,
   );
 
   await userEvent.click(screen.getByRole("button", { name: "全部开启" }));
@@ -79,14 +82,16 @@ test("disables all enabled tools for the current skill", async () => {
   } as unknown as ReturnType<typeof useSkillWorkspace>);
 
   render(
-    <ToolSyncPanel
-      skillName="drawio-diagram"
-      tools={[
-        { name: "Cursor", statusLabel: "已启用" },
-        { name: "Codex", statusLabel: "未启用" },
-        { name: "Claude Code", statusLabel: "已同步" },
-      ]}
-    />,
+    <NotificationProvider>
+      <ToolSyncPanel
+        skillName="drawio-diagram"
+        tools={[
+          { name: "Cursor", statusLabel: "已启用" },
+          { name: "Codex", statusLabel: "未启用" },
+          { name: "Claude Code", statusLabel: "已同步" },
+        ]}
+      />
+    </NotificationProvider>,
   );
 
   await userEvent.click(screen.getByRole("button", { name: "全部关闭" }));
@@ -122,14 +127,16 @@ test("locks bulk actions and tool pills until bulk update finishes", async () =>
   } as unknown as ReturnType<typeof useSkillWorkspace>);
 
   render(
-    <ToolSyncPanel
-      skillName="drawio-diagram"
-      tools={[
-        { name: "Cursor", statusLabel: "已启用" },
-        { name: "Codex", statusLabel: "未启用" },
-        { name: "Claude Code", statusLabel: "未启用" },
-      ]}
-    />,
+    <NotificationProvider>
+      <ToolSyncPanel
+        skillName="drawio-diagram"
+        tools={[
+          { name: "Cursor", statusLabel: "已启用" },
+          { name: "Codex", statusLabel: "未启用" },
+          { name: "Claude Code", statusLabel: "未启用" },
+        ]}
+      />
+    </NotificationProvider>,
   );
 
   await userEvent.click(screen.getByRole("button", { name: "全部开启" }));
@@ -164,14 +171,16 @@ test("updates a single tool immediately and only disables that tool while saving
   } as unknown as ReturnType<typeof useSkillWorkspace>);
 
   render(
-    <ToolSyncPanel
-      skillName="drawio-diagram"
-      tools={[
-        { name: "Cursor", statusLabel: "已启用" },
-        { name: "Codex", statusLabel: "未启用" },
-        { name: "Claude Code", statusLabel: "未启用" },
-      ]}
-    />,
+    <NotificationProvider>
+      <ToolSyncPanel
+        skillName="drawio-diagram"
+        tools={[
+          { name: "Cursor", statusLabel: "已启用" },
+          { name: "Codex", statusLabel: "未启用" },
+          { name: "Claude Code", statusLabel: "未启用" },
+        ]}
+      />
+    </NotificationProvider>,
   );
 
   await userEvent.click(screen.getByRole("button", { name: "启用 Codex" }));

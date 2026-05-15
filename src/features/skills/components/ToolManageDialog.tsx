@@ -1,4 +1,5 @@
 import { useEffect, useId, useMemo, useState } from "react";
+import { useFailureReporter } from "@/app/failure-feedback";
 import { fetchMcpWorkspace, toggleMcpServerApp } from "@/features/skills/api/skill-client";
 import { useSkillWorkspace } from "@/features/skills/state/skill-workspace";
 import type { McpWorkspaceSnapshot } from "@/features/skills/state/skill-store";
@@ -63,6 +64,7 @@ function patchMcpWorkspaceBulkToggle(
 export function ToolManageDialog({ isOpen, onClose, tool }: ToolManageDialogProps) {
   const dialogTitleId = useId();
   const { installedSkills, setToolSkillStatuses, toggleSkillTool } = useSkillWorkspace();
+  const reportFailure = useFailureReporter();
   const [activeTab, setActiveTab] = useState<CapabilityTabKey>("skills");
   const [query, setQuery] = useState("");
   const [showEnabledOnly, setShowEnabledOnly] = useState(false);
@@ -192,8 +194,11 @@ export function ToolManageDialog({ isOpen, onClose, tool }: ToolManageDialogProp
         toolNames: knownSkillToolNames,
       });
     } catch (error) {
-      const message = error instanceof Error ? error.message : "切换 Skill 启用状态失败";
-      window.alert(message);
+      reportFailure(error, {
+        operation: "toggle_tool_manage_skill",
+        fallbackMessage: "切换 Skill 启用状态失败",
+        context: { toolId: tool.id, toolName: tool.name, skillName },
+      });
     }
   }
 
@@ -211,8 +216,11 @@ export function ToolManageDialog({ isOpen, onClose, tool }: ToolManageDialogProp
       setMcpWorkspace(nextWorkspace);
     } catch (error) {
       setMcpWorkspace(previousWorkspace);
-      const message = error instanceof Error ? error.message : "切换 MCP 启用状态失败";
-      window.alert(message);
+      reportFailure(error, {
+        operation: "toggle_tool_manage_mcp",
+        fallbackMessage: "切换 MCP 启用状态失败",
+        context: { toolId: tool.id, toolName: tool.name, serverId, enabled },
+      });
     }
   }
 
@@ -233,8 +241,11 @@ export function ToolManageDialog({ isOpen, onClose, tool }: ToolManageDialogProp
           toolNames: knownSkillToolNames,
         });
       } catch (error) {
-        const message = error instanceof Error ? error.message : "批量启用 Skills 失败";
-        window.alert(message);
+        reportFailure(error, {
+          operation: "enable_all_tool_manage_skills",
+          fallbackMessage: "批量启用 Skills 失败",
+          context: { toolId: tool.id, toolName: tool.name, skillNames: disabledSkillNames },
+        });
       }
       return;
     }
@@ -263,8 +274,11 @@ export function ToolManageDialog({ isOpen, onClose, tool }: ToolManageDialogProp
       }
     } catch (error) {
       setMcpWorkspace(previousWorkspace);
-      const message = error instanceof Error ? error.message : "批量启用 MCP 失败";
-      window.alert(message);
+      reportFailure(error, {
+        operation: "enable_all_tool_manage_mcp",
+        fallbackMessage: "批量启用 MCP 失败",
+        context: { toolId: tool.id, toolName: tool.name, serverIds: disabledRows.map((row) => row.id) },
+      });
     } finally {
       setIsUpdatingAll(false);
     }
@@ -287,8 +301,11 @@ export function ToolManageDialog({ isOpen, onClose, tool }: ToolManageDialogProp
           toolNames: knownSkillToolNames,
         });
       } catch (error) {
-        const message = error instanceof Error ? error.message : "批量关闭 Skills 失败";
-        window.alert(message);
+        reportFailure(error, {
+          operation: "disable_all_tool_manage_skills",
+          fallbackMessage: "批量关闭 Skills 失败",
+          context: { toolId: tool.id, toolName: tool.name, skillNames: enabledSkillNames },
+        });
       }
       return;
     }
@@ -317,8 +334,11 @@ export function ToolManageDialog({ isOpen, onClose, tool }: ToolManageDialogProp
       }
     } catch (error) {
       setMcpWorkspace(previousWorkspace);
-      const message = error instanceof Error ? error.message : "批量关闭 MCP 失败";
-      window.alert(message);
+      reportFailure(error, {
+        operation: "disable_all_tool_manage_mcp",
+        fallbackMessage: "批量关闭 MCP 失败",
+        context: { toolId: tool.id, toolName: tool.name, serverIds: enabledRows.map((row) => row.id) },
+      });
     } finally {
       setIsUpdatingAll(false);
     }

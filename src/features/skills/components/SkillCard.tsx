@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { MouseEvent as ReactMouseEvent } from "react";
 import { useNotifications } from "@/app/notifications";
+import { useFailureReporter } from "@/app/failure-feedback";
 import { SkillStatusBadge } from "@/features/skills/components/SkillStatusBadge";
 import { SkillFileDialog } from "@/features/skills/components/SkillFileDialog";
 import { ToolSyncPanel } from "@/features/skills/components/ToolSyncPanel";
@@ -154,6 +155,7 @@ function DeleteIcon() {
 
 export function SkillCard({ skill, expanded: expandedProp, onExpandedChange }: SkillCardProps) {
   const { notify } = useNotifications();
+  const reportFailure = useFailureReporter();
   const { deleteSkill, openSkillWithDefaultTool, toolConfigs, updateSkill } = useSkillWorkspace();
   const [expandedState, setExpandedState] = useState(false);
   const [showFileDialog, setShowFileDialog] = useState(false);
@@ -223,8 +225,11 @@ export function SkillCard({ skill, expanded: expandedProp, onExpandedChange }: S
       try {
         await updateSkill(skill.name);
       } catch (error) {
-        const message = error instanceof Error ? error.message : "更新失败，请稍后重试。";
-        window.alert(message);
+        reportFailure(error, {
+          operation: "update_skill",
+          fallbackMessage: "更新失败，请稍后重试。",
+          context: { skillName: skill.name },
+        });
       } finally {
         setIsUpdating(false);
       }
@@ -247,8 +252,11 @@ export function SkillCard({ skill, expanded: expandedProp, onExpandedChange }: S
       await deleteSkill(skill.name);
       notify({ tone: "success", message: `已删除 ${skill.name}` });
     } catch (error) {
-      const message = error instanceof Error ? error.message : "删除 skill 失败";
-      window.alert(message);
+      reportFailure(error, {
+        operation: "delete_skill",
+        fallbackMessage: "删除 skill 失败",
+        context: { skillName: skill.name },
+      });
     } finally {
       setIsDeleting(false);
     }
@@ -258,8 +266,11 @@ export function SkillCard({ skill, expanded: expandedProp, onExpandedChange }: S
     try {
       await openSkillWithDefaultTool(skill.name);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "打开 skill 目录失败，请检查默认打开工具。";
-      window.alert(message);
+      reportFailure(error, {
+        operation: "open_skill_with_default_tool",
+        fallbackMessage: "打开 skill 目录失败，请检查默认打开工具。",
+        context: { skillName: skill.name },
+      });
     }
   }
 

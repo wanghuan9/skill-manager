@@ -5695,47 +5695,6 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn local_import_cleans_up_partial_skill_directory_on_failure() {
-        let _guard = TEST_ENV_LOCK
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        let temp_dir = temp_test_dir("local-import-cleanup-on-failure");
-        let home_dir = temp_dir.join("home");
-        let legacy_skill_dir = temp_dir.join("legacy/broken-skill");
-        let codex_skills_dir = home_dir.join(".codex/skills");
-        let codex_skill_link = codex_skills_dir.join("broken-skill");
-        fs::create_dir_all(&legacy_skill_dir).expect("create legacy skill dir");
-        fs::create_dir_all(&codex_skills_dir).expect("create codex skills dir");
-        fs::write(
-            legacy_skill_dir.join("SKILL.md"),
-            "---\nname: broken-skill\ndescription: 测试失败回滚\n---",
-        )
-        .expect("write legacy skill file");
-        std::os::unix::fs::symlink(&legacy_skill_dir, &codex_skill_link)
-            .expect("create existing external symlink");
-
-        let original_home = env::var_os("HOME");
-        // SAFETY: this test holds ENV_LOCK and restores HOME before returning.
-        unsafe {
-            env::set_var("HOME", &home_dir);
-        }
-
-        let target_dir = home_dir.join(".skilldock/skills/broken-skill");
-        let result: Result<(), String> = cleanup_local_skill_install_on_error(&target_dir, true, || {
-            let _ = copy_local_skill_dir(&legacy_skill_dir, &target_dir)?;
-            Err("forced failure".into())
-        });
-
-        restore_env_var("HOME", original_home);
-
-        assert!(result.is_err());
-        assert!(!target_dir.exists());
-
-        let _ = fs::remove_dir_all(temp_dir);
-    }
-
-    #[cfg(unix)]
-    #[test]
     fn local_import_replaces_existing_tool_directory_with_symlink() {
         let _guard = TEST_ENV_LOCK
             .lock()
@@ -5778,6 +5737,47 @@ mod tests {
             .tools
             .iter()
             .any(|tool| { tool.name == "Cursor" && tool.status_label == "已启用" }));
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn local_import_cleans_up_partial_skill_directory_on_failure() {
+        let _guard = TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let temp_dir = temp_test_dir("local-import-cleanup-on-failure");
+        let home_dir = temp_dir.join("home");
+        let legacy_skill_dir = temp_dir.join("legacy/broken-skill");
+        let codex_skills_dir = home_dir.join(".codex/skills");
+        let codex_skill_link = codex_skills_dir.join("broken-skill");
+        fs::create_dir_all(&legacy_skill_dir).expect("create legacy skill dir");
+        fs::create_dir_all(&codex_skills_dir).expect("create codex skills dir");
+        fs::write(
+            legacy_skill_dir.join("SKILL.md"),
+            "---\nname: broken-skill\ndescription: 测试失败回滚\n---",
+        )
+        .expect("write legacy skill file");
+        std::os::unix::fs::symlink(&legacy_skill_dir, &codex_skill_link)
+            .expect("create existing external symlink");
+
+        let original_home = env::var_os("HOME");
+        // SAFETY: this test holds ENV_LOCK and restores HOME before returning.
+        unsafe {
+            env::set_var("HOME", &home_dir);
+        }
+
+        let target_dir = home_dir.join(".skilldock/skills/broken-skill");
+        let result: Result<(), String> = cleanup_local_skill_install_on_error(&target_dir, true, || {
+            let _ = copy_local_skill_dir(&legacy_skill_dir, &target_dir)?;
+            Err("forced failure".into())
+        });
+
+        restore_env_var("HOME", original_home);
+
+        assert!(result.is_err());
+        assert!(!target_dir.exists());
 
         let _ = fs::remove_dir_all(temp_dir);
     }

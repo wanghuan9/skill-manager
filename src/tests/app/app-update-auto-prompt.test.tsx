@@ -1,7 +1,10 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { vi } from "vitest";
 import { NotificationProvider } from "@/app/notifications";
-import { AppUpdateAutoPrompt } from "@/features/app-update/AppUpdateAutoPrompt";
+import {
+  AppUpdateAutoPrompt,
+  resetAutoUpdatePromptStateForTests,
+} from "@/features/app-update/AppUpdateAutoPrompt";
 import { checkForAppUpdate } from "@/features/app-update/app-update-client";
 
 vi.mock("@/features/app-update/app-update-client", () => ({
@@ -11,6 +14,7 @@ vi.mock("@/features/app-update/app-update-client", () => ({
 afterEach(() => {
   vi.useRealTimers();
   vi.clearAllMocks();
+  resetAutoUpdatePromptStateForTests();
 });
 
 test("shows an in-app prompt and installs when automatic update check finds a new version", async () => {
@@ -50,4 +54,30 @@ test("shows an in-app prompt and installs when automatic update check finds a ne
   expect(screen.getByText("正在下载并安装更新...")).toBeInTheDocument();
 
   view.unmount();
+});
+
+test("fails silently when automatic update check cannot reach the updater endpoint", async () => {
+  vi.useFakeTimers();
+  vi.mocked(checkForAppUpdate).mockRejectedValue(new Error("error sending request for url (https://github.com/...)"));
+  const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+  const view = render(
+    <NotificationProvider>
+      <AppUpdateAutoPrompt />
+    </NotificationProvider>,
+  );
+
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(2000);
+  });
+
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Update" })).not.toBeInTheDocument();
+  expect(warnSpy).toHaveBeenCalledWith(
+    "Automatic app update check failed",
+    expect.any(Error),
+  );
+
+  view.unmount();
+  warnSpy.mockRestore();
 });
