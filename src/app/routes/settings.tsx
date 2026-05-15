@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
+import { useTranslate } from "@/app/i18n";
 import { useFailureReporter } from "@/app/failure-feedback";
 import {
   type AppUpdateCheckResult,
@@ -11,8 +12,8 @@ import { useSkillWorkspace } from "@/features/skills/state/skill-workspace";
 import {
   buildOpenToolOptions,
   buildSupportedAiToolCards,
+  getToolSurfaceLabels,
   sortToolCards,
-  TOOL_SURFACE_LABELS,
 } from "@/features/skills/utils/open-tools";
 import { getToolLogoUrl } from "@/features/skills/utils/tool-logo";
 
@@ -61,14 +62,6 @@ function getDirectoryPath(filePath: string) {
   return normalizedPath.slice(0, lastSeparatorIndex);
 }
 
-function formatUpdateSize(progress: AppUpdateProgress) {
-  if (!progress.totalBytes) {
-    return `${formatBytes(progress.downloadedBytes)} 已下载`;
-  }
-
-  return `${formatBytes(progress.downloadedBytes)} / ${formatBytes(progress.totalBytes)}`;
-}
-
 function formatBytes(bytes: number) {
   if (bytes <= 0) {
     return "0 B";
@@ -92,21 +85,119 @@ type SettingsFormItem = {
   onActivate?: () => void | Promise<void>;
 };
 
+type LanguageOption = {
+  value: "zh-CN" | "en";
+  label: string;
+};
+
+function LanguagePicker(props: {
+  value: "zh-CN" | "en";
+  options: LanguageOption[];
+  label: string;
+  onChange: (value: "zh-CN" | "en") => void | Promise<void>;
+}) {
+  const { label, onChange, options, value } = props;
+  const [isOpen, setIsOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const selectedOption = options.find((option) => option.value === value) ?? options[0];
+
+  useEffect(() => {
+    if (!isOpen) {
+      return;
+    }
+
+    function handlePointerDown(event: MouseEvent) {
+      if (!rootRef.current?.contains(event.target as Node)) {
+        setIsOpen(false);
+      }
+    }
+
+    function handleEscape(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setIsOpen(false);
+      }
+    }
+
+    window.addEventListener("mousedown", handlePointerDown);
+    window.addEventListener("keydown", handleEscape);
+    return () => {
+      window.removeEventListener("mousedown", handlePointerDown);
+      window.removeEventListener("keydown", handleEscape);
+    };
+  }, [isOpen]);
+
+  return (
+    <div ref={rootRef} className={`settings-language-picker${isOpen ? " is-open" : ""}`}>
+      <button
+        className="settings-language-picker__trigger"
+        type="button"
+        aria-label={label}
+        aria-haspopup="listbox"
+        aria-expanded={isOpen}
+        onClick={() => setIsOpen((current) => !current)}
+      >
+        <span>{selectedOption?.label ?? ""}</span>
+        <span className="settings-language-picker__chevron" aria-hidden="true">
+          {isOpen ? "⌃" : "⌄"}
+        </span>
+      </button>
+      {isOpen ? (
+        <div className="settings-language-picker__menu" role="listbox" aria-label={label}>
+          {options.map((option) => {
+            const selected = option.value === value;
+            return (
+              <button
+                key={option.value}
+                className={`settings-language-picker__option${selected ? " is-selected" : ""}`}
+                type="button"
+                role="option"
+                aria-selected={selected}
+                onClick={() => {
+                  setIsOpen(false);
+                  void onChange(option.value);
+                }}
+              >
+                <span className="settings-language-picker__check" aria-hidden="true">
+                  {selected ? "✓" : ""}
+                </span>
+                <span>{option.label}</span>
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 export function SettingsRoute() {
+  const { language, t } = useTranslate();
   const {
     appSettings,
     defaultOpenToolId,
     openPathInFinder,
+    setLanguage,
     setMcpInstallActivation,
     setDefaultOpenToolId,
     setSkillInstallActivation,
     toolConfigs,
   } = useSkillWorkspace();
-  const openToolOptions = useMemo(() => buildOpenToolOptions(toolConfigs), [toolConfigs]);
+  const openToolOptions = useMemo(
+    () => buildOpenToolOptions(toolConfigs, language),
+    [language, toolConfigs],
+  );
   const supportedToolCards = useMemo(
     () => sortToolCards(buildSupportedAiToolCards(toolConfigs), defaultOpenToolId),
     [defaultOpenToolId, toolConfigs],
   );
+  const languageOptions = useMemo<LanguageOption[]>(
+    () => [
+      { value: "zh-CN", label: t("settings.language.option.zh-CN") },
+      { value: "en", label: t("settings.language.option.en") },
+    ],
+    [t],
+  );
+  const toolSurfaceLabels = useMemo(() => getToolSurfaceLabels(language), [language]);
   const selectedDefaultToolId = openToolOptions.some((tool) => tool.id === defaultOpenToolId)
     ? defaultOpenToolId
     : openToolOptions[0]?.id ?? "";
@@ -117,7 +208,7 @@ export function SettingsRoute() {
   const [appUpdateStatus, setAppUpdateStatus] = useState<
     "idle" | "checking" | "available" | "not-available" | "installing" | "error"
   >("idle");
-  const [appUpdateMessage, setAppUpdateMessage] = useState("尚未检查更新");
+  const [appUpdateMessage, setAppUpdateMessage] = useState(t("settings.update.status.idle"));
   const [appUpdateProgress, setAppUpdateProgress] = useState<AppUpdateProgress | null>(null);
   const reportFailure = useFailureReporter();
   const toolStatusPanelClassName = `panel-card placeholder-panel settings-panel settings-panel--tool-status${
@@ -128,11 +219,20 @@ export function SettingsRoute() {
   const isInstallingAppUpdate = appUpdateStatus === "installing";
   const shouldShowInstallAppUpdate = Boolean(appUpdate?.available && appUpdate?.install);
   const appUpdateActionLabel = shouldShowInstallAppUpdate
-    ? (isInstallingAppUpdate ? "安装中..." : "下载并重启")
-    : (isCheckingAppUpdate ? "检查中..." : "检查更新");
+    ? (isInstallingAppUpdate ? t("settings.update.action.installing") : t("settings.update.action.install"))
+    : (isCheckingAppUpdate ? t("settings.update.action.checking") : t("settings.update.action.check"));
   const appUpdateActionClassName = shouldShowInstallAppUpdate
     ? "primary-button primary-button--compact settings-update-button"
     : "secondary-button secondary-button--compact settings-update-button";
+
+  useEffect(() => {
+    setAppUpdateMessage((current) => {
+      if (current.trim().length === 0 || current === t("settings.update.status.idle")) {
+        return t("settings.update.status.idle");
+      }
+      return current;
+    });
+  }, [t]);
 
   useEffect(() => {
     let shouldIgnore = false;
@@ -145,7 +245,7 @@ export function SettingsRoute() {
       })
       .catch(() => {
         if (!shouldIgnore) {
-          setCurrentAppVersion("未知");
+          setCurrentAppVersion(t("settings.about.versionUnknown"));
         }
       });
 
@@ -167,6 +267,14 @@ export function SettingsRoute() {
     }
   }
 
+  function formatUpdateSize(progress: AppUpdateProgress) {
+    if (!progress.totalBytes) {
+      return t("settings.update.downloaded", { size: formatBytes(progress.downloadedBytes) });
+    }
+
+    return `${formatBytes(progress.downloadedBytes)} / ${formatBytes(progress.totalBytes)}`;
+  }
+
   async function handleCheckAppUpdate() {
     if (isCheckingAppUpdate || isInstallingAppUpdate) {
       return;
@@ -174,7 +282,7 @@ export function SettingsRoute() {
 
     setAppUpdate(null);
     setAppUpdateStatus("checking");
-    setAppUpdateMessage("正在检查");
+    setAppUpdateMessage(t("settings.update.status.checking"));
     setAppUpdateProgress(null);
 
     try {
@@ -184,19 +292,23 @@ export function SettingsRoute() {
 
       if (update.available) {
         setAppUpdateStatus("available");
-        setAppUpdateMessage(update.version ? `发现新版本 ${update.version}` : "发现新版本");
+        setAppUpdateMessage(
+          update.version
+            ? t("settings.update.status.available", { version: update.version })
+            : t("settings.update.status.availableNoVersion"),
+        );
         return;
       }
 
       setAppUpdateStatus("not-available");
-      setAppUpdateMessage("当前已经是最新版本");
+      setAppUpdateMessage(t("settings.update.status.latest"));
     } catch (error) {
       setAppUpdateStatus("error");
-      const message = error instanceof Error ? error.message : "检查更新失败";
+      const message = error instanceof Error ? error.message : t("settings.update.status.checkFailed");
       setAppUpdateMessage(message);
       reportFailure(error, {
         operation: "check_for_app_update",
-        fallbackMessage: "检查更新失败",
+        fallbackMessage: t("settings.update.status.checkFailed"),
       });
     }
   }
@@ -207,7 +319,7 @@ export function SettingsRoute() {
     }
 
     setAppUpdateStatus("installing");
-    setAppUpdateMessage("正在下载并安装更新...");
+    setAppUpdateMessage(t("settings.update.status.installing"));
 
     try {
       await appUpdate.install((progress) => {
@@ -215,47 +327,61 @@ export function SettingsRoute() {
       });
     } catch (error) {
       setAppUpdateStatus("error");
-      const message = error instanceof Error ? error.message : "安装更新失败";
+      const message = error instanceof Error ? error.message : t("settings.update.status.installFailed");
       setAppUpdateMessage(message);
       reportFailure(error, {
         operation: "install_app_update",
-        fallbackMessage: "安装更新失败",
+        fallbackMessage: t("settings.update.status.installFailed"),
       });
     }
   }
 
   const generalSettingsItems: SettingsFormItem[] = [
     {
-      label: "配置文件存储目录",
-      description: "应用设置会写入这个目录，便于你在本地查看或备份默认配置。",
+      label: t("settings.storage.label"),
+      description: t("settings.storage.description"),
       value: (
         <div className="settings-form-item__path-group">
           <div className="settings-form-item__value settings-form-item__value--path">
-            {storageDirectoryPath || "暂未检测到存储目录"}
+            {storageDirectoryPath || t("settings.storage.empty")}
           </div>
           <span className="secondary-button secondary-button--compact settings-open-button settings-open-button--static">
             <FolderOpenIcon />
-            打开
+            {t("settings.storage.open")}
           </span>
         </div>
       ),
       readonly: true,
-      actionLabel: "打开配置文件存储目录",
+      actionLabel: t("settings.storage.action"),
       disabled: !storageDirectoryPath || isOpeningStoragePath,
       onActivate: handleOpenStoragePath,
     },
     {
-      label: "默认编辑器",
-      description: "当你点击“打开目录”或需要在本地查看/对比改动时会使用该编辑器。",
+      label: t("settings.language.label"),
+      description: t("settings.language.description"),
+      value: (
+        <div className="settings-form-item__control">
+          <LanguagePicker
+            value={appSettings.language}
+            options={languageOptions}
+            label={t("settings.language.label")}
+            onChange={setLanguage}
+          />
+        </div>
+      ),
+    },
+    {
+      label: t("settings.defaultEditor.label"),
+      description: t("settings.defaultEditor.description"),
       value: (
         <div className="settings-form-item__control">
           <select
-            aria-label="默认编辑器"
+            aria-label={t("settings.defaultEditor.aria")}
             value={selectedDefaultToolId}
             onChange={(event) => setDefaultOpenToolId(event.target.value)}
             disabled={openToolOptions.length === 0}
           >
-            {openToolOptions.length === 0 ? <option value="">未检测到可用编辑器</option> : null}
+            {openToolOptions.length === 0 ? <option value="">{t("settings.defaultEditor.empty")}</option> : null}
             {openToolOptions.map((tool) => (
               <option key={tool.id} value={tool.id}>
                 {tool.name}
@@ -268,12 +394,12 @@ export function SettingsRoute() {
   ];
   const installBehaviorItems: SettingsFormItem[] = [
     {
-      label: "新增 Skill 默认启用",
-      description: "开启后会在安装 skill 时默认应用到所有已安装工具；关闭后先保持未启用。",
+      label: t("settings.install.skill.label"),
+      description: t("settings.install.skill.description"),
       value: (
         <div className="settings-toggle-control">
           <span className="settings-toggle-control__state">
-            {appSettings.skillInstallActivation === "apply-all-tools" ? "已开启" : "已关闭"}
+            {appSettings.skillInstallActivation === "apply-all-tools" ? t("settings.toggle.on") : t("settings.toggle.off")}
           </span>
           <button
             className={`switch-button${appSettings.skillInstallActivation === "apply-all-tools" ? " is-enabled" : ""}`}
@@ -286,7 +412,7 @@ export function SettingsRoute() {
               )
             }
             aria-pressed={appSettings.skillInstallActivation === "apply-all-tools"}
-            aria-label="新增 Skill 默认启用"
+            aria-label={t("settings.install.skill.label")}
           >
             <span className="switch-button__thumb" />
           </button>
@@ -294,12 +420,12 @@ export function SettingsRoute() {
       ),
     },
     {
-      label: "新增 MCP 默认启用",
-      description: "开启后会在安装 MCP 时默认同步到所有已支持应用；关闭后先仅保存不启用。",
+      label: t("settings.install.mcp.label"),
+      description: t("settings.install.mcp.description"),
       value: (
         <div className="settings-toggle-control">
           <span className="settings-toggle-control__state">
-            {appSettings.mcpInstallActivation === "apply-all-tools" ? "已开启" : "已关闭"}
+            {appSettings.mcpInstallActivation === "apply-all-tools" ? t("settings.toggle.on") : t("settings.toggle.off")}
           </span>
           <button
             className={`switch-button${appSettings.mcpInstallActivation === "apply-all-tools" ? " is-enabled" : ""}`}
@@ -312,7 +438,7 @@ export function SettingsRoute() {
               )
             }
             aria-pressed={appSettings.mcpInstallActivation === "apply-all-tools"}
-            aria-label="新增 MCP 默认启用"
+            aria-label={t("settings.install.mcp.label")}
           >
             <span className="switch-button__thumb" />
           </button>
@@ -326,7 +452,7 @@ export function SettingsRoute() {
       <section className="settings-group">
         <div className="settings-group__heading">
           <span className="settings-group__bar" aria-hidden="true" />
-          <h2 className="settings-group__title">应用偏好</h2>
+          <h2 className="settings-group__title">{t("settings.group.preferences")}</h2>
         </div>
         <div className="panel-card placeholder-panel settings-panel settings-panel--module">
           <div className="settings-form-list">
@@ -372,22 +498,22 @@ export function SettingsRoute() {
       <section className="settings-group">
         <div className="settings-group__heading">
           <span className="settings-group__bar" aria-hidden="true" />
-          <h2 className="settings-group__title">软件更新</h2>
+          <h2 className="settings-group__title">{t("settings.group.updates")}</h2>
         </div>
         <div className="panel-card placeholder-panel settings-panel settings-panel--module">
           <div className="settings-form-list">
             <div className="settings-form-item settings-form-item--readonly">
               <div className="settings-form-item__copy">
-                <span className="settings-form-item__title">当前版本</span>
-                <p>应用会从 GitHub Releases 检查新版本，下载安装后自动重启。</p>
+                <span className="settings-form-item__title">{t("settings.update.currentVersion")}</span>
+                <p>{t("settings.update.currentVersionDescription")}</p>
               </div>
               <div className="settings-form-item__value">
-                {currentAppVersion || "读取中..."}
+                {currentAppVersion || t("settings.update.loadingVersion")}
               </div>
             </div>
             <div className="settings-form-item">
               <div className="settings-form-item__copy">
-                <span className="settings-form-item__title">更新状态</span>
+                <span className="settings-form-item__title">{t("settings.update.status")}</span>
                 <p>{appUpdateMessage}</p>
                 {appUpdateProgress ? <p>{formatUpdateSize(appUpdateProgress)}</p> : null}
               </div>
@@ -416,7 +542,7 @@ export function SettingsRoute() {
       <section className="settings-group">
         <div className="settings-group__heading">
           <span className="settings-group__bar" aria-hidden="true" />
-          <h2 className="settings-group__title">安装行为</h2>
+          <h2 className="settings-group__title">{t("settings.group.installBehavior")}</h2>
         </div>
         <div className="panel-card placeholder-panel settings-panel settings-panel--module">
           <div className="settings-form-list">
@@ -436,7 +562,7 @@ export function SettingsRoute() {
       <section className="settings-group">
         <div className="settings-group__heading">
           <span className="settings-group__bar" aria-hidden="true" />
-          <h2 className="settings-group__title">工具状态</h2>
+          <h2 className="settings-group__title">{t("settings.group.toolStatus")}</h2>
         </div>
         <section
           className={toolStatusPanelClassName}
@@ -451,10 +577,10 @@ export function SettingsRoute() {
             type="button"
             onClick={() => setIsToolStatusExpanded((current) => !current)}
             aria-expanded={isToolStatusExpanded}
-            aria-label="工具状态"
+            aria-label={t("settings.group.toolStatus")}
           >
             <span className="settings-section-toggle__copy">
-              <span className="settings-section-hint">展示当前支持的软件列表以及各软件的安装状态。</span>
+              <span className="settings-section-hint">{t("settings.toolStatus.hint")}</span>
             </span>
             <span className="settings-section-toggle__chevron" aria-hidden="true">
               {isToolStatusExpanded ? "⌄" : "›"}
@@ -484,7 +610,7 @@ export function SettingsRoute() {
                       <span className="settings-tool-card__copy">
                         <span className="settings-tool-card__title">{tool.name}</span>
                         <span className="settings-tool-card__surface">
-                          {tool.surfaceTypes.map((surface) => TOOL_SURFACE_LABELS[surface]).join(" / ")}
+                          {tool.surfaceTypes.map((surface) => toolSurfaceLabels[surface]).join(" / ")}
                         </span>
                       </span>
                     </span>
@@ -499,13 +625,13 @@ export function SettingsRoute() {
       <section className="settings-group">
         <div className="settings-group__heading">
           <span className="settings-group__bar" aria-hidden="true" />
-          <h2 className="settings-group__title">GitHub 账号</h2>
+          <h2 className="settings-group__title">{t("settings.group.github")}</h2>
         </div>
         <div className="panel-card placeholder-panel settings-panel settings-panel--git-account">
           <div className="settings-row settings-row--account">
-            <span className="settings-row__title">GitHub</span>
-            <span>账号信息占位</span>
-            <span className="status-badge tone-info">暂不展示</span>
+            <span className="settings-row__title">{t("settings.github.provider")}</span>
+            <span>{t("settings.github.placeholder")}</span>
+            <span className="status-badge tone-info">{t("settings.github.badge")}</span>
           </div>
         </div>
       </section>

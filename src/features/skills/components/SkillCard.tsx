@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { MouseEvent as ReactMouseEvent } from "react";
+import { useTranslate } from "@/app/i18n";
 import { useNotifications } from "@/app/notifications";
 import { useFailureReporter } from "@/app/failure-feedback";
 import { SkillStatusBadge } from "@/features/skills/components/SkillStatusBadge";
@@ -71,8 +72,11 @@ function compareToolsByDisplayOrder(left: { name: string }, right: { name: strin
   return left.name.localeCompare(right.name);
 }
 
-function formatSummaryDescription(description: string) {
+function formatSummaryDescription(description: string, emptyDescriptionLabel: string) {
   const normalizedDescription = formatSkillDescription(description).replace(/\s+/g, " ");
+  if (!normalizedDescription) {
+    return emptyDescriptionLabel;
+  }
   if (normalizedDescription.length <= SUMMARY_DESCRIPTION_LIMIT) {
     return normalizedDescription;
   }
@@ -154,6 +158,7 @@ function DeleteIcon() {
 }
 
 export function SkillCard({ skill, expanded: expandedProp, onExpandedChange }: SkillCardProps) {
+  const { t } = useTranslate();
   const { notify } = useNotifications();
   const reportFailure = useFailureReporter();
   const { deleteSkill, openSkillWithDefaultTool, toolConfigs, updateSkill } = useSkillWorkspace();
@@ -169,19 +174,23 @@ export function SkillCard({ skill, expanded: expandedProp, onExpandedChange }: S
     sourceType: skill.sourceType,
     sourceUrl: skill.sourceUrl,
   });
-  const skillDescription = formatSkillDescription(skill.description);
-  const summaryDescription = formatSummaryDescription(skill.description);
+  const skillDescription = formatSkillDescription(skill.description) || t("skills.description.empty");
+  const summaryDescription = formatSummaryDescription(skill.description, t("skills.description.empty"));
   const remoteUpdatedAt = formatSkillUpdatedAt(skill.remoteUpdatedAt);
   const localUpdatedAt = formatSkillUpdatedAt(skill.localUpdatedAt);
-  const remoteUpdater = formatSkillLastEditor(skill.lastEditor) || "未获取";
+  const remoteUpdater = formatSkillLastEditor(skill.lastEditor) || t("skill.card.remoteUpdaterUnknown");
   const enabledTools = skillTools
     .filter((tool) => isToolEnabledStatus(tool.statusLabel))
     .sort(compareToolsByDisplayOrder);
   const summaryToolsLabel = enabledTools.length > 0
-    ? `已启用工具：${enabledTools.map((tool) => tool.name).join("、")}`
-    : "已启用工具：无";
+    ? t("skill.card.enabledTools", { tools: enabledTools.map((tool) => tool.name).join("、") })
+    : t("skill.card.enabledToolsNone");
   const showDetailAction = skill.collabStatus === "update-available";
   const showRemoteUpdateInfo = skill.sourceType !== "local";
+  const displaySourceLabel =
+    sourceLabel === "本地" || sourceLabel === "Local"
+      ? t("skills.source.local")
+      : sourceLabel;
   const expanded = expandedProp ?? expandedState;
 
   useEffect(() => {
@@ -227,7 +236,7 @@ export function SkillCard({ skill, expanded: expandedProp, onExpandedChange }: S
       } catch (error) {
         reportFailure(error, {
           operation: "update_skill",
-          fallbackMessage: "更新失败，请稍后重试。",
+          fallbackMessage: t("skill.card.error.update"),
           context: { skillName: skill.name },
         });
       } finally {
@@ -250,11 +259,11 @@ export function SkillCard({ skill, expanded: expandedProp, onExpandedChange }: S
     setIsDeleting(true);
     try {
       await deleteSkill(skill.name);
-      notify({ tone: "success", message: `已删除 ${skill.name}` });
+      notify({ tone: "success", message: t("skill.card.success.deleted", { name: skill.name }) });
     } catch (error) {
       reportFailure(error, {
         operation: "delete_skill",
-        fallbackMessage: "删除 skill 失败",
+        fallbackMessage: t("skill.card.error.delete"),
         context: { skillName: skill.name },
       });
     } finally {
@@ -268,7 +277,7 @@ export function SkillCard({ skill, expanded: expandedProp, onExpandedChange }: S
     } catch (error) {
       reportFailure(error, {
         operation: "open_skill_with_default_tool",
-        fallbackMessage: "打开 skill 目录失败，请检查默认打开工具。",
+        fallbackMessage: t("skill.card.error.openFolder"),
         context: { skillName: skill.name },
       });
     }
@@ -290,8 +299,8 @@ export function SkillCard({ skill, expanded: expandedProp, onExpandedChange }: S
     onExpandedChange?.(nextExpanded);
   }
 
-  const updateTooltipLabel = isUpdating ? "正在更新" : "更新 skill";
-  const deleteConfirmTooltipLabel = isDeleting ? "正在删除" : "再次点击删除";
+  const updateTooltipLabel = isUpdating ? t("skill.card.tooltip.updating") : t("skill.card.tooltip.update");
+  const deleteConfirmTooltipLabel = isDeleting ? t("skill.card.tooltip.deleting") : t("skill.card.tooltip.deleteConfirm");
 
   return (
     <>
@@ -316,7 +325,7 @@ export function SkillCard({ skill, expanded: expandedProp, onExpandedChange }: S
                         aria-label={summaryToolsLabel}
                         disabled={enabledTools.length === 0}
                       >
-                        {enabledTools.length > 0 ? `已启用 ${enabledTools.length}` : "未启用"}
+                        {enabledTools.length > 0 ? t("skill.card.enabledCount", { count: enabledTools.length }) : t("skill.card.disabled")}
                       </button>
                       {showEnabledTools && enabledTools.length > 0 ? (
                         <div className="skill-card__summary-tools" aria-label={summaryToolsLabel}>
@@ -339,7 +348,7 @@ export function SkillCard({ skill, expanded: expandedProp, onExpandedChange }: S
                 className="skill-card__icon-button skill-card__icon-button--update"
                 type="button"
                 onClick={() => void handlePrimaryAction()}
-                aria-label={`更新 ${skill.name}`}
+                aria-label={t("skill.card.aria.update", { name: skill.name })}
                 data-tooltip={updateTooltipLabel}
                 disabled={isUpdating}
               >
@@ -350,8 +359,8 @@ export function SkillCard({ skill, expanded: expandedProp, onExpandedChange }: S
               className="skill-card__icon-button"
               type="button"
               onClick={() => setShowFileDialog(true)}
-              aria-label={`查看 ${skill.name} 文件`}
-              data-tooltip="查看 skill 文件"
+              aria-label={t("skill.card.aria.viewFiles", { name: skill.name })}
+              data-tooltip={t("skill.card.tooltip.viewFiles")}
             >
               <ViewFileIcon />
             </button>
@@ -359,8 +368,8 @@ export function SkillCard({ skill, expanded: expandedProp, onExpandedChange }: S
               className="skill-card__icon-button"
               type="button"
               onClick={() => void handleOpenSkill()}
-              aria-label={`打开 ${skill.name} 目录`}
-              data-tooltip="用默认工具打开 skill 目录"
+              aria-label={t("skill.card.aria.openFolder", { name: skill.name })}
+              data-tooltip={t("skill.card.tooltip.openFolder")}
             >
               <OpenFolderIcon />
             </button>
@@ -370,11 +379,14 @@ export function SkillCard({ skill, expanded: expandedProp, onExpandedChange }: S
                 className="skill-card__delete-confirm-button"
                 type="button"
                 onClick={() => void handleDeleteAction()}
-                aria-label={`${isDeleting ? "正在删除" : "确认删除"} ${skill.name}`}
+                aria-label={t("skill.card.aria.deleteConfirm", {
+                  state: isDeleting ? t("skill.card.deleteLoading") : t("skill.card.deleteConfirm"),
+                  name: skill.name,
+                })}
                 data-tooltip={deleteConfirmTooltipLabel}
                 disabled={isDeleting}
               >
-                {isDeleting ? "删除中" : "确认"}
+                {isDeleting ? t("skill.card.deleteLoading") : t("skill.card.deleteConfirm")}
               </button>
             ) : (
               <button
@@ -382,8 +394,8 @@ export function SkillCard({ skill, expanded: expandedProp, onExpandedChange }: S
                 className="skill-card__icon-button skill-card__icon-button--delete"
                 type="button"
                 onClick={() => void handleDeleteAction()}
-                aria-label={`删除 ${skill.name}`}
-                data-tooltip="删除 skill"
+                aria-label={t("skill.card.aria.delete", { name: skill.name })}
+                data-tooltip={t("skill.card.tooltip.delete")}
               >
                 <DeleteIcon />
               </button>
@@ -393,7 +405,10 @@ export function SkillCard({ skill, expanded: expandedProp, onExpandedChange }: S
               type="button"
               onClick={() => handleExpandedChange(!expanded)}
               aria-expanded={expanded}
-              aria-label={`${expanded ? "收起" : "展开"} ${skill.name}`}
+              aria-label={t("skill.card.aria.expand", {
+                state: expanded ? t("skill.card.collapse") : t("skill.card.expand"),
+                name: skill.name,
+              })}
             >
               <span className="skill-card__chevron" aria-hidden="true">
               {expanded ? "⌄" : "›"}
@@ -405,21 +420,21 @@ export function SkillCard({ skill, expanded: expandedProp, onExpandedChange }: S
           <div className="skill-card__details">
             <section>
               <div className="skill-card__section-header">
-                <h4>基本信息</h4>
+                <h4>{t("skill.card.basicInfo")}</h4>
               </div>
               <dl className="detail-grid detail-grid--single">
                 <div>
-                  <dt>简介</dt>
+                  <dt>{t("skill.card.description")}</dt>
                   <dd>{skillDescription}</dd>
                 </div>
               </dl>
               <dl className="detail-grid detail-grid--source">
                 <div>
-                  <dt>来源类型</dt>
-                  <dd>{sourceLabel}</dd>
+                  <dt>{t("skill.card.sourceType")}</dt>
+                  <dd>{displaySourceLabel}</dd>
                 </div>
                 <div>
-                  <dt>来源</dt>
+                  <dt>{t("skill.card.source")}</dt>
                   <dd className="detail-grid__source-value">
                     {isHttpUrl(skill.sourceUrl) ? (
                       <a
@@ -443,18 +458,18 @@ export function SkillCard({ skill, expanded: expandedProp, onExpandedChange }: S
                 {showRemoteUpdateInfo ? (
                   <>
                     <div>
-                      <dt>远端更新时间</dt>
-                      <dd>{remoteUpdatedAt || "未获取"}</dd>
+                      <dt>{t("skill.card.remoteUpdatedAt")}</dt>
+                      <dd>{remoteUpdatedAt || t("skill.card.notFetched")}</dd>
                     </div>
                     <div>
-                      <dt>更新人</dt>
+                      <dt>{t("skill.card.lastEditor")}</dt>
                       <dd>{remoteUpdater}</dd>
                     </div>
                   </>
                 ) : null}
                 <div>
-                  <dt>本地更新时间</dt>
-                  <dd>{localUpdatedAt || "未获取"}</dd>
+                  <dt>{t("skill.card.localUpdatedAt")}</dt>
+                  <dd>{localUpdatedAt || t("skill.card.notFetched")}</dd>
                 </div>
               </dl>
             </section>

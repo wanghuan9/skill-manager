@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useTranslate } from "@/app/i18n";
 import { useNotifications } from "@/app/notifications";
 import { useFailureReporter } from "@/app/failure-feedback";
 import {
@@ -16,6 +17,7 @@ export function resetAutoUpdatePromptStateForTests() {
 }
 
 export function AppUpdateAutoPrompt() {
+  const { t } = useTranslate();
   const { notify } = useNotifications();
   const reportFailure = useFailureReporter();
   const [update, setUpdate] = useState<AppUpdateCheckResult | null>(null);
@@ -66,7 +68,7 @@ export function AppUpdateAutoPrompt() {
 
     setIsInstalling(true);
     setProgress(null);
-    notify({ message: "正在下载并安装更新...", tone: "info" });
+    notify({ message: t("updates.installing"), tone: "info" });
 
     try {
       await update.install((nextProgress) => {
@@ -76,7 +78,7 @@ export function AppUpdateAutoPrompt() {
       setIsInstalling(false);
       reportFailure(error, {
         operation: "install_app_update",
-        fallbackMessage: "安装更新失败",
+        fallbackMessage: t("updates.installFailed"),
       });
     }
   }
@@ -103,7 +105,7 @@ export function AppUpdateAutoPrompt() {
       >
         {isInstalling ? "Updating" : "Update"}
       </button>
-      <section className="app-update-popover" aria-label="软件更新" aria-hidden={!isPanelOpen}>
+      <section className="app-update-popover" aria-label={t("updates.popover.aria")} aria-hidden={!isPanelOpen}>
         <header className="app-update-popover__header">
           <div>
             <h2>What's in this update</h2>

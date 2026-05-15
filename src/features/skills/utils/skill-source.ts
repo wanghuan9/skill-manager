@@ -59,11 +59,11 @@ function resolveSourceTypeFromUrl(sourceUrl?: string) {
 }
 
 export function formatSkillSourceLabel(value: string, options: SkillSourceDisplayOptions = {}) {
-  if (value === "本地导入" || value === "本地安装") {
+  if (value === "本地导入" || value === "本地安装" || value === "Local Import" || value === "Local Install" || value === "Local") {
     return "本地";
   }
 
-  if (value === "自定义仓库") {
+  if (value === "自定义仓库" || value === "Custom Repository") {
     return (
       resolveSourceLabelFromType(options.sourceType)
       || resolveSourceLabelFromType(resolveSourceTypeFromUrl(options.sourceUrl) ?? undefined)

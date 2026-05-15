@@ -1,15 +1,17 @@
+import { useTranslate } from "@/app/i18n";
 import type { SkillSummary } from "@/features/skills/state/skill-store";
 
 type SkillStatusBadgeProps = {
   status: SkillSummary["collabStatus"];
 };
 
-const statusMap = {
-  "update-available": { label: "可更新", toneClass: "tone-positive" },
-  "pending-push": { label: "待推送", toneClass: "tone-info" },
-} as const;
-
 export function SkillStatusBadge({ status }: SkillStatusBadgeProps) {
+  const { t } = useTranslate();
+  const statusMap = {
+    "update-available": { label: t("skill.status.updateAvailable"), toneClass: "tone-positive" },
+    "pending-push": { label: t("skill.status.pendingPush"), toneClass: "tone-info" },
+  } as const;
+
   if (!(status in statusMap)) {
     return null;
   }

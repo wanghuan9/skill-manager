@@ -9,7 +9,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use regex::{Regex, RegexBuilder};
 use reqwest::Client;
-use serde::{Deserialize, Deserializer};
+use serde::{Deserialize, Deserializer, Serialize};
+use serde_json::Value;
 use zip::ZipArchive;
 
 use crate::git_state::{
@@ -3670,6 +3671,69 @@ pub fn get_app_settings() -> AppSettings {
 #[tauri::command]
 pub fn update_app_settings(settings: AppSettings) -> Result<AppSettings, String> {
     save_app_settings(settings)
+}
+
+#[tauri::command]
+pub async fn detect_preferred_app_language() -> Result<AppSettingsLanguageDetection, String> {
+    let client = marketplace_http_client()?;
+    detect_preferred_app_language_with_client(&client).await
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppSettingsLanguageDetection {
+    pub language: String,
+}
+
+async fn detect_preferred_app_language_with_client(
+    client: &Client,
+) -> Result<AppSettingsLanguageDetection, String> {
+    let endpoints = ["https://ipwho.is/", "https://ipapi.co/json/"];
+
+    for endpoint in endpoints {
+        let response = match client.get(endpoint).send().await {
+            Ok(value) => value,
+            Err(error) => {
+                eprintln!("language detection request failed for {endpoint}: {error}");
+                continue;
+            }
+        };
+        if !response.status().is_success() {
+            continue;
+        }
+
+        let payload = match response.json::<Value>().await {
+            Ok(value) => value,
+            Err(error) => {
+                eprintln!("language detection payload parse failed for {endpoint}: {error}");
+                continue;
+            }
+        };
+        if let Some(language) = language_from_geo_payload(&payload) {
+            return Ok(AppSettingsLanguageDetection {
+                language: language.to_string(),
+            });
+        }
+    }
+
+    Ok(AppSettingsLanguageDetection {
+        language: "zh-CN".to_string(),
+    })
+}
+
+fn language_from_geo_payload(payload: &Value) -> Option<&'static str> {
+    let country_code = payload
+        .get("country_code")
+        .and_then(Value::as_str)
+        .or_else(|| payload.get("country_code_iso3").and_then(Value::as_str))
+        .or_else(|| payload.get("countryCode").and_then(Value::as_str))?
+        .trim()
+        .to_uppercase();
+
+    match country_code.as_str() {
+        "CN" | "CHN" | "HK" | "HKG" | "MO" | "MAC" | "TW" | "TWN" => Some("zh-CN"),
+        _ => Some("en"),
+    }
 }
 
 #[tauri::command]

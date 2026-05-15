@@ -1,4 +1,5 @@
 import { useEffect, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { useTranslate } from "@/app/i18n";
 import { useFailureReporter } from "@/app/failure-feedback";
 import { useNotifications } from "@/app/notifications";
 import { fetchMarketplaceSkillDescription, openExternalLink } from "@/features/skills/api/skill-client";
@@ -24,6 +25,7 @@ type MarketplaceInstallPanelProps = {
 };
 
 export function MarketplaceInstallPanel(props: MarketplaceInstallPanelProps) {
+  const { t } = useTranslate();
   const {
     activeSourceSite,
     marketplaceSkills,
@@ -47,11 +49,11 @@ export function MarketplaceInstallPanel(props: MarketplaceInstallPanelProps) {
   async function handleInstallSkill(skill: MarketplaceSkill) {
     try {
       await installFromMarket(skill);
-      notify({ message: `技能 "${skill.name}" 已安装`, tone: "success" });
+      notify({ message: t("install.market.success.installed", { name: skill.name }), tone: "success" });
     } catch (error) {
       reportFailure(error, {
         operation: "install_marketplace_skill",
-        fallbackMessage: "安装失败，请稍后重试。",
+        fallbackMessage: t("install.market.error.installFailed"),
         context: { skillId: skill.id, skillName: skill.name, sourceSite: skill.sourceSite },
       });
     }
@@ -70,24 +72,24 @@ export function MarketplaceInstallPanel(props: MarketplaceInstallPanelProps) {
     <section className="panel-card market-panel">
       <div className="market-source-bar">
         <div className="panel-header">
-          <h2>安装源</h2>
+          <h2>{t("install.sources.title")}</h2>
         </div>
         <label className="market-search-field">
-          <span className="sr-only">搜索 skill</span>
+          <span className="sr-only">{t("install.sources.searchAria")}</span>
           <div className="market-search-input-wrap">
             <input
               className="market-search-input"
               type="search"
               value={searchQuery}
-              placeholder="搜索 skill（支持全部安装源）"
+              placeholder={t("install.sources.searchPlaceholder")}
               onChange={(event) => onSearchQueryChange(event.target.value)}
             />
             {isSearchLoading ? (
-              <span className="loading-spinner market-search-spinner" aria-label="正在搜索" />
+              <span className="loading-spinner market-search-spinner" aria-label={t("install.sources.searching")} />
             ) : null}
           </div>
         </label>
-        <div className="source-tab-row" role="tablist" aria-label="安装源">
+        <div className="source-tab-row" role="tablist" aria-label={t("install.sources.tabsAria")}>
           {sourceTabs.map((sourceSite) => {
             const selected = sourceSite === activeSourceSite;
 
@@ -110,7 +112,7 @@ export function MarketplaceInstallPanel(props: MarketplaceInstallPanelProps) {
         {isInitialLoading ? (
           <section className="placeholder-card">
             <h3 className="install-loading-title">
-              <span>{isSearching ? "正在搜索可安装技能" : "正在努力加载 skill 中"}</span>
+              <span>{isSearching ? t("install.market.loading.searchTitle") : t("install.market.loading.title")}</span>
               {!isSearching ? (
                 <span className="loading-ellipsis" aria-hidden="true">
                   <span>.</span>
@@ -121,8 +123,8 @@ export function MarketplaceInstallPanel(props: MarketplaceInstallPanelProps) {
             </h3>
             <p>
               {isSearching
-                ? `正在从所有安装源搜索 “${searchQuery.trim()}”...`
-                : `正在加载 ${activeSourceSite} 中的 skill，请稍等。`}
+                ? t("install.market.loading.searchDescription", { query: searchQuery.trim() })
+                : t("install.market.loading.sourceDescription", { source: activeSourceSite })}
             </p>
           </section>
         ) : marketplaceSkills.length > 0 ? (
@@ -154,7 +156,7 @@ export function MarketplaceInstallPanel(props: MarketplaceInstallPanelProps) {
                         <a
                           className="install-card__link"
                           href={buildOfficialRepositoryUrl(skill.sourceUrl)}
-                          aria-label={`打开 ${skill.name} 仓库`}
+                          aria-label={t("install.market.aria.openRepo", { name: skill.name })}
                           onClick={(event) => {
                             event.preventDefault();
                             event.stopPropagation();
@@ -164,7 +166,7 @@ export function MarketplaceInstallPanel(props: MarketplaceInstallPanelProps) {
                           <ExternalLinkIcon />
                         </a>
                       </div>
-                      <p>{buildListDescription(skill)}</p>
+                      <p>{buildListDescription(skill, t)}</p>
                     </div>
                   </div>
                   <button
@@ -176,12 +178,12 @@ export function MarketplaceInstallPanel(props: MarketplaceInstallPanelProps) {
                       void handleInstallSkill(skill);
                     }}
                   >
-                    {isInstalled ? "已安装" : isInstalling ? "安装中..." : "安装"}
+                    {isInstalled ? t("install.market.installed") : isInstalling ? t("install.market.installing") : t("install.market.install")}
                   </button>
                 </div>
                   <div className="install-card__chips">
-                    <span className="install-card__chip">来源: {skill.sourceSite}</span>
-                    <span className="install-card__chip">作者: {skill.maintainer}</span>
+                    <span className="install-card__chip">{t("install.market.source")}: {skill.sourceSite}</span>
+                    <span className="install-card__chip">{t("install.market.author")}: {skill.maintainer}</span>
                     <span className="install-card__chip install-card__chip--metric">
                       <DownloadIcon />
                       {skill.popularityLabel}
@@ -192,19 +194,19 @@ export function MarketplaceInstallPanel(props: MarketplaceInstallPanelProps) {
               );
             })}
             {isLoadingMore ? (
-              <p className="install-loading-text">加载中...</p>
+              <p className="install-loading-text">{t("install.market.loading.more")}</p>
             ) : null}
             {!hasMore ? (
-              <p className="install-loading-text">已加载全部技能</p>
+              <p className="install-loading-text">{t("install.market.loading.done")}</p>
             ) : null}
           </>
         ) : (
           <section className="placeholder-card">
-            <h3>暂无可安装项</h3>
+            <h3>{t("install.market.emptyTitle")}</h3>
             <p>
               {isSearching
-                ? `没有在支持的安装源中找到 “${searchQuery.trim()}” 相关 skill。`
-                : `${activeSourceSite} 暂时还没有可展示的技能。`}
+                ? t("install.market.emptySearch", { query: searchQuery.trim() })
+                : t("install.market.emptySource", { source: activeSourceSite })}
             </p>
           </section>
         )}
@@ -223,6 +225,7 @@ type SkillDetailModalProps = {
 
 function SkillDetailModal(props: SkillDetailModalProps) {
   const { skill, onClose } = props;
+  const { t } = useTranslate();
   const [description, setDescription] = useState(skill.description);
   const [isDescriptionLoading, setIsDescriptionLoading] = useState(false);
   const [descriptionNotice, setDescriptionNotice] = useState("");
@@ -258,7 +261,7 @@ function SkillDetailModal(props: SkillDetailModalProps) {
           return;
         }
         setDescription(skill.description);
-        setDescriptionNotice("简介加载失败，已展示默认文案。");
+        setDescriptionNotice(t("install.market.detail.loadFailed"));
       })
       .finally(() => {
         if (active) {
@@ -295,13 +298,13 @@ function SkillDetailModal(props: SkillDetailModalProps) {
         className="skill-detail-modal"
         role="dialog"
         aria-modal="true"
-        aria-label={`${skill.name} 详情`}
+        aria-label={t("install.market.detail.aria", { name: skill.name })}
         onClick={(event) => event.stopPropagation()}
       >
         <header className="skill-detail-modal__header">
           <div className="skill-detail-modal__title-group">
             <h3>{skill.name}</h3>
-            <p>来源 {skill.sourceSite} · 作者 {skill.maintainer}</p>
+            <p>{t("install.market.detail.meta", { source: skill.sourceSite, author: skill.maintainer })}</p>
           </div>
           <div className="skill-detail-modal__actions">
             {marketplaceUrl ? (
@@ -314,7 +317,7 @@ function SkillDetailModal(props: SkillDetailModalProps) {
                 }}
               >
                 <ExternalLinkIcon />
-                查看商店
+                {t("install.market.detail.viewStore")}
               </a>
             ) : null}
             <a
@@ -326,24 +329,24 @@ function SkillDetailModal(props: SkillDetailModalProps) {
               }}
             >
               <ExternalLinkIcon />
-              打开仓库
+              {t("install.market.detail.openRepo")}
             </a>
-            <button className="skill-detail-modal__close" type="button" onClick={onClose} aria-label="关闭详情">
+            <button className="skill-detail-modal__close" type="button" onClick={onClose} aria-label={t("install.market.detail.close")}>
               ×
             </button>
           </div>
         </header>
         <div className="skill-detail-modal__meta">
-          <span className="install-card__chip">来源: {skill.sourceSite}</span>
-          <span className="install-card__chip">作者: {skill.maintainer}</span>
+          <span className="install-card__chip">{t("install.market.source")}: {skill.sourceSite}</span>
+          <span className="install-card__chip">{t("install.market.author")}: {skill.maintainer}</span>
           <span className="install-card__chip install-card__chip--metric">
             <DownloadIcon />
             {skill.popularityLabel}
           </span>
         </div>
         <article className="skill-detail-modal__content">
-          <h4>Skill 介绍</h4>
-          {isDescriptionLoading ? <p>正在加载技能简介...</p> : null}
+          <h4>{t("install.market.detail.intro")}</h4>
+          {isDescriptionLoading ? <p>{t("install.market.detail.loading")}</p> : null}
           {descriptionNotice ? <p>{descriptionNotice}</p> : null}
           <p>{description}</p>
         </article>
@@ -352,12 +355,18 @@ function SkillDetailModal(props: SkillDetailModalProps) {
   );
 }
 
-function buildListDescription(skill: MarketplaceSkill) {
+function buildListDescription(
+  skill: MarketplaceSkill,
+  t: (key: "install.market.fallbackDescription", values: Record<string, string | number>) => string,
+) {
   if (skill.sourceSite === "skillsmp" && skill.description && skill.description.trim()) {
     return skill.description;
   }
   const repositoryLabel = extractRepositoryLabel(skill.sourceUrl);
-  return `来自 ${repositoryLabel || skill.maintainer} 的公开 skill（${skill.name}）`;
+  return skill.description.trim() || t("install.market.fallbackDescription", {
+    repository: repositoryLabel || skill.maintainer,
+    name: skill.name,
+  });
 }
 
 function extractRepositoryLabel(sourceUrl: string) {

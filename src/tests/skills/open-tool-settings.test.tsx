@@ -22,6 +22,7 @@ test("allows selecting default open tool in settings", async () => {
   await userEvent.click(screen.getByRole("button", { name: /设置/ }));
 
   expect(screen.getByText("/Users/demo/.skilldock")).toBeInTheDocument();
+  expect(screen.getByLabelText("界面语言")).toHaveTextContent("简体中文");
   const select = screen.getByLabelText("默认编辑器");
   expect(select).toBeInTheDocument();
   expect(screen.getByLabelText("新增 Skill 默认启用")).toHaveAttribute("aria-pressed", "true");
@@ -146,4 +147,17 @@ test("opens storage path in Finder from settings", async () => {
   });
 
   delete (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
+});
+
+test("switches interface language to English from settings", async () => {
+  window.localStorage.clear();
+  render(<App />);
+
+  await userEvent.click(screen.getByRole("button", { name: /设置/ }));
+  await userEvent.click(screen.getByLabelText("界面语言"));
+  await userEvent.click(screen.getByRole("option", { name: "English" }));
+
+  expect(screen.getByRole("button", { name: "Settings" })).toBeInTheDocument();
+  expect(screen.getByText("App Preferences")).toBeInTheDocument();
+  expect(screen.getByLabelText("Interface Language")).toHaveTextContent("English");
 });

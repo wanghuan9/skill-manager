@@ -1,6 +1,7 @@
 import { startTransition, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import type { MouseEvent as ReactMouseEvent } from "react";
 import { createPortal } from "react-dom";
+import { useTranslate, type TranslationKey } from "@/app/i18n";
 import { useNotifications } from "@/app/notifications";
 import { BusinessError } from "@/app/errors";
 import { useFailureReporter } from "@/app/failure-feedback";
@@ -34,6 +35,7 @@ import {
   getCachedMcpWorkspace,
   subscribeMcpWorkspaceChange,
 } from "@/features/skills/utils/mcp-workspace-cache";
+import { isToolInstalledStatus } from "@/features/skills/utils/tool-status";
 
 type McpFormState = {
   id: string;
@@ -41,6 +43,8 @@ type McpFormState = {
   serverJson: string;
   enabledAppIds: string[];
 };
+
+type Translate = (key: TranslationKey, values?: Record<string, string | number>) => string;
 
 const MCP_CONFIG_PLACEHOLDER_PATTERN = /<[^>]*(?:YOUR|TOKEN|KEY|SECRET|PASSWORD|API)[^>]*>|^(?:your[_ -]?(?:api[_ -]?)?(?:key|token|secret|password)|replace[_ -]?me|change[_ -]?me|changeme|todo)$/i;
 const MCP_MISSING_ENV_PATTERN = /缺少环境变量\s+([A-Z0-9_]+)/i;
@@ -100,10 +104,10 @@ function buildFormState(server: McpServerSummary): McpFormState {
   };
 }
 
-function parseServerJson(value: string): Record<string, unknown> {
+function parseServerJson(value: string, invalidJsonObjectMessage: string): Record<string, unknown> {
   const parsed = JSON.parse(value) as unknown;
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new BusinessError("MCP 配置必须是 JSON 对象");
+    throw new BusinessError(invalidJsonObjectMessage);
   }
 
   return parsed as Record<string, unknown>;
@@ -148,7 +152,7 @@ function getMissingMcpEnvParamName(errorMessage: string) {
 function getRequiredMcpConfigParamNames(server: McpServerSummary) {
   const paramNames = new Set<string>();
   try {
-    const serverConfig = parseServerJson(server.serverJson);
+    const serverConfig = parseServerJson(server.serverJson, "MCP config must be a JSON object");
     for (const field of MCP_CONFIG_PARAM_FIELDS) {
       collectUnconfiguredMcpParamNames(serverConfig[field], paramNames);
     }
@@ -164,16 +168,16 @@ function getRequiredMcpConfigParamNames(server: McpServerSummary) {
   return Array.from(paramNames).sort();
 }
 
-function formatRequiredMcpConfigTooltip(paramNames: string[]) {
+function formatRequiredMcpConfigTooltip(paramNames: string[], t: Translate) {
   if (paramNames.length === 0) {
-    return "需要配置参数";
+    return t("mcp.requiredParams");
   }
 
-  return `需要配置参数：${paramNames.join(", ")}`;
+  return t("mcp.requiredParamsWithNames", { params: paramNames.join(", ") });
 }
 
 function normalizeServerJsonForSave(value: string): Record<string, unknown> {
-  const server = parseServerJson(value);
+  const server = parseServerJson(value, "MCP config must be a JSON object");
   if (typeof server.type === "string" && server.type.trim() === "stdio") {
     const { type: _type, ...serverWithoutDefaultType } = server;
     return serverWithoutDefaultType;
@@ -209,8 +213,8 @@ function buildUniqueMcpServerId(value: string, servers: McpServerSummary[]) {
   return `${baseId}-${suffix}`;
 }
 
-function targetAppLabel(app: McpTargetApp) {
-  return `${app.name}${app.statusLabel === "已安装" ? "" : "（未安装）"}`;
+function targetAppLabel(app: McpTargetApp, t: Translate) {
+  return `${app.name}${isToolInstalledStatus(app.statusLabel) ? "" : ` ${t("mcp.app.notInstalled")}`}`;
 }
 
 function isMcpAppSupported(app: McpTargetApp | McpAppStatus) {
@@ -221,7 +225,7 @@ function isMcpAppReady(app: McpTargetApp | McpAppStatus) {
   return isMcpAppSupported(app);
 }
 
-function formatMcpDescription(server: McpServerSummary) {
+function formatMcpDescription(server: McpServerSummary, t: Translate) {
   const explicitDescription = server.description.trim();
   if (explicitDescription) {
     return explicitDescription;
@@ -229,16 +233,16 @@ function formatMcpDescription(server: McpServerSummary) {
 
   const commandLabel = server.commandLabel || server.name;
   if (server.serverType === "stdio") {
-    return `通过本地命令 ${commandLabel} 启动的 MCP 服务。`;
+    return t("mcp.description.stdio", { command: commandLabel });
   }
   if (server.serverType === "sse") {
-    return `连接到 ${commandLabel} 的远程 SSE MCP 服务。`;
+    return t("mcp.description.sse", { command: commandLabel });
   }
   if (server.serverType === "http" || server.serverType === "streamable-http") {
-    return `连接到 ${commandLabel} 的远程 HTTP MCP 服务。`;
+    return t("mcp.description.http", { command: commandLabel });
   }
 
-  return `用于向已安装工具同步 ${server.name} MCP 配置。`;
+  return t("mcp.description.default", { name: server.name });
 }
 
 function isHttpUrl(value: string) {
@@ -473,13 +477,14 @@ function McpToolLogo({ appId, appName }: McpToolLogoProps) {
 }
 
 function McpEnabledAppSummary({ apps }: { apps: McpAppStatus[] }) {
+  const { t } = useTranslate();
   const [showEnabledApps, setShowEnabledApps] = useState(false);
   const enabledApps = apps.filter((app) => app.isEnabled).sort(compareAppsByDisplayOrder);
   const visibleApps = enabledApps.slice(0, MCP_SUMMARY_APP_ICON_LIMIT);
   const hiddenAppCount = Math.max(enabledApps.length - visibleApps.length, 0);
   const summaryLabel = enabledApps.length > 0
-    ? `已启用工具：${enabledApps.map((app) => app.appName).join("、")}`
-    : "未启用";
+    ? t("mcp.summary.enabledApps", { apps: enabledApps.map((app) => app.appName).join("、") })
+    : t("mcp.summary.disabled");
 
   function handleEnabledAppsToggle(event: ReactMouseEvent<HTMLButtonElement>) {
     event.stopPropagation();
@@ -512,7 +517,7 @@ function McpEnabledAppSummary({ apps }: { apps: McpAppStatus[] }) {
         aria-expanded={showEnabledApps}
         aria-label={summaryLabel}
       >
-        已启用 {enabledApps.length}
+        {t("mcp.summary.enabledCount", { count: enabledApps.length })}
       </button>
       {showEnabledApps ? (
         <span className="mcp-enabled-app-summary" aria-label={summaryLabel}>
@@ -533,6 +538,7 @@ type McpRouteProps = {
 };
 
 export function McpRoute(props: McpRouteProps = {}) {
+  const { t } = useTranslate();
   const { notify } = useNotifications();
   const reportFailure = useFailureReporter();
   const [workspace, setWorkspace] = useState<McpWorkspaceSnapshot | null>(null);
@@ -595,7 +601,7 @@ export function McpRoute(props: McpRouteProps = {}) {
         commitWorkspace(nextSnapshot);
       } catch (error) {
         console.warn(`Failed to refresh MCP tools for ${server.id}`, error);
-        const message = error instanceof Error ? error.message : "MCP tools 探测失败";
+        const message = error instanceof Error ? error.message : t("mcp.toolsProbeFailed");
         const failedSnapshot: McpWorkspaceSnapshot = {
           ...(nextSnapshot ?? snapshot),
           servers: (nextSnapshot ?? snapshot)?.servers.map((item) => (
@@ -661,7 +667,7 @@ export function McpRoute(props: McpRouteProps = {}) {
         }
       } catch (error) {
         if (active) {
-          const message = error instanceof Error ? error.message : "读取 MCP 配置失败";
+          const message = error instanceof Error ? error.message : t("mcp.loadFailed");
           setErrorMessage(message);
         }
       }
@@ -724,7 +730,7 @@ export function McpRoute(props: McpRouteProps = {}) {
     }
 
     return servers.filter((server) => {
-      const serverDescription = formatMcpDescription(server);
+      const serverDescription = formatMcpDescription(server, t);
       const searchableText = [
         server.id,
         server.name,
@@ -755,12 +761,12 @@ export function McpRoute(props: McpRouteProps = {}) {
       await probeMcpTools(snapshot, shouldAutoRefreshMcpTools);
       notify({
         tone: "success",
-        message: count > 0 ? `已新增 ${count} 个 MCP 配置` : "没有发现新的 MCP 配置",
+        message: count > 0 ? t("mcp.import.added", { count }) : t("mcp.import.none"),
       });
     } catch (error) {
       reportFailure(error, {
         operation: "import_mcp_servers_from_apps",
-        fallbackMessage: "导入 MCP 配置失败",
+        fallbackMessage: t("mcp.import.failed"),
         context: buildMcpFeedbackContext(workspace),
       });
     } finally {
@@ -784,7 +790,7 @@ export function McpRoute(props: McpRouteProps = {}) {
     } catch (error) {
       reportFailure(error, {
         operation: "refresh_mcp_workspace",
-        fallbackMessage: "刷新 MCP 配置失败",
+        fallbackMessage: t("mcp.refreshFailed"),
       });
     } finally {
       setIsRefreshing(false);
@@ -813,7 +819,7 @@ export function McpRoute(props: McpRouteProps = {}) {
       commitWorkspace(previousWorkspace);
       reportFailure(error, {
         operation: "toggle_mcp_server_app",
-        fallbackMessage: "更新 MCP 启用状态失败",
+        fallbackMessage: t("mcp.toggleFailed"),
         context: { serverId: server.id, appId, enabled },
       });
     } finally {
@@ -851,7 +857,7 @@ export function McpRoute(props: McpRouteProps = {}) {
       commitWorkspace(previousWorkspace);
       reportFailure(error, {
         operation: "toggle_all_mcp_server_apps",
-        fallbackMessage: "批量更新 MCP 启用状态失败",
+        fallbackMessage: t("mcp.toggleAllAppsFailed"),
         context: { serverId: server.id, appIds: targetAppIds, enabled },
       });
     } finally {
@@ -880,7 +886,7 @@ export function McpRoute(props: McpRouteProps = {}) {
       commitWorkspace(previousWorkspace);
       reportFailure(error, {
         operation: "toggle_mcp_server_tool",
-        fallbackMessage: "更新 MCP tool 启用状态失败",
+        fallbackMessage: t("mcp.toggleToolFailed"),
         context: { serverId: server.id, toolName, enabled },
       });
     } finally {
@@ -930,7 +936,7 @@ export function McpRoute(props: McpRouteProps = {}) {
       commitWorkspace(previousWorkspace);
       reportFailure(error, {
         operation: "toggle_all_mcp_server_tools",
-        fallbackMessage: "批量更新 MCP tools 启用状态失败",
+        fallbackMessage: t("mcp.toggleAllToolsFailed"),
         context: { serverId: server.id, toolNames: targetTools.map((tool) => tool.name), enabled },
       });
     } finally {
@@ -953,11 +959,11 @@ export function McpRoute(props: McpRouteProps = {}) {
     try {
       const snapshot = await deleteMcpServer(server.id);
       commitWorkspace(snapshot);
-      notify({ tone: "success", message: `已删除 ${server.name}` });
+      notify({ tone: "success", message: t("mcp.deleteSuccess", { name: server.name }) });
     } catch (error) {
       reportFailure(error, {
         operation: "delete_mcp_server",
-        fallbackMessage: "删除 MCP 失败",
+        fallbackMessage: t("mcp.deleteFailed"),
         context: { serverId: server.id },
       });
     } finally {
@@ -987,11 +993,11 @@ export function McpRoute(props: McpRouteProps = {}) {
       setIsCreating(false);
       setEditingServer(null);
       setDeleteConfirmingServerId("");
-      notify({ tone: "success", message: `已保存 ${serverRecord.name}` });
+      notify({ tone: "success", message: t("mcp.saveSuccess", { name: serverRecord.name }) });
     } catch (error) {
       reportFailure(error, {
         operation: "save_mcp_server",
-        fallbackMessage: "保存 MCP 失败",
+        fallbackMessage: t("mcp.dialog.saveFailed"),
         context: { serverId, name: serverRecord.name },
       });
     }
@@ -1045,16 +1051,16 @@ export function McpRoute(props: McpRouteProps = {}) {
   const importProgress = importSession.progress;
   const importButtonLabel = isImporting
     ? importProgress
-      ? `已扫描 ${importProgress.scannedCount}`
-      : "扫描中..."
-    : "扫描导入";
+      ? t("mcp.toolbar.scannedCount", { count: importProgress.scannedCount })
+      : t("mcp.toolbar.scanning")
+    : t("mcp.toolbar.scanImport");
   const toolbar = (
-    <section className="mcp-toolbar skills-header-bar__tools" aria-label="MCP 工具栏">
+    <section className="mcp-toolbar skills-header-bar__tools" aria-label={t("mcp.toolbar.aria")}>
       <label className="search-field search-field--header mcp-toolbar__search">
-        <span className="sr-only">搜索 MCP</span>
+        <span className="sr-only">{t("mcp.toolbar.search")}</span>
         <input
           type="search"
-          placeholder="搜索 MCP 名称、描述、命令或地址..."
+          placeholder={t("mcp.toolbar.searchPlaceholder")}
           value={query}
           onChange={(event) => setQuery(event.target.value)}
         />
@@ -1068,7 +1074,7 @@ export function McpRoute(props: McpRouteProps = {}) {
         <span aria-hidden="true" className="skills-toolbar-button__icon">
           <RefreshIcon isSpinning={isRefreshing} />
         </span>
-        <span>刷新</span>
+        <span>{t("mcp.toolbar.refresh")}</span>
       </button>
       <button
         className="secondary-button secondary-button--compact skills-toolbar-button"
@@ -1076,7 +1082,10 @@ export function McpRoute(props: McpRouteProps = {}) {
         onClick={() => void handleImport()}
         disabled={isImporting}
         aria-label={isImporting && importProgress
-          ? `正在导入 MCP，已扫描 ${importProgress.scannedCount} 项，已新增 ${importProgress.importedCount} 项`
+          ? t("mcp.toolbar.importProgress", {
+              scanned: importProgress.scannedCount,
+              imported: importProgress.importedCount,
+            })
           : undefined}
       >
         <span aria-hidden="true" className="skills-toolbar-button__icon">
@@ -1092,7 +1101,7 @@ export function McpRoute(props: McpRouteProps = {}) {
         <span aria-hidden="true" className="skills-toolbar-button__icon">
           <AddIcon />
         </span>
-        <span>新增 MCP</span>
+        <span>{t("mcp.toolbar.add")}</span>
       </button>
     </section>
   );
@@ -1122,18 +1131,16 @@ export function McpRoute(props: McpRouteProps = {}) {
           const totalToolCount = server.tools.length;
           const disabledToolCount = totalToolCount - enabledToolCount;
           const toolSummaryLabel = totalToolCount > 0
-            ? enabledToolCount === totalToolCount
-              ? `${enabledToolCount} tools`
-              : `${enabledToolCount}/${totalToolCount} tools`
+            ? t("mcp.card.toolsEnabledCount", { enabled: enabledToolCount, total: totalToolCount })
             : server.toolsDiscoveryError
-              ? "获取失败"
-              : "未获取 tools";
-          const serverDescription = formatMcpDescription(server);
+              ? t("mcp.card.toolsFetchFailed")
+              : t("mcp.card.toolsUnknown");
+          const serverDescription = formatMcpDescription(server, t);
           const isDeleteConfirming = deleteConfirmingServerId === server.id;
           const isDeleting = deletingServerId === server.id;
-          const deleteConfirmTooltipLabel = isDeleting ? "正在删除" : "再次点击删除";
+          const deleteConfirmTooltipLabel = isDeleting ? t("mcp.card.deleting") : t("mcp.card.deleteConfirmTooltip");
           const requiredConfigParamNames = getRequiredMcpConfigParamNames(server);
-          const requiredConfigTooltip = formatRequiredMcpConfigTooltip(requiredConfigParamNames);
+          const requiredConfigTooltip = formatRequiredMcpConfigTooltip(requiredConfigParamNames, t);
 
           return (
             <article key={server.id} className={`mcp-server-card${isExpanded ? " is-expanded" : ""}`}>
@@ -1150,7 +1157,7 @@ export function McpRoute(props: McpRouteProps = {}) {
                     }
                   }}
                   aria-expanded={isExpanded}
-                  aria-label={`${isExpanded ? "收起" : "展开"} ${server.name}`}
+                  aria-label={`${isExpanded ? t("mcp.card.collapse") : t("mcp.card.expand")} ${server.name}`}
                 >
                   <div className="mcp-server-card__main">
                     <div className="mcp-server-card__identity">
@@ -1167,7 +1174,7 @@ export function McpRoute(props: McpRouteProps = {}) {
                               className="status-badge tone-warning"
                               data-tooltip={requiredConfigTooltip}
                             >
-                              需配置参数
+                              {t("mcp.card.configRequired")}
                             </span>
                           ) : null}
                         </div>
@@ -1183,8 +1190,8 @@ export function McpRoute(props: McpRouteProps = {}) {
                     className="skill-card__icon-button"
                     type="button"
                     onClick={() => handleEdit(server)}
-                    aria-label={`编辑 ${server.name}`}
-                    data-tooltip="编辑 MCP"
+                    aria-label={t("mcp.card.edit", { name: server.name })}
+                    data-tooltip={t("mcp.card.editTooltip")}
                     disabled={Boolean(deletingServerId)}
                   >
                     <EditIcon />
@@ -1195,19 +1202,22 @@ export function McpRoute(props: McpRouteProps = {}) {
                       className="skill-card__delete-confirm-button"
                       type="button"
                       onClick={() => void handleDelete(server)}
-                      aria-label={`${isDeleting ? "正在删除" : "确认删除"} ${server.name}`}
+                      aria-label={t("mcp.card.deleteConfirmAria", {
+                        state: isDeleting ? t("mcp.card.deleting") : t("mcp.card.deleteConfirm"),
+                        name: server.name,
+                      })}
                       data-tooltip={deleteConfirmTooltipLabel}
                       disabled={isDeleting}
                     >
-                      {isDeleting ? "删除中" : "确认"}
+                      {isDeleting ? t("mcp.card.deleteLoading") : t("mcp.card.deleteConfirm")}
                     </button>
                   ) : (
                     <button
                       className="skill-card__icon-button skill-card__icon-button--delete"
                       type="button"
                       onClick={() => void handleDelete(server)}
-                      aria-label={`删除 ${server.name}`}
-                      data-tooltip="删除 MCP"
+                      aria-label={t("mcp.card.delete", { name: server.name })}
+                      data-tooltip={t("mcp.card.deleteTooltip")}
                       disabled={Boolean(deletingServerId)}
                     >
                       <DeleteIcon />
@@ -1222,17 +1232,17 @@ export function McpRoute(props: McpRouteProps = {}) {
                 <div className="mcp-server-card__details">
                   <section>
                     <div className="skill-card__section-header">
-                      <h4>基本信息</h4>
+                      <h4>{t("mcp.card.basicInfo")}</h4>
                     </div>
                     <dl className="detail-grid detail-grid--single">
                       <div>
-                        <dt>简介</dt>
+                        <dt>{t("mcp.card.description")}</dt>
                         <dd>{serverDescription}</dd>
                       </div>
                     </dl>
                     <dl className="detail-grid detail-grid--single">
                       <div>
-                        <dt>完整命令</dt>
+                        <dt>{t("mcp.card.command")}</dt>
                         <dd className="detail-grid__single-line">
                           {server.commandLabel || server.id}
                         </dd>
@@ -1242,7 +1252,7 @@ export function McpRoute(props: McpRouteProps = {}) {
                       <dl className="detail-grid detail-grid--mcp-meta">
                         {server.installedAt ? (
                           <div>
-                            <dt>安装时间</dt>
+                            <dt>{t("mcp.card.installedAt")}</dt>
                             <dd
                               className="detail-grid__single-line detail-grid__single-line--tooltip"
                               data-tooltip={formatSkillUpdatedAt(server.installedAt)}
@@ -1253,7 +1263,7 @@ export function McpRoute(props: McpRouteProps = {}) {
                         ) : null}
                         {server.sourceUrl ? (
                           <div>
-                            <dt>来源</dt>
+                            <dt>{t("mcp.card.source")}</dt>
                             <dd className="detail-grid__source-value">
                               {isHttpUrl(server.sourceUrl) ? (
                                 <a
@@ -1281,7 +1291,7 @@ export function McpRoute(props: McpRouteProps = {}) {
                   </section>
                   <section>
                     <div className="skill-card__section-header">
-                      <h4>启用到工具</h4>
+                      <h4>{t("mcp.card.enableApps")}</h4>
                       {visibleApps.length > 0 ? (
                         <div className="tool-sync-panel__actions">
                           <button
@@ -1289,18 +1299,18 @@ export function McpRoute(props: McpRouteProps = {}) {
                             type="button"
                             onClick={() => void handleToggleAllApps(server, visibleApps, true)}
                             disabled={Boolean(pendingAppKey) || Boolean(pendingToolKey) || disabledVisibleAppCount === 0}
-                            aria-label={`全部开启 ${server.name} 启用到工具`}
+                            aria-label={t("mcp.card.enableAllApps", { name: server.name })}
                           >
-                            {appBulkAction === "enable" ? "开启中..." : "全部开启"}
+                            {appBulkAction === "enable" ? t("mcp.card.enabling") : t("mcp.card.enableAll")}
                           </button>
                           <button
                             className="secondary-button secondary-button--compact"
                             type="button"
                             onClick={() => void handleToggleAllApps(server, visibleApps, false)}
                             disabled={Boolean(pendingAppKey) || Boolean(pendingToolKey) || enabledVisibleAppCount === 0}
-                            aria-label={`全部关闭 ${server.name} 启用到工具`}
+                            aria-label={t("mcp.card.disableAllApps", { name: server.name })}
                           >
-                            {appBulkAction === "disable" ? "关闭中..." : "全部关闭"}
+                            {appBulkAction === "disable" ? t("mcp.card.disabling") : t("mcp.card.disableAll")}
                           </button>
                         </div>
                       ) : null}
@@ -1308,7 +1318,7 @@ export function McpRoute(props: McpRouteProps = {}) {
                     <div className="mcp-server-card__apps">
                       {visibleApps.map((app) => {
                         const isUpdating = pendingAppKey === `${server.id}:${app.appId}`;
-                        const appTooltipLabel = app.isEnabled ? "已启用，点击关闭" : "未启用，点击启用";
+                        const appTooltipLabel = app.isEnabled ? t("mcp.card.appEnabledTooltip") : t("mcp.card.appDisabledTooltip");
 
                         return (
                           <button
@@ -1335,7 +1345,7 @@ export function McpRoute(props: McpRouteProps = {}) {
                         <div className="mcp-server-card__tool-header">
                           <h4>Tools</h4>
                           {totalToolCount > 0 ? (
-                            <span className="mcp-server-card__tool-count">{enabledToolCount}/{totalToolCount} 已启用</span>
+                            <span className="mcp-server-card__tool-count">{t("mcp.card.toolsEnabledCount", { enabled: enabledToolCount, total: totalToolCount })}</span>
                           ) : null}
                           {totalToolCount > 0 ? (
                             <button
@@ -1344,8 +1354,8 @@ export function McpRoute(props: McpRouteProps = {}) {
                               onClick={() => toggleToolSectionCollapsed(server.id)}
                               aria-expanded={!isToolSectionCollapsed}
                               aria-controls={`mcp-tools-${server.id}`}
-                              aria-label={`${isToolSectionCollapsed ? "展开" : "收起"} ${server.name} Tools`}
-                              data-tooltip={isToolSectionCollapsed ? "展开 Tools" : "收起 Tools"}
+                              aria-label={isToolSectionCollapsed ? t("mcp.card.expandTools", { name: server.name }) : t("mcp.card.collapseTools", { name: server.name })}
+                              data-tooltip={isToolSectionCollapsed ? t("mcp.card.expandToolsTooltip") : t("mcp.card.collapseToolsTooltip")}
                             >
                               <CollapseToolsIcon collapsed={isToolSectionCollapsed} />
                             </button>
@@ -1359,7 +1369,7 @@ export function McpRoute(props: McpRouteProps = {}) {
                               onClick={() => void handleToggleAllTools(server, true)}
                               disabled={Boolean(pendingToolKey) || disabledToolCount === 0}
                             >
-                              全部开启
+                              {t("mcp.card.enableAll")}
                             </button>
                             <button
                               className="secondary-button secondary-button--compact"
@@ -1367,7 +1377,7 @@ export function McpRoute(props: McpRouteProps = {}) {
                               onClick={() => void handleToggleAllTools(server, false)}
                               disabled={Boolean(pendingToolKey) || enabledToolCount === 0}
                             >
-                              全部关闭
+                              {t("mcp.card.disableAll")}
                             </button>
                           </div>
                         ) : null}
@@ -1390,7 +1400,7 @@ export function McpRoute(props: McpRouteProps = {}) {
                               onClick={() => void handleToggleTool(server, tool.name, !tool.isEnabled)}
                               disabled={isUpdating || pendingToolKey === `${server.id}:tools:all`}
                               aria-pressed={tool.isEnabled}
-                              data-tooltip={tool.isEnabled ? "点击关闭" : "点击开启"}
+                              data-tooltip={tool.isEnabled ? t("mcp.card.toolDisableTooltip") : t("mcp.card.toolEnableTooltip")}
                             >
                               {tool.name}
                             </button>
@@ -1400,8 +1410,8 @@ export function McpRoute(props: McpRouteProps = {}) {
                     ) : server.tools.length > 0 ? null : (
                       <p className="mcp-server-card__tool-empty">
                         {server.toolsDiscoveryError
-                          ? `获取 tools 失败：${server.toolsDiscoveryError}`
-                          : "暂未获取到该 MCP 的 tools。"}
+                          ? t("mcp.card.toolsError", { message: server.toolsDiscoveryError })
+                          : t("mcp.card.toolsEmpty")}
                       </p>
                     )}
                   </section>
@@ -1414,8 +1424,8 @@ export function McpRoute(props: McpRouteProps = {}) {
           <div className="panel-card empty-state">
             {workspace.servers.length === 0 ? (
               <>
-                <h3>还没有安装 MCP</h3>
-                <p>扫描导入已有工具配置，或去商店安装 MCP 服务，之后可在这里统一管理和启用。</p>
+                <h3>{t("mcp.empty.title")}</h3>
+                <p>{t("mcp.empty.description")}</p>
                 <div className="empty-state__actions">
                   <button
                     className="primary-button"
@@ -1426,14 +1436,14 @@ export function McpRoute(props: McpRouteProps = {}) {
                     {importButtonLabel}
                   </button>
                   <button className="secondary-button" type="button" onClick={props.onInstallFromMarketplace}>
-                    去商店安装
+                    {t("mcp.empty.market")}
                   </button>
                 </div>
               </>
             ) : (
               <>
-                <h3>暂无匹配的 MCP</h3>
-                <p>调整搜索词，或扫描导入已有工具配置后再查看。</p>
+                <h3>{t("mcp.empty.noMatchTitle")}</h3>
+                <p>{t("mcp.empty.noMatchDescription")}</p>
               </>
             )}
           </div>
@@ -1463,6 +1473,7 @@ type McpEditDialogProps = {
 
 function McpEditDialog(props: McpEditDialogProps) {
   const { apps, initialState, isEditing, onClose, onSave } = props;
+  const { t } = useTranslate();
   const [formState, setFormState] = useState(initialState);
   const [errorMessage, setErrorMessage] = useState("");
   const [isSaving, setIsSaving] = useState(false);
@@ -1487,14 +1498,14 @@ function McpEditDialog(props: McpEditDialogProps) {
   async function handleSubmit() {
     setErrorMessage("");
     if (!formState.name.trim()) {
-      setErrorMessage("名称不能为空");
+      setErrorMessage(t("mcp.dialog.nameRequired"));
       return;
     }
 
     try {
-      parseServerJson(formState.serverJson);
+      parseServerJson(formState.serverJson, t("mcp.error.invalidJsonObject"));
     } catch (error) {
-      const message = error instanceof Error ? error.message : "JSON 格式无效";
+      const message = error instanceof Error ? error.message : t("mcp.dialog.invalidJson");
       setErrorMessage(message);
       return;
     }
@@ -1503,7 +1514,7 @@ function McpEditDialog(props: McpEditDialogProps) {
     try {
       await onSave(formState);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "保存 MCP 失败";
+      const message = error instanceof Error ? error.message : t("mcp.dialog.saveFailed");
       setErrorMessage(message);
     } finally {
       setIsSaving(false);
@@ -1516,30 +1527,30 @@ function McpEditDialog(props: McpEditDialogProps) {
         className="mcp-edit-dialog"
         role="dialog"
         aria-modal="true"
-        aria-label={isEditing ? "编辑 MCP" : "新增 MCP"}
+        aria-label={isEditing ? t("mcp.dialog.editAria") : t("mcp.dialog.createAria")}
         onClick={(event) => event.stopPropagation()}
       >
         <div className="mcp-edit-dialog__header">
-          <h3>{isEditing ? "编辑 MCP" : "新增 MCP"}</h3>
+          <h3>{isEditing ? t("mcp.dialog.editTitle") : t("mcp.dialog.createTitle")}</h3>
           <button
             className="tool-manage-dialog__close"
             type="button"
             onClick={onClose}
-            aria-label="关闭"
+            aria-label={t("mcp.dialog.close")}
           >
             ×
           </button>
         </div>
         <div className="mcp-edit-dialog__body">
           <label className="mcp-form-field">
-            <span>名称</span>
+            <span>{t("mcp.dialog.name")}</span>
             <input
               value={formState.name}
               onChange={(event) => setFormState((current) => ({ ...current, name: event.target.value }))}
             />
           </label>
           <div className="mcp-form-field">
-            <span>启用软件</span>
+            <span>{t("mcp.dialog.enabledApps")}</span>
             <div className="mcp-form-apps">
               {apps.filter((app) => isMcpAppSupported(app)).map((app) => {
                 const checked = formState.enabledAppIds.includes(app.id);
@@ -1554,14 +1565,14 @@ function McpEditDialog(props: McpEditDialogProps) {
                       onChange={(event) => setEnabledApp(app.id, event.target.checked)}
                     />
                     <McpToolLogo appId={app.id} appName={app.name} />
-                    <span>{targetAppLabel(app)}</span>
+                    <span>{targetAppLabel(app, t)}</span>
                   </label>
                 );
               })}
             </div>
           </div>
           <label className="mcp-form-field">
-            <span>JSON 配置</span>
+            <span>{t("mcp.dialog.json")}</span>
             <textarea
               className="mcp-json-editor"
               value={formState.serverJson}
@@ -1577,7 +1588,7 @@ function McpEditDialog(props: McpEditDialogProps) {
             type="button"
             onClick={onClose}
           >
-            取消
+            {t("mcp.dialog.cancel")}
           </button>
           <button
             className="primary-button primary-button--compact"
@@ -1585,7 +1596,7 @@ function McpEditDialog(props: McpEditDialogProps) {
             onClick={() => void handleSubmit()}
             disabled={isSaving}
           >
-            {isSaving ? "保存中..." : "保存"}
+            {isSaving ? t("mcp.dialog.saving") : t("mcp.dialog.save")}
           </button>
         </div>
       </div>

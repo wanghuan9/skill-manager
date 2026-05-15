@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { flushSync } from "react-dom";
+import { useTranslate } from "@/app/i18n";
 import { useNotifications } from "@/app/notifications";
 import { useFailureReporter } from "@/app/failure-feedback";
 import { useSkillWorkspace } from "@/features/skills/state/skill-workspace";
@@ -45,6 +46,7 @@ function toggleSelection(current: string[], value: string) {
 }
 
 export function RepoInstallPanel() {
+  const { t } = useTranslate();
   const { discoverRepoSkills, installFromRepo, installedSkills } = useSkillWorkspace();
   const { notify } = useNotifications();
   const reportFailure = useFailureReporter();
@@ -67,7 +69,7 @@ export function RepoInstallPanel() {
   async function handleDiscover(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!isValid) {
-      notify({ message: "请输入有效的 Git 仓库地址。", tone: "error" });
+      notify({ message: t("install.repo.error.invalidUrl"), tone: "error" });
       return;
     }
 
@@ -89,7 +91,7 @@ export function RepoInstallPanel() {
       setSelectedPaths([]);
       reportFailure(error, {
         operation: "discover_repo_skills",
-        fallbackMessage: "读取仓库技能失败，请稍后重试。",
+        fallbackMessage: t("install.repo.error.readFailed"),
       });
     } finally {
       setIsDiscovering(false);
@@ -104,14 +106,14 @@ export function RepoInstallPanel() {
     setIsInstalling(true);
     try {
       await installFromRepo(normalizedRepoUrl, selectedPaths);
-      notify({ message: "选中技能已安装", tone: "success" });
+      notify({ message: t("install.repo.success.selectedInstalled"), tone: "success" });
       setRepoInput("");
       setCandidates([]);
       setSelectedPaths([]);
     } catch (error) {
       reportFailure(error, {
         operation: "install_from_repo",
-        fallbackMessage: "安装选中技能失败，请稍后重试。",
+        fallbackMessage: t("install.repo.error.installFailed"),
       });
     } finally {
       setIsInstalling(false);
@@ -124,7 +126,7 @@ export function RepoInstallPanel() {
         <form className="repo-form" onSubmit={(event) => void handleDiscover(event)}>
           <div className="repo-form__section">
             <label className="repo-form__field">
-              <span className="repo-form__label">Git 仓库地址</span>
+              <span className="repo-form__label">{t("install.repo.url")}</span>
               <input
                 type="text"
                 placeholder="https://git.example.com/user/repo"
@@ -133,7 +135,7 @@ export function RepoInstallPanel() {
               />
             </label>
             <div className="repo-form__hint-block">
-              <p className="repo-form__hint-title">支持格式：</p>
+              <p className="repo-form__hint-title">{t("install.repo.supported")}</p>
               <ul className="repo-form__hint-list">
                 <li>https://git.example.com/user/repo</li>
                 <li>https://git.example.com/user/repo/tree/main/skills/my-skill</li>
@@ -146,14 +148,14 @@ export function RepoInstallPanel() {
               type="submit"
               disabled={!repoInput.trim() || isDiscovering}
             >
-              {isDiscovering ? "检查中..." : "识别仓库技能"}
+              {isDiscovering ? t("install.repo.discovering") : t("install.repo.discover")}
             </button>
           </div>
         </form>
       ) : null}
       {candidates.length > 0 ? (
         <div className="repo-install__selection">
-          <p className="repo-install__notice">发现 {candidates.length} 个技能，请选择要安装的技能</p>
+          <p className="repo-install__notice">{t("install.repo.found", { count: candidates.length })}</p>
           <div className="repo-install__list">
             {candidates.map((candidate) => {
               const selected = selectedPaths.includes(candidate.relativePath);
@@ -174,10 +176,10 @@ export function RepoInstallPanel() {
                     <div className="repo-install__option-title">
                       <h3>{candidate.name}</h3>
                       {installedSkillNames.has(candidate.name) ? (
-                        <span className="repo-install__option-badge">已安装</span>
+                        <span className="repo-install__option-badge">{t("install.repo.badgeInstalled")}</span>
                       ) : null}
                     </div>
-                    <p>{formatSkillDescription(candidate.description)}</p>
+                    <p>{formatSkillDescription(candidate.description) || t("skills.description.empty")}</p>
                     <span>{candidate.relativePath}</span>
                   </div>
                 </button>
@@ -193,7 +195,7 @@ export function RepoInstallPanel() {
                 setSelectedPaths([]);
               }}
             >
-              返回
+              {t("install.repo.back")}
             </button>
             <button
               className="primary-button"
@@ -201,7 +203,7 @@ export function RepoInstallPanel() {
               disabled={selectedPaths.length === 0 || isInstalling || !hasSelectableCandidates}
               onClick={() => void handleInstallSelected()}
             >
-              {isInstalling ? "安装中..." : "安装选中技能"}
+              {isInstalling ? t("install.repo.installing") : t("install.repo.installSelected")}
             </button>
           </div>
         </div>

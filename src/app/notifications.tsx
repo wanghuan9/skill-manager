@@ -8,6 +8,8 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { tx } from "@/app/i18n";
+import type { AppLanguage } from "@/features/skills/state/skill-store";
 
 export type NotificationTone = "success" | "error" | "info";
 
@@ -122,7 +124,7 @@ export function NotificationProvider({ children }: NotificationProviderProps) {
             <button
               className="app-notification__close"
               type="button"
-              aria-label="关闭通知"
+              aria-label={tx(resolveNotificationLanguage(), "notifications.close")}
               onClick={() => dismiss(notification.id)}
             >
               <svg viewBox="0 0 20 20" aria-hidden="true">
@@ -140,6 +142,15 @@ export function NotificationProvider({ children }: NotificationProviderProps) {
       </div>
     </NotificationContext.Provider>
   );
+}
+
+function resolveNotificationLanguage(): AppLanguage {
+  if (typeof window === "undefined") {
+    return "zh-CN";
+  }
+
+  const savedLanguage = window.localStorage.getItem("skilldock.settings.language");
+  return savedLanguage === "en" ? "en" : "zh-CN";
 }
 
 export function useNotifications() {

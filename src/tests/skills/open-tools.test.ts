@@ -28,7 +28,7 @@ test("adds Finder as a selectable default open tool", () => {
       mcpConfigPath: "",
       mcpConfigPathRecognized: false,
     }),
-  ]);
+  ], "zh-CN");
 
   expect(options.map((tool) => tool.id)).toEqual(["cursor", "intellij", "finder"]);
 });
@@ -47,7 +47,7 @@ test("falls back to Finder when no editor can open directories directly", () => 
       name: "Kiro",
       statusLabel: "未安装",
     }),
-  ]);
+  ], "zh-CN");
 
   expect(options).toEqual([
     {

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { useTranslate } from "@/app/i18n";
 import { MarketplaceInstallPanel } from "@/features/install/components/MarketplaceInstallPanel";
 import { McpMarketplacePanel } from "@/features/install/components/McpMarketplacePanel";
 import { RepoInstallPanel } from "@/features/install/components/RepoInstallPanel";
@@ -12,15 +13,15 @@ import { dedupeMarketplaceSkills } from "@/features/skills/utils/marketplace-ski
 export type InstallTab = "market" | "git" | "local";
 export type InstallCategory = "skill" | "mcp";
 
-export const installTabs: { key: InstallTab; label: string }[] = [
-  { key: "market", label: "市场安装" },
-  { key: "git", label: "Git 安装" },
-  { key: "local", label: "本地安装" },
+export const installTabs: { key: InstallTab; labelKey: "install.tab.market" | "install.tab.git" | "install.tab.local" }[] = [
+  { key: "market", labelKey: "install.tab.market" },
+  { key: "git", labelKey: "install.tab.git" },
+  { key: "local", labelKey: "install.tab.local" },
 ];
 
-const installCategories: { key: InstallCategory; label: string }[] = [
-  { key: "skill", label: "Skill" },
-  { key: "mcp", label: "MCP" },
+const installCategories: { key: InstallCategory; labelKey: "install.category.skill" | "install.category.mcp" }[] = [
+  { key: "skill", labelKey: "install.category.skill" },
+  { key: "mcp", labelKey: "install.category.mcp" },
 ];
 
 const sourceTabs: MarketplaceSourceSite[] = ["skills.sh", "skillsmp"];
@@ -303,11 +304,12 @@ type InstallCategorySwitcherProps = {
 };
 
 function InstallCategorySwitcher(props: InstallCategorySwitcherProps) {
+  const { t } = useTranslate();
   const { activeCategory, onCategoryChange } = props;
 
   return (
     <div className="page-tabs-row page-tabs-center install-category-tabs-row">
-      <div className="page-tabs filter-tabs install-category-row" role="tablist" aria-label="安装类型">
+      <div className="page-tabs filter-tabs install-category-row" role="tablist" aria-label={t("install.category.aria")}>
         {installCategories.map((category) => {
           const selected = category.key === activeCategory;
 
@@ -323,7 +325,7 @@ function InstallCategorySwitcher(props: InstallCategorySwitcherProps) {
               <span className="tab-icon install-category-tab__icon">
                 <InstallCategoryIcon category={category.key} />
               </span>
-              <span>{category.label}</span>
+              <span>{t(category.labelKey)}</span>
             </button>
           );
         })}
@@ -379,10 +381,11 @@ type InstallTabSwitcherProps = {
 };
 
 export function InstallTabSwitcher(props: InstallTabSwitcherProps) {
+  const { t } = useTranslate();
   const { activeInstallTab, onInstallTabChange } = props;
 
   return (
-    <div className="market-tab-row" role="tablist" aria-label="安装方式">
+    <div className="market-tab-row" role="tablist" aria-label={t("install.tabs.aria")}>
       {installTabs.map((tab) => {
         const selected = tab.key === activeInstallTab;
 
@@ -398,7 +401,7 @@ export function InstallTabSwitcher(props: InstallTabSwitcherProps) {
             <span className="market-tab__icon">
               <InstallTabIcon tab={tab.key} />
             </span>
-            <span>{tab.label}</span>
+            <span>{t(tab.labelKey)}</span>
           </button>
         );
       })}

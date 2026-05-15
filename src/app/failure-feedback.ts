@@ -1,4 +1,5 @@
 import { useCallback } from "react";
+import { useTranslate } from "@/app/i18n";
 import { useNotifications } from "@/app/notifications";
 import { classifyError, normalizeErrorMessage } from "@/app/errors";
 import { openExternalLink, recordFailureFeedback } from "@/features/skills/api/skill-client";
@@ -16,6 +17,7 @@ type UseFailureReporterInput = {
 };
 
 export function useFailureReporter() {
+  const { t } = useTranslate();
   const { notify } = useNotifications();
 
   return useCallback((error: unknown, input: UseFailureReporterInput) => {
@@ -37,7 +39,7 @@ export function useFailureReporter() {
     notify({
       tone: "error",
       message: classification.message,
-      actionLabel: "反馈",
+      actionLabel: t("mcp.feedback.action"),
       onAction: () => {
         void feedbackDraftPromise
           .then((draft) => {
@@ -49,10 +51,10 @@ export function useFailureReporter() {
           .catch((feedbackError) => {
           notify({
             tone: "error",
-            message: normalizeErrorMessage(feedbackError, "打开反馈页面失败"),
+            message: normalizeErrorMessage(feedbackError, t("mcp.feedback.openFailed")),
           });
           });
       },
     });
-  }, [notify]);
+  }, [notify, t]);
 }

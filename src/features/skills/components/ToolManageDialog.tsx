@@ -1,4 +1,5 @@
 import { useEffect, useId, useMemo, useState } from "react";
+import { useTranslate } from "@/app/i18n";
 import { useFailureReporter } from "@/app/failure-feedback";
 import { fetchMcpWorkspace, toggleMcpServerApp } from "@/features/skills/api/skill-client";
 import { useSkillWorkspace } from "@/features/skills/state/skill-workspace";
@@ -62,6 +63,7 @@ function patchMcpWorkspaceBulkToggle(
 }
 
 export function ToolManageDialog({ isOpen, onClose, tool }: ToolManageDialogProps) {
+  const { t } = useTranslate();
   const dialogTitleId = useId();
   const { installedSkills, setToolSkillStatuses, toggleSkillTool } = useSkillWorkspace();
   const reportFailure = useFailureReporter();
@@ -107,7 +109,7 @@ export function ToolManageDialog({ isOpen, onClose, tool }: ToolManageDialogProp
       })
       .catch((error) => {
         if (!isCancelled) {
-          const message = error instanceof Error ? error.message : "加载 MCP 配置失败";
+          const message = error instanceof Error ? error.message : t("tools.dialog.loadMcpFailed");
           setMcpErrorMessage(message);
         }
       })
@@ -185,9 +187,20 @@ export function ToolManageDialog({ isOpen, onClose, tool }: ToolManageDialogProp
   const enabledVisibleCount = activeRows.filter((item) => item.isEnabled).length;
   const summaryLabel = supportsMcp
     ? hasManagedMcpConfig
-      ? `Skills ${enabledSkillCount}/${installedSkills.length} · MCP ${enabledMcpCount}/${mcpWorkspace?.servers.length ?? 0}`
-      : `Skills ${enabledSkillCount}/${installedSkills.length} · MCP 支持，路径未建模`
-    : `Skills ${enabledSkillCount}/${installedSkills.length} · MCP 不支持`;
+      ? t("tools.dialog.summary", {
+          enabledSkills: enabledSkillCount,
+          totalSkills: installedSkills.length,
+          enabledMcp: enabledMcpCount,
+          totalMcp: mcpWorkspace?.servers.length ?? 0,
+        })
+      : t("tools.dialog.summaryUnmodeled", {
+          enabledSkills: enabledSkillCount,
+          totalSkills: installedSkills.length,
+        })
+    : t("tools.dialog.summaryUnsupported", {
+        enabledSkills: enabledSkillCount,
+        totalSkills: installedSkills.length,
+      });
 
   async function handleToggleSkill(skillName: string) {
     try {
@@ -197,11 +210,11 @@ export function ToolManageDialog({ isOpen, onClose, tool }: ToolManageDialogProp
         toolNames: knownSkillToolNames,
       });
     } catch (error) {
-      reportFailure(error, {
-        operation: "toggle_tool_manage_skill",
-        fallbackMessage: "切换 Skill 启用状态失败",
-        context: { toolId: tool.id, toolName: tool.name, skillName },
-      });
+        reportFailure(error, {
+          operation: "toggle_tool_manage_skill",
+        fallbackMessage: t("tools.dialog.error.toggleSkill"),
+          context: { toolId: tool.id, toolName: tool.name, skillName },
+        });
     }
   }
 
@@ -221,7 +234,7 @@ export function ToolManageDialog({ isOpen, onClose, tool }: ToolManageDialogProp
       setMcpWorkspace(previousWorkspace);
       reportFailure(error, {
         operation: "toggle_tool_manage_mcp",
-        fallbackMessage: "切换 MCP 启用状态失败",
+        fallbackMessage: t("tools.dialog.error.toggleMcp"),
         context: { toolId: tool.id, toolName: tool.name, serverId, enabled },
       });
     }
@@ -246,7 +259,7 @@ export function ToolManageDialog({ isOpen, onClose, tool }: ToolManageDialogProp
       } catch (error) {
         reportFailure(error, {
           operation: "enable_all_tool_manage_skills",
-          fallbackMessage: "批量启用 Skills 失败",
+          fallbackMessage: t("tools.dialog.error.enableSkills"),
           context: { toolId: tool.id, toolName: tool.name, skillNames: disabledSkillNames },
         });
       }
@@ -279,7 +292,7 @@ export function ToolManageDialog({ isOpen, onClose, tool }: ToolManageDialogProp
       setMcpWorkspace(previousWorkspace);
       reportFailure(error, {
         operation: "enable_all_tool_manage_mcp",
-        fallbackMessage: "批量启用 MCP 失败",
+        fallbackMessage: t("tools.dialog.error.enableMcp"),
         context: { toolId: tool.id, toolName: tool.name, serverIds: disabledRows.map((row) => row.id) },
       });
     } finally {
@@ -306,7 +319,7 @@ export function ToolManageDialog({ isOpen, onClose, tool }: ToolManageDialogProp
       } catch (error) {
         reportFailure(error, {
           operation: "disable_all_tool_manage_skills",
-          fallbackMessage: "批量关闭 Skills 失败",
+          fallbackMessage: t("tools.dialog.error.disableSkills"),
           context: { toolId: tool.id, toolName: tool.name, skillNames: enabledSkillNames },
         });
       }
@@ -339,7 +352,7 @@ export function ToolManageDialog({ isOpen, onClose, tool }: ToolManageDialogProp
       setMcpWorkspace(previousWorkspace);
       reportFailure(error, {
         operation: "disable_all_tool_manage_mcp",
-        fallbackMessage: "批量关闭 MCP 失败",
+        fallbackMessage: t("tools.dialog.error.disableMcp"),
         context: { toolId: tool.id, toolName: tool.name, serverIds: enabledRows.map((row) => row.id) },
       });
     } finally {
@@ -362,20 +375,20 @@ export function ToolManageDialog({ isOpen, onClose, tool }: ToolManageDialogProp
       >
         <div className="tool-manage-dialog__header">
           <div className="tool-manage-dialog__title">
-            <h3 id={dialogTitleId}>配置 {tool.name}</h3>
+            <h3 id={dialogTitleId}>{t("tools.dialog.title", { name: tool.name })}</h3>
             <p>{summaryLabel}</p>
           </div>
           <button
             className="tool-manage-dialog__close"
             type="button"
             onClick={onClose}
-            aria-label="关闭"
+            aria-label={t("tools.dialog.close")}
           >
             ×
           </button>
         </div>
 
-        <div className="tool-manage-dialog__tabs" role="tablist" aria-label="能力类型">
+        <div className="tool-manage-dialog__tabs" role="tablist" aria-label={t("tools.dialog.tabs")}>
           <button
             className={`tool-manage-dialog__tab${activeTab === "skills" ? " is-selected" : ""}`}
             type="button"
@@ -401,7 +414,7 @@ export function ToolManageDialog({ isOpen, onClose, tool }: ToolManageDialogProp
           <input
             className="tool-manage-dialog__search"
             type="search"
-            placeholder={activeTab === "skills" ? "搜索 Skills" : "搜索 MCP"}
+            placeholder={activeTab === "skills" ? t("tools.dialog.searchSkills") : t("tools.dialog.searchMcp")}
             value={query}
             onChange={(event) => setQuery(event.target.value)}
           />
@@ -411,11 +424,11 @@ export function ToolManageDialog({ isOpen, onClose, tool }: ToolManageDialogProp
               type="button"
               onClick={() => setShowEnabledOnly((current) => !current)}
               aria-pressed={showEnabledOnly}
-              aria-label="只看已启用"
+              aria-label={t("tools.dialog.enabledOnly")}
             >
               <span className="switch-button__thumb" />
             </button>
-            <span>只看已启用</span>
+            <span>{t("tools.dialog.enabledOnly")}</span>
           </label>
           <div className="tool-manage-dialog__bulk-actions">
             <button
@@ -424,7 +437,7 @@ export function ToolManageDialog({ isOpen, onClose, tool }: ToolManageDialogProp
               onClick={() => void handleToggleAllOn()}
               disabled={isUpdatingAll || disabledVisibleCount === 0 || (activeTab === "mcp" && isMcpLoading)}
             >
-              全部开启
+              {t("tools.dialog.enableAll")}
             </button>
             <button
               className="secondary-button secondary-button--compact"
@@ -432,20 +445,20 @@ export function ToolManageDialog({ isOpen, onClose, tool }: ToolManageDialogProp
               onClick={() => void handleToggleAllOff()}
               disabled={isUpdatingAll || enabledVisibleCount === 0 || (activeTab === "mcp" && isMcpLoading)}
             >
-              全部关闭
+              {t("tools.dialog.disableAll")}
             </button>
           </div>
         </div>
 
         <div className="tool-manage-dialog__list">
           {activeTab === "mcp" && !supportsMcp ? (
-            <div className="tool-manage-dialog__empty">{tool.name} 暂不支持 MCP 配置。</div>
+            <div className="tool-manage-dialog__empty">{t("tools.dialog.noMcpSupport", { name: tool.name })}</div>
           ) : null}
           {activeTab === "mcp" && supportsMcp && !hasManagedMcpConfig ? (
-            <div className="tool-manage-dialog__empty">{tool.name} 支持 MCP，但暂未识别配置路径。</div>
+            <div className="tool-manage-dialog__empty">{t("tools.dialog.noMcpPath", { name: tool.name })}</div>
           ) : null}
           {activeTab === "mcp" && hasManagedMcpConfig && isMcpLoading ? (
-            <div className="tool-manage-dialog__empty">正在加载 MCP 列表...</div>
+            <div className="tool-manage-dialog__empty">{t("tools.dialog.loadingMcp")}</div>
           ) : null}
           {activeTab === "mcp" && hasManagedMcpConfig && !isMcpLoading && mcpErrorMessage ? (
             <div className="tool-manage-dialog__empty">{mcpErrorMessage}</div>
@@ -471,7 +484,7 @@ export function ToolManageDialog({ isOpen, onClose, tool }: ToolManageDialogProp
                     void handleToggleMcp(item.id, !item.isEnabled);
                   }}
                   aria-pressed={item.isEnabled}
-                  aria-label={`${item.isEnabled ? "关闭" : "启用"} ${item.name}`}
+                  aria-label={item.isEnabled ? t("tools.dialog.item.disable", { name: item.name }) : t("tools.dialog.item.enable", { name: item.name })}
                   disabled={isUpdatingAll}
                 >
                   <span className="switch-button__thumb" />
@@ -482,7 +495,7 @@ export function ToolManageDialog({ isOpen, onClose, tool }: ToolManageDialogProp
           {(activeTab === "skills" || (activeTab === "mcp" && hasManagedMcpConfig && !isMcpLoading && !mcpErrorMessage)) &&
           activeRows.length === 0 ? (
             <div className="tool-manage-dialog__empty">
-              {activeTab === "skills" ? "没有匹配的 Skill。" : "没有匹配的 MCP。"}
+              {activeTab === "skills" ? t("tools.dialog.emptySkills") : t("tools.dialog.emptyMcp")}
             </div>
           ) : null}
         </div>
@@ -493,7 +506,7 @@ export function ToolManageDialog({ isOpen, onClose, tool }: ToolManageDialogProp
             type="button"
             onClick={onClose}
           >
-            完成
+            {t("tools.dialog.done")}
           </button>
         </div>
       </div>

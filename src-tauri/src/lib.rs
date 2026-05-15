@@ -39,6 +39,7 @@ pub fn run() {
             commands::get_git_account_summary,
             commands::get_app_settings,
             commands::update_app_settings,
+            commands::detect_preferred_app_language,
             commands::install_skill_from_market,
             commands::install_skill_from_repo,
             commands::discover_repo_skills,

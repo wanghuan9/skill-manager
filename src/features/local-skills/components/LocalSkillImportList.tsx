@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
+import { useTranslate } from "@/app/i18n";
 import { LocalInstallPanel } from "@/features/install/components/LocalInstallPanel";
 import { useNotifications } from "@/app/notifications";
 import { useFailureReporter } from "@/app/failure-feedback";
@@ -14,11 +15,6 @@ type LocalSkillGroup = {
 type LocalInstallTab = "scan" | "manual";
 
 const SOURCE_LABEL_ORDER = ["cursor", "claude_code", "codex", "windsurf"];
-
-const localInstallTabs: { key: LocalInstallTab; label: string }[] = [
-  { key: "scan", label: "扫描导入" },
-  { key: "manual", label: "手动安装" },
-];
 
 function sourceOrder(candidate: LocalSkillCandidate) {
   const index = SOURCE_LABEL_ORDER.indexOf(sourceLabel(candidate));
@@ -61,7 +57,19 @@ function sourceLabel(candidate: LocalSkillCandidate) {
   return parts.at(-2) ?? parts.at(-1) ?? "local";
 }
 
+function formatSourceHint(sourceHint: string, t: ReturnType<typeof useTranslate>["t"]) {
+  if (sourceHint === "符号链接" || sourceHint === "Symlink") {
+    return t("install.local.sourceHint.symlink");
+  }
+  if (sourceHint === "本地文件" || sourceHint === "Local File") {
+    return t("install.local.sourceHint.file");
+  }
+
+  return sourceHint;
+}
+
 export function LocalSkillImportList() {
+  const { t } = useTranslate();
   const { importCandidate, installedSkills, isLoading, localCandidates, refreshLocalCandidates } = useSkillWorkspace();
   const { notify } = useNotifications();
   const reportFailure = useFailureReporter();
@@ -91,7 +99,7 @@ export function LocalSkillImportList() {
         }
         reportFailure(error, {
           operation: "refresh_local_candidates",
-          fallbackMessage: "扫描本地技能失败，请稍后重试。",
+          fallbackMessage: t("install.local.error.scanFailed"),
         });
       })
       .finally(() => {
@@ -118,7 +126,7 @@ export function LocalSkillImportList() {
     } catch (error) {
       reportFailure(error, {
         operation: "refresh_local_candidates",
-        fallbackMessage: "扫描本地技能失败，请稍后重试。",
+        fallbackMessage: t("install.local.error.scanFailed"),
       });
     } finally {
       setIsRefreshing(false);
@@ -130,8 +138,8 @@ export function LocalSkillImportList() {
       <LocalInstallShell activeTab={activeLocalTab} onTabChange={setActiveLocalTab}>
         <div className="local-install-panel">
           <div className="panel-header">
-            <h2>手动安装</h2>
-            <p>从本机目录或 .zip/.skill 文件安装一个新的 skill。</p>
+            <h2>{t("install.local.manual")}</h2>
+            <p>{t("install.local.manualDescription")}</p>
           </div>
           <LocalInstallPanel variant="embedded" />
         </div>
@@ -144,12 +152,12 @@ export function LocalSkillImportList() {
       <LocalInstallShell activeTab={activeLocalTab} onTabChange={setActiveLocalTab}>
         <div className="local-scan-panel">
           <div className="panel-header">
-            <h2>扫描本地 Skills 并导入</h2>
-            <p>正在读取常见技能目录，马上给出可导入项。</p>
+            <h2>{t("install.local.scanLoadingTitle")}</h2>
+            <p>{t("install.local.scanLoadingDescription")}</p>
           </div>
           <section className="placeholder-card">
-            <h3>正在扫描本地技能</h3>
-            <p>系统正在汇总本机已有工具目录中的 skill。</p>
+            <h3>{t("install.local.scanLoadingCardTitle")}</h3>
+            <p>{t("install.local.scanLoadingCardDescription")}</p>
           </section>
         </div>
       </LocalInstallShell>
@@ -161,19 +169,19 @@ export function LocalSkillImportList() {
       <LocalInstallShell activeTab={activeLocalTab} onTabChange={setActiveLocalTab}>
         <div className="local-scan-panel">
           <div className="panel-header">
-            <h2>扫描导入</h2>
-            <p>从已存在的工具目录中导入 skill。</p>
+            <h2>{t("install.local.scan")}</h2>
+            <p>{t("install.local.scanDescription")}</p>
           </div>
           <div className="local-import-overview__empty">
-            <h3>没有待导入的本地技能</h3>
-            <p>当前本机已发现的 skill 都已经纳入统一管理了。</p>
+            <h3>{t("install.local.emptyTitle")}</h3>
+            <p>{t("install.local.emptyDescription")}</p>
             <button
               className="secondary-button"
               type="button"
               disabled={isRefreshing}
               onClick={() => void handleRefresh()}
             >
-              {isRefreshing ? "扫描中..." : "重新扫描"}
+              {isRefreshing ? t("install.local.rescanning") : t("install.local.rescan")}
             </button>
           </div>
         </div>
@@ -203,14 +211,14 @@ export function LocalSkillImportList() {
     try {
       await importCandidate(candidate.localPath);
       if (shouldNotify) {
-        notify({ message: `${group.name} 已导入`, tone: "success" });
+        notify({ message: t("install.local.success.importOne", { name: group.name }), tone: "success" });
       }
       return true;
     } catch (error) {
       if (shouldNotify) {
         reportFailure(error, {
           operation: "import_local_skill",
-          fallbackMessage: `${group.name} 导入失败，请稍后重试。`,
+          fallbackMessage: t("install.local.error.importOne", { name: group.name }),
           context: { skillName: group.name, localPath: candidate.localPath },
         });
       }
@@ -251,11 +259,11 @@ export function LocalSkillImportList() {
       }
 
       if (failedCount > 0) {
-        notify({ message: `已导入 ${importedCount} 个 skill，${failedCount} 个失败。`, tone: "error" });
+        notify({ message: t("install.local.summaryError", { imported: importedCount, failed: failedCount }), tone: "error" });
         return;
       }
 
-      notify({ message: `已导入 ${importedCount} 个本地 skill`, tone: "success" });
+      notify({ message: t("install.local.summarySuccess", { count: importedCount }), tone: "success" });
     } finally {
       setIsImportingAll(false);
       setImportingNames(new Set());
@@ -266,13 +274,17 @@ export function LocalSkillImportList() {
     <LocalInstallShell activeTab={activeLocalTab} onTabChange={setActiveLocalTab}>
       <div className="local-scan-panel">
         <div className="panel-header">
-          <h2>扫描导入</h2>
-          <p>从已存在的工具目录中导入 skill，列表按技能名称聚合同一技能的多个来源位置。</p>
+          <h2>{t("install.local.scan")}</h2>
+          <p>{t("install.local.scanDescription")}</p>
         </div>
-        <div className="local-import-summary-bar" aria-label="本地导入总览">
+        <div className="local-import-summary-bar" aria-label={t("install.local.overviewAria")}>
           <p>
-            发现 <strong>{groups.length}</strong> 个本地 skill · <strong>{totalLocationCount}</strong> 个位置 ·{" "}
-            <strong>{duplicatedSkillCount}</strong> 个重复 · 已管理 <strong>{localManagedCount}</strong> 个
+            {t("install.local.summary", {
+              groups: groups.length,
+              locations: totalLocationCount,
+              duplicates: duplicatedSkillCount,
+              managed: localManagedCount,
+            })}
           </p>
           <div className="local-import-overview__actions">
             <button
@@ -282,7 +294,7 @@ export function LocalSkillImportList() {
               aria-controls="local-scan-results"
               onClick={() => setIsScanListExpanded((current) => !current)}
             >
-              {isScanListExpanded ? "收起列表" : "展开列表"}
+              {isScanListExpanded ? t("install.local.collapse") : t("install.local.expand")}
             </button>
             <button
               className="secondary-button"
@@ -290,7 +302,7 @@ export function LocalSkillImportList() {
               disabled={isRefreshing}
               onClick={() => void handleRefresh()}
             >
-              {isRefreshing ? "扫描中..." : "重新扫描"}
+              {isRefreshing ? t("install.local.rescanning") : t("install.local.rescan")}
             </button>
             <button
               className="primary-button"
@@ -298,17 +310,17 @@ export function LocalSkillImportList() {
               disabled={isImportingAll || groups.length === 0}
               onClick={() => void handleImportAll()}
             >
-              {isImportingAll ? "导入中..." : "全部导入"}
+              {isImportingAll ? t("install.local.importAllLoading") : t("install.local.importAll")}
             </button>
           </div>
         </div>
 
         {isScanListExpanded ? (
-          <section id="local-scan-results" className="local-scan-results" aria-label="扫描导入结果">
+          <section id="local-scan-results" className="local-scan-results" aria-label={t("install.local.resultsAria")}>
             <div className="local-scan-list-header" aria-hidden="true">
-              <span>skill 名称</span>
-              <span>来源位置</span>
-              <span>操作</span>
+              <span>{t("install.local.name")}</span>
+              <span>{t("install.local.sourceLocation")}</span>
+              <span>{t("install.local.action")}</span>
             </div>
             <div className="local-scan-list">
               {groups.map((group) => {
@@ -322,7 +334,7 @@ export function LocalSkillImportList() {
                       <button
                         className="local-scan-group__toggle"
                         type="button"
-                        aria-label={`${isExpanded ? "收起" : "展开"} ${group.name}`}
+                        aria-label={isExpanded ? t("install.local.collapseItem", { name: group.name }) : t("install.local.expandItem", { name: group.name })}
                         aria-expanded={isExpanded}
                         onClick={() => toggleGroup(group.name)}
                       >
@@ -333,17 +345,17 @@ export function LocalSkillImportList() {
                           <strong>{group.name}</strong>
                         </span>
                         <span className="local-scan-group__sources">
-                          {group.candidates.length} 个位置 · {sourceSummary}
+                          {t("install.local.locations", { count: group.candidates.length, sources: sourceSummary })}
                         </span>
                       </button>
                       <button
                         className="primary-button local-scan-group__import-button"
                         type="button"
-                        aria-label={`导入 ${group.name}`}
+                        aria-label={t("install.local.importAria", { name: group.name })}
                         disabled={isGroupImporting || isImportingAll}
                         onClick={() => void handleImportGroup(group)}
                       >
-                        {isGroupImporting ? "导入中..." : "导入"}
+                        {isGroupImporting ? t("install.local.importingOne") : t("install.local.importOne")}
                       </button>
                     </div>
 
@@ -353,7 +365,7 @@ export function LocalSkillImportList() {
                           <div key={candidate.localPath} className="local-scan-location">
                             <span className="local-scan-location__source">{sourceLabel(candidate)}</span>
                             <span className="local-scan-location__path">{candidate.localPath}</span>
-                            <span className="local-scan-location__hint">{candidate.sourceHint}</span>
+                            <span className="local-scan-location__hint">{formatSourceHint(candidate.sourceHint, t)}</span>
                           </div>
                         ))}
                       </div>
@@ -377,10 +389,15 @@ type LocalInstallShellProps = {
 
 function LocalInstallShell(props: LocalInstallShellProps) {
   const { activeTab, children, onTabChange } = props;
+  const { t } = useTranslate();
+  const localInstallTabs: { key: LocalInstallTab; label: string }[] = [
+    { key: "scan", label: t("install.local.scan") },
+    { key: "manual", label: t("install.local.manual") },
+  ];
   return (
     <section className="panel-card market-panel local-install-workspace">
       <div className="local-install-workspace__toolbar">
-        <div className="page-tabs filter-tabs local-install-subtabs" role="tablist" aria-label="本地安装方式">
+        <div className="page-tabs filter-tabs local-install-subtabs" role="tablist" aria-label={t("install.local.tabAria")}>
           {localInstallTabs.map((tab) => {
             const selected = tab.key === activeTab;
 

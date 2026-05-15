@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useState } from "react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import * as skillClient from "@/features/skills/api/skill-client";
@@ -19,6 +19,10 @@ import type {
   ToolConfig,
 } from "@/features/skills/state/skill-store";
 
+vi.mock("@/app/utils/wait-for-next-paint", () => ({
+  waitForNextPaint: vi.fn(() => Promise.resolve()),
+}));
+
 vi.mock("@/features/skills/api/skill-client", async () => {
   const actual = await vi.importActual<typeof import("@/features/skills/api/skill-client")>(
     "@/features/skills/api/skill-client",
@@ -33,6 +37,7 @@ vi.mock("@/features/skills/api/skill-client", async () => {
     fetchAppSettings: vi.fn(),
     fetchGitStates: vi.fn(),
     fetchMarketplaceSkillsByPage: vi.fn(),
+    detectPreferredAppLanguage: vi.fn(),
     updateAppSettings: vi.fn(),
   };
 });
@@ -44,6 +49,7 @@ const mockedFetchGitAccount = vi.mocked(skillClient.fetchGitAccount);
 const mockedFetchAppSettings = vi.mocked(skillClient.fetchAppSettings);
 const mockedFetchGitStates = vi.mocked(skillClient.fetchGitStates);
 const mockedFetchMarketplaceSkillsByPage = vi.mocked(skillClient.fetchMarketplaceSkillsByPage);
+const mockedDetectPreferredAppLanguage = vi.mocked(skillClient.detectPreferredAppLanguage);
 const mockedUpdateAppSettings = vi.mocked(skillClient.updateAppSettings);
 
 function createDeferred<T>() {
@@ -122,10 +128,8 @@ function createMarketplaceSkill(name: string): MarketplaceSkill {
 
 beforeEach(() => {
   vi.useFakeTimers();
-  vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback: FrameRequestCallback) =>
-    window.setTimeout(() => callback(performance.now()), 16),
-  );
   window.localStorage.clear();
+  mockedDetectPreferredAppLanguage.mockResolvedValue("zh-CN");
 });
 
 afterEach(() => {
@@ -167,7 +171,8 @@ test("refresh resolves after startup skills without waiting for ancillary reques
   );
 
   await act(async () => {
-    vi.advanceTimersByTime(32);
+    vi.runOnlyPendingTimers();
+    await Promise.resolve();
     await Promise.resolve();
   });
 
@@ -176,6 +181,7 @@ test("refresh resolves after startup skills without waiting for ancillary reques
 
   await act(async () => {
     fireEvent.click(screen.getByRole("button", { name: "刷新工作区" }));
+    await Promise.resolve();
     await Promise.resolve();
   });
 
@@ -224,7 +230,8 @@ test("does not overwrite saved default open tool while settings are still loadin
   );
 
   await act(async () => {
-    vi.advanceTimersByTime(32);
+    vi.runOnlyPendingTimers();
+    await Promise.resolve();
     await Promise.resolve();
   });
 
@@ -233,6 +240,8 @@ test("does not overwrite saved default open tool while settings are still loadin
   pendingSettings.resolve(savedSettings);
 
   await act(async () => {
+    vi.runOnlyPendingTimers();
+    await Promise.resolve();
     await Promise.resolve();
   });
 
@@ -258,7 +267,7 @@ test("refreshes skillsmp marketplace after serving the initial cached page", asy
   );
 
   await act(async () => {
-    vi.advanceTimersByTime(32);
+    await Promise.resolve();
     await Promise.resolve();
   });
 
