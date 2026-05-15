@@ -29,6 +29,27 @@ pub fn managed_workspace_root() -> Result<PathBuf, String> {
     Ok(home_dir.join(WORKSPACE_DIR_NAME))
 }
 
+pub fn ensure_workspace_initialized() -> Result<PathBuf, String> {
+    let workspace_root = managed_workspace_root()?;
+    fs::create_dir_all(workspace_root.join("skills"))
+        .map_err(|error| format!("创建 skills 目录失败: {error}"))?;
+    fs::create_dir_all(workspace_root.join("cache"))
+        .map_err(|error| format!("创建 cache 目录失败: {error}"))?;
+    fs::create_dir_all(workspace_root.join("repo-cache"))
+        .map_err(|error| format!("创建 repo-cache 目录失败: {error}"))?;
+    fs::create_dir_all(workspace_root.join("imports"))
+        .map_err(|error| format!("创建 imports 目录失败: {error}"))?;
+
+    ensure_workspace_file_with_default_content(&workspace_root.join("state.json"), "{\n  \"installedSkills\": []\n}\n")?;
+    ensure_workspace_file_with_default_content(
+        &workspace_root.join("settings.json"),
+        "{\n  \"defaultOpenToolId\": \"\",\n  \"skillInstallActivation\": \"apply-all-tools\",\n  \"mcpInstallActivation\": \"disable-all-tools\"\n}\n",
+    )?;
+    ensure_workspace_file_with_default_content(&workspace_root.join("mcp-servers.json"), "{\n  \"servers\": []\n}\n")?;
+
+    Ok(workspace_root)
+}
+
 pub fn managed_workspace_root_option() -> Option<PathBuf> {
     managed_workspace_root().ok()
 }
@@ -68,9 +89,13 @@ pub fn normalize_workspace_path(value: &str) -> String {
     value.replace(LEGACY_WORKSPACE_DIR_NAME, WORKSPACE_DIR_NAME)
 }
 
-pub fn ensure_workspace_migrated() -> Result<(), String> {
-    let home_dir = home_dir()?;
-    ensure_workspace_migrated_for_home(&home_dir)
+fn ensure_workspace_file_with_default_content(path: &Path, default_content: &str) -> Result<(), String> {
+    if path.exists() {
+        return Ok(());
+    }
+
+    fs::write(path, default_content)
+        .map_err(|error| format!("初始化工作区文件失败（{}）: {error}", path.display()))
 }
 
 fn ensure_workspace_migrated_for_home(home_dir: &Path) -> Result<(), String> {
@@ -267,8 +292,8 @@ fn prune_legacy_workspace_root_if_empty(home_dir: &Path) {
 #[cfg(test)]
 mod tests {
     use super::{
-        managed_workspace_root, normalize_workspace_path, workspace_file_candidates, TEST_ENV_LOCK,
-        WORKSPACE_DIR_NAME,
+        ensure_workspace_initialized, managed_workspace_root, normalize_workspace_path,
+        workspace_file_candidates, TEST_ENV_LOCK, WORKSPACE_DIR_NAME,
     };
     use std::env;
     use std::fs;
@@ -342,6 +367,72 @@ mod tests {
                     temp_home.join(".skilldock/state.json"),
                     temp_home.join(".skillm/state.json"),
                 ]
+            );
+        });
+    }
+
+    #[test]
+    fn initializes_workspace_directories_and_files_when_missing() {
+        run_with_temp_home("bootstrap", |temp_home| {
+            let workspace_root = ensure_workspace_initialized().expect("workspace should initialize");
+
+            assert_eq!(workspace_root, temp_home.join(WORKSPACE_DIR_NAME));
+            assert!(workspace_root.join("skills").is_dir());
+            assert!(workspace_root.join("cache").is_dir());
+            assert!(workspace_root.join("repo-cache").is_dir());
+            assert!(workspace_root.join("imports").is_dir());
+            assert_eq!(
+                fs::read_to_string(workspace_root.join("state.json")).expect("read state"),
+                "{\n  \"installedSkills\": []\n}\n"
+            );
+            assert_eq!(
+                fs::read_to_string(workspace_root.join("mcp-servers.json")).expect("read mcp"),
+                "{\n  \"servers\": []\n}\n"
+            );
+            let settings_content =
+                fs::read_to_string(workspace_root.join("settings.json")).expect("read settings");
+            assert!(settings_content.contains("\"defaultOpenToolId\": \"\""));
+            assert!(settings_content.contains("\"skillInstallActivation\": \"apply-all-tools\""));
+            assert!(settings_content.contains("\"mcpInstallActivation\": \"disable-all-tools\""));
+        });
+    }
+
+    #[test]
+    fn does_not_overwrite_existing_workspace_files() {
+        run_with_temp_home("bootstrap-preserve", |temp_home| {
+            let workspace_root = temp_home.join(WORKSPACE_DIR_NAME);
+            fs::create_dir_all(workspace_root.join("skills")).expect("create skills dir");
+            fs::write(
+                workspace_root.join("state.json"),
+                "{\n  \"installedSkills\": [{\"name\": \"kept\"}]\n}\n",
+            )
+            .expect("write custom state");
+            fs::write(
+                workspace_root.join("settings.json"),
+                "{\n  \"defaultOpenToolId\": \"cursor\"\n}\n",
+            )
+            .expect("write custom settings");
+            fs::write(
+                workspace_root.join("mcp-servers.json"),
+                "{\n  \"servers\": [{\"id\": \"kept\"}]\n}\n",
+            )
+            .expect("write custom mcp state");
+
+            let initialized_root =
+                ensure_workspace_initialized().expect("workspace should initialize");
+
+            assert_eq!(initialized_root, workspace_root);
+            assert_eq!(
+                fs::read_to_string(workspace_root.join("state.json")).expect("read state"),
+                "{\n  \"installedSkills\": [{\"name\": \"kept\"}]\n}\n"
+            );
+            assert_eq!(
+                fs::read_to_string(workspace_root.join("settings.json")).expect("read settings"),
+                "{\n  \"defaultOpenToolId\": \"cursor\"\n}\n"
+            );
+            assert_eq!(
+                fs::read_to_string(workspace_root.join("mcp-servers.json")).expect("read mcp"),
+                "{\n  \"servers\": [{\"id\": \"kept\"}]\n}\n"
             );
         });
     }

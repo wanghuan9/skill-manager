@@ -1,3 +1,4 @@
+import { isTauriRuntime } from "@/app/is-tauri-runtime";
 import { getVersion } from "@tauri-apps/api/app";
 import { type DownloadEvent, check } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
@@ -19,7 +20,7 @@ export type AppUpdateCheckResult = {
 };
 
 function shouldUseTauriUpdater() {
-  return Boolean((window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__);
+  return isTauriRuntime();
 }
 
 export async function fetchCurrentAppVersion(): Promise<string> {

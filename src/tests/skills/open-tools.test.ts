@@ -1,4 +1,4 @@
-import { buildOpenToolOptions } from "@/features/skills/utils/open-tools";
+import { buildOpenToolOptions, resolvePreferredEditorIdForTextFile } from "@/features/skills/utils/open-tools";
 import type { ToolConfig } from "@/features/skills/state/skill-store";
 
 function buildToolConfig(overrides: Partial<ToolConfig>): ToolConfig {
@@ -53,4 +53,27 @@ test("falls back to Finder when no editor can open directories directly", () => 
       primaryType: "desktop",
     },
   ]);
+});
+
+test("resolves installed direct-open editor for text files", () => {
+  const editorId = resolvePreferredEditorIdForTextFile([
+    buildToolConfig({ id: "cursor", name: "Cursor" }),
+    buildToolConfig({
+      id: "claude-code",
+      name: "Claude Code",
+      primaryType: "cli",
+      surfaceTypes: ["cli"],
+      supportsDirectOpen: false,
+    }),
+  ], "cursor");
+
+  expect(editorId).toBe("cursor");
+});
+
+test("returns undefined when preferred tool is not a direct-open editor", () => {
+  const editorId = resolvePreferredEditorIdForTextFile([
+    buildToolConfig({ id: "cursor", name: "Cursor" }),
+  ], "finder");
+
+  expect(editorId).toBeUndefined();
 });

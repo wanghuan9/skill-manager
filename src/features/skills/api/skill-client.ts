@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { isTauriRuntime } from "@/app/is-tauri-runtime";
 import {
   appSettingsFixture,
   gitAccountFixture,
@@ -162,7 +163,7 @@ let mcpImportProgressListenerPromise: Promise<void> | null = null;
 const mcpImportSessionListeners = new Set<McpImportSessionListener>();
 
 export function shouldUseFixtureData() {
-  return !(window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
+  return !isTauriRuntime();
 }
 
 function emitMcpImportSessionChange() {

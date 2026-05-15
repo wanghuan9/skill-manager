@@ -1,6 +1,14 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { vi } from "vitest";
 import { App } from "@/app/App";
+import * as skillClient from "@/features/skills/api/skill-client";
+import { appSettingsFixture } from "@/features/skills/state/skill-fixtures";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  appSettingsFixture.defaultOpenToolId = "";
+});
 
 test("renders installed tools only with manage action", async () => {
   window.localStorage.clear();
@@ -32,12 +40,33 @@ test("can open a tool skills folder from the tools page", async () => {
 
 test("can open a tool MCP config from the tools page", async () => {
   window.localStorage.clear();
+  const openToolMcpConfigSpy = vi.spyOn(skillClient, "openToolMcpConfig").mockResolvedValue(undefined);
   render(<App />);
 
   await userEvent.click(screen.getByRole("button", { name: "工具" }));
   await userEvent.click(screen.getByRole("button", { name: "打开 Claude Code MCP 配置" }));
 
+  expect(openToolMcpConfigSpy).toHaveBeenCalledWith({
+    toolId: "claude-code",
+    editorId: undefined,
+  });
   expect(screen.getByRole("button", { name: "打开 Claude Code MCP 配置" })).toBeEnabled();
+});
+
+test("uses default editor for MCP config when a direct-open editor is selected", async () => {
+  window.localStorage.clear();
+  appSettingsFixture.defaultOpenToolId = "cursor";
+  const openToolMcpConfigSpy = vi.spyOn(skillClient, "openToolMcpConfig").mockResolvedValue(undefined);
+
+  render(<App />);
+
+  await userEvent.click(screen.getByRole("button", { name: "工具" }));
+  await userEvent.click(screen.getByRole("button", { name: "打开 Claude Code MCP 配置" }));
+
+  expect(openToolMcpConfigSpy).toHaveBeenCalledWith({
+    toolId: "claude-code",
+    editorId: "cursor",
+  });
 });
 
 test("can enable all visible skills from tool manage dialog", async () => {

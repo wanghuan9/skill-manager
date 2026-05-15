@@ -95,16 +95,34 @@ export function buildInstalledToolCards(toolConfigs: ToolConfig[]): OpenToolCard
 export function buildOpenToolOptions(toolConfigs: ToolConfig[]): OpenToolOption[] {
   const installedEditorOptions = toolConfigs
     .map(toOpenToolCard)
-    .filter(
-      (tool) =>
-        tool.id !== FINDER_OPEN_TOOL_OPTION.id &&
-        tool.isInstalled &&
-        tool.primaryType === "editor" &&
-        tool.supportsDirectOpen,
-    )
+    .filter(isDirectOpenEditorTool)
     .map(({ id, name, primaryType }) => ({ id, name, primaryType }));
 
   return [...installedEditorOptions, FINDER_OPEN_TOOL_OPTION];
+}
+
+export function isDirectOpenEditorTool(tool: Pick<OpenToolCard, "id" | "isInstalled" | "primaryType" | "supportsDirectOpen">) {
+  return (
+    tool.id !== FINDER_OPEN_TOOL_OPTION.id &&
+    tool.isInstalled &&
+    tool.primaryType === "editor" &&
+    tool.supportsDirectOpen
+  );
+}
+
+export function resolvePreferredEditorIdForTextFile(
+  toolConfigs: ToolConfig[],
+  preferredToolId?: string,
+): string | undefined {
+  const preferredTool = toolConfigs
+    .map(toOpenToolCard)
+    .find((tool) => tool.id === preferredToolId);
+
+  if (!preferredTool || !isDirectOpenEditorTool(preferredTool)) {
+    return undefined;
+  }
+
+  return preferredTool.id;
 }
 
 export function sortToolCards<T extends OpenToolCard>(toolCards: T[], defaultOpenToolId?: string) {

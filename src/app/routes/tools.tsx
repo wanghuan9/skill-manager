@@ -6,6 +6,7 @@ import { getToolLogoUrl } from "@/features/skills/utils/tool-logo";
 import {
   buildInstalledToolCards,
   PRIMARY_TOOL_TYPE_LABELS,
+  resolvePreferredEditorIdForTextFile,
   sortToolCards,
   TOOL_SURFACE_LABELS,
 } from "@/features/skills/utils/open-tools";
@@ -115,7 +116,8 @@ export function ToolsRoute() {
 
     setOpeningMcpToolId(toolId);
     try {
-      await openToolMcpConfig({ toolId, editorId: defaultOpenToolId });
+      const preferredEditorId = resolvePreferredEditorIdForTextFile(toolConfigs, defaultOpenToolId);
+      await openToolMcpConfig({ toolId, editorId: preferredEditorId });
     } catch (error) {
       const message = error instanceof Error ? error.message : "打开 MCP 配置失败";
       window.alert(message);

@@ -11,7 +11,7 @@ mod workspace;
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
-            workspace::ensure_workspace_migrated()?;
+            workspace::ensure_workspace_initialized()?;
             if cfg!(debug_assertions) {
                 app.handle().plugin(
                     tauri_plugin_log::Builder::default()

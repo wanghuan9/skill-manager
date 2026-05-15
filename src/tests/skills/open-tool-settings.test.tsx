@@ -7,6 +7,7 @@ import * as appUpdateClient from "@/features/app-update/app-update-client";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
+  isTauri: vi.fn(() => false),
 }));
 
 afterEach(() => {
