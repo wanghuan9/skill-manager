@@ -5734,6 +5734,54 @@ mod tests {
         let _ = fs::remove_dir_all(temp_dir);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn local_import_replaces_existing_tool_directory_with_symlink() {
+        let _guard = TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let temp_dir = temp_test_dir("local-import-replace-real-tool-dir");
+        let home_dir = temp_dir.join("home");
+        let cursor_skill_dir = home_dir.join(".cursor/skills/ahs-persistence");
+        fs::create_dir_all(&cursor_skill_dir).expect("create cursor skill dir");
+        fs::write(
+            cursor_skill_dir.join("SKILL.md"),
+            "---\nname: ahs-persistence\ndescription: 持久化助手\n---",
+        )
+        .expect("write cursor skill file");
+
+        let original_home = env::var_os("HOME");
+        let original_path = prepend_fake_executable_to_path(&temp_dir, "cursor");
+        // SAFETY: this test holds ENV_LOCK and restores HOME before returning.
+        unsafe {
+            env::set_var("HOME", &home_dir);
+        }
+
+        let imported =
+            import_local_skill(cursor_skill_dir.to_string_lossy().as_ref()).expect("import skill");
+
+        restore_env_var("HOME", original_home);
+        restore_env_var("PATH", original_path);
+
+        let managed_skill_dir = home_dir.join(".skilldock/skills/ahs-persistence");
+        assert_eq!(
+            imported.local_path,
+            managed_skill_dir.to_string_lossy().to_string()
+        );
+        assert!(managed_skill_dir.join("SKILL.md").is_file());
+        assert!(cursor_skill_dir.is_symlink());
+        assert_eq!(
+            fs::read_link(&cursor_skill_dir).expect("read cursor symlink"),
+            managed_skill_dir
+        );
+        assert!(imported
+            .tools
+            .iter()
+            .any(|tool| { tool.name == "Cursor" && tool.status_label == "已启用" }));
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
     #[test]
     fn repo_install_source_url_keeps_branch_hint_from_tree_url() {
         let spec = parse_repo_install_spec(

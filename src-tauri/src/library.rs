@@ -1361,9 +1361,17 @@ pub fn create_skill_symlink(
 
     let symlink_path = tool_path.join(normalized_skill_name);
 
-    // 如果符号链接已存在，先删除
+    // 如果同名条目已存在，先按条目类型清理，再创建新的符号链接。
     if symlink_path.exists() || symlink_path.is_symlink() {
-        fs::remove_file(&symlink_path).map_err(|error| format!("删除现有符号链接失败: {error}"))?;
+        let metadata = fs::symlink_metadata(&symlink_path)
+            .map_err(|error| format!("读取现有技能条目失败: {error}"))?;
+        if metadata.file_type().is_dir() && !metadata.file_type().is_symlink() {
+            fs::remove_dir_all(&symlink_path)
+                .map_err(|error| format!("删除现有技能目录失败: {error}"))?;
+        } else {
+            fs::remove_file(&symlink_path)
+                .map_err(|error| format!("删除现有符号链接失败: {error}"))?;
+        }
     }
 
     // 创建符号链接
