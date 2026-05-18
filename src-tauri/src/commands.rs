@@ -2433,6 +2433,8 @@ fn editor_app_name_candidates(editor_id: &str) -> &[&str] {
         "windsurf" => &["Windsurf"],
         "kiro" => &["Kiro", "Kiro CLI"],
         "trae" => &["Trae", "TRAE"],
+        "trae-cn" => &["Trae CN", "TRAE CN"],
+        "qoder" => &["Qoder"],
         "intellij" => &[
             "IntelliJ IDEA",
             "IntelliJ IDEA CE",
@@ -2448,6 +2450,8 @@ fn editor_cli_name_candidates(editor_id: &str) -> &[&str] {
         "windsurf" => &["windsurf"],
         "kiro" => &["kiro"],
         "trae" => &["trae"],
+        "trae-cn" => &["trae-cn", "trae"],
+        "qoder" => &["qoder"],
         "intellij" => &["idea"],
         _ => &[],
     }

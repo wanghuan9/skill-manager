@@ -1,4 +1,8 @@
-import { buildOpenToolOptions, resolvePreferredEditorIdForTextFile } from "@/features/skills/utils/open-tools";
+import {
+  buildOpenToolOptions,
+  resolveDefaultOpenToolId,
+  resolvePreferredEditorIdForTextFile,
+} from "@/features/skills/utils/open-tools";
 import type { ToolConfig } from "@/features/skills/state/skill-store";
 
 function buildToolConfig(overrides: Partial<ToolConfig>): ToolConfig {
@@ -79,4 +83,39 @@ test("returns undefined when preferred tool is not a direct-open editor", () => 
   ], "finder");
 
   expect(editorId).toBeUndefined();
+});
+
+test("resolves default open tool by preferred editor priority", () => {
+  const editorId = resolveDefaultOpenToolId([
+    buildToolConfig({ id: "qoder", name: "Qoder", supportsDirectOpen: true, statusLabel: "已安装" }),
+    buildToolConfig({ id: "trae-cn", name: "Trae CN", supportsDirectOpen: true, statusLabel: "已安装" }),
+    buildToolConfig({ id: "windsurf", name: "Windsurf", supportsDirectOpen: true, statusLabel: "已安装" }),
+    buildToolConfig({ id: "cursor", name: "Cursor", supportsDirectOpen: true, statusLabel: "已安装" }),
+  ]);
+
+  expect(editorId).toBe("cursor");
+});
+
+test("falls back through preferred editors when cursor is missing", () => {
+  const editorId = resolveDefaultOpenToolId([
+    buildToolConfig({ id: "windsurf", name: "Windsurf", supportsDirectOpen: true, statusLabel: "已安装" }),
+    buildToolConfig({ id: "trae", name: "Trae", supportsDirectOpen: true, statusLabel: "已安装" }),
+  ]);
+
+  expect(editorId).toBe("windsurf");
+});
+
+test("returns Finder when no direct-open editor is available", () => {
+  const editorId = resolveDefaultOpenToolId([
+    buildToolConfig({
+      id: "claude-code",
+      name: "Claude Code",
+      primaryType: "cli",
+      surfaceTypes: ["cli"],
+      supportsDirectOpen: false,
+      statusLabel: "已安装",
+    }),
+  ]);
+
+  expect(editorId).toBe("finder");
 });

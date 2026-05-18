@@ -19,6 +19,15 @@ export type OpenToolCard = OpenToolOption & {
   supportsDirectOpen: boolean;
 };
 
+const DEFAULT_OPEN_TOOL_PRIORITY = [
+  "cursor",
+  "windsurf",
+  "antigravity",
+  "trae",
+  "trae-cn",
+  "qoder",
+] as const;
+
 const TOOL_POPULARITY_RANK: Record<string, number> = {
   cursor: 1,
   "claude-code": 2,
@@ -122,6 +131,21 @@ export function isDirectOpenEditorTool(tool: Pick<OpenToolCard, "id" | "isInstal
     tool.primaryType === "editor" &&
     tool.supportsDirectOpen
   );
+}
+
+export function resolveDefaultOpenToolId(toolConfigs: ToolConfig[]): string {
+  const installedDirectOpenTools = toolConfigs
+    .map(toOpenToolCard)
+    .filter(isDirectOpenEditorTool);
+
+  for (const preferredToolId of DEFAULT_OPEN_TOOL_PRIORITY) {
+    const preferredTool = installedDirectOpenTools.find((tool) => tool.id === preferredToolId);
+    if (preferredTool) {
+      return preferredTool.id;
+    }
+  }
+
+  return installedDirectOpenTools[0]?.id ?? FINDER_OPEN_TOOL_ID;
 }
 
 export function resolvePreferredEditorIdForTextFile(

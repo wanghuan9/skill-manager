@@ -147,7 +147,7 @@ test("refresh resolves after startup skills without waiting for ancillary reques
   let accountCallCount = 0;
   let settingsCallCount = 0;
 
-  mockedInvoke.mockImplementation(async (command) => {
+  mockedInvoke.mockImplementation(async (command, args) => {
     switch (command) {
       case "list_startup_installed_skills":
         startupCallCount += 1;
@@ -164,6 +164,8 @@ test("refresh resolves after startup skills without waiting for ancillary reques
       case "get_app_settings":
         settingsCallCount += 1;
         return settingsCallCount === 1 ? appSettingsFixture : pendingSettings.promise;
+      case "update_app_settings":
+        return (args as { settings: AppSettings }).settings;
       case "refresh_git_states":
         gitStateCallCount += 1;
         return gitStateCallCount === 1 ? initialSkills : refreshedSkills;
@@ -208,7 +210,7 @@ test("does not overwrite saved default open tool while settings are still loadin
   };
   const pendingSettings = createDeferred<AppSettings>();
 
-  mockedInvoke.mockImplementation(async (command) => {
+  mockedInvoke.mockImplementation(async (command, args) => {
     switch (command) {
       case "list_startup_installed_skills":
       case "refresh_git_states":
@@ -221,6 +223,8 @@ test("does not overwrite saved default open tool while settings are still loadin
         return gitAccountFixture;
       case "get_app_settings":
         return pendingSettings.promise;
+      case "update_app_settings":
+        return (args as { settings: AppSettings }).settings;
       default:
         throw new Error(`Unexpected command: ${command}`);
     }
@@ -255,6 +259,59 @@ test("does not overwrite saved default open tool while settings are still loadin
   });
 });
 
+test("persists preferred default open tool after startup refresh when settings are empty", async () => {
+  const pendingSettings = createDeferred<AppSettings>();
+  let updateAppSettingsPayload: AppSettings | null = null;
+
+  mockedInvoke.mockImplementation(async (command, args) => {
+    switch (command) {
+      case "list_startup_installed_skills":
+      case "refresh_git_states":
+        return installedSkillFixtures;
+      case "list_local_skill_candidates":
+        return localSkillFixtures;
+      case "list_tool_configs":
+        return toolConfigFixtures;
+      case "get_git_account_summary":
+        return gitAccountFixture;
+      case "get_app_settings":
+        return pendingSettings.promise;
+      case "update_app_settings":
+        updateAppSettingsPayload = args?.settings as AppSettings;
+        return updateAppSettingsPayload;
+      default:
+        throw new Error(`Unexpected command: ${command}`);
+    }
+  });
+  window.localStorage.setItem(
+    "skilldock.startupWorkspaceCache",
+    JSON.stringify({
+      installedSkills: installedSkillFixtures,
+      localCandidates: localSkillFixtures,
+      toolConfigs: toolConfigFixtures,
+      gitAccount: gitAccountFixture,
+    }),
+  );
+
+  render(
+    <SkillWorkspaceProvider>
+      <DefaultOpenToolProbe />
+    </SkillWorkspaceProvider>,
+  );
+
+  await act(async () => {
+    pendingSettings.resolve({
+      ...appSettingsFixture,
+      defaultOpenToolId: "",
+    });
+  });
+
+  await waitFor(() => {
+    expect(screen.getByTestId("default-open-tool-id").textContent).toBe("cursor");
+    expect(updateAppSettingsPayload?.defaultOpenToolId).toBe("cursor");
+  });
+});
+
 test("refreshes skillsmp marketplace after serving the initial cached page", async () => {
   const marketplaceCalls: Array<Record<string, unknown> | undefined> = [];
   mockedInvoke.mockImplementation(async (command, args) => {
@@ -270,6 +327,8 @@ test("refreshes skillsmp marketplace after serving the initial cached page", asy
         return gitAccountFixture;
       case "get_app_settings":
         return appSettingsFixture;
+      case "update_app_settings":
+        return (args as { settings: AppSettings }).settings;
       case "list_marketplace_skills":
         marketplaceCalls.push(args as Record<string, unknown> | undefined);
         return marketplaceCalls.length === 1

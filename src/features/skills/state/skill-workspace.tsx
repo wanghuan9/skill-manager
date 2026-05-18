@@ -64,7 +64,7 @@ import type {
   SkillSummary,
   ToolConfig,
 } from "@/features/skills/state/skill-store";
-import { buildOpenToolOptions } from "@/features/skills/utils/open-tools";
+import { buildOpenToolOptions, resolveDefaultOpenToolId } from "@/features/skills/utils/open-tools";
 import {
   localizeGitAccountSummary,
   localizeSkillSummaries,
@@ -465,6 +465,18 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
     return savedSettings;
   }
 
+  async function ensureDefaultOpenToolId(nextToolConfigs: ToolConfig[], nextSettings: AppSettings) {
+    const resolvedDefaultOpenToolId = resolveDefaultOpenToolId(nextToolConfigs);
+    if (nextSettings.defaultOpenToolId === resolvedDefaultOpenToolId) {
+      return nextSettings;
+    }
+
+    return persistAppSettings({
+      ...nextSettings,
+      defaultOpenToolId: resolvedDefaultOpenToolId,
+    });
+  }
+
   async function handleSetDefaultOpenToolId(toolId: string) {
     const nextSettings = {
       ...appSettings,
@@ -569,7 +581,14 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
     }
 
     if (settingsResult.status === "fulfilled") {
-      setAppSettings(settingsResult.value);
+      const nextSettings = settingsResult.value;
+      if (nextSettings.defaultOpenToolId.trim().length === 0 && toolsResult.status === "fulfilled") {
+        const resolvedSettings = await ensureDefaultOpenToolId(toolsResult.value, nextSettings);
+        setAppSettings(resolvedSettings);
+        return;
+      }
+
+      setAppSettings(nextSettings);
     } else {
       console.error("Failed to load app settings:", settingsResult.reason);
     }
@@ -612,6 +631,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
 
       const workspace = await loadWorkspaceCore();
       setInstalledSkills(workspace.skills);
+      await ensureDefaultOpenToolId(workspace.tools, workspace.settings);
       applyWorkspaceAncillaryData({
         candidates: workspace.candidates,
         tools: workspace.tools,
