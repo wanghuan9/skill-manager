@@ -4,7 +4,7 @@ import { vi } from "vitest";
 import { App } from "@/app/App";
 import * as skillClient from "@/features/skills/api/skill-client";
 import { marketplaceSkillFixtures, mcpMarketplaceServerFixtures } from "@/features/skills/state/skill-fixtures";
-import type { McpMarketplaceServer } from "@/features/skills/state/skill-store";
+import type { MarketplaceSkill, McpMarketplaceServer } from "@/features/skills/state/skill-store";
 import { getCachedMcpWorkspace } from "@/features/skills/utils/mcp-workspace-cache";
 
 function resetMcpMarketplaceRuntimeCache() {
@@ -474,6 +474,50 @@ test("keeps the current MCP list visible until pending search results return", a
   });
 
   fetchMcpMarketplaceServersSpy.mockRestore();
+});
+
+test("keeps the current skill list visible until pending search results return", async () => {
+  window.localStorage.clear();
+  const originalFetchMarketplaceSkillsByPage = skillClient.fetchMarketplaceSkillsByPage;
+  let resolvePendingSearch: ((value: MarketplaceSkill[]) => void) | null = null;
+  const fetchMarketplaceSkillsByPageSpy = vi
+    .spyOn(skillClient, "fetchMarketplaceSkillsByPage")
+    .mockImplementation((input) => {
+      if (input.query === "find") {
+        return new Promise((resolve) => {
+          resolvePendingSearch = resolve;
+        });
+      }
+      return originalFetchMarketplaceSkillsByPage(input);
+    });
+
+  render(<App />);
+  await userEvent.click(screen.getByRole("button", { name: /安装/ }));
+
+  expect(await screen.findByText("workflow-critic")).toBeInTheDocument();
+
+  const searchInput = screen.getByRole("searchbox", { name: "搜索 skill" });
+  await userEvent.type(searchInput, "find");
+
+  await waitFor(() => {
+    expect(fetchMarketplaceSkillsByPageSpy).toHaveBeenCalledWith(expect.objectContaining({ query: "find" }));
+  });
+
+  expect(screen.getByText("workflow-critic")).toBeInTheDocument();
+  expect(screen.queryByText("正在搜索可安装技能")).not.toBeInTheDocument();
+
+  const finishPendingSearch = resolvePendingSearch as ((value: MarketplaceSkill[]) => void) | null;
+  if (!finishPendingSearch) {
+    throw new Error("pending skill marketplace search was not triggered");
+  }
+  finishPendingSearch(marketplaceSkillFixtures.filter((skill) => skill.name === "workflow-critic"));
+
+  await waitFor(() => {
+    expect(screen.getByText("workflow-critic")).toBeInTheDocument();
+    expect(screen.queryByText("正在搜索可安装技能")).not.toBeInTheDocument();
+  });
+
+  fetchMarketplaceSkillsByPageSpy.mockRestore();
 });
 
 test("reuses cached MCP marketplace results when switching away and back", async () => {

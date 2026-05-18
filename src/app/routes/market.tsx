@@ -192,7 +192,6 @@ export function MarketRoute(props: MarketRouteProps) {
   const hasMoreMarketplaceSkills = hasMoreMarketplaceSkillsBySource[activeSourceSite] ?? false;
   const isMarketplaceInitializing =
     !isSearching && stableTabSkills.length === 0 && (isMarketplaceLoading || hasMoreMarketplaceSkills);
-  const isMarketplaceSearchInitializing = isSearching && isSearchLoading && !searchDone;
 
   useEffect(() => {
     isMarketplaceLoadingRef.current = isMarketplaceLoadingBySource;
@@ -272,7 +271,7 @@ export function MarketRoute(props: MarketRouteProps) {
                 onSearchQueryChange={setSearchQuery}
                 isSearching={isSearching}
                 isSearchLoading={isSearchLoading}
-                isInitialLoading={isMarketplaceSearchInitializing || isMarketplaceInitializing}
+                isInitialLoading={isMarketplaceInitializing}
                 isLoadingMore={isSearching ? false : isMarketplaceLoading}
                 hasMore={isSearching ? false : hasMoreMarketplaceSkills}
                 installedMarketplaceSkillIds={installedMarketplaceSkillIds}
