@@ -5,7 +5,7 @@
 <h1 align="center">SkillDock - AI Skills & MCP Manager</h1>
 
 <p align="center">
-  Manage AI Skills and MCP servers in one desktop app, with Git-aware updates, marketplace install, source grouping, and sync across Claude Code, Codex, Cursor, Windsurf, Gemini CLI, GitHub Copilot, and more.
+  SkillDock is a skill manager and MCP manager for AI coding tools. It helps users install, view, edit, organize, sync, and update skills and MCP servers, with Git-aware updates for tracking upstream changes and local modifications.
 </p>
 
 <p align="center">

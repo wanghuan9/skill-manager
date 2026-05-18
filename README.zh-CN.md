@@ -5,7 +5,7 @@
 <h1 align="center">SkillDock - AI Skills & MCP Manager</h1>
 
 <p align="center">
-  一个桌面应用，统一管理 AI Skills 和 MCP Servers，支持 Git-aware 更新、市场安装、来源分组，并同步到 Claude Code、Codex、Cursor、Windsurf、Gemini CLI、GitHub Copilot 等工具。
+  SkillDock 是一个面向 AI Coding 工具的 skill 管理工具和 MCP 管理工具，支持安装、查看、编辑、整理、同步和更新 skills 与 MCP servers，并提供 Git-aware 更新能力，用于跟踪上游变更和本地修改。
 </p>
 
 <p align="center">
