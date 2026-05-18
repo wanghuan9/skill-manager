@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { useTranslate } from "@/app/i18n";
 import { useFailureReporter } from "@/app/failure-feedback";
 import { useNotifications } from "@/app/notifications";
 import {
@@ -291,6 +292,7 @@ async function ensureInstalledServerIdsLoaded() {
 }
 
 export function McpMarketplacePanel(props: McpMarketplacePanelProps) {
+  const { t } = useTranslate();
   const { searchQuery, onSearchQueryChange } = props;
   const { notify } = useNotifications();
   const reportFailure = useFailureReporter();
@@ -319,7 +321,7 @@ export function McpMarketplacePanel(props: McpMarketplacePanelProps) {
   const showLoadingPlaceholder = isLoading && servers.length === 0;
   const installHint =
     appSettings.mcpInstallActivation === "apply-all-tools"
-      ? "安装后默认同步到所有已支持应用"
+      ? t("install.mcp.hint.applyAll")
       : "";
 
   const applyCachedServerConfig = useCallback((server: McpMarketplaceServer) => {
@@ -489,7 +491,7 @@ export function McpMarketplacePanel(props: McpMarketplacePanelProps) {
         setServers([]);
         setPage(0);
         setHasMore(false);
-        const message = error instanceof Error ? error.message : "加载 MCP 市场失败，请稍后重试。";
+        const message = error instanceof Error ? error.message : t("install.mcp.error.loadMarketplace");
         setErrorMessage(message);
       } finally {
         if (active) {
@@ -551,11 +553,11 @@ export function McpMarketplacePanel(props: McpMarketplacePanelProps) {
       setPage(nextPage);
       setHasMore(isSearching ? nextServers.length >= MCP_MARKETPLACE_PAGE_SIZE : nextServers.length > 0);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "加载更多 MCP 失败，请稍后重试。";
+      const message = error instanceof Error ? error.message : t("install.mcp.error.loadMore");
       setErrorMessage(message);
       reportFailure(error, {
         operation: "load_more_mcp_marketplace_servers",
-        fallbackMessage: "加载更多 MCP 失败，请稍后重试。",
+        fallbackMessage: t("install.mcp.error.loadMore"),
         context: { page: nextPage, query: normalizedQuery },
       });
     } finally {
@@ -619,7 +621,7 @@ export function McpMarketplacePanel(props: McpMarketplacePanelProps) {
       );
       const nextInstalledServerIds = new Set(installedWorkspace.servers.map((item) => item.id));
       setInstalledServerIds(nextInstalledServerIds);
-      notify({ message: `MCP "${server.name}" 已安装，可到 MCP 页查看`, tone: "success" });
+      notify({ message: t("install.mcp.success.installed", { name: server.name }), tone: "success" });
 
       if (shouldRefreshTools) {
         void refreshMcpServerTools(installedServerId)
@@ -631,7 +633,7 @@ export function McpMarketplacePanel(props: McpMarketplacePanelProps) {
     } catch (error) {
       reportFailure(error, {
         operation: "install_mcp_server_from_marketplace",
-        fallbackMessage: "安装 MCP 失败，请稍后重试。",
+        fallbackMessage: t("install.mcp.error.installFailed"),
         context: { serverId: server.id, serverName: server.name },
       });
     } finally {
@@ -659,25 +661,25 @@ export function McpMarketplacePanel(props: McpMarketplacePanelProps) {
     <section className="panel-card market-panel mcp-market-panel">
       <div className="market-source-bar">
         <div className="panel-header">
-          <h2>安装源</h2>
+          <h2>{t("install.mcp.sources.title")}</h2>
           <p>{installHint}</p>
         </div>
         <label className="market-search-field">
-          <span className="sr-only">搜索 MCP</span>
+          <span className="sr-only">{t("install.mcp.searchAria")}</span>
           <div className="market-search-input-wrap">
             <input
               className="market-search-input"
               type="search"
               value={searchQuery}
-              placeholder="搜索 MCP（支持全部安装源）"
+              placeholder={t("install.mcp.searchPlaceholder")}
               onChange={(event) => onSearchQueryChange(event.target.value)}
             />
             {isLoading ? (
-              <span className="loading-spinner market-search-spinner" aria-label="正在搜索" />
+              <span className="loading-spinner market-search-spinner" aria-label={t("install.mcp.searching")} />
             ) : null}
           </div>
         </label>
-        <div className="source-tab-row" role="tablist" aria-label="安装源">
+        <div className="source-tab-row" role="tablist" aria-label={t("install.mcp.sourcesAria")}>
           <button className="source-tab is-selected" type="button" role="tab" aria-selected="true">
             {MCP_MARKETPLACE_SOURCE_LABEL}
           </button>
@@ -687,8 +689,8 @@ export function McpMarketplacePanel(props: McpMarketplacePanelProps) {
       <div className="install-grid">
         {showLoadingPlaceholder ? (
           <section className="placeholder-card">
-            <h3>正在搜索 MCP</h3>
-            <p>{normalizedQuery ? `正在从 ${MCP_MARKETPLACE_SOURCE_LABEL} 搜索 "${normalizedQuery}"...` : `正在加载 ${MCP_MARKETPLACE_SOURCE_LABEL} 真实服务列表。`}</p>
+            <h3>{t("install.mcp.loading.title")}</h3>
+            <p>{normalizedQuery ? t("install.mcp.loading.searchDescription", { source: MCP_MARKETPLACE_SOURCE_LABEL, query: normalizedQuery }) : t("install.mcp.loading.sourceDescription", { source: MCP_MARKETPLACE_SOURCE_LABEL })}</p>
           </section>
         ) : servers.length > 0 ? (
           <>
@@ -717,7 +719,7 @@ export function McpMarketplacePanel(props: McpMarketplacePanelProps) {
                             <a
                               className="install-card__link"
                               href={sourceUrl}
-                              aria-label={`打开 ${server.name} 仓库`}
+                              aria-label={t("install.mcp.openRepo", { name: server.name })}
                               onClick={(event) => {
                                 event.preventDefault();
                                 event.stopPropagation();
@@ -739,14 +741,14 @@ export function McpMarketplacePanel(props: McpMarketplacePanelProps) {
                           void handleInstall(server);
                         }}
                       >
-                        {isInstalled ? "已安装" : isInstalling ? "安装中..." : canInstall ? "安装" : "需补全"}
+                        {isInstalled ? t("install.market.installed") : isInstalling ? t("install.market.installing") : canInstall ? t("install.market.install") : t("install.mcp.installNeedsConfig")}
                       </button>
                     </div>
                     <div className="install-card__chips">
-                      <span className="install-card__chip">来源: {server.sourceSite.toLowerCase()}</span>
-                      <span className="install-card__chip">作者: {server.publisher}</span>
-                      <span className="install-card__chip">下载量: {server.popularityLabel}</span>
-                      <span className="install-card__chip">分类: {server.category}</span>
+                      <span className="install-card__chip">{t("install.market.source")}: {server.sourceSite.toLowerCase()}</span>
+                      <span className="install-card__chip">{t("install.market.author")}: {server.publisher}</span>
+                      <span className="install-card__chip">{t("install.mcp.downloads")}: {server.popularityLabel}</span>
+                      <span className="install-card__chip">{t("install.mcp.category")}: {server.category}</span>
                     </div>
                   </div>
                 </article>
@@ -756,21 +758,21 @@ export function McpMarketplacePanel(props: McpMarketplacePanelProps) {
               <p className="install-loading-text" role="status">{errorMessage}</p>
             ) : null}
             {isLoadingMore ? (
-              <p className="install-loading-text">加载中...</p>
+              <p className="install-loading-text">{t("install.market.loading.more")}</p>
             ) : null}
             {!hasMore ? (
-              <p className="install-loading-text">已加载全部 MCP</p>
+              <p className="install-loading-text">{t("install.mcp.allLoaded")}</p>
             ) : null}
           </>
         ) : (
           <section className="placeholder-card">
-            <h3>暂无可安装 MCP</h3>
+            <h3>{t("install.mcp.emptyTitle")}</h3>
             <p>
               {errorMessage
                 ? errorMessage
                 : normalizedQuery
-                  ? `没有在 ${MCP_MARKETPLACE_SOURCE_LABEL} 中找到 "${normalizedQuery}"。`
-                  : `${MCP_MARKETPLACE_SOURCE_LABEL} 暂时没有可展示的服务。`}
+                  ? t("install.mcp.emptySearch", { source: MCP_MARKETPLACE_SOURCE_LABEL, query: normalizedQuery })
+                  : t("install.mcp.emptySource", { source: MCP_MARKETPLACE_SOURCE_LABEL })}
             </p>
           </section>
         )}
@@ -797,6 +799,7 @@ type McpServerDetailModalProps = {
 
 function McpServerDetailModal(props: McpServerDetailModalProps) {
   const { server, onClose, onLoadServerConfig, onOpenSource } = props;
+  const { t } = useTranslate();
   const sourceUrl = resolveServerSourceUrl(server);
   const marketplaceUrl = resolveServerMarketplaceUrl(server);
   const [serverConfig, setServerConfig] = useState<Record<string, unknown> | null>(server.server ?? null);
@@ -807,12 +810,12 @@ function McpServerDetailModal(props: McpServerDetailModalProps) {
       return JSON.stringify(serverConfig, null, 2);
     }
     if (isConfigLoading) {
-      return "正在加载安装配置...";
+      return t("install.mcp.config.loading");
     }
     if (configErrorMessage) {
       return configErrorMessage;
     }
-    return "当前 MCP 暂未提供安装配置";
+    return t("install.mcp.config.unavailable");
   }, [configErrorMessage, isConfigLoading, serverConfig]);
 
   useEffect(() => {
@@ -849,7 +852,7 @@ function McpServerDetailModal(props: McpServerDetailModalProps) {
         if (!active) {
           return;
         }
-        const message = error instanceof Error ? error.message : "加载安装配置失败，请稍后重试。";
+        const message = error instanceof Error ? error.message : t("install.mcp.config.loadFailed");
         setConfigErrorMessage(message);
       })
       .finally(() => {
@@ -869,7 +872,7 @@ function McpServerDetailModal(props: McpServerDetailModalProps) {
         className="skill-detail-modal"
         role="dialog"
         aria-modal="true"
-        aria-label={`${server.name} 详情`}
+        aria-label={t("install.mcp.detail.aria", { name: server.name })}
         onClick={(event) => event.stopPropagation()}
       >
         <header className="skill-detail-modal__header">
@@ -888,7 +891,7 @@ function McpServerDetailModal(props: McpServerDetailModalProps) {
                 }}
               >
                 <ExternalLinkIcon />
-                查看商店
+                {t("install.mcp.detail.viewStore")}
               </a>
             ) : null}
             <a
@@ -900,25 +903,25 @@ function McpServerDetailModal(props: McpServerDetailModalProps) {
               }}
             >
               <ExternalLinkIcon />
-              打开仓库
+              {t("install.mcp.detail.openRepo")}
             </a>
-            <button className="skill-detail-modal__close" type="button" onClick={onClose} aria-label="关闭详情">
+            <button className="skill-detail-modal__close" type="button" onClick={onClose} aria-label={t("install.mcp.detail.close")}>
               ×
             </button>
           </div>
         </header>
         <div className="skill-detail-modal__meta">
-          <span className="install-card__chip">来源: {server.sourceSite.toLowerCase()}</span>
-          <span className="install-card__chip">作者: {server.publisher}</span>
-          <span className="install-card__chip">下载量: {server.popularityLabel}</span>
-          <span className="install-card__chip">分类: {server.category}</span>
+          <span className="install-card__chip">{t("install.market.source")}: {server.sourceSite.toLowerCase()}</span>
+          <span className="install-card__chip">{t("install.market.author")}: {server.publisher}</span>
+          <span className="install-card__chip">{t("install.mcp.downloads")}: {server.popularityLabel}</span>
+          <span className="install-card__chip">{t("install.mcp.category")}: {server.category}</span>
         </div>
         <article className="skill-detail-modal__content">
-          <h4>MCP 介绍</h4>
+          <h4>{t("install.mcp.detail.intro")}</h4>
           <p>{server.description}</p>
         </article>
         <article className="skill-detail-modal__config">
-          <h4>安装配置</h4>
+          <h4>{t("install.mcp.detail.config")}</h4>
           <pre className="mcp-market-config-preview">{serverJson}</pre>
         </article>
       </section>

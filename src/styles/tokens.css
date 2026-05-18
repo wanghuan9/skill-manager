@@ -5369,7 +5369,7 @@ button.settings-form-item:disabled {
   justify-content: flex-end;
   gap: 10px;
   width: fit-content;
-  min-width: 132px;
+  min-width: 0;
 }
 
 .settings-update-button {
@@ -5377,8 +5377,10 @@ button.settings-form-item:disabled {
   align-items: center;
   justify-content: center;
   gap: 6px;
-  width: 132px;
+  width: auto;
+  min-width: 168px;
   max-width: 100%;
+  white-space: nowrap;
 }
 
 .settings-update-button__icon {
@@ -5437,6 +5439,90 @@ button.settings-form-item:disabled {
   outline: none;
   border-color: #9fb9f9;
   box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.12);
+}
+
+.settings-language-picker {
+  position: relative;
+  width: 100%;
+}
+
+.settings-language-picker__trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  min-height: 38px;
+  border: 1px solid #dce4f0;
+  border-radius: 10px;
+  padding: 0 12px;
+  background: #f4f7fc;
+  color: #1f2937;
+  font-size: 0.82rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.settings-language-picker__trigger:focus-visible {
+  outline: none;
+  border-color: #9fb9f9;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.12);
+}
+
+.settings-language-picker__chevron {
+  flex: 0 0 auto;
+  color: #667085;
+  font-size: 0.8rem;
+}
+
+.settings-language-picker__menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  right: 0;
+  z-index: 20;
+  display: grid;
+  gap: 4px;
+  padding: 6px;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow: 0 16px 36px rgba(15, 23, 42, 0.16);
+  backdrop-filter: blur(14px);
+}
+
+.settings-language-picker__option {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 34px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #1f2937;
+  font-size: 0.82rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.settings-language-picker__option:hover {
+  background: rgba(59, 130, 246, 0.08);
+}
+
+.settings-language-picker__option.is-selected {
+  background: rgba(59, 130, 246, 0.12);
+  color: #1d4ed8;
+  font-weight: 500;
+}
+
+.settings-language-picker__check {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  color: currentColor;
 }
 
 .settings-form-item__value {

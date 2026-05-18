@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import type { DragDropEvent } from "@tauri-apps/api/webview";
 import { open } from "@tauri-apps/plugin-dialog";
+import { useTranslate } from "@/app/i18n";
 import { isTauriRuntime } from "@/app/is-tauri-runtime";
 import { useNotifications } from "@/app/notifications";
 import { useFailureReporter } from "@/app/failure-feedback";
@@ -42,6 +43,7 @@ function toggleSelection(current: string[], value: string) {
 
 export function LocalInstallPanel(props: LocalInstallPanelProps) {
   const { variant = "panel", onInstalled } = props;
+  const { t } = useTranslate();
   const {
     discoverLocalInstallSkills,
     installFromLocalPath,
@@ -79,7 +81,7 @@ export function LocalInstallPanel(props: LocalInstallPanelProps) {
   const handleDroppedPath = useCallback(
     (droppedPath: string) => {
       if (!droppedPath) {
-        notify({ message: "未读取到拖拽文件路径，请使用选择按钮或手动输入路径。", tone: "error" });
+        notify({ message: t("install.local.error.dropPathMissing"), tone: "error" });
         return;
       }
 
@@ -87,7 +89,7 @@ export function LocalInstallPanel(props: LocalInstallPanelProps) {
       setCandidates([]);
       setSelectedPaths([]);
     },
-    [notify],
+    [notify, t],
   );
 
   useEffect(() => {
@@ -137,7 +139,7 @@ export function LocalInstallPanel(props: LocalInstallPanelProps) {
     const selected = await open({
       directory: true,
       multiple: false,
-      title: "选择 skill 文件夹",
+      title: t("install.local.dialog.chooseFolder"),
     });
     const selectedPath = firstSelectedPath(selected);
     if (selectedPath) {
@@ -151,7 +153,7 @@ export function LocalInstallPanel(props: LocalInstallPanelProps) {
     const selected = await open({
       directory: false,
       multiple: false,
-      title: "选择 skill 压缩包",
+      title: t("install.local.dialog.chooseArchive"),
       filters: [{ name: "Skill", extensions: ["zip", "skill"] }],
     });
     const selectedPath = firstSelectedPath(selected);
@@ -185,7 +187,7 @@ export function LocalInstallPanel(props: LocalInstallPanelProps) {
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!trimmedLocalPath) {
-      notify({ message: "请选择或输入本地 skill 路径。", tone: "error" });
+      notify({ message: t("install.local.error.pathRequired"), tone: "error" });
       return;
     }
 
@@ -199,7 +201,7 @@ export function LocalInstallPanel(props: LocalInstallPanelProps) {
       }
 
       await installFromLocalPath(trimmedLocalPath, skillName.trim() || undefined);
-      notify({ message: "本地技能已安装", tone: "success" });
+      notify({ message: t("install.local.success.installed"), tone: "success" });
       setLocalPath("");
       setSkillName("");
       setCandidates([]);
@@ -208,7 +210,7 @@ export function LocalInstallPanel(props: LocalInstallPanelProps) {
     } catch (error) {
       reportFailure(error, {
         operation: "discover_local_install_skills",
-        fallbackMessage: "未识别到 skill，请选择包含 SKILL.md 的目录或压缩包。",
+        fallbackMessage: t("install.local.error.invalidSkill"),
       });
     } finally {
       setIsDiscovering(false);
@@ -223,7 +225,7 @@ export function LocalInstallPanel(props: LocalInstallPanelProps) {
     setIsInstalling(true);
     try {
       await installSelectedLocalSkills(trimmedLocalPath, selectedPaths);
-      notify({ message: "选中本地技能已安装", tone: "success" });
+      notify({ message: t("install.local.success.selectedInstalled"), tone: "success" });
       setLocalPath("");
       setSkillName("");
       setCandidates([]);
@@ -232,7 +234,7 @@ export function LocalInstallPanel(props: LocalInstallPanelProps) {
     } catch (error) {
       reportFailure(error, {
         operation: "install_selected_local_skills",
-        fallbackMessage: "安装选中本地技能失败，请稍后重试。",
+        fallbackMessage: t("install.local.error.selectedInstallFailed"),
       });
     } finally {
       setIsInstalling(false);
@@ -241,7 +243,7 @@ export function LocalInstallPanel(props: LocalInstallPanelProps) {
 
   const selection = (
     <div className="repo-install__selection local-install-selection">
-      <p className="repo-install__notice">发现 {candidates.length} 个技能，请选择要安装的技能</p>
+      <p className="repo-install__notice">{t("install.local.found", { count: candidates.length })}</p>
       <div className="repo-install__list">
         {candidates.map((candidate) => {
           const selected = selectedPaths.includes(candidate.relativePath);
@@ -262,9 +264,9 @@ export function LocalInstallPanel(props: LocalInstallPanelProps) {
               <div className="repo-install__option-main">
                 <div className="repo-install__option-title">
                   <h3>{candidate.name}</h3>
-                  {installed ? <span className="repo-install__option-badge">已安装</span> : null}
+                  {installed ? <span className="repo-install__option-badge">{t("install.local.badgeInstalled")}</span> : null}
                 </div>
-                <p>{formatSkillDescription(candidate.description)}</p>
+                <p>{formatSkillDescription(candidate.description) || t("skills.description.empty")}</p>
                 <span>{candidate.relativePath || "."}</span>
               </div>
             </button>
@@ -280,7 +282,7 @@ export function LocalInstallPanel(props: LocalInstallPanelProps) {
             setSelectedPaths([]);
           }}
         >
-          返回
+          {t("install.repo.back")}
         </button>
         <button
           className="primary-button"
@@ -288,7 +290,7 @@ export function LocalInstallPanel(props: LocalInstallPanelProps) {
           disabled={selectedPaths.length === 0 || isInstalling || !hasSelectableCandidates}
           onClick={() => void handleInstallSelected()}
         >
-          {isInstalling ? "安装中..." : "安装选中技能"}
+          {isInstalling ? t("install.local.installing") : t("install.local.installSelected")}
         </button>
       </div>
     </div>
@@ -321,23 +323,23 @@ export function LocalInstallPanel(props: LocalInstallPanelProps) {
           </svg>
           {trimmedLocalPath ? (
             <strong className="local-install-dropzone__selected">
-              <span>已选择:</span>
+              <span>{t("install.local.selected")}</span>
               <span>{trimmedLocalPath}</span>
             </strong>
           ) : (
-            <strong>拖拽文件夹或压缩包到此处</strong>
+            <strong>{t("install.local.dropTitle")}</strong>
           )}
-          <span>支持 .zip/.skill 压缩包或技能文件夹</span>
+          <span>{t("install.local.dropHint")}</span>
         </div>
 
         <div className="local-install-form__section">
-          <span className="repo-form__label">或手动选择</span>
+          <span className="repo-form__label">{t("install.local.manualChoose")}</span>
           <div className="local-install-form__path-row">
             <input
-              aria-label="本地 skill 路径"
+              aria-label={t("install.local.pathAria")}
               type="text"
-              placeholder="选择文件夹或 .zip/.skill 文件"
-            value={localPath}
+              placeholder={t("install.local.pathPlaceholder")}
+              value={localPath}
               onChange={(event) => {
                 setLocalPath(event.target.value);
                 setCandidates([]);
@@ -347,8 +349,8 @@ export function LocalInstallPanel(props: LocalInstallPanelProps) {
             <button
               className="secondary-button local-install-form__icon-button"
               type="button"
-              aria-label="选择文件夹"
-              title="选择文件夹"
+              aria-label={t("install.local.chooseFolderAria")}
+              title={t("install.local.chooseFolderAria")}
               onClick={() => void chooseDirectory()}
             >
               <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -364,8 +366,8 @@ export function LocalInstallPanel(props: LocalInstallPanelProps) {
             <button
               className="secondary-button local-install-form__icon-button"
               type="button"
-              aria-label="选择压缩包"
-              title="选择压缩包"
+              aria-label={t("install.local.chooseArchiveAria")}
+              title={t("install.local.chooseArchiveAria")}
               onClick={() => void chooseArchive()}
             >
               <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -384,10 +386,10 @@ export function LocalInstallPanel(props: LocalInstallPanelProps) {
         </div>
 
         <label className="repo-form__field">
-          <span className="repo-form__label">技能名称（可选）</span>
+          <span className="repo-form__label">{t("install.local.skillName")}</span>
           <input
             type="text"
-            placeholder="留空则自动从 SKILL.md 或文件名推断"
+            placeholder={t("install.local.skillNamePlaceholder")}
             value={skillName}
             onChange={(event) => setSkillName(event.target.value)}
           />
@@ -399,7 +401,7 @@ export function LocalInstallPanel(props: LocalInstallPanelProps) {
             type="submit"
             disabled={!trimmedLocalPath || isDiscovering}
           >
-            {isDiscovering ? "识别中..." : "安装技能"}
+            {isDiscovering ? t("install.local.submitting") : t("install.local.submit")}
           </button>
         </div>
       </form>
@@ -412,8 +414,8 @@ export function LocalInstallPanel(props: LocalInstallPanelProps) {
   return (
     <section className="panel-card market-panel local-install-panel">
       <div className="panel-header">
-        <h2>本地安装</h2>
-        <p>从本机目录或 .zip/.skill 文件安装一个新的 skill。</p>
+        <h2>{t("install.tab.local")}</h2>
+        <p>{t("install.local.manualDescription")}</p>
       </div>
       {form}
     </section>

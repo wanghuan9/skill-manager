@@ -1,4 +1,5 @@
 import { useDeferredValue, useMemo, useState } from "react";
+import { useTranslate } from "@/app/i18n";
 import { waitForNextPaint } from "@/app/utils/wait-for-next-paint";
 import { useFailureReporter } from "@/app/failure-feedback";
 import { openExternalLink } from "@/features/skills/api/skill-client";
@@ -21,13 +22,6 @@ type SkillToolbarProps = {
   showGroupView: boolean;
   onShowGroupViewChange: (value: boolean) => void;
 };
-
-const skillStatusFilterOptions: Array<{ value: SkillStatusFilter; label: string }> = [
-  { value: "all", label: "全部" },
-  { value: "update-available", label: "可更新" },
-  { value: "pending-push", label: "待推送" },
-  { value: "disabled", label: "未启用" },
-];
 
 function GridIcon() {
   return (
@@ -130,6 +124,7 @@ function SkillGroupMonogram({ label }: { label: string }) {
 }
 
 export function SkillListToolbar(props: SkillToolbarProps) {
+  const { t } = useTranslate();
   const { query, statusFilter, onQueryChange, onStatusFilterChange, showGroupView, onShowGroupViewChange } = props;
   const { installedSkills, isLoading, refreshWorkspace, updateAllSkills } = useSkillWorkspace();
   const reportFailure = useFailureReporter();
@@ -150,7 +145,15 @@ export function SkillListToolbar(props: SkillToolbarProps) {
     () => installedSkills.filter((skill) => skill.collabStatus === "update-available").length,
     [installedSkills],
   );
-  const updateAllButtonLabel = updatableSkillCount > 0 ? `全部更新 (${updatableSkillCount})` : "全部更新";
+  const skillStatusFilterOptions: Array<{ value: SkillStatusFilter; label: string }> = [
+    { value: "all", label: t("skills.filter.all") },
+    { value: "update-available", label: t("skills.filter.updateAvailable") },
+    { value: "pending-push", label: t("skills.filter.pendingPush") },
+    { value: "disabled", label: t("skills.filter.disabled") },
+  ];
+  const updateAllButtonLabel = updatableSkillCount > 0
+    ? t("skills.updateAllWithCount", { count: updatableSkillCount })
+    : t("skills.updateAll");
 
   async function handleRefreshWorkspace() {
     if (isRefreshing) {
@@ -164,7 +167,7 @@ export function SkillListToolbar(props: SkillToolbarProps) {
     } catch (error) {
       reportFailure(error, {
         operation: "refresh_workspace",
-        fallbackMessage: "刷新失败",
+        fallbackMessage: t("skills.error.refresh"),
       });
     } finally {
       setIsRefreshing(false);
@@ -183,7 +186,7 @@ export function SkillListToolbar(props: SkillToolbarProps) {
     } catch (error) {
       reportFailure(error, {
         operation: "update_all_skills",
-        fallbackMessage: "批量更新失败",
+        fallbackMessage: t("skills.error.updateAll"),
       });
     } finally {
       setIsUpdatingAll(false);
@@ -193,10 +196,10 @@ export function SkillListToolbar(props: SkillToolbarProps) {
   return (
     <div className="skills-header-bar__tools">
       <label className="search-field search-field--header skill-search-field">
-        <span className="sr-only">搜索技能</span>
+        <span className="sr-only">{t("skills.searchAria")}</span>
         <input
           type="search"
-          placeholder="搜索技能名称、描述、来源..."
+          placeholder={t("skills.searchPlaceholder")}
           value={query}
           onChange={(event) => onQueryChange(event.target.value)}
         />
@@ -210,17 +213,17 @@ export function SkillListToolbar(props: SkillToolbarProps) {
         <span aria-hidden="true" className="skills-toolbar-button__icon">
           {showGroupView ? <GroupIcon /> : <GridIcon />}
         </span>
-        <span>{showGroupView ? "分组" : "平铺"}</span>
+        <span>{showGroupView ? t("skills.view.grouped") : t("skills.view.grid")}</span>
       </button>
       <label className="skill-status-filter">
-        <span className="sr-only">按状态筛选技能</span>
+        <span className="sr-only">{t("skills.filter.aria")}</span>
         <span className="skill-status-filter__icon" aria-hidden="true">
           <FilterIcon />
         </span>
         <select
           value={statusFilter}
           onChange={(event) => onStatusFilterChange(event.target.value as SkillStatusFilter)}
-          aria-label="按状态筛选技能"
+          aria-label={t("skills.filter.aria")}
         >
           {skillStatusFilterOptions.map((option) => (
             <option key={option.value} value={option.value}>
@@ -238,7 +241,7 @@ export function SkillListToolbar(props: SkillToolbarProps) {
         <span aria-hidden="true" className="skills-toolbar-button__icon">
           <RefreshIcon isSpinning={isRefreshing} />
         </span>
-        <span>刷新</span>
+        <span>{t("skills.refresh")}</span>
       </button>
       <button
         className={`secondary-button secondary-button--compact skills-toolbar-button skills-toolbar-button--update-all${isUpdatingAll ? " is-loading" : ""}`}
@@ -249,7 +252,7 @@ export function SkillListToolbar(props: SkillToolbarProps) {
         <span aria-hidden="true" className="skills-toolbar-button__icon">
           <UpdateAllIcon isSpinning={isUpdatingAll} />
         </span>
-        <span>{isUpdatingAll ? "更新中..." : updateAllButtonLabel}</span>
+        <span>{isUpdatingAll ? t("skills.updating") : updateAllButtonLabel}</span>
       </button>
     </div>
   );
@@ -265,6 +268,7 @@ type SkillListPageProps = {
 };
 
 export function SkillListPage(props: SkillListPageProps) {
+  const { t } = useTranslate();
   const {
     onImportFromLocal,
     onInstallFromGit,
@@ -281,7 +285,10 @@ export function SkillListPage(props: SkillListPageProps) {
     () => filterSkills(installedSkills, { query: deferredQuery, status: statusFilter }),
     [deferredQuery, installedSkills, statusFilter],
   );
-  const groupedSkills = useMemo(() => groupSkillsBySource(skills), [skills]);
+  const groupedSkills = useMemo(
+    () => groupSkillsBySource(skills, { localLabel: t("skills.source.local") }),
+    [skills, t],
+  );
 
   function isGroupCollapsed(groupId: string) {
     return collapsedGroups[groupId] ?? true;
@@ -307,8 +314,8 @@ export function SkillListPage(props: SkillListPageProps) {
       <div className="card-list">
         {isLoading ? (
           <div className="panel-card empty-state">
-            <h3>正在加载技能</h3>
-            <p>正在通过桌面端能力读取本地与仓库状态，请稍等。</p>
+            <h3>{t("skills.loadingTitle")}</h3>
+            <p>{t("skills.loadingDescription")}</p>
           </div>
         ) : groupedSkills.length > 0 ? (
           showGroupView ? (
@@ -334,7 +341,7 @@ export function SkillListPage(props: SkillListPageProps) {
                     }
                   }}
                   aria-expanded={!isCollapsed}
-                  aria-label={`${isCollapsed ? "展开" : "收起"}来源分组 ${group.label}`}
+                  aria-label={t(isCollapsed ? "skills.group.expand" : "skills.group.collapse", { label: group.label })}
                 >
                   <div className="skill-group-section__title">
                     <SkillGroupMonogram label={group.label} />
@@ -342,13 +349,13 @@ export function SkillListPage(props: SkillListPageProps) {
                       <div className="skill-group-section__name-row">
                         <h3>{group.label}</h3>
                         <span className="skill-group-section__badge" aria-hidden="true">
-                          分组
+                          {t("skills.group.badge")}
                         </span>
-                        <span className="skill-group-section__count">{group.skills.length} 个技能</span>
+                        <span className="skill-group-section__count">{t("skills.group.count", { count: group.skills.length })}</span>
                       </div>
                       <p className="skill-group-section__source">
                         <span>
-                          来源于：
+                          {t("skills.group.sourcePrefix")}
                           {isGroupSourceLinkable ? (
                             <a
                               href={groupSourceUrl}
@@ -368,8 +375,8 @@ export function SkillListPage(props: SkillListPageProps) {
                     </div>
                   </div>
                   <div className="skill-group-section__meta">
-                    {updateCount > 0 ? <span className="skill-group-section__state skill-group-section__state--update">可更新 {updateCount}</span> : null}
-                    {pendingPushCount > 0 ? <span className="skill-group-section__state skill-group-section__state--pending">待推送 {pendingPushCount}</span> : null}
+                    {updateCount > 0 ? <span className="skill-group-section__state skill-group-section__state--update">{t("skills.group.updateCount", { count: updateCount })}</span> : null}
+                    {pendingPushCount > 0 ? <span className="skill-group-section__state skill-group-section__state--pending">{t("skills.group.pendingCount", { count: pendingPushCount })}</span> : null}
                     <button
                       className="skill-group-section__toggle"
                       type="button"
@@ -378,7 +385,7 @@ export function SkillListPage(props: SkillListPageProps) {
                         toggleGroup(group.id);
                       }}
                       aria-expanded={!isCollapsed}
-                      aria-label={`${isCollapsed ? "展开" : "收起"}来源分组`}
+                      aria-label={t(isCollapsed ? "skills.group.expand" : "skills.group.collapse", { label: group.label })}
                     >
                       <span className={`skill-group-section__chevron${isCollapsed ? " is-collapsed" : ""}`}>
                         ⌄
@@ -415,24 +422,24 @@ export function SkillListPage(props: SkillListPageProps) {
           <div className="panel-card empty-state">
             {installedSkills.length === 0 ? (
               <>
-                <h3>还没有安装 Skill</h3>
-                <p>去商店安装推荐 Skill，或通过 Git 安装、本地导入添加已有 Skill。</p>
+                <h3>{t("skills.empty.noneTitle")}</h3>
+                <p>{t("skills.empty.noneDescription")}</p>
                 <div className="empty-state__actions">
                   <button className="primary-button" type="button" onClick={onInstallFromMarketplace}>
-                    去商店安装
+                    {t("skills.empty.market")}
                   </button>
                   <button className="secondary-button" type="button" onClick={onInstallFromGit}>
-                    Git 安装
+                    {t("skills.empty.git")}
                   </button>
                   <button className="secondary-button" type="button" onClick={onImportFromLocal}>
-                    本地导入
+                    {t("skills.empty.local")}
                   </button>
                 </div>
               </>
             ) : (
               <>
-                <h3>暂无匹配的技能</h3>
-                <p>调整搜索词或状态筛选后，这里会重新展示可操作的 skill。</p>
+                <h3>{t("skills.empty.noMatchTitle")}</h3>
+                <p>{t("skills.empty.noMatchDescription")}</p>
               </>
             )}
           </div>

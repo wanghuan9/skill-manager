@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { tx } from "@/app/i18n";
 import { isTauriRuntime } from "@/app/is-tauri-runtime";
 import {
   appSettingsFixture,
@@ -19,6 +20,7 @@ import {
   workspaceSnapshotFixture,
 } from "@/features/skills/state/skill-fixtures";
 import type {
+  AppLanguage,
   AppSettings,
   FailureFeedbackInput,
   FeedbackIssueDraft,
@@ -41,7 +43,17 @@ import type {
   ToolConfig,
   WorkspaceSnapshot,
 } from "@/features/skills/state/skill-store";
+import {
+  localizeGitAccountSummary,
+  localizeSkillStatusText,
+  localizeToolConfigs,
+} from "@/features/skills/utils/skill-localization";
 import { mergeSkillToolsWithInstalledTools } from "@/features/skills/utils/skill-tools";
+import {
+  getToolStatusLabel,
+  isToolEnabledStatus,
+  localizeToolStatusLabel,
+} from "@/features/skills/utils/tool-status";
 
 type InstallFromRepoInput = {
   repoUrl: string;
@@ -142,6 +154,10 @@ type UpdateAppSettingsInput = {
   settings: AppSettings;
 };
 
+type DetectedAppLanguage = {
+  language: AppLanguage;
+};
+
 type LegacySkillSummary = Partial<SkillSummary> & {
   lastSyncedAt?: string;
 };
@@ -229,7 +245,56 @@ async function invokeOrFallback<T>(command: string, args: Record<string, unknown
   return invoke<T>(command, args);
 }
 
+function getCurrentAppLanguage(): AppLanguage {
+  if (typeof window !== "undefined") {
+    const savedLanguage = window.localStorage.getItem("skilldock.settings.language");
+    if (savedLanguage === "zh-CN" || savedLanguage === "en") {
+      return savedLanguage;
+    }
+
+    const navigatorLanguages = [window.navigator.language, ...(window.navigator.languages ?? [])]
+      .filter(Boolean)
+      .map((language) => language.toLowerCase());
+    if (navigatorLanguages.some((language) => language.startsWith("zh"))) {
+      return "zh-CN";
+    }
+  }
+
+  return "zh-CN";
+}
+
+function inCurrentLanguage(chinese: string, english: string) {
+  return getCurrentAppLanguage() === "en" ? english : chinese;
+}
+
+function getCurrentTimestampLabel() {
+  return String(Date.now());
+}
+
+function normalizeToolConfigs(toolConfigs: ToolConfig[]): ToolConfig[] {
+  return localizeToolConfigs(toolConfigs, getCurrentAppLanguage());
+}
+
+function normalizeMcpWorkspaceSnapshot(workspace: McpWorkspaceSnapshot): McpWorkspaceSnapshot {
+  const language = getCurrentAppLanguage();
+  return {
+    ...workspace,
+    apps: workspace.apps.map((app) => ({
+      ...app,
+      statusLabel: localizeToolStatusLabel(app.statusLabel, language),
+    })),
+    servers: workspace.servers.map((server) => ({
+      ...server,
+      apps: server.apps.map((app) => ({
+        ...app,
+        statusLabel: localizeToolStatusLabel(app.statusLabel, language),
+      })),
+    })),
+  };
+}
+
 function normalizeSkillSummary(skill: LegacySkillSummary): SkillSummary {
+  const language = getCurrentAppLanguage();
   const normalizedUpdatedAt =
     skill.localUpdatedAt?.trim()
     || skill.remoteUpdatedAt?.trim()
@@ -245,7 +310,7 @@ function normalizeSkillSummary(skill: LegacySkillSummary): SkillSummary {
     localPath: skill.localPath ?? "",
     branch: skill.branch ?? "",
     collabStatus: skill.collabStatus ?? "clean",
-    statusText: skill.statusText ?? "",
+    statusText: localizeSkillStatusText(skill.statusText ?? "", language),
     remoteUpdatedAt: skill.remoteUpdatedAt ?? skill.lastSyncedAt ?? normalizedUpdatedAt,
     localUpdatedAt: skill.localUpdatedAt ?? skill.lastSyncedAt ?? normalizedUpdatedAt,
     lastCheckedAt: skill.lastCheckedAt ?? "",
@@ -253,7 +318,10 @@ function normalizeSkillSummary(skill: LegacySkillSummary): SkillSummary {
     lastEditor: skill.lastEditor ?? "",
     commitLabel: skill.commitLabel ?? "",
     gitLinked: skill.gitLinked ?? false,
-    tools: skill.tools ?? [],
+    tools: (skill.tools ?? []).map((tool) => ({
+      ...tool,
+      statusLabel: localizeToolStatusLabel(tool.statusLabel, language),
+    })),
   };
 }
 
@@ -266,6 +334,8 @@ export async function fetchWorkspaceSnapshot(): Promise<WorkspaceSnapshot> {
   return {
     ...snapshot,
     installedSkills: normalizeSkillSummaryList(snapshot.installedSkills),
+    toolConfigs: normalizeToolConfigs(snapshot.toolConfigs),
+    gitAccount: localizeGitAccountSummary(snapshot.gitAccount, getCurrentAppLanguage()) ?? snapshot.gitAccount,
   };
 }
 
@@ -334,7 +404,11 @@ export async function fetchMarketplaceSkillDescription(input: {
   skillName: string;
   fallbackDescription?: string;
 }): Promise<string> {
-  const fallback = input.fallbackDescription?.trim() || `来自 ${input.sourceSite} 的公开 skill（${input.skillName}）`;
+  const fallback = input.fallbackDescription?.trim() || tx(
+    getCurrentAppLanguage(),
+    "install.market.fallbackDescription",
+    { repository: input.sourceSite, name: input.skillName },
+  );
   return invokeOrFallback(
     "get_marketplace_skill_description",
     {
@@ -353,11 +427,13 @@ export async function fetchLocalSkillCandidates(): Promise<LocalSkillCandidate[]
 }
 
 export async function fetchToolConfigs(): Promise<ToolConfig[]> {
-  return invokeOrFallback("list_tool_configs", {}, toolConfigFixtures);
+  const toolConfigs = await invokeOrFallback("list_tool_configs", {}, toolConfigFixtures);
+  return normalizeToolConfigs(toolConfigs);
 }
 
 export async function fetchGitAccount(): Promise<GitAccountSummary> {
-  return invokeOrFallback("get_git_account_summary", {}, gitAccountFixture);
+  const gitAccount = await invokeOrFallback("get_git_account_summary", {}, gitAccountFixture);
+  return localizeGitAccountSummary(gitAccount, getCurrentAppLanguage()) ?? gitAccount;
 }
 
 export async function fetchAppSettings(): Promise<AppSettings> {
@@ -366,6 +442,15 @@ export async function fetchAppSettings(): Promise<AppSettings> {
 
 export async function updateAppSettings(input: UpdateAppSettingsInput): Promise<AppSettings> {
   return invokeOrFallback("update_app_settings", input, input.settings);
+}
+
+export async function detectPreferredAppLanguage(): Promise<AppLanguage> {
+  const result = await invokeOrFallback<DetectedAppLanguage>(
+    "detect_preferred_app_language",
+    {},
+    { language: "zh-CN" },
+  );
+  return result.language;
 }
 
 export async function installSkillFromMarket(skill: MarketplaceSkill): Promise<SkillSummary> {
@@ -377,9 +462,12 @@ export async function installSkillFromMarket(skill: MarketplaceSkill): Promise<S
     sourceType: skill.sourceType,
     sourceUrl: skill.sourceUrl,
     remoteUpdatedAt: skill.updatedAt,
-    localUpdatedAt: "刚刚",
+    localUpdatedAt: getCurrentTimestampLabel(),
     collabStatus: "clean",
-    statusText: "已安装到本地，可继续同步到工具。",
+    statusText: inCurrentLanguage(
+      "已安装到本地，可继续同步到工具。",
+      "Installed locally. You can continue syncing it to tools.",
+    ),
   });
   const installedSkill = await invokeOrFallback<LegacySkillSummary>("install_skill_from_market", { skill }, fallback);
   return normalizeSkillSummary(installedSkill);
@@ -420,7 +508,10 @@ export async function installSelectedRepoSkills(
       sourceUrl: input.repoUrl,
       localPath: `/Users/demo/.skilldock/skills/${repoName}/${candidate.relativePath}`,
       collabStatus: "clean" as const,
-      statusText: "仓库技能已导入，后续可继续同步到工具。",
+      statusText: inCurrentLanguage(
+        "仓库技能已导入，后续可继续同步到工具。",
+        "Repository skills imported. You can continue syncing them to tools.",
+      ),
     };
   });
 
@@ -438,7 +529,7 @@ export async function discoverLocalInstallSkills(
     {
       id: fallbackName,
       name: fallbackName,
-      description: "从本地路径识别的技能。",
+      description: inCurrentLanguage("从本地路径识别的技能。", "Skill discovered from a local path."),
       relativePath: "",
     },
   ];
@@ -465,16 +556,19 @@ export async function installSelectedLocalSkills(
     return {
       ...installedSkillFixtures[0],
       name: fallbackName,
-      description: "从本地路径安装的技能。",
-      sourceLabel: "本地安装",
+      description: inCurrentLanguage("从本地路径安装的技能。", "Skill installed from a local path."),
+      sourceLabel: inCurrentLanguage("本地安装", "Local Install"),
       sourceType: "local" as const,
       sourceUrl: input.localPath,
       localPath: `/Users/demo/.skilldock/skills/${fallbackName}`,
       collabStatus: "clean" as const,
-      statusText: "本地技能已安装，可继续同步到目标工具。",
+      statusText: inCurrentLanguage(
+        "本地技能已安装，可继续同步到目标工具。",
+        "Local skill installed. You can continue syncing it to target tools.",
+      ),
       gitLinked: false,
       remoteUpdatedAt: "",
-      localUpdatedAt: "刚刚",
+      localUpdatedAt: getCurrentTimestampLabel(),
     };
   });
 
@@ -495,20 +589,23 @@ export async function installLocalSkill(input: InstallLocalSkillInput): Promise<
   const fallback = {
     ...installedSkillFixtures[0],
     name: fallbackName,
-    description: "从本地路径安装的技能。",
-    sourceLabel: "本地安装",
+    description: inCurrentLanguage("从本地路径安装的技能。", "Skill installed from a local path."),
+    sourceLabel: inCurrentLanguage("本地安装", "Local Install"),
     sourceType: "local" as const,
     sourceUrl: input.localPath,
     localPath: `/Users/demo/.skilldock/skills/${fallbackName}`,
     collabStatus: "clean" as const,
-    statusText: "本地技能已安装，可继续同步到目标工具。",
+    statusText: inCurrentLanguage(
+      "本地技能已安装，可继续同步到目标工具。",
+      "Local skill installed. You can continue syncing it to target tools.",
+    ),
     gitLinked: false,
   };
 
   const installedSkill = await invokeOrFallback<LegacySkillSummary>("install_local_skill", input, {
     ...fallback,
     remoteUpdatedAt: "",
-    localUpdatedAt: "刚刚",
+    localUpdatedAt: getCurrentTimestampLabel(),
   });
   return normalizeSkillSummary(installedSkill);
 }
@@ -518,19 +615,22 @@ export async function importLocalSkill(localPath: string): Promise<SkillSummary>
   const fallback = {
     ...installedSkillFixtures[0],
     name: match?.name ?? "imported-skill",
-    description: match?.description ?? "从本地导入的技能。",
-    sourceLabel: "本地导入",
+    description: match?.description ?? inCurrentLanguage("从本地导入的技能。", "Skill imported from local storage."),
+    sourceLabel: inCurrentLanguage("本地导入", "Local Import"),
     sourceType: "local" as const,
     sourceUrl: match?.detectedFrom ?? localPath,
     localPath,
     collabStatus: "clean" as const,
-    statusText: "已纳入管理，建议同步到目标工具。",
+    statusText: inCurrentLanguage(
+      "已纳入管理，建议同步到目标工具。",
+      "Now managed here. Sync it to target tools when you're ready.",
+    ),
   };
 
   const importedSkill = await invokeOrFallback<LegacySkillSummary>("import_local_skill", { localPath }, {
     ...fallback,
     remoteUpdatedAt: "",
-    localUpdatedAt: "刚刚",
+    localUpdatedAt: getCurrentTimestampLabel(),
   });
   return normalizeSkillSummary(importedSkill);
 }
@@ -577,14 +677,19 @@ export async function openExternalLink(url: string): Promise<void> {
 }
 
 export async function recordFailureFeedback(input: FailureFeedbackInput): Promise<FeedbackIssueDraft> {
-  const failureKind = input.kind === "business" ? "业务异常" : "未知异常";
+  const failureKind = input.kind === "business"
+    ? inCurrentLanguage("业务异常", "Business Error")
+    : inCurrentLanguage("未知异常", "Unknown Error");
   const title = `[Bug] ${input.operation} ${failureKind}: ${input.message}`.slice(0, 120);
   const context = input.context ?? {};
   const body = [
-    "## 问题描述",
-    "请描述你刚才点击了什么、期望发生什么、实际发生了什么。",
+    inCurrentLanguage("## 问题描述", "## What Happened"),
+    inCurrentLanguage(
+      "请描述你刚才点击了什么、期望发生什么、实际发生了什么。",
+      "Describe what you clicked, what you expected, and what actually happened.",
+    ),
     "",
-    "## 本次失败日志（自动过滤）",
+    inCurrentLanguage("## 本次失败日志（自动过滤）", "## Failure Log (Auto-filtered)"),
     "```text",
     `kind: ${input.kind ?? "unknown"}`,
     `operation: ${input.operation}`,
@@ -595,11 +700,14 @@ export async function recordFailureFeedback(input: FailureFeedbackInput): Promis
     typeof context.serverCount === "number" ? `knownMcpServers: ${context.serverCount}` : "",
     "```",
     "",
-    "## 补充信息",
-    "以上是 SkillDock 自动提取的关键错误信息；完整诊断仅保存在用户本机日志文件中。",
+    inCurrentLanguage("## 补充信息", "## Extra Context"),
+    inCurrentLanguage(
+      "以上是 SkillDock 自动提取的关键错误信息；完整诊断仅保存在用户本机日志文件中。",
+      "These are the key error details extracted by SkillDock. Full diagnostics are only stored in the local log file.",
+    ),
   ].filter(Boolean).join("\n");
   const urlBody = body.length > 1400
-    ? `${body.slice(0, 1400)}\n\n...摘要过长，已截断。`
+    ? `${body.slice(0, 1400)}\n\n${inCurrentLanguage("...摘要过长，已截断。", "...Summary too long, truncated.")}`
     : body;
   const issueUrl = buildSafeIssueUrl(title, urlBody);
   const fallback: FeedbackIssueDraft = {
@@ -619,7 +727,7 @@ function buildSafeIssueUrl(title: string, body: string) {
     if (issueUrl.length <= 6000) {
       return issueUrl;
     }
-    nextBody = `${nextBody.slice(0, Math.max(400, nextBody.length - 200))}\n\n...自动诊断摘要过长，已截断。`;
+    nextBody = `${nextBody.slice(0, Math.max(400, nextBody.length - 200))}\n\n${inCurrentLanguage("...自动诊断摘要过长，已截断。", "...Auto-diagnosis summary too long, truncated.")}`;
   }
 
   return `https://github.com/wanghuan9/skill-manager/issues/new?title=${encodeURIComponent(title)}&body=${encodeURIComponent(nextBody)}`;
@@ -663,13 +771,16 @@ export async function updateSkill(
   const fallback = {
     ...fallbackSource,
     collabStatus: "clean" as const,
-    statusText: "已拉取远端最新内容，可继续同步到工具。",
-    lastCheckedAt: "刚刚检查",
+    statusText: inCurrentLanguage(
+      "已拉取远端最新内容，可继续同步到工具。",
+      "Pulled the latest remote changes. You can continue syncing to tools.",
+    ),
+    lastCheckedAt: getCurrentTimestampLabel(),
   };
 
   const updatedSkill = await invokeOrFallback<LegacySkillSummary>("update_skill", input, {
     ...fallback,
-    localUpdatedAt: "刚刚",
+    localUpdatedAt: getCurrentTimestampLabel(),
   });
   return normalizeSkillSummary(updatedSkill);
 }
@@ -723,9 +834,9 @@ export async function toggleSkillTool(input: ToggleSkillToolInput): Promise<Skil
       tool.name === input.toolName
         ? {
             ...tool,
-            statusLabel: ["已同步", "已启用", "需要重同步"].includes(tool.statusLabel)
-              ? "未启用"
-              : "已启用",
+            statusLabel: isToolEnabledStatus(tool.statusLabel)
+              ? getToolStatusLabel("disabled", getCurrentAppLanguage())
+              : getToolStatusLabel("enabled", getCurrentAppLanguage()),
           }
         : tool,
     ),
@@ -750,7 +861,7 @@ export async function setToolSkillStatuses(
         tool.name === input.toolName
           ? {
               ...tool,
-              statusLabel: input.enabled ? "已启用" : "未启用",
+              statusLabel: getToolStatusLabel(input.enabled ? "enabled" : "disabled", getCurrentAppLanguage()),
             }
           : tool
       ),
@@ -777,7 +888,7 @@ export async function setSkillAllToolStatuses(
     name: input.skillName,
     tools: mergedTools.map((tool) => ({
       ...tool,
-      statusLabel: input.enabled ? "已启用" : "未启用",
+      statusLabel: getToolStatusLabel(input.enabled ? "enabled" : "disabled", getCurrentAppLanguage()),
     })),
   };
 
@@ -790,7 +901,8 @@ export async function setSkillAllToolStatuses(
 }
 
 export async function fetchMcpWorkspace(): Promise<McpWorkspaceSnapshot> {
-  return invokeOrFallback("list_mcp_workspace", {}, mcpWorkspaceFixture);
+  const workspace = await invokeOrFallback("list_mcp_workspace", {}, mcpWorkspaceFixture);
+  return normalizeMcpWorkspaceSnapshot(workspace);
 }
 
 export async function fetchMcpMarketplaceServers(input: {
@@ -857,14 +969,15 @@ export async function installMcpServerFromMarketplace(
     tools: [],
     toolsDiscoveredAt: "",
     toolsDiscoveryError: "",
-    installedAt: "刚刚",
+    installedAt: getCurrentTimestampLabel(),
   };
   const fallback = {
     ...mcpWorkspaceFixture,
     servers: [installedServer, ...mcpWorkspaceFixture.servers.filter((item) => item.id !== installedServer.id)],
   };
 
-  return invokeOrFallback("install_mcp_server_from_marketplace", input, fallback);
+  const workspace = await invokeOrFallback("install_mcp_server_from_marketplace", input, fallback);
+  return normalizeMcpWorkspaceSnapshot(workspace);
 }
 
 export async function importMcpServersFromApps(): Promise<number> {
@@ -923,7 +1036,7 @@ export async function saveMcpServer(server: McpServerRecord): Promise<McpWorkspa
     name: normalizedName,
     serverType,
     commandLabel,
-    description: explicitDescription || `用于向已安装工具同步 ${normalizedName} MCP 配置。`,
+    description: explicitDescription || tx(getCurrentAppLanguage(), "mcp.description.default", { name: normalizedName }),
     sourceUrl: server.sourceUrl,
     serverJson: JSON.stringify(displayServer, null, 2),
     enabledAppCount: server.enabledAppIds.length,
@@ -943,7 +1056,8 @@ export async function saveMcpServer(server: McpServerRecord): Promise<McpWorkspa
     ...mcpWorkspaceFixture,
     servers: [nextServer, ...mcpWorkspaceFixture.servers.filter((item) => item.id !== server.id)],
   };
-  return invokeOrFallback("upsert_mcp_server", { server }, fallback);
+  const workspace = await invokeOrFallback("upsert_mcp_server", { server }, fallback);
+  return normalizeMcpWorkspaceSnapshot(workspace);
 }
 
 export async function deleteMcpServer(serverId: string): Promise<McpWorkspaceSnapshot> {
@@ -951,7 +1065,8 @@ export async function deleteMcpServer(serverId: string): Promise<McpWorkspaceSna
     ...mcpWorkspaceFixture,
     servers: mcpWorkspaceFixture.servers.filter((item) => item.id !== serverId),
   };
-  return invokeOrFallback("delete_mcp_server", { id: serverId }, fallback);
+  const workspace = await invokeOrFallback("delete_mcp_server", { id: serverId }, fallback);
+  return normalizeMcpWorkspaceSnapshot(workspace);
 }
 
 export async function toggleMcpServerApp(input: ToggleMcpAppInput): Promise<McpWorkspaceSnapshot> {
@@ -971,7 +1086,8 @@ export async function toggleMcpServerApp(input: ToggleMcpAppInput): Promise<McpW
         : server
     )),
   };
-  return invokeOrFallback("toggle_mcp_server_app", input, fallback);
+  const workspace = await invokeOrFallback("toggle_mcp_server_app", input, fallback);
+  return normalizeMcpWorkspaceSnapshot(workspace);
 }
 
 export async function toggleMcpServerTool(input: ToggleMcpToolInput): Promise<McpWorkspaceSnapshot> {
@@ -988,7 +1104,8 @@ export async function toggleMcpServerTool(input: ToggleMcpToolInput): Promise<Mc
         : server
     )),
   };
-  return invokeOrFallback("toggle_mcp_server_tool", input, fallback);
+  const workspace = await invokeOrFallback("toggle_mcp_server_tool", input, fallback);
+  return normalizeMcpWorkspaceSnapshot(workspace);
 }
 
 export async function refreshMcpServerTools(serverId: string): Promise<McpWorkspaceSnapshot> {
@@ -1025,7 +1142,8 @@ export async function refreshMcpServerTools(serverId: string): Promise<McpWorksp
         servers: [fallbackServer, ...mcpWorkspaceFixture.servers.filter((server) => server.id !== serverId)],
       }
     : mcpWorkspaceFixture;
-  return invokeOrFallback("refresh_mcp_server_tools", { serverId }, fallback);
+  const workspace = await invokeOrFallback("refresh_mcp_server_tools", { serverId }, fallback);
+  return normalizeMcpWorkspaceSnapshot(workspace);
 }
 
 function normalizeMcpServerId(name: string) {

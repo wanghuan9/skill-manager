@@ -5,6 +5,7 @@ import { McpRoute } from "@/app/routes/mcp";
 import { MarketRoute, type InstallCategory, type InstallTab } from "@/app/routes/market";
 import { SettingsRoute } from "@/app/routes/settings";
 import { AboutRoute } from "@/app/routes/about";
+import { AppI18nProvider, tx, useTranslate } from "@/app/i18n";
 import { NotificationProvider } from "@/app/notifications";
 import { useFailureReporter } from "@/app/failure-feedback";
 import { FailureTracker } from "@/app/failure-tracker";
@@ -22,22 +23,23 @@ import {
   getCachedMcpWorkspace,
   subscribeMcpWorkspaceChange,
 } from "@/features/skills/utils/mcp-workspace-cache";
+import { isToolInstalledStatus } from "@/features/skills/utils/tool-status";
 
 type RouteKey = "skills" | "tools" | "install" | "settings" | "about";
 type SkillsSectionKey = "skills" | "mcp";
 
 type RouteDefinition = {
   key: RouteKey;
-  label: string;
-  description: string;
+  labelKey: Parameters<typeof tx>[1];
+  descriptionKey: Parameters<typeof tx>[1];
 };
 
 const routes: RouteDefinition[] = [
-  { key: "skills", label: "Skills", description: "查看已安装 skill 的状态、更新和待处理情况" },
-  { key: "tools", label: "工具", description: "检测可打开的编辑器工具并设置默认打开方式" },
-  { key: "install", label: "安装", description: "通过安装源、Git 仓库或本地目录纳入新的 skill 和 MCP" },
-  { key: "settings", label: "设置", description: "配置默认打开工具、GitHub 账号和基础偏好" },
-  { key: "about", label: "关于", description: "查看版本信息、项目仓库和反馈入口" },
+  { key: "skills", labelKey: "app.nav.skills.label", descriptionKey: "app.nav.skills.description" },
+  { key: "tools", labelKey: "app.nav.tools.label", descriptionKey: "app.nav.tools.description" },
+  { key: "install", labelKey: "app.nav.install.label", descriptionKey: "app.nav.install.description" },
+  { key: "settings", labelKey: "app.nav.settings.label", descriptionKey: "app.nav.settings.description" },
+  { key: "about", labelKey: "app.nav.about.label", descriptionKey: "app.nav.about.description" },
 ];
 
 function isMacOSWindow() {
@@ -215,15 +217,17 @@ function SidebarToggleButton(props: {
   className?: string;
   style?: CSSProperties;
 }) {
+  const { t } = useTranslate();
   const { className, isSidebarCollapsed, onToggle, style } = props;
   const buttonClassName = `sidebar-toggle${className ? ` ${className}` : ""}`;
+  const label = isSidebarCollapsed ? t("app.sidebar.expand") : t("app.sidebar.collapse");
 
   return (
     <button
       className={buttonClassName}
       type="button"
-      aria-label={isSidebarCollapsed ? "展开侧边栏" : "收起侧边栏"}
-      title={isSidebarCollapsed ? "展开侧边栏" : "收起侧边栏"}
+      aria-label={label}
+      title={label}
       onClick={onToggle}
       style={style}
     >
@@ -244,7 +248,8 @@ function SidebarToggleButton(props: {
 }
 
 function AppContent() {
-  const { installedSkills, refreshWorkspace, toolConfigs } = useSkillWorkspace();
+  const { installedSkills, language, refreshWorkspace, toolConfigs } = useSkillWorkspace();
+  const { t } = useTranslate();
   const reportFailure = useFailureReporter();
   const initialSkillViewMode = readSkillViewModePreference();
   const isMacOS = isMacOSWindow();
@@ -266,18 +271,22 @@ function AppContent() {
   const activeDefinition = routes.find((route) => route.key === activeRoute) ?? routes[0];
   const updatableSkillCount = installedSkills.filter((skill) => skill.collabStatus === "update-available").length;
   const pendingPushSkillCount = installedSkills.filter((skill) => skill.collabStatus === "pending-push").length;
-  const installedToolCount = toolConfigs.filter((tool) => tool.statusLabel === "已安装").length;
+  const installedToolCount = toolConfigs.filter((tool) => isToolInstalledStatus(tool.statusLabel)).length;
   const mcpToolCount = toolConfigs.filter(
-    (tool) => tool.statusLabel === "已安装" && tool.supportsMcp && tool.mcpConfigPathRecognized,
+    (tool) => isToolInstalledStatus(tool.statusLabel) && tool.supportsMcp && tool.mcpConfigPathRecognized,
   ).length;
   const activeDescription =
     activeRoute === "skills" && activeSkillsSection === "skills"
-      ? `已安装的 ${installedSkills.length} 个技能，可更新 ${updatableSkillCount} 个，待推送 ${pendingPushSkillCount} 个`
+      ? tx(language, "app.header.skills.summary", {
+          installed: installedSkills.length,
+          updatable: updatableSkillCount,
+          pending: pendingPushSkillCount,
+        })
       : activeRoute === "skills"
-        ? `扫描、编辑并同步 ${mcpServerCount} 个 MCP，覆盖 ${mcpToolCount} 个工具配置`
+        ? tx(language, "app.header.mcp.summary", { count: mcpServerCount, tools: mcpToolCount })
       : activeRoute === "tools"
-        ? `已安装 ${installedToolCount} 个工具`
-      : activeDefinition.description;
+        ? tx(language, "app.header.tools.summary", { count: installedToolCount })
+      : tx(language, activeDefinition.descriptionKey);
 
   useEffect(() => subscribeMcpWorkspaceChange((snapshot) => {
     setMcpServerCount(snapshot?.servers.length ?? 0);
@@ -338,7 +347,7 @@ function AppContent() {
     } catch (error) {
       reportFailure(error, {
         operation: "refresh_workspace_from_app_shell",
-        fallbackMessage: "刷新失败",
+        fallbackMessage: t("app.header.refreshFailed"),
       });
     } finally {
       setIsToolsRefreshing(false);
@@ -432,7 +441,7 @@ function AppContent() {
                   <span className="nav-icon" aria-hidden="true">
                     <NavRouteIcon route={route.key} />
                   </span>
-                  <span className="nav-label">{route.label}</span>
+                  <span className="nav-label">{tx(language, route.labelKey)}</span>
                 </button>
                 {route.key === "skills" ? (
                   <button
@@ -462,7 +471,7 @@ function AppContent() {
           {activeRoute === "skills" ? (
             <div className="page-header--split">
               <div className="page-header__row">
-                <h1>{activeSkillsSection === "mcp" ? "MCP" : activeDefinition.label}</h1>
+                <h1>{activeSkillsSection === "mcp" ? "MCP" : tx(language, activeDefinition.labelKey)}</h1>
                 {activeSkillsSection === "skills" ? (
                   <SkillListToolbar
                     query={skillQuery}
@@ -481,7 +490,7 @@ function AppContent() {
           ) : activeRoute === "tools" ? (
             <div className="page-header--split">
               <div className="page-header__row">
-                <h1>{activeDefinition.label}</h1>
+                <h1>{tx(language, activeDefinition.labelKey)}</h1>
                 <button
                   className={`ghost-button tools-refresh-button${isToolsRefreshing ? " is-loading" : ""}`}
                   type="button"
@@ -520,7 +529,7 @@ function AppContent() {
                       />
                     </svg>
                   </span>
-                  <span>刷新</span>
+                  <span>{t("app.header.refresh")}</span>
                 </button>
               </div>
               <p>{activeDescription}</p>
@@ -528,14 +537,14 @@ function AppContent() {
           ) : activeRoute === "install" ? (
             <div className="page-header--split">
               <div className="page-header__row page-header__row--install">
-                <h1>{activeDefinition.label}</h1>
+                <h1>{tx(language, activeDefinition.labelKey)}</h1>
                 <div className="install-header-toolbar-slot" id="install-header-toolbar-slot" />
               </div>
               <p>{activeDescription}</p>
             </div>
           ) : (
             <div className="page-header--split">
-              <h1>{activeDefinition.label}</h1>
+              <h1>{tx(language, activeDefinition.labelKey)}</h1>
               <p>{activeDescription}</p>
             </div>
           )}
@@ -566,12 +575,14 @@ function AppContent() {
 export function App() {
   return (
     <SkillWorkspaceProvider>
-      <NotificationProvider>
-        <FailureTracker>
-          <AppUpdateAutoPrompt />
-          <AppContent />
-        </FailureTracker>
-      </NotificationProvider>
+      <AppI18nProvider>
+        <NotificationProvider>
+          <FailureTracker>
+            <AppUpdateAutoPrompt />
+            <AppContent />
+          </FailureTracker>
+        </NotificationProvider>
+      </AppI18nProvider>
     </SkillWorkspaceProvider>
   );
 }

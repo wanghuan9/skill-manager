@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useTranslate } from "@/app/i18n";
 import { fetchCurrentAppVersion } from "@/features/app-update/app-update-client";
 import { openExternalLink } from "@/features/skills/api/skill-client";
 
@@ -13,30 +14,6 @@ type AboutActionCard = {
   url: string;
   icon: "github" | "message" | "tag";
 };
-
-const aboutActionCards: AboutActionCard[] = [
-  {
-    title: "GitHub 仓库",
-    description: "查看项目主页、发布记录和后续开放计划。",
-    linkText: "wanghuan9/skill-manager",
-    url: APP_REPOSITORY_URL,
-    icon: "github",
-  },
-  {
-    title: "意见反馈",
-    description: "报告问题、提交建议或补充工具适配需求。",
-    linkText: "GitHub Issues",
-    url: APP_ISSUES_URL,
-    icon: "message",
-  },
-  {
-    title: "版本发布",
-    description: "查看最新安装包、更新说明和历史版本。",
-    linkText: "Releases",
-    url: APP_RELEASES_URL,
-    icon: "tag",
-  },
-];
 
 function AboutAppIcon() {
   return (
@@ -101,7 +78,31 @@ function AboutActionIcon({ icon }: { icon: AboutActionCard["icon"] }) {
 }
 
 export function AboutRoute() {
+  const { t } = useTranslate();
   const [currentAppVersion, setCurrentAppVersion] = useState("");
+  const aboutActionCards = useMemo<AboutActionCard[]>(() => [
+    {
+      title: t("about.repo.title"),
+      description: t("about.repo.description"),
+      linkText: "wanghuan9/skill-manager",
+      url: APP_REPOSITORY_URL,
+      icon: "github",
+    },
+    {
+      title: t("about.feedback.title"),
+      description: t("about.feedback.description"),
+      linkText: "GitHub Issues",
+      url: APP_ISSUES_URL,
+      icon: "message",
+    },
+    {
+      title: t("about.release.title"),
+      description: t("about.release.description"),
+      linkText: "Releases",
+      url: APP_RELEASES_URL,
+      icon: "tag",
+    },
+  ], [t]);
 
   useEffect(() => {
     let shouldIgnore = false;
@@ -114,14 +115,14 @@ export function AboutRoute() {
       })
       .catch(() => {
         if (!shouldIgnore) {
-          setCurrentAppVersion("未知");
+          setCurrentAppVersion(t("settings.about.versionUnknown"));
         }
       });
 
     return () => {
       shouldIgnore = true;
     };
-  }, []);
+  }, [t]);
 
   return (
     <div className="about-page">
@@ -129,15 +130,15 @@ export function AboutRoute() {
         <AboutAppIcon />
         <div className="about-hero__copy">
           <h2 id="about-title">SkillDock</h2>
-          <p>统一管理 Skills、MCP Servers、Git 更新和 Coding Agent 同步状态。</p>
+          <p>{t("about.summary")}</p>
         </div>
-        <div className="about-hero__meta" aria-label="应用信息">
-          <span>v{currentAppVersion || "读取中..."}</span>
-          <span>macOS Preview</span>
+        <div className="about-hero__meta" aria-label={t("about.meta")}>
+          <span>v{currentAppVersion || t("about.versionLoading")}</span>
+          <span>{t("about.preview")}</span>
         </div>
       </section>
 
-      <section className="about-action-grid" aria-label="项目链接">
+      <section className="about-action-grid" aria-label={t("about.links")}>
         {aboutActionCards.map((card) => (
           <a
             key={card.title}

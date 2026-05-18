@@ -1,7 +1,8 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { invoke } from "@tauri-apps/api/core";
 import { useState } from "react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import * as skillClient from "@/features/skills/api/skill-client";
+import { resetMcpImportSessionForTests } from "@/features/skills/api/skill-client";
 import {
   appSettingsFixture,
   gitAccountFixture,
@@ -19,32 +20,20 @@ import type {
   ToolConfig,
 } from "@/features/skills/state/skill-store";
 
-vi.mock("@/features/skills/api/skill-client", async () => {
-  const actual = await vi.importActual<typeof import("@/features/skills/api/skill-client")>(
-    "@/features/skills/api/skill-client",
-  );
-  return {
-    ...actual,
-    shouldUseFixtureData: vi.fn(() => false),
-    fetchStartupInstalledSkills: vi.fn(),
-    fetchLocalSkillCandidates: vi.fn(),
-    fetchToolConfigs: vi.fn(),
-    fetchGitAccount: vi.fn(),
-    fetchAppSettings: vi.fn(),
-    fetchGitStates: vi.fn(),
-    fetchMarketplaceSkillsByPage: vi.fn(),
-    updateAppSettings: vi.fn(),
-  };
-});
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke: vi.fn(),
+  isTauri: vi.fn(() => true),
+}));
 
-const mockedFetchStartupInstalledSkills = vi.mocked(skillClient.fetchStartupInstalledSkills);
-const mockedFetchLocalSkillCandidates = vi.mocked(skillClient.fetchLocalSkillCandidates);
-const mockedFetchToolConfigs = vi.mocked(skillClient.fetchToolConfigs);
-const mockedFetchGitAccount = vi.mocked(skillClient.fetchGitAccount);
-const mockedFetchAppSettings = vi.mocked(skillClient.fetchAppSettings);
-const mockedFetchGitStates = vi.mocked(skillClient.fetchGitStates);
-const mockedFetchMarketplaceSkillsByPage = vi.mocked(skillClient.fetchMarketplaceSkillsByPage);
-const mockedUpdateAppSettings = vi.mocked(skillClient.updateAppSettings);
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: vi.fn(() => Promise.resolve(() => undefined)),
+}));
+
+vi.mock("@/app/utils/wait-for-next-paint", () => ({
+  waitForNextPaint: vi.fn(() => Promise.resolve()),
+}));
+
+const mockedInvoke = vi.mocked(invoke);
 
 function createDeferred<T>() {
   let resolve!: (value: T) => void;
@@ -80,6 +69,19 @@ function DefaultOpenToolProbe() {
   const { defaultOpenToolId } = useSkillWorkspace();
 
   return <span data-testid="default-open-tool-id">{defaultOpenToolId}</span>;
+}
+
+function LanguageProbe() {
+  const { language, setLanguage } = useSkillWorkspace();
+
+  return (
+    <div>
+      <span data-testid="language-value">{language}</span>
+      <button type="button" onClick={() => void setLanguage("en")}>
+        切换语言
+      </button>
+    </div>
+  );
 }
 
 function MarketplaceProbe() {
@@ -121,16 +123,14 @@ function createMarketplaceSkill(name: string): MarketplaceSkill {
 }
 
 beforeEach(() => {
-  vi.useFakeTimers();
-  vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback: FrameRequestCallback) =>
-    window.setTimeout(() => callback(performance.now()), 16),
-  );
+  vi.useRealTimers();
   window.localStorage.clear();
+  resetMcpImportSessionForTests();
+  mockedInvoke.mockReset();
 });
 
 afterEach(() => {
   vi.restoreAllMocks();
-  vi.useRealTimers();
 });
 
 test("refresh resolves after startup skills without waiting for ancillary requests", async () => {
@@ -140,25 +140,37 @@ test("refresh resolves after startup skills without waiting for ancillary reques
   const pendingTools = createDeferred<ToolConfig[]>();
   const pendingAccount = createDeferred<GitAccountSummary>();
   const pendingSettings = createDeferred<AppSettings>();
+  let startupCallCount = 0;
+  let gitStateCallCount = 0;
+  let candidateCallCount = 0;
+  let toolCallCount = 0;
+  let accountCallCount = 0;
+  let settingsCallCount = 0;
 
-  mockedFetchStartupInstalledSkills
-    .mockResolvedValueOnce(initialSkills)
-    .mockResolvedValueOnce(refreshedSkills);
-  mockedFetchLocalSkillCandidates
-    .mockResolvedValueOnce(localSkillFixtures)
-    .mockReturnValueOnce(pendingCandidates.promise);
-  mockedFetchToolConfigs
-    .mockResolvedValueOnce(toolConfigFixtures)
-    .mockReturnValueOnce(pendingTools.promise);
-  mockedFetchGitAccount
-    .mockResolvedValueOnce(gitAccountFixture)
-    .mockReturnValueOnce(pendingAccount.promise);
-  mockedFetchAppSettings
-    .mockResolvedValueOnce(appSettingsFixture)
-    .mockReturnValueOnce(pendingSettings.promise);
-  mockedFetchGitStates
-    .mockResolvedValueOnce(initialSkills)
-    .mockResolvedValueOnce(refreshedSkills);
+  mockedInvoke.mockImplementation(async (command) => {
+    switch (command) {
+      case "list_startup_installed_skills":
+        startupCallCount += 1;
+        return startupCallCount === 1 ? initialSkills : refreshedSkills;
+      case "list_local_skill_candidates":
+        candidateCallCount += 1;
+        return candidateCallCount === 1 ? localSkillFixtures : pendingCandidates.promise;
+      case "list_tool_configs":
+        toolCallCount += 1;
+        return toolCallCount === 1 ? toolConfigFixtures : pendingTools.promise;
+      case "get_git_account_summary":
+        accountCallCount += 1;
+        return accountCallCount === 1 ? gitAccountFixture : pendingAccount.promise;
+      case "get_app_settings":
+        settingsCallCount += 1;
+        return settingsCallCount === 1 ? appSettingsFixture : pendingSettings.promise;
+      case "refresh_git_states":
+        gitStateCallCount += 1;
+        return gitStateCallCount === 1 ? initialSkills : refreshedSkills;
+      default:
+        throw new Error(`Unexpected command: ${command}`);
+    }
+  });
 
   render(
     <SkillWorkspaceProvider>
@@ -166,31 +178,27 @@ test("refresh resolves after startup skills without waiting for ancillary reques
     </SkillWorkspaceProvider>,
   );
 
-  await act(async () => {
-    vi.advanceTimersByTime(32);
-    await Promise.resolve();
+  await waitFor(() => {
+    expect(screen.getByTestId("loading-state").textContent).toBe("ready");
+    expect(screen.getByTestId("skill-name").textContent).toBe(initialSkills[0].name);
   });
-
-  expect(screen.getByTestId("loading-state").textContent).toBe("ready");
-  expect(screen.getByTestId("skill-name").textContent).toBe(initialSkills[0].name);
 
   await act(async () => {
     fireEvent.click(screen.getByRole("button", { name: "刷新工作区" }));
-    await Promise.resolve();
   });
 
-  expect(screen.getByTestId("refresh-state").textContent).toBe("done");
-  expect(screen.getByTestId("loading-state").textContent).toBe("ready");
-  expect(screen.getByTestId("skill-name").textContent).toBe(refreshedSkills[0].name);
+  await waitFor(() => {
+    expect(screen.getByTestId("refresh-state").textContent).toBe("done");
+    expect(screen.getByTestId("loading-state").textContent).toBe("ready");
+    expect(screen.getByTestId("skill-name").textContent).toBe(refreshedSkills[0].name);
+  });
 
   pendingCandidates.resolve(localSkillFixtures);
   pendingTools.resolve(toolConfigFixtures);
   pendingAccount.resolve(gitAccountFixture);
   pendingSettings.resolve(appSettingsFixture);
 
-  await act(async () => {
-    await Promise.resolve();
-  });
+  await act(async () => undefined);
 });
 
 test("does not overwrite saved default open tool while settings are still loading", async () => {
@@ -200,13 +208,23 @@ test("does not overwrite saved default open tool while settings are still loadin
   };
   const pendingSettings = createDeferred<AppSettings>();
 
-  mockedFetchStartupInstalledSkills.mockResolvedValue(installedSkillFixtures);
-  mockedFetchLocalSkillCandidates.mockResolvedValue(localSkillFixtures);
-  mockedFetchToolConfigs.mockResolvedValue(toolConfigFixtures);
-  mockedFetchGitAccount.mockResolvedValue(gitAccountFixture);
-  mockedFetchAppSettings.mockReturnValue(pendingSettings.promise);
-  mockedFetchGitStates.mockResolvedValue(installedSkillFixtures);
-  mockedUpdateAppSettings.mockImplementation(async ({ settings }) => settings);
+  mockedInvoke.mockImplementation(async (command) => {
+    switch (command) {
+      case "list_startup_installed_skills":
+      case "refresh_git_states":
+        return installedSkillFixtures;
+      case "list_local_skill_candidates":
+        return localSkillFixtures;
+      case "list_tool_configs":
+        return toolConfigFixtures;
+      case "get_git_account_summary":
+        return gitAccountFixture;
+      case "get_app_settings":
+        return pendingSettings.promise;
+      default:
+        throw new Error(`Unexpected command: ${command}`);
+    }
+  });
   window.localStorage.setItem(
     "skilldock.startupWorkspaceCache",
     JSON.stringify({
@@ -223,33 +241,44 @@ test("does not overwrite saved default open tool while settings are still loadin
     </SkillWorkspaceProvider>,
   );
 
-  await act(async () => {
-    vi.advanceTimersByTime(32);
-    await Promise.resolve();
+  await waitFor(() => {
+    expect(mockedInvoke).not.toHaveBeenCalledWith("update_app_settings", expect.anything(), expect.anything());
   });
 
-  expect(mockedUpdateAppSettings).not.toHaveBeenCalled();
-
-  pendingSettings.resolve(savedSettings);
-
   await act(async () => {
-    await Promise.resolve();
+    pendingSettings.resolve(savedSettings);
   });
 
-  expect(screen.getByTestId("default-open-tool-id").textContent).toBe("windsurf");
-  expect(mockedUpdateAppSettings).not.toHaveBeenCalled();
+  await waitFor(() => {
+    expect(screen.getByTestId("default-open-tool-id").textContent).toBe("windsurf");
+    expect(mockedInvoke).not.toHaveBeenCalledWith("update_app_settings", expect.anything(), expect.anything());
+  });
 });
 
 test("refreshes skillsmp marketplace after serving the initial cached page", async () => {
-  mockedFetchStartupInstalledSkills.mockResolvedValue(installedSkillFixtures);
-  mockedFetchLocalSkillCandidates.mockResolvedValue(localSkillFixtures);
-  mockedFetchToolConfigs.mockResolvedValue(toolConfigFixtures);
-  mockedFetchGitAccount.mockResolvedValue(gitAccountFixture);
-  mockedFetchAppSettings.mockResolvedValue(appSettingsFixture);
-  mockedFetchGitStates.mockResolvedValue(installedSkillFixtures);
-  mockedFetchMarketplaceSkillsByPage
-    .mockResolvedValueOnce([createMarketplaceSkill("cached-skill")])
-    .mockResolvedValueOnce([createMarketplaceSkill("fresh-skill")]);
+  const marketplaceCalls: Array<Record<string, unknown> | undefined> = [];
+  mockedInvoke.mockImplementation(async (command, args) => {
+    switch (command) {
+      case "list_startup_installed_skills":
+      case "refresh_git_states":
+        return installedSkillFixtures;
+      case "list_local_skill_candidates":
+        return localSkillFixtures;
+      case "list_tool_configs":
+        return toolConfigFixtures;
+      case "get_git_account_summary":
+        return gitAccountFixture;
+      case "get_app_settings":
+        return appSettingsFixture;
+      case "list_marketplace_skills":
+        marketplaceCalls.push(args as Record<string, unknown> | undefined);
+        return marketplaceCalls.length === 1
+          ? [createMarketplaceSkill("cached-skill")]
+          : [createMarketplaceSkill("fresh-skill")];
+      default:
+        throw new Error(`Unexpected command: ${command}`);
+    }
+  });
 
   render(
     <SkillWorkspaceProvider>
@@ -258,30 +287,63 @@ test("refreshes skillsmp marketplace after serving the initial cached page", asy
   );
 
   await act(async () => {
-    vi.advanceTimersByTime(32);
-    await Promise.resolve();
+    fireEvent.click(screen.getByRole("button", { name: "加载 skillsmp" }));
+  });
+
+  await waitFor(() => {
+    expect(screen.getByTestId("marketplace-load-state").textContent).toBe("done");
+    expect(marketplaceCalls).toHaveLength(2);
+    expect(marketplaceCalls[0]).toEqual({
+      sourceSite: "skillsmp",
+      page: 1,
+      limit: 18,
+      refresh: undefined,
+    });
+    expect(marketplaceCalls[1]).toEqual({
+      sourceSite: "skillsmp",
+      page: 1,
+      limit: 18,
+      refresh: true,
+    });
+    expect(screen.getByTestId("marketplace-skill-names").textContent).toBe("fresh-skill");
+  });
+});
+
+test("persists selected language into local storage", async () => {
+  mockedInvoke.mockImplementation(async (command, args) => {
+    switch (command) {
+      case "list_startup_installed_skills":
+      case "refresh_git_states":
+        return installedSkillFixtures;
+      case "list_local_skill_candidates":
+        return localSkillFixtures;
+      case "list_tool_configs":
+        return toolConfigFixtures;
+      case "get_git_account_summary":
+        return gitAccountFixture;
+      case "get_app_settings":
+        return appSettingsFixture;
+      case "update_app_settings":
+        return (args as { settings: AppSettings }).settings;
+      default:
+        throw new Error(`Unexpected command: ${command}`);
+    }
+  });
+
+  render(
+    <SkillWorkspaceProvider>
+      <LanguageProbe />
+    </SkillWorkspaceProvider>,
+  );
+
+  await waitFor(() => {
+    expect(screen.getByRole("button", { name: "切换语言" })).toBeInTheDocument();
   });
 
   await act(async () => {
-    fireEvent.click(screen.getByRole("button", { name: "加载 skillsmp" }));
-    await Promise.resolve();
-    await Promise.resolve();
-    await Promise.resolve();
+    fireEvent.click(screen.getByRole("button", { name: "切换语言" }));
   });
 
-  expect(screen.getByTestId("marketplace-load-state").textContent).toBe("done");
-  expect(mockedFetchMarketplaceSkillsByPage).toHaveBeenCalledTimes(2);
-  expect(mockedFetchMarketplaceSkillsByPage).toHaveBeenNthCalledWith(1, {
-    sourceSite: "skillsmp",
-    page: 1,
-    limit: 18,
-    refresh: undefined,
-  });
-  expect(mockedFetchMarketplaceSkillsByPage).toHaveBeenNthCalledWith(2, {
-    sourceSite: "skillsmp",
-    page: 1,
-    limit: 18,
-    refresh: true,
-  });
-  expect(screen.getByTestId("marketplace-skill-names").textContent).toBe("fresh-skill");
+  expect(screen.getByTestId("language-value").textContent).toBe("en");
+  expect(window.localStorage.getItem("skilldock.settings.language")).toBe("en");
 });

@@ -1,4 +1,6 @@
-import type { ToolConfig, ToolSurfaceType, ToolType } from "@/features/skills/state/skill-store";
+import { tx } from "@/app/i18n";
+import type { AppLanguage, ToolConfig, ToolSurfaceType, ToolType } from "@/features/skills/state/skill-store";
+import { isToolInstalledStatus } from "@/features/skills/utils/tool-status";
 
 export type OpenToolOption = {
   id: string;
@@ -15,12 +17,6 @@ export type OpenToolCard = OpenToolOption & {
   mcpConfigPathRecognized: boolean;
   surfaceTypes: ToolSurfaceType[];
   supportsDirectOpen: boolean;
-};
-
-export const FINDER_OPEN_TOOL_OPTION: OpenToolOption = {
-  id: "finder",
-  name: "访达",
-  primaryType: "desktop",
 };
 
 const TOOL_POPULARITY_RANK: Record<string, number> = {
@@ -56,19 +52,32 @@ const TOOL_POPULARITY_RANK: Record<string, number> = {
 };
 
 export const OPEN_ONLY_TOOL_IDS = new Set(["intellij"]);
+export const FINDER_OPEN_TOOL_ID = "finder";
 
-export const PRIMARY_TOOL_TYPE_LABELS: Record<ToolType, string> = {
-  editor: "编辑器",
-  cli: "CLI",
-  desktop: "桌面应用",
-};
+export function getFinderOpenToolOption(language: AppLanguage): OpenToolOption {
+  return {
+    id: FINDER_OPEN_TOOL_ID,
+    name: tx(language, "tools.finder"),
+    primaryType: "desktop",
+  };
+}
 
-export const TOOL_SURFACE_LABELS: Record<ToolSurfaceType, string> = {
-  editor: "编辑器",
-  cli: "CLI",
-  desktop: "桌面应用",
-  "ide-plugin": "IDE 集成",
-};
+export function getPrimaryToolTypeLabels(language: AppLanguage): Record<ToolType, string> {
+  return {
+    editor: tx(language, "tools.type.editor"),
+    cli: tx(language, "tools.type.cli"),
+    desktop: tx(language, "tools.type.desktop"),
+  };
+}
+
+export function getToolSurfaceLabels(language: AppLanguage): Record<ToolSurfaceType, string> {
+  return {
+    editor: tx(language, "tools.surface.editor"),
+    cli: tx(language, "tools.surface.cli"),
+    desktop: tx(language, "tools.surface.desktop"),
+    "ide-plugin": tx(language, "tools.surface.ide-plugin"),
+  };
+}
 
 function toOpenToolCard(tool: ToolConfig): OpenToolCard {
   return {
@@ -76,7 +85,7 @@ function toOpenToolCard(tool: ToolConfig): OpenToolCard {
     name: tool.name,
     primaryType: tool.primaryType,
     statusLabel: tool.statusLabel,
-    isInstalled: tool.statusLabel === "已安装",
+    isInstalled: isToolInstalledStatus(tool.statusLabel),
     skillsPath: tool.skillsPath,
     mcpConfigPath: tool.mcpConfigPath,
     supportsMcp: tool.supportsMcp,
@@ -96,18 +105,19 @@ export function buildInstalledToolCards(toolConfigs: ToolConfig[]): OpenToolCard
   return buildSupportedAiToolCards(toolConfigs).filter((tool) => tool.isInstalled);
 }
 
-export function buildOpenToolOptions(toolConfigs: ToolConfig[]): OpenToolOption[] {
+export function buildOpenToolOptions(toolConfigs: ToolConfig[], language: AppLanguage): OpenToolOption[] {
+  const finderOption = getFinderOpenToolOption(language);
   const installedEditorOptions = toolConfigs
     .map(toOpenToolCard)
     .filter(isDirectOpenEditorTool)
     .map(({ id, name, primaryType }) => ({ id, name, primaryType }));
 
-  return [...installedEditorOptions, FINDER_OPEN_TOOL_OPTION];
+  return [...installedEditorOptions, finderOption];
 }
 
 export function isDirectOpenEditorTool(tool: Pick<OpenToolCard, "id" | "isInstalled" | "primaryType" | "supportsDirectOpen">) {
   return (
-    tool.id !== FINDER_OPEN_TOOL_OPTION.id &&
+    tool.id !== FINDER_OPEN_TOOL_ID &&
     tool.isInstalled &&
     tool.primaryType === "editor" &&
     tool.supportsDirectOpen

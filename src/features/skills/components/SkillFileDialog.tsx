@@ -1,6 +1,7 @@
 import { useEffect, useId, useMemo, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { useTranslate } from "@/app/i18n";
 import { useSkillWorkspace } from "@/features/skills/state/skill-workspace";
 import type { SkillFileEntry, SkillSummary } from "@/features/skills/state/skill-store";
 
@@ -10,7 +11,6 @@ type SkillFileDialogProps = {
   onClose: () => void;
 };
 
-const DEFAULT_ERROR_MESSAGE = "读取 skill 文件失败，请稍后重试。";
 const MARKDOWN_FILE_PATTERN = /\.(md|markdown)$/i;
 const FRONTMATTER_PATTERN = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/;
 
@@ -86,6 +86,7 @@ function splitFrontmatter(content: string) {
 }
 
 export function SkillFileDialog({ skill, isOpen, onClose }: SkillFileDialogProps) {
+  const { t } = useTranslate();
   const { loadSkillFileBrowser, loadSkillFileContent, saveSkillFileContent } = useSkillWorkspace();
   const dialogTitleId = useId();
   const [entries, setEntries] = useState<SkillFileEntry[]>([]);
@@ -164,7 +165,7 @@ export function SkillFileDialog({ skill, isOpen, onClose }: SkillFileDialogProps
           return;
         }
 
-        setErrorMessage(error instanceof Error ? error.message : DEFAULT_ERROR_MESSAGE);
+        setErrorMessage(error instanceof Error ? error.message : t("skill.files.error.load"));
         setEntries([]);
         setSelectedPath("");
         setContent("");
@@ -181,7 +182,7 @@ export function SkillFileDialog({ skill, isOpen, onClose }: SkillFileDialogProps
     return () => {
       active = false;
     };
-  }, [isOpen, loadSkillFileBrowser, loadSkillFileContent, skill.name]);
+  }, [isOpen, loadSkillFileBrowser, loadSkillFileContent, skill.name, t]);
 
   useEffect(() => {
     if (!isOpen) {
@@ -223,7 +224,7 @@ export function SkillFileDialog({ skill, isOpen, onClose }: SkillFileDialogProps
       setContent(document.content);
       setHasDirtyChanges(false);
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : DEFAULT_ERROR_MESSAGE);
+      setErrorMessage(error instanceof Error ? error.message : t("skill.files.error.load"));
     } finally {
       setIsLoading(false);
     }
@@ -246,7 +247,7 @@ export function SkillFileDialog({ skill, isOpen, onClose }: SkillFileDialogProps
       setContent(document.content);
       setHasDirtyChanges(false);
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : "保存失败，请稍后重试。");
+      setErrorMessage(error instanceof Error ? error.message : t("skill.files.error.save"));
     } finally {
       setIsSaving(false);
     }
@@ -273,21 +274,21 @@ export function SkillFileDialog({ skill, isOpen, onClose }: SkillFileDialogProps
             <h3 id={dialogTitleId}>{skill.name}</h3>
           </div>
           <div className="skill-file-dialog__toolbar">
-            <div className="skill-file-dialog__actions">
-              <div className="skill-file-dialog__view-toggle" role="group" aria-label="文件视图切换">
+              <div className="skill-file-dialog__actions">
+              <div className="skill-file-dialog__view-toggle" role="group" aria-label={t("skill.files.viewMode")}>
                 <button
                   className={`secondary-button secondary-button--compact${viewMode === "preview" ? " is-selected" : ""}`}
                   type="button"
                   onClick={() => setViewMode("preview")}
                 >
-                  预览
+                  {t("skill.files.preview")}
                 </button>
                 <button
                   className={`secondary-button secondary-button--compact${viewMode === "edit" ? " is-selected" : ""}`}
                   type="button"
                   onClick={() => setViewMode("edit")}
                 >
-                  编辑
+                  {t("skill.files.edit")}
                 </button>
               </div>
               <button
@@ -297,10 +298,10 @@ export function SkillFileDialog({ skill, isOpen, onClose }: SkillFileDialogProps
                 disabled={!selectedPath || isSaving}
               >
                 <span aria-hidden="true">⌘</span>
-                <span>{isSaving ? "保存中..." : "保存"}</span>
+                <span>{isSaving ? t("skill.files.saving") : t("skill.files.save")}</span>
               </button>
             </div>
-            <button className="skill-file-dialog__close" type="button" onClick={onClose} aria-label="关闭">
+            <button className="skill-file-dialog__close" type="button" onClick={onClose} aria-label={t("skill.files.close")}>
               <span aria-hidden="true">×</span>
             </button>
           </div>
@@ -326,7 +327,7 @@ export function SkillFileDialog({ skill, isOpen, onClose }: SkillFileDialogProps
                     type="button"
                     onClick={() => handleToggleDirectory(entry.path)}
                     aria-expanded={!collapsedDirectories[entry.path]}
-                    aria-label={`${collapsedDirectories[entry.path] ? "展开" : "收起"} ${entry.name}`}
+                    aria-label={t(collapsedDirectories[entry.path] ? "skill.files.expand" : "skill.files.collapse", { name: entry.name })}
                   >
                     <span aria-hidden="true">
                       {directoryChildCounts.get(entry.path) ? (collapsedDirectories[entry.path] ? "›" : "⌄") : "•"}
@@ -352,11 +353,11 @@ export function SkillFileDialog({ skill, isOpen, onClose }: SkillFileDialogProps
           </aside>
           <section className="skill-file-dialog__editor">
             <div className="skill-file-dialog__editor-header">
-              <strong>{selectedPath || "暂无可编辑文件"}</strong>
-              {hasDirtyChanges ? <span className="skill-file-dialog__dirty">未保存</span> : null}
+              <strong>{selectedPath || t("skill.files.noEditableFile")}</strong>
+              {hasDirtyChanges ? <span className="skill-file-dialog__dirty">{t("skill.files.unsaved")}</span> : null}
             </div>
             {fileEntries.length === 0 ? (
-              <div className="skill-file-dialog__empty">当前 skill 没有可编辑的文本文件。</div>
+              <div className="skill-file-dialog__empty">{t("skill.files.empty")}</div>
             ) : viewMode === "edit" ? (
               <textarea
                 className="skill-file-dialog__textarea"
@@ -382,7 +383,7 @@ export function SkillFileDialog({ skill, isOpen, onClose }: SkillFileDialogProps
                         <ReactMarkdown remarkPlugins={[remarkGfm]}>{previewDocument.body}</ReactMarkdown>
                       </div>
                     ) : (
-                      <div className="skill-file-dialog__empty">当前 Markdown 没有可预览内容。</div>
+                      <div className="skill-file-dialog__empty">{t("skill.files.emptyMarkdown")}</div>
                     )}
                   </>
                 ) : (
@@ -390,7 +391,7 @@ export function SkillFileDialog({ skill, isOpen, onClose }: SkillFileDialogProps
                 )}
               </div>
             )}
-            {isLoading ? <p className="dialog-note">正在读取文件内容...</p> : null}
+            {isLoading ? <p className="dialog-note">{t("skill.files.loading")}</p> : null}
             {errorMessage ? <p className="dialog-error">{errorMessage}</p> : null}
           </section>
         </div>

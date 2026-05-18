@@ -20,6 +20,10 @@ const SKILL_INSTALL_ACTIVATION_APPLY_ALL: &str = "apply-all-tools";
 const SKILL_INSTALL_ACTIVATION_DISABLE_ALL: &str = "disable-all-tools";
 const MCP_INSTALL_ACTIVATION_APPLY_ALL: &str = "apply-all-tools";
 const MCP_INSTALL_ACTIVATION_DISABLE_ALL: &str = "disable-all-tools";
+const APP_LANGUAGE_ZH_CN: &str = "zh-CN";
+const APP_LANGUAGE_EN: &str = "en";
+const APP_LANGUAGE_SOURCE_AUTO: &str = "auto";
+const APP_LANGUAGE_SOURCE_USER: &str = "user";
 
 #[derive(Clone, Debug, Deserialize, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -30,6 +34,10 @@ struct SettingsPersistence {
     skill_install_activation: String,
     #[serde(default)]
     mcp_install_activation: String,
+    #[serde(default)]
+    language: String,
+    #[serde(default)]
+    language_source: String,
 }
 
 pub fn load_installed_skills(default_skills: &[SkillSummary]) -> Vec<SkillSummary> {
@@ -123,6 +131,8 @@ pub fn load_app_settings() -> AppSettings {
         .to_string(),
         mcp_install_activation: normalize_mcp_install_activation(&persisted.mcp_install_activation)
             .to_string(),
+        language: normalize_app_language(&persisted.language).to_string(),
+        language_source: normalize_app_language_source(&persisted.language_source).to_string(),
     }
 }
 
@@ -144,11 +154,15 @@ pub fn save_app_settings(input: AppSettings) -> Result<AppSettings, String> {
         .to_string(),
         mcp_install_activation: normalize_mcp_install_activation(&input.mcp_install_activation)
             .to_string(),
+        language: normalize_app_language(&input.language).to_string(),
+        language_source: normalize_app_language_source(&input.language_source).to_string(),
     };
     let persistence = SettingsPersistence {
         default_open_tool_id: normalized.default_open_tool_id.clone(),
         skill_install_activation: normalized.skill_install_activation.clone(),
         mcp_install_activation: normalized.mcp_install_activation.clone(),
+        language: normalized.language.clone(),
+        language_source: normalized.language_source.clone(),
     };
     let payload = serde_json::to_string_pretty(&persistence)
         .map_err(|error| format!("序列化设置失败: {error}"))?;
@@ -156,6 +170,20 @@ pub fn save_app_settings(input: AppSettings) -> Result<AppSettings, String> {
     fs::write(&settings_file, payload).map_err(|error| format!("写入设置文件失败: {error}"))?;
     remove_legacy_workspace_file(SETTINGS_FILE_NAME);
     Ok(normalized)
+}
+
+fn normalize_app_language(value: &str) -> &'static str {
+    match value.trim() {
+        APP_LANGUAGE_EN => APP_LANGUAGE_EN,
+        _ => APP_LANGUAGE_ZH_CN,
+    }
+}
+
+fn normalize_app_language_source(value: &str) -> &'static str {
+    match value.trim() {
+        APP_LANGUAGE_SOURCE_USER => APP_LANGUAGE_SOURCE_USER,
+        _ => APP_LANGUAGE_SOURCE_AUTO,
+    }
 }
 
 pub fn scan_local_skill_candidates(installed_skills: &[SkillSummary]) -> Vec<(String, String)> {

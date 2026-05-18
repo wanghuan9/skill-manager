@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from "react";
+import { useTranslate } from "@/app/i18n";
 import { waitForNextPaint } from "@/app/utils/wait-for-next-paint";
 import { useFailureReporter } from "@/app/failure-feedback";
 import type { SkillToolSyncStatus } from "@/features/skills/state/skill-store";
 import { useSkillWorkspace } from "@/features/skills/state/skill-workspace";
 import { resolveToolLogoUrl } from "@/features/skills/utils/tool-logo";
-import { isToolEnabledStatus } from "@/features/skills/utils/tool-status";
+import { getToolStatusLabel, isToolEnabledStatus } from "@/features/skills/utils/tool-status";
 
 type ToolSyncPanelProps = {
   skillName: string;
@@ -14,19 +15,19 @@ type ToolSyncPanelProps = {
 function patchToolStatuses(
   tools: SkillToolSyncStatus[],
   targetToolNames: Set<string>,
-  enabled: boolean,
+  nextStatusLabel: string,
 ) {
   return tools.map((tool) => (
     targetToolNames.has(tool.name)
-      ? { ...tool, statusLabel: enabled ? "已启用" : "未启用" }
+      ? { ...tool, statusLabel: nextStatusLabel }
       : tool
   ));
 }
 
-function patchAllToolStatuses(tools: SkillToolSyncStatus[], enabled: boolean) {
+function patchAllToolStatuses(tools: SkillToolSyncStatus[], nextStatusLabel: string) {
   return tools.map((tool) => ({
     ...tool,
-    statusLabel: enabled ? "已启用" : "未启用",
+    statusLabel: nextStatusLabel,
   }));
 }
 
@@ -42,6 +43,7 @@ function isMissingBulkCommandError(error: unknown) {
 }
 
 export function ToolSyncPanel({ skillName, tools }: ToolSyncPanelProps) {
+  const { language, t } = useTranslate();
   const { setSkillAllToolStatuses, setToolSkillStatuses, toggleSkillTool } = useSkillWorkspace();
   const reportFailure = useFailureReporter();
   const [isBulkUpdating, setIsBulkUpdating] = useState(false);
@@ -65,7 +67,13 @@ export function ToolSyncPanel({ skillName, tools }: ToolSyncPanelProps) {
     const targetTool = displayTools.find((tool) => tool.name === toolName);
     const previousEnabled = targetTool ? isToolEnabledStatus(targetTool.statusLabel) : false;
     const nextEnabled = !previousEnabled;
-    setDisplayTools((current) => patchToolStatuses(current, new Set([toolName]), nextEnabled));
+    setDisplayTools((current) =>
+      patchToolStatuses(
+        current,
+        new Set([toolName]),
+        getToolStatusLabel(nextEnabled ? "enabled" : "disabled", language),
+      )
+    );
     setPendingToolNames((current) => [...current, toolName]);
 
     try {
@@ -75,10 +83,16 @@ export function ToolSyncPanel({ skillName, tools }: ToolSyncPanelProps) {
         toolNames: displayTools.map((tool) => tool.name),
       });
     } catch (error) {
-      setDisplayTools((current) => patchToolStatuses(current, new Set([toolName]), previousEnabled));
-      reportFailure(error, {
+      setDisplayTools((current) =>
+        patchToolStatuses(
+          current,
+          new Set([toolName]),
+          getToolStatusLabel(previousEnabled ? "enabled" : "disabled", language),
+        )
+      );
+        reportFailure(error, {
         operation: "toggle_skill_tool",
-        fallbackMessage: "切换 Tool 启用状态失败",
+        fallbackMessage: t("skill.tools.error.toggle"),
         context: { skillName, toolName },
       });
     } finally {
@@ -117,9 +131,14 @@ export function ToolSyncPanel({ skillName, tools }: ToolSyncPanelProps) {
 
     if (failedToolNames.length > 0) {
       setDisplayTools(latestToolsRef.current);
-      reportFailure(new Error(`已${enabled ? "开启" : "关闭"} ${toolNames.length - failedToolNames.length} 个工具，${failedToolNames.length} 个失败：${failedToolNames.join("、")}`), {
+      reportFailure(new Error(t("skill.tools.bulkResult", {
+        action: t(enabled ? "skill.tools.action.enable" : "skill.tools.action.disable"),
+        success: toolNames.length - failedToolNames.length,
+        failed: failedToolNames.length,
+        names: failedToolNames.join("、"),
+      })), {
         operation: "sync_all_skill_tools",
-        fallbackMessage: "批量更新 Tool 启用状态失败",
+        fallbackMessage: t("skill.tools.error.toggle"),
         context: { skillName, enabled, failedToolNames },
       });
     }
@@ -132,7 +151,9 @@ export function ToolSyncPanel({ skillName, tools }: ToolSyncPanelProps) {
     }
 
     const previousTools = displayTools;
-    setDisplayTools((current) => patchAllToolStatuses(current, enabled));
+    setDisplayTools((current) =>
+      patchAllToolStatuses(current, getToolStatusLabel(enabled ? "enabled" : "disabled", language))
+    );
     setIsBulkUpdating(true);
     setBulkAction(enabled ? "enable" : "disable");
 
@@ -150,7 +171,7 @@ export function ToolSyncPanel({ skillName, tools }: ToolSyncPanelProps) {
   return (
     <section>
       <div className="skill-card__section-header">
-        <h4>启用到工具</h4>
+        <h4>{t("skill.tools.title")}</h4>
         <div className="tool-sync-panel__actions">
           <button
             className="secondary-button secondary-button--compact"
@@ -158,7 +179,7 @@ export function ToolSyncPanel({ skillName, tools }: ToolSyncPanelProps) {
             onClick={() => void handleToggleAllTools(true)}
             disabled={isBulkUpdating || pendingToolNames.length > 0 || disabledTools.length === 0}
           >
-            {bulkAction === "enable" ? "开启中..." : "全部开启"}
+            {bulkAction === "enable" ? t("skill.tools.enableAllLoading") : t("skill.tools.enableAll")}
           </button>
           <button
             className="secondary-button secondary-button--compact"
@@ -166,7 +187,7 @@ export function ToolSyncPanel({ skillName, tools }: ToolSyncPanelProps) {
             onClick={() => void handleToggleAllTools(false)}
             disabled={isBulkUpdating || pendingToolNames.length > 0 || enabledTools.length === 0}
           >
-            {bulkAction === "disable" ? "关闭中..." : "全部关闭"}
+            {bulkAction === "disable" ? t("skill.tools.disableAllLoading") : t("skill.tools.disableAll")}
           </button>
         </div>
       </div>
@@ -174,7 +195,7 @@ export function ToolSyncPanel({ skillName, tools }: ToolSyncPanelProps) {
         {displayTools.map((tool) => {
           const enabled = isToolEnabledStatus(tool.statusLabel);
           const logoUrl = resolveToolLogoUrl(tool.name);
-          const tooltipLabel = enabled ? "已启用，点击关闭" : "未启用，点击启用";
+          const tooltipLabel = enabled ? t("skill.tools.tooltip.enabled") : t("skill.tools.tooltip.disabled");
 
           return (
             <button
@@ -183,7 +204,7 @@ export function ToolSyncPanel({ skillName, tools }: ToolSyncPanelProps) {
               type="button"
               onClick={() => void handleToggleTool(tool.name)}
               aria-pressed={enabled}
-              aria-label={`${enabled ? "取消启用" : "启用"} ${tool.name}`}
+              aria-label={enabled ? t("skill.tools.aria.disable", { name: tool.name }) : t("skill.tools.aria.enable", { name: tool.name })}
               data-tooltip={tooltipLabel}
               disabled={isBulkUpdating || pendingToolNames.includes(tool.name)}
             >
@@ -195,7 +216,7 @@ export function ToolSyncPanel({ skillName, tools }: ToolSyncPanelProps) {
                 )}
               </span>
               <span className="tool-pill__name">{tool.name}</span>
-              <span className="sr-only">{enabled ? "已启用" : "未启用"}</span>
+              <span className="sr-only">{enabled ? t("settings.toggle.on") : t("settings.toggle.off")}</span>
             </button>
           );
         })}

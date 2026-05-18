@@ -6,6 +6,10 @@ export type SkillSourceGroup = {
   skills: SkillSummary[];
 };
 
+type GroupLabelOptions = {
+  localLabel?: string;
+};
+
 const GENERIC_REPOSITORY_NAMES = new Set([
   "skill",
   "skills",
@@ -65,9 +69,9 @@ function parseRepository(sourceUrl: string): ParsedRepository | null {
   return null;
 }
 
-function resolveFallbackGroupLabel(skill: SkillSummary) {
+function resolveFallbackGroupLabel(skill: SkillSummary, options: GroupLabelOptions) {
   if (isLocalSourceUrl(skill.sourceUrl)) {
-    return "本地";
+    return options.localLabel ?? "本地";
   }
 
   return skill.sourceLabel.replace(/\//g, "-");
@@ -81,13 +85,13 @@ function buildPreferredGroupLabel(parsedRepository: ParsedRepository) {
   return parsedRepository.repo;
 }
 
-function resolveInitialGroupLabel(skill: SkillSummary) {
+function resolveInitialGroupLabel(skill: SkillSummary, options: GroupLabelOptions) {
   if (skill.sourceType === "local") {
-    return "本地";
+    return options.localLabel ?? "本地";
   }
 
   if (isLocalSourceUrl(skill.sourceUrl)) {
-    return "本地";
+    return options.localLabel ?? "本地";
   }
 
   const parsedRepository = parseRepository(skill.sourceUrl);
@@ -95,16 +99,16 @@ function resolveInitialGroupLabel(skill: SkillSummary) {
     return buildPreferredGroupLabel(parsedRepository);
   }
 
-  return resolveFallbackGroupLabel(skill);
+  return resolveFallbackGroupLabel(skill, options);
 }
 
-export function groupSkillsBySource(skills: SkillSummary[]): SkillSourceGroup[] {
+export function groupSkillsBySource(skills: SkillSummary[], options: GroupLabelOptions = {}): SkillSourceGroup[] {
   const groupedItems = skills.map((skill) => {
     const parsedRepository = parseRepository(skill.sourceUrl);
-    const preferredLabel = resolveInitialGroupLabel(skill);
+    const preferredLabel = resolveInitialGroupLabel(skill, options);
     const fallbackLabel = parsedRepository
       ? formatOwnerRepoLabel(parsedRepository.owner, parsedRepository.repo)
-      : resolveFallbackGroupLabel(skill);
+      : resolveFallbackGroupLabel(skill, options);
 
     return {
       skill,

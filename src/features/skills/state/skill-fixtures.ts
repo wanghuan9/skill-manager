@@ -449,6 +449,8 @@ export const appSettingsFixture: AppSettings = {
   defaultOpenToolId: "",
   skillInstallActivation: "apply-all-tools",
   mcpInstallActivation: "disable-all-tools",
+  language: "zh-CN",
+  languageSource: "user",
 };
 
 export const pushTargetFixtures: Record<string, PushTargetSnapshot> = {

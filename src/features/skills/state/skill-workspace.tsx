@@ -9,6 +9,7 @@ import {
 } from "react";
 import { BusinessError } from "@/app/errors";
 import {
+  detectPreferredAppLanguage,
   fetchAppSettings,
   deleteSkill,
   discoverLocalInstallSkills,
@@ -46,6 +47,8 @@ import {
   sortMarketplaceSkillsByPopularity,
 } from "@/features/skills/utils/marketplace-skills";
 import type {
+  AppLanguage,
+  AppLanguageSource,
   AppSettings,
   GitAccountSummary,
   InstallActivationMode,
@@ -62,9 +65,15 @@ import type {
   ToolConfig,
 } from "@/features/skills/state/skill-store";
 import { buildOpenToolOptions } from "@/features/skills/utils/open-tools";
-import { isToolEnabledStatus } from "@/features/skills/utils/tool-status";
+import {
+  localizeGitAccountSummary,
+  localizeSkillSummaries,
+  localizeToolConfigs,
+} from "@/features/skills/utils/skill-localization";
+import { getToolStatusLabel, isToolEnabledStatus } from "@/features/skills/utils/tool-status";
 
 const STARTUP_WORKSPACE_CACHE_KEY = "skilldock.startupWorkspaceCache";
+const APP_LANGUAGE_STORAGE_KEY = "skilldock.settings.language";
 const FALLBACK_OPEN_TOOL_ID = "finder";
 const MARKETPLACE_PAGE_SIZE = 18;
 const MARKETPLACE_SOURCE_SITES: MarketplaceSourceSite[] = ["skills.sh", "skillsmp"];
@@ -134,6 +143,8 @@ type SkillWorkspaceContextValue = {
   defaultOpenToolId: string;
   setDefaultOpenToolId: (toolId: string) => Promise<void>;
   appSettings: AppSettings;
+  language: AppLanguage;
+  setLanguage: (language: AppLanguage) => Promise<void>;
   setSkillInstallActivation: (mode: InstallActivationMode) => Promise<void>;
   setMcpInstallActivation: (mode: InstallActivationMode) => Promise<void>;
   openSkillWithDefaultTool: (skillName: string) => Promise<void>;
@@ -164,7 +175,7 @@ function removeInstalledMarketplaceSkill(
   return skills.filter((skill) => skill.name !== installedSkill.name);
 }
 
-function patchSkillToolStatus(skill: SkillSummary, toolName: string, enabled: boolean) {
+function patchSkillToolStatus(skill: SkillSummary, toolName: string, nextStatusLabel: string) {
   let matchedTool = false;
   const tools = skill.tools.map((tool) => {
     if (tool.name !== toolName) {
@@ -174,7 +185,7 @@ function patchSkillToolStatus(skill: SkillSummary, toolName: string, enabled: bo
     matchedTool = true;
     return {
       ...tool,
-      statusLabel: enabled ? "已启用" : "未启用",
+      statusLabel: nextStatusLabel,
     };
   });
 
@@ -189,10 +200,10 @@ function patchSkillToolStatus(skill: SkillSummary, toolName: string, enabled: bo
   };
 }
 
-function patchAllSkillToolStatuses(skill: SkillSummary, enabled: boolean) {
+function patchAllSkillToolStatuses(skill: SkillSummary, nextStatusLabel: string) {
   const tools = skill.tools.map((tool) => ({
     ...tool,
-    statusLabel: enabled ? "已启用" : "未启用",
+    statusLabel: nextStatusLabel,
   }));
 
   return {
@@ -212,6 +223,23 @@ function mergeUpdatedSkillsPreservingOrder(
   const newSkills = updatedSkills.filter((skill) => !currentSkillNames.has(skill.name));
 
   return [...newSkills, ...mergedSkills];
+}
+
+function getMarketplaceSearchFailedMessage(language: AppLanguage) {
+  return language === "en" ? "Failed to search sources" : "搜索安装源失败";
+}
+
+function getPartialSkillUpdateFailedMessage(input: {
+  language: AppLanguage;
+  updated: number;
+  failed: number;
+  names: string;
+}) {
+  if (input.language === "en") {
+    return `Updated ${input.updated} skills, but ${input.failed} failed: ${input.names}`;
+  }
+
+  return `已更新 ${input.updated} 个 skill，${input.failed} 个更新失败：${input.names}`;
 }
 
 function removeImportedCandidate(
@@ -378,6 +406,8 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
           defaultOpenToolId: "",
           skillInstallActivation: "apply-all-tools",
           mcpInstallActivation: "disable-all-tools",
+          language: "zh-CN",
+          languageSource: "auto",
         },
   );
   const [isLoading, setIsLoading] = useState(!usesFixtureData && startupCache === null);
@@ -411,6 +441,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
     skillsmp: true,
   });
   const defaultOpenToolId = appSettings.defaultOpenToolId;
+  const language = appSettings.language;
 
   useEffect(() => {
     if (usesFixtureData || !gitAccount) {
@@ -427,6 +458,9 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
 
   async function persistAppSettings(nextSettings: AppSettings) {
     const savedSettings = await updateAppSettings({ settings: nextSettings });
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(APP_LANGUAGE_STORAGE_KEY, savedSettings.language);
+    }
     setAppSettings(savedSettings);
     return savedSettings;
   }
@@ -438,6 +472,51 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
     };
     await persistAppSettings(nextSettings);
   }
+
+  async function handleSetLanguage(nextLanguage: AppLanguage) {
+    await persistAppSettings({
+      ...appSettings,
+      language: nextLanguage,
+      languageSource: "user",
+    });
+  }
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(APP_LANGUAGE_STORAGE_KEY, language);
+    }
+    setInstalledSkills((current) => localizeSkillSummaries(current, language));
+    setToolConfigs((current) => localizeToolConfigs(current, language));
+    setGitAccount((current) => localizeGitAccountSummary(current, language));
+  }, [language]);
+
+  useEffect(() => {
+    if (usesFixtureData || appSettings.languageSource !== "auto" || appSettings.storagePath.trim().length === 0) {
+      return;
+    }
+
+    let active = true;
+
+    void detectPreferredAppLanguage()
+      .then(async (detectedLanguage) => {
+        if (!active || detectedLanguage === appSettings.language) {
+          return;
+        }
+
+        await persistAppSettings({
+          ...appSettings,
+          language: detectedLanguage,
+          languageSource: "auto",
+        });
+      })
+      .catch((error) => {
+        console.error("Failed to detect preferred app language:", error);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [appSettings.language, appSettings.languageSource, appSettings.storagePath, usesFixtureData]);
 
   function applyWorkspaceAncillaryData(input: {
     candidates?: LocalSkillCandidate[];
@@ -709,7 +788,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
         result.status === "fulfilled" ? result.value : []
       );
       if (fulfilledResults.length === 0 && searchResults.some((result) => result.status === "rejected")) {
-        throw new BusinessError("搜索安装源失败");
+        throw new BusinessError(getMarketplaceSearchFailedMessage(language));
       }
 
       const mergedSkills = dedupeMarketplaceSkills(fulfilledResults);
@@ -804,7 +883,12 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       .filter((item) => item.result.status === "rejected");
     if (failedUpdates.length > 0) {
       const failedSkillNames = failedUpdates.map((item) => item.skillName).join("、");
-      throw new BusinessError(`已更新 ${updatedSkills.length} 个 skill，${failedUpdates.length} 个更新失败：${failedSkillNames}`);
+      throw new BusinessError(getPartialSkillUpdateFailedMessage({
+        language,
+        updated: updatedSkills.length,
+        failed: failedUpdates.length,
+        names: failedSkillNames,
+      }));
     }
   }
 
@@ -823,7 +907,11 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       previousSkill = skill;
       const matchedTool = skill.tools.find((tool) => tool.name === input.toolName);
       const nextEnabled = matchedTool ? !isToolEnabledStatus(matchedTool.statusLabel) : true;
-      return patchSkillToolStatus(skill, input.toolName, nextEnabled);
+      return patchSkillToolStatus(
+        skill,
+        input.toolName,
+        getToolStatusLabel(nextEnabled ? "enabled" : "disabled", appSettings.language),
+      );
     }));
 
     try {
@@ -850,7 +938,11 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       previousSkills = current.filter((skill) => targetSkillNames.has(skill.name));
       return current.map((skill) => (
         targetSkillNames.has(skill.name)
-          ? patchSkillToolStatus(skill, input.toolName, input.enabled)
+          ? patchSkillToolStatus(
+              skill,
+              input.toolName,
+              getToolStatusLabel(input.enabled ? "enabled" : "disabled", appSettings.language),
+            )
           : skill
       ));
     });
@@ -880,7 +972,10 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       }
 
       previousSkill = skill;
-      return patchAllSkillToolStatuses(skill, input.enabled);
+      return patchAllSkillToolStatuses(
+        skill,
+        getToolStatusLabel(input.enabled ? "enabled" : "disabled", appSettings.language),
+      );
     }));
 
     try {
@@ -896,7 +991,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
   }
 
   async function handleOpenSkillWithDefaultTool(skillName: string) {
-    const availableTools = buildOpenToolOptions(toolConfigs);
+    const availableTools = buildOpenToolOptions(toolConfigs, appSettings.language);
     const availableToolIds = new Set(availableTools.map((tool) => tool.id));
     const resolvedOpenToolId = availableToolIds.has(defaultOpenToolId)
       ? defaultOpenToolId
@@ -971,6 +1066,8 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       defaultOpenToolId,
       setDefaultOpenToolId: handleSetDefaultOpenToolId,
       appSettings,
+      language,
+      setLanguage: handleSetLanguage,
       setSkillInstallActivation: handleSetSkillInstallActivation,
       setMcpInstallActivation: handleSetMcpInstallActivation,
       openSkillWithDefaultTool: handleOpenSkillWithDefaultTool,
@@ -978,6 +1075,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
     }),
     [
       appSettings,
+      language,
       defaultOpenToolId,
       gitAccount,
       hasMoreMarketplaceSkillsBySource,

@@ -149,12 +149,16 @@ export type GitAccountSummary = {
 };
 
 export type InstallActivationMode = "apply-all-tools" | "disable-all-tools";
+export type AppLanguage = "zh-CN" | "en";
+export type AppLanguageSource = "auto" | "user";
 
 export type AppSettings = {
   storagePath: string;
   defaultOpenToolId: string;
   skillInstallActivation: InstallActivationMode;
   mcpInstallActivation: InstallActivationMode;
+  language: AppLanguage;
+  languageSource: AppLanguageSource;
 };
 
 export type WorkspaceSnapshot = {

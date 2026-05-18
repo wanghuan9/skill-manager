@@ -23,7 +23,7 @@ test("renders MCP toolbar in the page header and hides the app matrix", async ()
   const toolbar = await screen.findByLabelText("MCP 工具栏");
   expect(toolbar).toBeInTheDocument();
   expect(toolbar.closest(".page-header__row")).not.toBeNull();
-  expect(await screen.findByText(/扫描、编辑并同步 \d+ 个 MCP，覆盖 \d+ 个工具配置/)).toBeInTheDocument();
+  expect(await screen.findByText(/扫描、编辑并同步 \d+ 个工具的 MCP 配置/)).toBeInTheDocument();
   expect(screen.queryByLabelText("MCP 目标软件")).not.toBeInTheDocument();
   expect(toolbar).not.toHaveTextContent("工具可同步");
   expect(screen.getByRole("searchbox", { name: "搜索 MCP" })).toBeInTheDocument();
@@ -434,7 +434,7 @@ test("shows MCP import scan and update counts separately", async () => {
 
     await waitFor(() => {
       expect(screen.getByText("已扫描 3")).toBeInTheDocument();
-      expect(screen.getByRole("button", { name: "正在导入 MCP，已扫描 3 项，已新增 0 项" })).toBeDisabled();
+      expect(screen.getByRole("button", { name: "正在导入 MCP，已扫描 3 项，已导入 0 项" })).toBeDisabled();
     });
   } finally {
     subscribeSpy.mockRestore();
@@ -726,7 +726,7 @@ test("shows supported MCP apps in enable-to-tool controls", async () => {
   expect(summaryButtons[0]).toHaveAccessibleName("展开 context7");
   expect(summaryButtons[1]).toHaveAccessibleName("展开 linear");
   expect(screen.getByText("已启用 2")).toBeInTheDocument();
-  expect(screen.getByText("2 tools")).toBeInTheDocument();
+  expect(screen.getAllByText("2 tools").length).toBeGreaterThan(0);
   expect(screen.queryByText("stdio")).not.toBeInTheDocument();
   expect(screen.queryByText("未获取 tools")).not.toBeInTheDocument();
 
@@ -759,8 +759,9 @@ test("shows supported MCP apps in enable-to-tool controls", async () => {
   expect(screen.getByText("启用到工具")).toBeInTheDocument();
   expect(screen.getAllByRole("button", { name: "Claude Code" })[0]).toHaveClass("tool-pill");
   expect(screen.getAllByRole("button", { name: "Codex" })[0]).toHaveClass("tool-pill");
+  expect(screen.queryByRole("button", { name: "Trae" })).not.toBeInTheDocument();
   expect(screen.getByText("Tools")).toBeInTheDocument();
-  expect(screen.getByText("2/2 已启用")).toBeInTheDocument();
+  expect(screen.getAllByText("2 tools").length).toBeGreaterThan(0);
   expect(screen.getByRole("button", { name: "收起 context7 Tools" })).toHaveAttribute("aria-expanded", "true");
   expect(screen.getByRole("button", { name: "全部开启" })).toBeDisabled();
   expect(screen.getByRole("button", { name: "全部关闭" })).toBeEnabled();
@@ -772,15 +773,15 @@ test("shows supported MCP apps in enable-to-tool controls", async () => {
   expect(screen.getByRole("button", { name: "收起 context7 Tools" })).toHaveAttribute("aria-expanded", "true");
   await userEvent.click(screen.getByRole("button", { name: "resolve-library-id" }));
   expect(screen.getByText("已启用 2")).toBeInTheDocument();
-  expect(screen.getByText("1/2 tools")).toBeInTheDocument();
+  expect(screen.getAllByText("1/2 tools").length).toBeGreaterThan(0);
   expect(screen.getByRole("button", { name: "resolve-library-id" })).toHaveAttribute("aria-pressed", "false");
   expect(screen.getByRole("button", { name: "全部开启" })).toBeEnabled();
   expect(screen.getByRole("button", { name: "全部关闭" })).toBeEnabled();
   await userEvent.click(screen.getByRole("button", { name: "全部开启" }));
-  expect(screen.getByText("2 tools")).toBeInTheDocument();
+  expect(screen.getAllByText("2 tools").length).toBeGreaterThan(0);
   expect(screen.getByRole("button", { name: "全部开启" })).toBeDisabled();
   expect(screen.getAllByText("Antigravity").length).toBeGreaterThan(0);
-  expect(screen.getByText("CodeBuddy")).toBeInTheDocument();
+  expect(screen.queryByText("CodeBuddy")).not.toBeInTheDocument();
 
   await userEvent.click(screen.getByRole("button", { name: "新增 MCP" }));
 
@@ -789,7 +790,6 @@ test("shows supported MCP apps in enable-to-tool controls", async () => {
   });
   expect((screen.getByLabelText("JSON 配置") as HTMLTextAreaElement).value).not.toContain("\"type\": \"stdio\"");
   expect(screen.getAllByText("Antigravity").length).toBeGreaterThan(0);
-  expect(screen.getByText("CodeBuddy")).toBeInTheDocument();
 });
 
 test("expanding one MCP server collapses the previously opened server", async () => {
@@ -810,7 +810,7 @@ test("expanding one MCP server collapses the previously opened server", async ()
   expect(screen.getByText("https://mcp.linear.app/sse")).toBeInTheDocument();
 });
 
-test("shows MCP-supported apps even when their config has not been initialized", async () => {
+test("hides uninstalled MCP target apps from the add dialog", async () => {
   window.localStorage.clear();
   const workspace = await skillClient.fetchMcpWorkspace();
   const workspaceWithUninitializedCursor = {
@@ -832,14 +832,14 @@ test("shows MCP-supported apps even when their config has not been initialized",
   await userEvent.click(screen.getByRole("button", { name: "MCP" }));
   await userEvent.click(await screen.findByRole("button", { name: "展开 context7" }));
 
-  expect(screen.getByRole("button", { name: "Cursor" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Cursor" })).not.toBeInTheDocument();
 
   await userEvent.click(screen.getByRole("button", { name: "新增 MCP" }));
 
   await waitFor(() => {
     expect(screen.getByRole("dialog", { name: "新增 MCP" })).toBeInTheDocument();
   });
-  expect(screen.getByText("Cursor（未安装）")).toBeInTheDocument();
+  expect(screen.queryByRole("checkbox", { name: /Cursor/ })).not.toBeInTheDocument();
 });
 
 test("creates MCP without asking the user for an ID", async () => {
@@ -924,7 +924,7 @@ test("tool toggles stay visually stable while updating", async () => {
   expect(screen.getByRole("button", { name: "resolve-library-id" })).toBeDisabled();
   expect(screen.getByRole("button", { name: "get-library-docs" })).toBeEnabled();
   expect(screen.queryByText("处理中")).not.toBeInTheDocument();
-  expect(screen.getByText("1/2 tools")).toBeInTheDocument();
+  expect(screen.getAllByText("1/2 tools").length).toBeGreaterThan(0);
 
   const finishToggle = resolveToggle;
   if (!finishToggle) {
@@ -1012,7 +1012,7 @@ test("bulk toggles MCP target apps from server details", async () => {
     expect(openCodeButton).toHaveAttribute("aria-pressed", "true");
     expect(openCodeButton).toBeEnabled();
   });
-  expect(screen.getByText("已启用 28")).toBeInTheDocument();
+  expect(screen.getByText("已启用 11")).toBeInTheDocument();
   expect(enableAllAppsButton).toBeDisabled();
 
   await userEvent.click(disableAllAppsButton);

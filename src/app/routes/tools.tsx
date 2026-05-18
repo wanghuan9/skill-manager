@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { useTranslate } from "@/app/i18n";
 import { ToolManageDialog } from "@/features/skills/components/ToolManageDialog";
 import { useFailureReporter } from "@/app/failure-feedback";
 import { openToolMcpConfig, openToolSkillsFolder } from "@/features/skills/api/skill-client";
@@ -6,10 +7,10 @@ import { useSkillWorkspace } from "@/features/skills/state/skill-workspace";
 import { getToolLogoUrl } from "@/features/skills/utils/tool-logo";
 import {
   buildInstalledToolCards,
-  PRIMARY_TOOL_TYPE_LABELS,
+  getPrimaryToolTypeLabels,
   resolvePreferredEditorIdForTextFile,
   sortToolCards,
-  TOOL_SURFACE_LABELS,
+  getToolSurfaceLabels,
 } from "@/features/skills/utils/open-tools";
 
 type ToolLogoProps = {
@@ -84,12 +85,15 @@ function EditorOpenIcon() {
 }
 
 export function ToolsRoute() {
+  const { language, t } = useTranslate();
   const { defaultOpenToolId, toolConfigs } = useSkillWorkspace();
   const reportFailure = useFailureReporter();
   const installedTools = useMemo(
     () => sortToolCards(buildInstalledToolCards(toolConfigs), defaultOpenToolId),
     [defaultOpenToolId, toolConfigs],
   );
+  const primaryToolTypeLabels = useMemo(() => getPrimaryToolTypeLabels(language), [language]);
+  const toolSurfaceLabels = useMemo(() => getToolSurfaceLabels(language), [language]);
   const [managingToolId, setManagingToolId] = useState("");
   const [openingToolId, setOpeningToolId] = useState("");
   const [openingMcpToolId, setOpeningMcpToolId] = useState("");
@@ -106,7 +110,7 @@ export function ToolsRoute() {
     } catch (error) {
       reportFailure(error, {
         operation: "open_tool_skills_folder",
-        fallbackMessage: "打开 Skills 文件夹失败",
+        fallbackMessage: t("tools.error.openSkillsFolder"),
       });
     } finally {
       setOpeningToolId("");
@@ -125,7 +129,7 @@ export function ToolsRoute() {
     } catch (error) {
       reportFailure(error, {
         operation: "open_tool_mcp_config",
-        fallbackMessage: "打开 MCP 配置失败",
+        fallbackMessage: t("tools.error.openMcpConfig"),
       });
     } finally {
       setOpeningMcpToolId("");
@@ -141,10 +145,10 @@ export function ToolsRoute() {
             const isOpeningFolder = openingToolId === tool.id;
             const isOpeningMcpConfig = openingMcpToolId === tool.id;
             const mcpConfigPath = !tool.supportsMcp
-              ? "不支持"
+              ? t("tools.mcpUnsupported")
               : !tool.mcpConfigPathRecognized
-                ? "支持，路径未建模"
-              : tool.mcpConfigPath || "未识别";
+                ? t("tools.mcpPathUnmodeled")
+                : tool.mcpConfigPath || t("tools.pathUnknown");
 
             return (
               <article key={tool.id} className="tool-card tool-card--simple">
@@ -155,9 +159,9 @@ export function ToolsRoute() {
                       <strong>{tool.name}</strong>
                       <div className="tool-card__status-badges">
                         <span className="status-badge tone-neutral">
-                          {PRIMARY_TOOL_TYPE_LABELS[tool.primaryType]}
+                          {primaryToolTypeLabels[tool.primaryType]}
                         </span>
-                        {isDefault ? <span className="status-badge tone-info">默认打开</span> : null}
+                        {isDefault ? <span className="status-badge tone-info">{t("tools.default")}</span> : null}
                       </div>
                     </div>
                   </div>
@@ -166,13 +170,13 @@ export function ToolsRoute() {
                     type="button"
                     onClick={() => setManagingToolId(tool.id)}
                   >
-                    管理
+                    {t("tools.manage")}
                   </button>
                 </div>
                 <div className="tool-card__simple-copy">
-                  <span>形态：{tool.surfaceTypes.map((surface) => TOOL_SURFACE_LABELS[surface]).join(" / ")}</span>
+                  <span>{t("tools.surface", { value: tool.surfaceTypes.map((surface) => toolSurfaceLabels[surface]).join(" / ") })}</span>
                   <div className="tool-card__path-row">
-                    <span className="tool-card__path-label">Skills 路径：</span>
+                    <span className="tool-card__path-label">{t("tools.skillsPath")}</span>
                     <span className="tool-card__path-value" title={tool.skillsPath}>
                       {tool.skillsPath}
                     </span>
@@ -180,16 +184,16 @@ export function ToolsRoute() {
                       className="tool-card__path-button"
                       type="button"
                       onClick={() => void handleOpenSkillsFolder(tool.id)}
-                      aria-label={`打开 ${tool.name} Skills 文件夹`}
-                      data-tooltip="在访达中打开"
+                      aria-label={t("tools.openSkillsFolder", { name: tool.name })}
+                      data-tooltip={t("tools.openInFinder")}
                       disabled={Boolean(openingToolId)}
                     >
                       <FolderOpenIcon />
-                      <span className="sr-only">{isOpeningFolder ? "正在打开" : "打开文件夹"}</span>
+                      <span className="sr-only">{isOpeningFolder ? t("tools.opening") : t("tools.openFolder")}</span>
                     </button>
                   </div>
                   <div className="tool-card__path-row">
-                    <span className="tool-card__path-label">MCP 配置：</span>
+                    <span className="tool-card__path-label">{t("tools.mcpConfig")}</span>
                     <span className="tool-card__path-value" title={tool.mcpConfigPath || undefined}>
                       {mcpConfigPath}
                     </span>
@@ -197,8 +201,8 @@ export function ToolsRoute() {
                       className="tool-card__path-button"
                       type="button"
                       onClick={() => void handleOpenMcpConfig(tool.id)}
-                      aria-label={`打开 ${tool.name} MCP 配置`}
-                      data-tooltip="用编辑器打开"
+                      aria-label={t("tools.openMcpConfig", { name: tool.name })}
+                      data-tooltip={t("tools.openInEditor")}
                       disabled={
                         Boolean(openingMcpToolId) ||
                         !tool.supportsMcp ||
@@ -207,7 +211,7 @@ export function ToolsRoute() {
                       }
                     >
                       <EditorOpenIcon />
-                      <span className="sr-only">{isOpeningMcpConfig ? "正在打开" : "打开配置"}</span>
+                      <span className="sr-only">{isOpeningMcpConfig ? t("tools.opening") : t("tools.openConfig")}</span>
                     </button>
                   </div>
                 </div>

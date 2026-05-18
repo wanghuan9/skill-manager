@@ -132,6 +132,8 @@ pub struct AppSettings {
     pub default_open_tool_id: String,
     pub skill_install_activation: String,
     pub mcp_install_activation: String,
+    pub language: String,
+    pub language_source: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

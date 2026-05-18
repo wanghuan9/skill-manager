@@ -1,4 +1,5 @@
 import { useEffect, type ReactNode } from "react";
+import { useTranslate } from "@/app/i18n";
 import { useFailureReporter } from "@/app/failure-feedback";
 
 type FailureTrackerProps = {
@@ -6,13 +7,14 @@ type FailureTrackerProps = {
 };
 
 export function FailureTracker({ children }: FailureTrackerProps) {
+  const { t } = useTranslate();
   const reportFailure = useFailureReporter();
 
   useEffect(() => {
     const handleError = (event: ErrorEvent) => {
-      reportFailure(event.error ?? new Error(event.message || "发生未知错误"), {
+      reportFailure(event.error ?? new Error(event.message || t("errors.unknown")), {
         operation: event.filename || "unhandled_error",
-        fallbackMessage: "发生未知错误",
+        fallbackMessage: t("errors.unknown"),
         context: {
           source: "window.error",
           filename: event.filename,
@@ -23,9 +25,9 @@ export function FailureTracker({ children }: FailureTrackerProps) {
     };
 
     const handleRejection = (event: PromiseRejectionEvent) => {
-      reportFailure(event.reason ?? new Error("发生未知错误"), {
+      reportFailure(event.reason ?? new Error(t("errors.unknown")), {
         operation: "unhandledrejection",
-        fallbackMessage: "发生未知错误",
+        fallbackMessage: t("errors.unknown"),
         context: {
           source: "window.unhandledrejection",
         },
@@ -39,7 +41,7 @@ export function FailureTracker({ children }: FailureTrackerProps) {
       window.removeEventListener("error", handleError);
       window.removeEventListener("unhandledrejection", handleRejection);
     };
-  }, [reportFailure]);
+  }, [reportFailure, t]);
 
   return <>{children}</>;
 }

@@ -11,6 +11,28 @@ vi.mock("@/features/app-update/app-update-client", () => ({
   checkForAppUpdate: vi.fn(),
 }));
 
+vi.mock("@/app/i18n", async () => {
+  const actual = await vi.importActual<typeof import("@/app/i18n")>("@/app/i18n");
+  return {
+    ...actual,
+    useTranslate: () => ({
+      language: "zh-CN",
+      t: (key: string) => {
+        const map: Record<string, string> = {
+          "updates.popover.aria": "软件更新",
+          "updates.installing": "正在下载并安装更新...",
+          "updates.installFailed": "安装更新失败",
+        };
+        return map[key] ?? key;
+      },
+    }),
+  };
+});
+
+vi.mock("@/app/failure-feedback", () => ({
+  useFailureReporter: () => vi.fn(),
+}));
+
 afterEach(() => {
   vi.useRealTimers();
   vi.clearAllMocks();
