@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { useTranslate } from "@/app/i18n";
 import { useFailureReporter } from "@/app/failure-feedback";
@@ -85,91 +85,6 @@ type SettingsFormItem = {
   onActivate?: () => void | Promise<void>;
 };
 
-type LanguageOption = {
-  value: "zh-CN" | "en";
-  label: string;
-};
-
-function LanguagePicker(props: {
-  value: "zh-CN" | "en";
-  options: LanguageOption[];
-  label: string;
-  onChange: (value: "zh-CN" | "en") => void | Promise<void>;
-}) {
-  const { label, onChange, options, value } = props;
-  const [isOpen, setIsOpen] = useState(false);
-  const rootRef = useRef<HTMLDivElement | null>(null);
-  const selectedOption = options.find((option) => option.value === value) ?? options[0];
-
-  useEffect(() => {
-    if (!isOpen) {
-      return;
-    }
-
-    function handlePointerDown(event: MouseEvent) {
-      if (!rootRef.current?.contains(event.target as Node)) {
-        setIsOpen(false);
-      }
-    }
-
-    function handleEscape(event: KeyboardEvent) {
-      if (event.key === "Escape") {
-        setIsOpen(false);
-      }
-    }
-
-    window.addEventListener("mousedown", handlePointerDown);
-    window.addEventListener("keydown", handleEscape);
-    return () => {
-      window.removeEventListener("mousedown", handlePointerDown);
-      window.removeEventListener("keydown", handleEscape);
-    };
-  }, [isOpen]);
-
-  return (
-    <div ref={rootRef} className={`settings-language-picker${isOpen ? " is-open" : ""}`}>
-      <button
-        className="settings-language-picker__trigger"
-        type="button"
-        aria-label={label}
-        aria-haspopup="listbox"
-        aria-expanded={isOpen}
-        onClick={() => setIsOpen((current) => !current)}
-      >
-        <span>{selectedOption?.label ?? ""}</span>
-        <span className="settings-language-picker__chevron" aria-hidden="true">
-          {isOpen ? "⌃" : "⌄"}
-        </span>
-      </button>
-      {isOpen ? (
-        <div className="settings-language-picker__menu" role="listbox" aria-label={label}>
-          {options.map((option) => {
-            const selected = option.value === value;
-            return (
-              <button
-                key={option.value}
-                className={`settings-language-picker__option${selected ? " is-selected" : ""}`}
-                type="button"
-                role="option"
-                aria-selected={selected}
-                onClick={() => {
-                  setIsOpen(false);
-                  void onChange(option.value);
-                }}
-              >
-                <span className="settings-language-picker__check" aria-hidden="true">
-                  {selected ? "✓" : ""}
-                </span>
-                <span>{option.label}</span>
-              </button>
-            );
-          })}
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
 export function SettingsRoute() {
   const { language, t } = useTranslate();
   const {
@@ -189,13 +104,6 @@ export function SettingsRoute() {
   const supportedToolCards = useMemo(
     () => sortToolCards(buildSupportedAiToolCards(toolConfigs), defaultOpenToolId),
     [defaultOpenToolId, toolConfigs],
-  );
-  const languageOptions = useMemo<LanguageOption[]>(
-    () => [
-      { value: "zh-CN", label: t("settings.language.option.zh-CN") },
-      { value: "en", label: t("settings.language.option.en") },
-    ],
-    [t],
   );
   const toolSurfaceLabels = useMemo(() => getToolSurfaceLabels(language), [language]);
   const selectedDefaultToolId = openToolOptions.some((tool) => tool.id === defaultOpenToolId)
@@ -361,12 +269,14 @@ export function SettingsRoute() {
       description: t("settings.language.description"),
       value: (
         <div className="settings-form-item__control">
-          <LanguagePicker
+          <select
+            aria-label={t("settings.language.label")}
             value={appSettings.language}
-            options={languageOptions}
-            label={t("settings.language.label")}
-            onChange={setLanguage}
-          />
+            onChange={(event) => void setLanguage(event.target.value as "zh-CN" | "en")}
+          >
+            <option value="zh-CN">{t("settings.language.option.zh-CN")}</option>
+            <option value="en">{t("settings.language.option.en")}</option>
+          </select>
         </div>
       ),
     },

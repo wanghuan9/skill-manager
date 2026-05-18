@@ -222,7 +222,13 @@ function isMcpAppSupported(app: McpTargetApp | McpAppStatus) {
 }
 
 function isMcpAppReady(app: McpTargetApp | McpAppStatus) {
-  return isMcpAppSupported(app);
+  return isMcpAppSupported(app) && isToolInstalledStatus(app.statusLabel);
+}
+
+function formatMcpToolCountLabel(enabled: number, total: number, t: Translate) {
+  return enabled === total
+    ? t("mcp.card.toolsCount", { count: total })
+    : t("mcp.card.toolsPartialCount", { enabled, total });
 }
 
 function formatMcpDescription(server: McpServerSummary, t: Translate) {
@@ -1131,7 +1137,7 @@ export function McpRoute(props: McpRouteProps = {}) {
           const totalToolCount = server.tools.length;
           const disabledToolCount = totalToolCount - enabledToolCount;
           const toolSummaryLabel = totalToolCount > 0
-            ? t("mcp.card.toolsEnabledCount", { enabled: enabledToolCount, total: totalToolCount })
+            ? formatMcpToolCountLabel(enabledToolCount, totalToolCount, t)
             : server.toolsDiscoveryError
               ? t("mcp.card.toolsFetchFailed")
               : t("mcp.card.toolsUnknown");
@@ -1345,7 +1351,7 @@ export function McpRoute(props: McpRouteProps = {}) {
                         <div className="mcp-server-card__tool-header">
                           <h4>Tools</h4>
                           {totalToolCount > 0 ? (
-                            <span className="mcp-server-card__tool-count">{t("mcp.card.toolsEnabledCount", { enabled: enabledToolCount, total: totalToolCount })}</span>
+                            <span className="mcp-server-card__tool-count">{formatMcpToolCountLabel(enabledToolCount, totalToolCount, t)}</span>
                           ) : null}
                           {totalToolCount > 0 ? (
                             <button

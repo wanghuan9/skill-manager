@@ -73,6 +73,7 @@ import {
 import { getToolStatusLabel, isToolEnabledStatus } from "@/features/skills/utils/tool-status";
 
 const STARTUP_WORKSPACE_CACHE_KEY = "skilldock.startupWorkspaceCache";
+const APP_LANGUAGE_STORAGE_KEY = "skilldock.settings.language";
 const FALLBACK_OPEN_TOOL_ID = "finder";
 const MARKETPLACE_PAGE_SIZE = 18;
 const MARKETPLACE_SOURCE_SITES: MarketplaceSourceSite[] = ["skills.sh", "skillsmp"];
@@ -457,6 +458,9 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
 
   async function persistAppSettings(nextSettings: AppSettings) {
     const savedSettings = await updateAppSettings({ settings: nextSettings });
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(APP_LANGUAGE_STORAGE_KEY, savedSettings.language);
+    }
     setAppSettings(savedSettings);
     return savedSettings;
   }
@@ -478,13 +482,16 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
   }
 
   useEffect(() => {
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(APP_LANGUAGE_STORAGE_KEY, language);
+    }
     setInstalledSkills((current) => localizeSkillSummaries(current, language));
     setToolConfigs((current) => localizeToolConfigs(current, language));
     setGitAccount((current) => localizeGitAccountSummary(current, language));
   }, [language]);
 
   useEffect(() => {
-    if (usesFixtureData || appSettings.languageSource !== "auto") {
+    if (usesFixtureData || appSettings.languageSource !== "auto" || appSettings.storagePath.trim().length === 0) {
       return;
     }
 
@@ -509,7 +516,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
     return () => {
       active = false;
     };
-  }, [appSettings, usesFixtureData]);
+  }, [appSettings.language, appSettings.languageSource, appSettings.storagePath, usesFixtureData]);
 
   function applyWorkspaceAncillaryData(input: {
     candidates?: LocalSkillCandidate[];

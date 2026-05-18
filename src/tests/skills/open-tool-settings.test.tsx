@@ -154,10 +154,9 @@ test("switches interface language to English from settings", async () => {
   render(<App />);
 
   await userEvent.click(screen.getByRole("button", { name: /设置/ }));
-  await userEvent.click(screen.getByLabelText("界面语言"));
-  await userEvent.click(screen.getByRole("option", { name: "English" }));
+  await userEvent.selectOptions(screen.getByLabelText("界面语言"), "en");
 
   expect(screen.getByRole("button", { name: "Settings" })).toBeInTheDocument();
   expect(screen.getByText("App Preferences")).toBeInTheDocument();
-  expect(screen.getByLabelText("Interface Language")).toHaveTextContent("English");
+  expect(screen.getByLabelText("Interface Language")).toHaveValue("en");
 });
