@@ -10,7 +10,6 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use regex::{Regex, RegexBuilder};
 use reqwest::Client;
 use serde::{Deserialize, Deserializer, Serialize};
-use serde_json::Value;
 use zip::ZipArchive;
 
 use crate::git_state::{
@@ -3679,8 +3678,9 @@ pub fn update_app_settings(settings: AppSettings) -> Result<AppSettings, String>
 
 #[tauri::command]
 pub async fn detect_preferred_app_language() -> Result<AppSettingsLanguageDetection, String> {
-    let client = marketplace_http_client()?;
-    detect_preferred_app_language_with_client(&client).await
+    Ok(AppSettingsLanguageDetection {
+        language: detect_preferred_app_language_from_system().to_string(),
+    })
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -3689,55 +3689,22 @@ pub struct AppSettingsLanguageDetection {
     pub language: String,
 }
 
-async fn detect_preferred_app_language_with_client(
-    client: &Client,
-) -> Result<AppSettingsLanguageDetection, String> {
-    let endpoints = ["https://ipwho.is/", "https://ipapi.co/json/"];
+fn detect_preferred_app_language_from_system() -> &'static str {
+    let locale_candidates = [
+        env::var("LC_ALL").ok(),
+        env::var("LC_MESSAGES").ok(),
+        env::var("LANG").ok(),
+    ];
 
-    for endpoint in endpoints {
-        let response = match client.get(endpoint).send().await {
-            Ok(value) => value,
-            Err(error) => {
-                eprintln!("language detection request failed for {endpoint}: {error}");
-                continue;
-            }
-        };
-        if !response.status().is_success() {
-            continue;
+    for locale in locale_candidates.into_iter().flatten() {
+        let normalized_locale = locale.trim().to_lowercase();
+        if normalized_locale.starts_with("zh") {
+            return "zh-CN";
         }
-
-        let payload = match response.json::<Value>().await {
-            Ok(value) => value,
-            Err(error) => {
-                eprintln!("language detection payload parse failed for {endpoint}: {error}");
-                continue;
-            }
-        };
-        if let Some(language) = language_from_geo_payload(&payload) {
-            return Ok(AppSettingsLanguageDetection {
-                language: language.to_string(),
-            });
-        }
+        return "en";
     }
 
-    Ok(AppSettingsLanguageDetection {
-        language: "zh-CN".to_string(),
-    })
-}
-
-fn language_from_geo_payload(payload: &Value) -> Option<&'static str> {
-    let country_code = payload
-        .get("country_code")
-        .and_then(Value::as_str)
-        .or_else(|| payload.get("country_code_iso3").and_then(Value::as_str))
-        .or_else(|| payload.get("countryCode").and_then(Value::as_str))?
-        .trim()
-        .to_uppercase();
-
-    match country_code.as_str() {
-        "CN" | "CHN" | "HK" | "HKG" | "MO" | "MAC" | "TW" | "TWN" => Some("zh-CN"),
-        _ => Some("en"),
-    }
+    "en"
 }
 
 #[tauri::command]
@@ -5084,6 +5051,7 @@ mod tests {
         build_local_candidates, build_repo_skill_source_url, cleanup_local_skill_install_on_error,
         collect_local_skill_dirs, collect_skills_manager_cached_items, collect_skillsmp_items,
         copy_local_skill_dir, import_local_skill, insert_trusted_project_path,
+        detect_preferred_app_language_from_system,
         install_selected_local_skill_dirs, intellij_trusted_locations_for_project,
         load_marketplace_cache_page, map_skillsmp_items_to_marketplace,
         normalize_installed_skill_source_url, open_target_path_for_skill, parse_repo_install_spec,
@@ -5384,6 +5352,39 @@ mod tests {
         assert_eq!(cached[0].source_site, "skillsmp");
 
         let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn preferred_app_language_follows_system_locale() {
+        let _guard = TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let original_lc_all = env::var_os("LC_ALL");
+        let original_lc_messages = env::var_os("LC_MESSAGES");
+        let original_lang = env::var_os("LANG");
+
+        unsafe {
+            env::set_var("LC_ALL", "zh_CN.UTF-8");
+            env::remove_var("LC_MESSAGES");
+            env::remove_var("LANG");
+        }
+        assert_eq!(detect_preferred_app_language_from_system(), "zh-CN");
+
+        unsafe {
+            env::set_var("LC_ALL", "en_US.UTF-8");
+        }
+        assert_eq!(detect_preferred_app_language_from_system(), "en");
+
+        unsafe {
+            env::remove_var("LC_ALL");
+            env::remove_var("LC_MESSAGES");
+            env::set_var("LANG", "fr_FR.UTF-8");
+        }
+        assert_eq!(detect_preferred_app_language_from_system(), "en");
+
+        restore_env_var("LC_ALL", original_lc_all);
+        restore_env_var("LC_MESSAGES", original_lc_messages);
+        restore_env_var("LANG", original_lang);
     }
 
     #[test]

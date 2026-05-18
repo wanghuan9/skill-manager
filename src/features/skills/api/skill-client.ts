@@ -258,9 +258,11 @@ function getCurrentAppLanguage(): AppLanguage {
     if (navigatorLanguages.some((language) => language.startsWith("zh"))) {
       return "zh-CN";
     }
+
+    return "en";
   }
 
-  return "zh-CN";
+  return "en";
 }
 
 function inCurrentLanguage(chinese: string, english: string) {
@@ -448,7 +450,7 @@ export async function detectPreferredAppLanguage(): Promise<AppLanguage> {
   const result = await invokeOrFallback<DetectedAppLanguage>(
     "detect_preferred_app_language",
     {},
-    { language: "zh-CN" },
+    { language: getCurrentAppLanguage() },
   );
   return result.language;
 }
