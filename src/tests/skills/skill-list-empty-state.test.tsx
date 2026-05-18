@@ -1,8 +1,9 @@
-import { render, screen } from "@testing-library/react";
+import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, expect, test, vi } from "vitest";
 import { SkillListPage } from "@/features/skills/components/SkillListPage";
 import { useSkillWorkspace } from "@/features/skills/state/skill-workspace";
+import { renderWithI18n } from "@/tests/helpers/render-with-i18n";
 
 vi.mock("@/features/skills/state/skill-workspace", () => ({
   useSkillWorkspace: vi.fn(),
@@ -12,6 +13,7 @@ const mockedUseSkillWorkspace = vi.mocked(useSkillWorkspace);
 
 beforeEach(() => {
   mockedUseSkillWorkspace.mockReturnValue({
+    language: "zh-CN",
     installedSkills: [],
     isLoading: false,
   } as unknown as ReturnType<typeof useSkillWorkspace>);
@@ -22,7 +24,7 @@ test("guides empty skill library to marketplace, git install, and local import",
   const onInstallFromGit = vi.fn();
   const onImportFromLocal = vi.fn();
 
-  render(
+  renderWithI18n(
     <SkillListPage
       onImportFromLocal={onImportFromLocal}
       onInstallFromGit={onInstallFromGit}

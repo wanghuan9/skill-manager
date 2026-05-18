@@ -1609,20 +1609,18 @@ code {
   border: 0;
   border-radius: 999px;
   background: transparent;
-  cursor: pointer;
+  pointer-events: none;
   transition:
     background-color 120ms ease,
     color 120ms ease;
 }
 
-.skill-group-section__toggle:hover {
+.skill-group-section__header:hover .skill-group-section__toggle {
   background: var(--group-accent-soft);
 }
 
 .skill-group-section__header:hover .skill-group-section__chevron,
-.skill-group-section__header:focus-visible .skill-group-section__chevron,
-.skill-group-section__toggle:hover .skill-group-section__chevron,
-.skill-group-section__toggle:focus-visible .skill-group-section__chevron {
+.skill-group-section__header:focus-visible .skill-group-section__chevron {
   color: var(--group-accent);
 }
 

@@ -377,20 +377,14 @@ export function SkillListPage(props: SkillListPageProps) {
                   <div className="skill-group-section__meta">
                     {updateCount > 0 ? <span className="skill-group-section__state skill-group-section__state--update">{t("skills.group.updateCount", { count: updateCount })}</span> : null}
                     {pendingPushCount > 0 ? <span className="skill-group-section__state skill-group-section__state--pending">{t("skills.group.pendingCount", { count: pendingPushCount })}</span> : null}
-                    <button
+                    <span
                       className="skill-group-section__toggle"
-                      type="button"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        toggleGroup(group.id);
-                      }}
-                      aria-expanded={!isCollapsed}
-                      aria-label={t(isCollapsed ? "skills.group.expand" : "skills.group.collapse", { label: group.label })}
+                      aria-hidden="true"
                     >
                       <span className={`skill-group-section__chevron${isCollapsed ? " is-collapsed" : ""}`}>
                         ⌄
                       </span>
-                    </button>
+                    </span>
                   </div>
                 </div>
                 {!isCollapsed ? (

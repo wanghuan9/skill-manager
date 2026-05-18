@@ -1,6 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
+import { AppI18nProvider } from "@/app/i18n";
 import { NotificationProvider } from "@/app/notifications";
 import { SkillFileDialog } from "@/features/skills/components/SkillFileDialog";
 import { installedSkillFixtures } from "@/features/skills/state/skill-fixtures";
@@ -13,11 +14,13 @@ function renderSkillFileDialog(skillName = "drawio-diagram") {
   }
 
   return render(
-    <NotificationProvider>
-      <SkillWorkspaceProvider>
-        <SkillFileDialog skill={skill} isOpen onClose={vi.fn()} />
-      </SkillWorkspaceProvider>
-    </NotificationProvider>,
+    <SkillWorkspaceProvider>
+      <AppI18nProvider>
+        <NotificationProvider>
+          <SkillFileDialog skill={skill} isOpen onClose={vi.fn()} />
+        </NotificationProvider>
+      </AppI18nProvider>
+    </SkillWorkspaceProvider>,
   );
 }
 

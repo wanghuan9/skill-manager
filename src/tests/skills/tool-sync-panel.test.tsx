@@ -1,9 +1,10 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, vi } from "vitest";
 import { NotificationProvider } from "@/app/notifications";
 import { ToolSyncPanel } from "@/features/skills/components/ToolSyncPanel";
 import { useSkillWorkspace } from "@/features/skills/state/skill-workspace";
+import { renderWithI18n } from "@/tests/helpers/render-with-i18n";
 
 vi.mock("@/features/skills/state/skill-workspace", () => ({
   useSkillWorkspace: vi.fn(),
@@ -17,6 +18,9 @@ const mockedUseSkillWorkspace = vi.mocked(useSkillWorkspace);
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockedUseSkillWorkspace.mockReturnValue({
+    language: "zh-CN",
+  } as unknown as ReturnType<typeof useSkillWorkspace>);
 });
 
 afterEach(() => {
@@ -31,12 +35,13 @@ test("enables all disabled tools for the current skill", async () => {
   const setToolSkillStatuses = vi.fn();
 
   mockedUseSkillWorkspace.mockReturnValue({
+    language: "zh-CN",
     setSkillAllToolStatuses,
     setToolSkillStatuses,
     toggleSkillTool: vi.fn(),
   } as unknown as ReturnType<typeof useSkillWorkspace>);
 
-  render(
+  renderWithI18n(
     <NotificationProvider>
       <ToolSyncPanel
         skillName="drawio-diagram"
@@ -76,12 +81,13 @@ test("disables all enabled tools for the current skill", async () => {
   const setToolSkillStatuses = vi.fn();
 
   mockedUseSkillWorkspace.mockReturnValue({
+    language: "zh-CN",
     setSkillAllToolStatuses,
     setToolSkillStatuses,
     toggleSkillTool: vi.fn(),
   } as unknown as ReturnType<typeof useSkillWorkspace>);
 
-  render(
+  renderWithI18n(
     <NotificationProvider>
       <ToolSyncPanel
         skillName="drawio-diagram"
@@ -121,12 +127,13 @@ test("locks bulk actions and tool pills until bulk update finishes", async () =>
   const setToolSkillStatuses = vi.fn();
 
   mockedUseSkillWorkspace.mockReturnValue({
+    language: "zh-CN",
     setSkillAllToolStatuses,
     setToolSkillStatuses,
     toggleSkillTool: vi.fn(),
   } as unknown as ReturnType<typeof useSkillWorkspace>);
 
-  render(
+  renderWithI18n(
     <NotificationProvider>
       <ToolSyncPanel
         skillName="drawio-diagram"
@@ -165,12 +172,13 @@ test("updates a single tool immediately and only disables that tool while saving
   }));
 
   mockedUseSkillWorkspace.mockReturnValue({
+    language: "zh-CN",
     setSkillAllToolStatuses: vi.fn(),
     setToolSkillStatuses: vi.fn(),
     toggleSkillTool,
   } as unknown as ReturnType<typeof useSkillWorkspace>);
 
-  render(
+  renderWithI18n(
     <NotificationProvider>
       <ToolSyncPanel
         skillName="drawio-diagram"

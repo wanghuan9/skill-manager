@@ -1,8 +1,9 @@
-import { render, screen } from "@testing-library/react";
+import { screen } from "@testing-library/react";
 import { beforeEach, expect, test, vi } from "vitest";
 import { NotificationProvider } from "@/app/notifications";
 import { MarketplaceInstallPanel } from "@/features/install/components/MarketplaceInstallPanel";
 import { useSkillWorkspace } from "@/features/skills/state/skill-workspace";
+import { renderWithI18n } from "@/tests/helpers/render-with-i18n";
 
 vi.mock("@/features/skills/state/skill-workspace", () => ({
   useSkillWorkspace: vi.fn(),
@@ -12,13 +13,14 @@ const mockedUseSkillWorkspace = vi.mocked(useSkillWorkspace);
 
 beforeEach(() => {
   mockedUseSkillWorkspace.mockReturnValue({
+    language: "zh-CN",
     installingMarketplaceSkillIds: new Set(),
     installFromMarket: vi.fn(),
   } as unknown as ReturnType<typeof useSkillWorkspace>);
 });
 
 test("shows initialization state before an uncached marketplace source returns", () => {
-  render(
+  renderWithI18n(
     <NotificationProvider>
       <MarketplaceInstallPanel
         activeSourceSite="skillsmp"

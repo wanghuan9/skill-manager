@@ -1,10 +1,11 @@
-import { render, screen } from "@testing-library/react";
+import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, expect, test, vi } from "vitest";
 import { NotificationProvider } from "@/app/notifications";
 import { SkillCard } from "@/features/skills/components/SkillCard";
 import { installedSkillFixtures } from "@/features/skills/state/skill-fixtures";
 import { useSkillWorkspace } from "@/features/skills/state/skill-workspace";
+import { renderWithI18n } from "@/tests/helpers/render-with-i18n";
 
 vi.mock("@/features/skills/state/skill-workspace", () => ({
   useSkillWorkspace: vi.fn(),
@@ -17,6 +18,7 @@ let deleteSkillMock: ReturnType<typeof vi.fn>;
 beforeEach(() => {
   deleteSkillMock = vi.fn().mockResolvedValue(undefined);
   mockedUseSkillWorkspace.mockReturnValue({
+    language: "zh-CN",
     deleteSkill: deleteSkillMock,
     openSkillWithDefaultTool: vi.fn(),
     toolConfigs: [],
@@ -30,7 +32,7 @@ test("calls delete only after the second click and shows success notification", 
     throw new Error("missing drawio-diagram fixture");
   }
 
-  render(
+  renderWithI18n(
     <NotificationProvider>
       <SkillCard skill={skill} />
     </NotificationProvider>,

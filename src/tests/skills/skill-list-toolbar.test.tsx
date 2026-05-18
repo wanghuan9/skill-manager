@@ -1,10 +1,11 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { NotificationProvider } from "@/app/notifications";
 import { SkillListToolbar } from "@/features/skills/components/SkillListPage";
 import { installedSkillFixtures } from "@/features/skills/state/skill-fixtures";
 import type { SkillSummary } from "@/features/skills/state/skill-store";
 import { useSkillWorkspace } from "@/features/skills/state/skill-workspace";
+import { renderWithI18n } from "@/tests/helpers/render-with-i18n";
 
 vi.mock("@/features/skills/state/skill-workspace", () => ({
   useSkillWorkspace: vi.fn(),
@@ -20,6 +21,9 @@ const disabledSkillFixture: SkillSummary = {
 
 beforeEach(() => {
   vi.useFakeTimers();
+  mockedUseSkillWorkspace.mockReturnValue({
+    language: "zh-CN",
+  } as unknown as ReturnType<typeof useSkillWorkspace>);
   vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback: FrameRequestCallback) =>
     window.setTimeout(() => callback(performance.now()), 16),
   );
@@ -34,13 +38,14 @@ test("shows update-all loading state before running the update task", async () =
   const updateAllSkills = vi.fn().mockResolvedValue(undefined);
 
   mockedUseSkillWorkspace.mockReturnValue({
+    language: "zh-CN",
     installedSkills: installedSkillFixtures,
     isLoading: false,
     refreshWorkspace: vi.fn(),
     updateAllSkills,
   } as unknown as ReturnType<typeof useSkillWorkspace>);
 
-  render(
+  renderWithI18n(
     <NotificationProvider>
       <SkillListToolbar
         query=""
@@ -71,13 +76,14 @@ test("notifies status filter changes", () => {
   const onStatusFilterChange = vi.fn();
 
   mockedUseSkillWorkspace.mockReturnValue({
+    language: "zh-CN",
     installedSkills: [...installedSkillFixtures, disabledSkillFixture],
     isLoading: false,
     refreshWorkspace: vi.fn(),
     updateAllSkills: vi.fn(),
   } as unknown as ReturnType<typeof useSkillWorkspace>);
 
-  render(
+  renderWithI18n(
     <NotificationProvider>
       <SkillListToolbar
         query=""

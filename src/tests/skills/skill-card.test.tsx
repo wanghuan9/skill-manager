@@ -1,6 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
+import { AppI18nProvider } from "@/app/i18n";
 import { NotificationProvider } from "@/app/notifications";
 import { SkillCard } from "@/features/skills/components/SkillCard";
 import { installedSkillFixtures } from "@/features/skills/state/skill-fixtures";
@@ -8,11 +9,13 @@ import { SkillWorkspaceProvider } from "@/features/skills/state/skill-workspace"
 
 function renderSkillCardWithProviders(skill: (typeof installedSkillFixtures)[number]) {
   return render(
-    <NotificationProvider>
-      <SkillWorkspaceProvider>
-        <SkillCard skill={skill} />
-      </SkillWorkspaceProvider>
-    </NotificationProvider>,
+    <SkillWorkspaceProvider>
+      <AppI18nProvider>
+        <NotificationProvider>
+          <SkillCard skill={skill} />
+        </NotificationProvider>
+      </AppI18nProvider>
+    </SkillWorkspaceProvider>,
   );
 }
 
