@@ -277,7 +277,7 @@ test("persists preferred default open tool after startup refresh when settings a
       case "get_app_settings":
         return pendingSettings.promise;
       case "update_app_settings":
-        updateAppSettingsPayload = args?.settings as AppSettings;
+        updateAppSettingsPayload = (args as { settings: AppSettings }).settings;
         return updateAppSettingsPayload;
       default:
         throw new Error(`Unexpected command: ${command}`);
