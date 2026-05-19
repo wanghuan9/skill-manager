@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { useTranslate } from "@/app/i18n";
 import { useNotifications } from "@/app/notifications";
 import { useFailureReporter } from "@/app/failure-feedback";
@@ -9,6 +11,7 @@ import {
 } from "@/features/app-update/app-update-client";
 
 const AUTO_UPDATE_CHECK_DELAY_MS = 2000;
+const DEFAULT_RELEASE_NOTES_TEXT = "New version is ready to install";
 
 let autoUpdatePromptState: "idle" | "scheduled" | "running" | "done" = "idle";
 
@@ -55,7 +58,7 @@ export function AppUpdateAutoPrompt() {
     };
   }, []);
 
-  const releaseNotes = useMemo(() => buildReleaseNotes(update), [update]);
+  const releaseNotes = useMemo(() => buildReleaseNotesMarkdown(update), [update]);
 
   if (!update?.available || !update.install) {
     return null;
@@ -113,11 +116,9 @@ export function AppUpdateAutoPrompt() {
           </div>
         </header>
         <div className="app-update-popover__content">
-          {releaseNotes.map((line, index) => (
-            <p key={`${line}-${index}`} className={line.startsWith("-") || line.startsWith("*") ? "is-bullet" : ""}>
-              {line}
-            </p>
-          ))}
+          <div className="app-update-popover__markdown">
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{releaseNotes}</ReactMarkdown>
+          </div>
         </div>
         {progress ? <p className="app-update-popover__progress">{formatUpdateSize(progress)}</p> : null}
       </section>
@@ -125,21 +126,13 @@ export function AppUpdateAutoPrompt() {
   );
 }
 
-function buildReleaseNotes(update: AppUpdateCheckResult | null) {
-  const bodyLines = update?.body
-    ?.split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
-
-  if (bodyLines && bodyLines.length > 0) {
-    return bodyLines;
+function buildReleaseNotesMarkdown(update: AppUpdateCheckResult | null) {
+  const body = update?.body?.trim();
+  if (body) {
+    return body;
   }
 
-  if (update?.version) {
-    return [`Version ${update.version}`, "- New version is ready to install"];
-  }
-
-  return ["New version is ready to install"];
+  return DEFAULT_RELEASE_NOTES_TEXT;
 }
 
 function formatUpdateSize(progress: AppUpdateProgress) {

@@ -396,7 +396,6 @@ code {
 
 .app-update-popover__header h2,
 .app-update-popover__header p,
-.app-update-popover__content p,
 .app-update-popover__progress {
   margin: 0;
 }
@@ -408,7 +407,6 @@ code {
 }
 
 .app-update-popover__header p,
-.app-update-popover__content p,
 .app-update-popover__progress {
   font-size: 0.78rem;
   line-height: 1.55;
@@ -416,20 +414,54 @@ code {
 }
 
 .app-update-popover__content {
-  display: grid;
-  gap: 8px;
   overflow: auto;
-  padding: 12px 16px;
+  padding: 12px 16px 16px;
 }
 
-.app-update-popover__content p:not(.is-bullet) {
+.app-update-popover__markdown > :first-child {
+  margin-top: 0;
+}
+
+.app-update-popover__markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.app-update-popover__markdown h1,
+.app-update-popover__markdown h2,
+.app-update-popover__markdown h3,
+.app-update-popover__markdown h4,
+.app-update-popover__markdown h5,
+.app-update-popover__markdown h6 {
+  margin: 0 0 10px;
+  font-size: 0.95rem;
+  line-height: 1.35;
   color: #263142;
-  font-weight: 700;
 }
 
-.app-update-popover__content p.is-bullet {
-  padding-left: 10px;
+.app-update-popover__markdown p {
+  margin: 0 0 10px;
+  font-size: 0.82rem;
+  line-height: 1.65;
   color: #475467;
+}
+
+.app-update-popover__markdown ul,
+.app-update-popover__markdown ol {
+  margin: 0 0 18px;
+  padding-left: 22px;
+  color: #344054;
+}
+
+.app-update-popover__markdown li {
+  margin: 0 0 8px;
+  font-size: 0.82rem;
+  line-height: 1.65;
+}
+
+.app-update-popover__markdown li:last-child,
+.app-update-popover__markdown ul:last-child,
+.app-update-popover__markdown ol:last-child {
+  margin-bottom: 0;
 }
 
 .app-update-popover__progress {

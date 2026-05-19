@@ -46,7 +46,16 @@ test("shows an in-app prompt and installs when automatic update check finds a ne
     available: true,
     currentVersion: "0.1.0",
     version: "0.1.1",
-    body: "Release notes\n- Update installs from the in-app capsule",
+    body: [
+      "## 修复",
+      "",
+      "- 修复 skill 商店搜索中页面提前切换的问题。",
+      "- 修复首次安装默认编辑器未同步到实际打开行为。",
+      "",
+      "## 优化",
+      "",
+      "- 默认语言选择由 IP 改为识别系统语言规则。",
+    ].join("\n"),
     install,
   });
 
@@ -68,7 +77,11 @@ test("shows an in-app prompt and installs when automatic update check finds a ne
   expect(screen.getByLabelText("软件更新")).toHaveAttribute("aria-hidden", "false");
   expect(screen.getByText("What's in this update")).toBeInTheDocument();
   expect(screen.getByText("Version 0.1.1")).toBeInTheDocument();
-  expect(screen.getByText("- Update installs from the in-app capsule")).toBeInTheDocument();
+  expect(screen.getByText("修复")).toBeInTheDocument();
+  expect(screen.getByText("修复 skill 商店搜索中页面提前切换的问题。")).toBeInTheDocument();
+  expect(screen.getByText("修复首次安装默认编辑器未同步到实际打开行为。")).toBeInTheDocument();
+  expect(screen.getByText("优化")).toBeInTheDocument();
+  expect(screen.getByText("默认语言选择由 IP 改为识别系统语言规则。")).toBeInTheDocument();
 
   fireEvent.click(screen.getByRole("button", { name: "Update" }));
 
