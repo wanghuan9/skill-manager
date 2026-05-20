@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { useTranslate } from "@/app/i18n";
 import { useFailureReporter } from "@/app/failure-feedback";
 import {
@@ -8,6 +10,7 @@ import {
   checkForAppUpdate,
   fetchCurrentAppVersion,
 } from "@/features/app-update/app-update-client";
+import { resolveAppUpdateReleaseNoteEntries } from "@/features/app-update/release-notes";
 import { useSkillWorkspace } from "@/features/skills/state/skill-workspace";
 import {
   buildOpenToolOptions,
@@ -116,6 +119,7 @@ export function SettingsRoute() {
   const [appUpdateStatus, setAppUpdateStatus] = useState<
     "idle" | "checking" | "available" | "not-available" | "installing" | "error"
   >("idle");
+  const [isAppUpdateReleaseNotesOpen, setIsAppUpdateReleaseNotesOpen] = useState(false);
   const [appUpdateMessage, setAppUpdateMessage] = useState(t("settings.update.status.idle"));
   const [appUpdateProgress, setAppUpdateProgress] = useState<AppUpdateProgress | null>(null);
   const reportFailure = useFailureReporter();
@@ -125,13 +129,24 @@ export function SettingsRoute() {
   const storageDirectoryPath = getDirectoryPath(appSettings.storagePath);
   const isCheckingAppUpdate = appUpdateStatus === "checking";
   const isInstallingAppUpdate = appUpdateStatus === "installing";
+  const appUpdateReleaseNoteEntries = useMemo(
+    () => resolveAppUpdateReleaseNoteEntries(appUpdate),
+    [appUpdate],
+  );
   const shouldShowInstallAppUpdate = Boolean(appUpdate?.available && appUpdate?.install);
+  const shouldShowAppUpdateReleaseNotes = shouldShowInstallAppUpdate && appUpdateReleaseNoteEntries.length > 0;
   const appUpdateActionLabel = shouldShowInstallAppUpdate
     ? (isInstallingAppUpdate ? t("settings.update.action.installing") : t("settings.update.action.install"))
     : (isCheckingAppUpdate ? t("settings.update.action.checking") : t("settings.update.action.check"));
   const appUpdateActionClassName = shouldShowInstallAppUpdate
-    ? "primary-button primary-button--compact settings-update-button"
+    ? "primary-button primary-button--compact settings-update-button settings-update-button--install"
     : "secondary-button secondary-button--compact settings-update-button";
+
+  useEffect(() => {
+    if (!shouldShowAppUpdateReleaseNotes && isAppUpdateReleaseNotesOpen) {
+      setIsAppUpdateReleaseNotesOpen(false);
+    }
+  }, [isAppUpdateReleaseNotesOpen, shouldShowAppUpdateReleaseNotes]);
 
   useEffect(() => {
     setAppUpdateMessage((current) => {
@@ -188,6 +203,7 @@ export function SettingsRoute() {
       return;
     }
 
+    setIsAppUpdateReleaseNotesOpen(false);
     setAppUpdate(null);
     setAppUpdateStatus("checking");
     setAppUpdateMessage(t("settings.update.status.checking"));
@@ -211,6 +227,7 @@ export function SettingsRoute() {
       setAppUpdateStatus("not-available");
       setAppUpdateMessage(t("settings.update.status.latest"));
     } catch (error) {
+      setIsAppUpdateReleaseNotesOpen(false);
       setAppUpdateStatus("error");
       const message = error instanceof Error ? error.message : t("settings.update.status.checkFailed");
       setAppUpdateMessage(message);
@@ -421,29 +438,60 @@ export function SettingsRoute() {
                 {currentAppVersion || t("settings.update.loadingVersion")}
               </div>
             </div>
-            <div className="settings-form-item">
-              <div className="settings-form-item__copy">
-                <span className="settings-form-item__title">{t("settings.update.status")}</span>
-                <p>{appUpdateMessage}</p>
-                {appUpdateProgress ? <p>{formatUpdateSize(appUpdateProgress)}</p> : null}
+            <div className="settings-update-block">
+              <div className="settings-form-item">
+                <div className="settings-form-item__copy">
+                  <span className="settings-form-item__title">{t("settings.update.status")}</span>
+                  <p>{appUpdateMessage}</p>
+                  {appUpdateProgress ? <p>{formatUpdateSize(appUpdateProgress)}</p> : null}
+                </div>
+                <div className="settings-form-item__control settings-update-actions">
+                  {shouldShowAppUpdateReleaseNotes ? (
+                    <button
+                      className="secondary-button secondary-button--compact settings-update-button settings-update-button--notes"
+                      type="button"
+                      onClick={() => setIsAppUpdateReleaseNotesOpen((current) => !current)}
+                      aria-expanded={isAppUpdateReleaseNotesOpen}
+                      aria-controls="settings-update-release-notes"
+                      disabled={isCheckingAppUpdate}
+                    >
+                      <span>{t("settings.update.releaseNotes")}</span>
+                    </button>
+                  ) : null}
+                  <button
+                    className={appUpdateActionClassName}
+                    type="button"
+                    onClick={() =>
+                      void (shouldShowInstallAppUpdate ? handleInstallAppUpdate() : handleCheckAppUpdate())
+                    }
+                    disabled={isCheckingAppUpdate || isInstallingAppUpdate}
+                  >
+                    {shouldShowInstallAppUpdate ? null : (
+                      <span aria-hidden="true" className="settings-update-button__icon">
+                        <RefreshIcon isSpinning={isCheckingAppUpdate} />
+                      </span>
+                    )}
+                    <span>{appUpdateActionLabel}</span>
+                  </button>
+                </div>
               </div>
-              <div className="settings-form-item__control settings-update-actions">
-                <button
-                  className={appUpdateActionClassName}
-                  type="button"
-                  onClick={() =>
-                    void (shouldShowInstallAppUpdate ? handleInstallAppUpdate() : handleCheckAppUpdate())
-                  }
-                  disabled={isCheckingAppUpdate || isInstallingAppUpdate}
-                >
-                  {shouldShowInstallAppUpdate ? null : (
-                    <span aria-hidden="true" className="settings-update-button__icon">
-                      <RefreshIcon isSpinning={isCheckingAppUpdate} />
-                    </span>
-                  )}
-                  <span>{appUpdateActionLabel}</span>
-                </button>
-              </div>
+              {shouldShowAppUpdateReleaseNotes && isAppUpdateReleaseNotesOpen ? (
+                <div id="settings-update-release-notes" className="settings-update-release-notes">
+                  <div className="settings-update-release-notes__header">
+                    <span className="settings-update-release-notes__title">{t("settings.update.releaseNotesTitle")}</span>
+                  </div>
+                  <div className="settings-update-release-notes__content">
+                    <div className="settings-update-release-notes__markdown">
+                      {appUpdateReleaseNoteEntries.map((entry) => (
+                        <section key={entry.version || entry.body} className="settings-update-release-notes__section">
+                          {entry.version ? <p className="settings-update-release-notes__version">{`Version ${entry.version}`}</p> : null}
+                          <ReactMarkdown remarkPlugins={[remarkGfm]}>{entry.body}</ReactMarkdown>
+                        </section>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              ) : null}
             </div>
           </div>
         </div>

@@ -109,6 +109,16 @@ test("switches app update action to install when a new version is available", as
     available: true,
     currentVersion: "0.1.0",
     version: "0.2.0",
+    releaseNotesHistory: [
+      {
+        version: "0.2.0",
+        body: "## 修复\n\n- 修复首次安装默认编辑器未同步到实际打开行为。",
+      },
+      {
+        version: "0.1.9",
+        body: "## 优化\n\n- 默认语言选择由 IP 改为识别系统语言规则。",
+      },
+    ],
     install,
   });
 
@@ -118,13 +128,57 @@ test("switches app update action to install when a new version is available", as
   await userEvent.click(screen.getByRole("button", { name: "检查更新" }));
 
   expect(await screen.findByText("发现新版本 0.2.0")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "更新日志" })).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "检查更新" })).not.toBeInTheDocument();
+
+  await userEvent.click(screen.getByRole("button", { name: "更新日志" }));
+
+  expect(screen.getByText("更新内容")).toBeInTheDocument();
+  expect(screen.getByText("Version 0.2.0")).toBeInTheDocument();
+  expect(screen.getByText("Version 0.1.9")).toBeInTheDocument();
+  expect(screen.getByText("修复首次安装默认编辑器未同步到实际打开行为。")).toBeInTheDocument();
+  expect(screen.getByText("默认语言选择由 IP 改为识别系统语言规则。")).toBeInTheDocument();
+
+  await userEvent.click(screen.getByRole("button", { name: "更新日志" }));
+
+  expect(screen.queryByText("更新内容")).not.toBeInTheDocument();
 
   await userEvent.click(screen.getByRole("button", { name: "下载并重启" }));
 
   expect(install).toHaveBeenCalled();
   expect(screen.getByText("正在下载并安装更新...")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "安装中..." })).toBeDisabled();
+});
+
+test("shows release notes controls in English settings", async () => {
+  window.localStorage.clear();
+  vi.spyOn(appUpdateClient, "checkForAppUpdate").mockResolvedValue({
+    available: true,
+    currentVersion: "0.1.0",
+    version: "0.2.0",
+    releaseNotesHistory: [
+      {
+        version: "0.2.0",
+        body: "## Fixes\n\n- Improve update summary readability.",
+      },
+    ],
+    install: vi.fn().mockResolvedValue(undefined),
+  });
+
+  render(<App />);
+
+  await userEvent.click(screen.getByRole("button", { name: /设置/ }));
+  await userEvent.selectOptions(screen.getByLabelText("界面语言"), "en");
+  await userEvent.click(screen.getByRole("button", { name: "Check for Updates" }));
+
+  expect(await screen.findByText("New version found: 0.2.0")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Release Notes" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Download and Restart" })).toBeInTheDocument();
+
+  await userEvent.click(screen.getByRole("button", { name: "Release Notes" }));
+
+  expect(screen.getByText("What's in this update")).toBeInTheDocument();
+  expect(screen.getByText("Improve update summary readability.")).toBeInTheDocument();
 });
 
 test("opens storage path in Finder from settings", async () => {

@@ -7,12 +7,11 @@ import { useFailureReporter } from "@/app/failure-feedback";
 import {
   type AppUpdateCheckResult,
   type AppUpdateProgress,
-  type AppUpdateReleaseNoteEntry,
   checkForAppUpdate,
 } from "@/features/app-update/app-update-client";
+import { resolveAppUpdateReleaseNoteEntries } from "@/features/app-update/release-notes";
 
 const AUTO_UPDATE_CHECK_DELAY_MS = 2000;
-const DEFAULT_RELEASE_NOTES_TEXT = "New version is ready to install";
 
 let autoUpdatePromptState: "idle" | "scheduled" | "running" | "done" = "idle";
 
@@ -59,7 +58,7 @@ export function AppUpdateAutoPrompt() {
     };
   }, []);
 
-  const releaseNoteEntries = useMemo(() => buildReleaseNoteEntries(update), [update]);
+  const releaseNoteEntries = useMemo(() => resolveAppUpdateReleaseNoteEntries(update), [update]);
 
   if (!update?.available || !update.install) {
     return null;
@@ -134,30 +133,6 @@ export function AppUpdateAutoPrompt() {
       </section>
     </div>
   );
-}
-
-function buildReleaseNoteEntries(update: AppUpdateCheckResult | null): AppUpdateReleaseNoteEntry[] {
-  const history = update?.releaseNotesHistory?.filter((entry) => entry.body.trim()) ?? [];
-  if (history.length > 0) {
-    return history;
-  }
-
-  const body = update?.body?.trim();
-  if (body) {
-    return [
-      {
-        version: update?.version ?? "",
-        body,
-      },
-    ];
-  }
-
-  return [
-    {
-      version: update?.version ?? "",
-      body: DEFAULT_RELEASE_NOTES_TEXT,
-    },
-  ];
 }
 
 function formatUpdateSize(progress: AppUpdateProgress) {

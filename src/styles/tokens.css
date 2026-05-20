@@ -413,23 +413,34 @@ code {
   color: #667085;
 }
 
+.settings-update-release-notes__content,
 .app-update-popover__content {
   max-height: 248px;
   overflow-x: hidden;
   overflow-y: auto;
-  padding: 12px 16px 16px;
   scrollbar-gutter: stable;
   overscroll-behavior: contain;
 }
 
+.settings-update-release-notes__content {
+  padding: 12px 20px 16px;
+}
+
+.app-update-popover__content {
+  padding: 12px 16px 16px;
+}
+
+.settings-update-release-notes__content::-webkit-scrollbar,
 .app-update-popover__content::-webkit-scrollbar {
   width: 10px;
 }
 
+.settings-update-release-notes__content::-webkit-scrollbar-track,
 .app-update-popover__content::-webkit-scrollbar-track {
   background: transparent;
 }
 
+.settings-update-release-notes__content::-webkit-scrollbar-thumb,
 .app-update-popover__content::-webkit-scrollbar-thumb {
   border: 2px solid transparent;
   border-radius: 999px;
@@ -437,22 +448,26 @@ code {
   background-clip: padding-box;
 }
 
+.settings-update-release-notes__content::-webkit-scrollbar-thumb:hover,
 .app-update-popover__content::-webkit-scrollbar-thumb:hover {
   background: rgba(100, 116, 139, 0.75);
 }
 
+.settings-update-release-notes__markdown,
 .app-update-popover__markdown {
   font-size: 0.82rem;
   line-height: 1.65;
   color: #475467;
 }
 
+.settings-update-release-notes__section + .settings-update-release-notes__section,
 .app-update-popover__release-section + .app-update-popover__release-section {
   margin-top: 14px;
   padding-top: 14px;
   border-top: 1px solid rgba(220, 226, 236, 0.94);
 }
 
+.settings-update-release-notes__version,
 .app-update-popover__release-version {
   margin: 0 0 10px;
   font-size: 0.74rem;
@@ -461,14 +476,22 @@ code {
   color: #4052d6;
 }
 
+.settings-update-release-notes__markdown > :first-child,
 .app-update-popover__markdown > :first-child {
   margin-top: 0;
 }
 
+.settings-update-release-notes__markdown > :last-child,
 .app-update-popover__markdown > :last-child {
   margin-bottom: 0;
 }
 
+.settings-update-release-notes__markdown h1,
+.settings-update-release-notes__markdown h2,
+.settings-update-release-notes__markdown h3,
+.settings-update-release-notes__markdown h4,
+.settings-update-release-notes__markdown h5,
+.settings-update-release-notes__markdown h6,
 .app-update-popover__markdown h1,
 .app-update-popover__markdown h2,
 .app-update-popover__markdown h3,
@@ -482,14 +505,20 @@ code {
   letter-spacing: -0.01em;
 }
 
+.settings-update-release-notes__markdown h1,
 .app-update-popover__markdown h1 {
   font-size: 0.98rem;
 }
 
+.settings-update-release-notes__markdown h2,
 .app-update-popover__markdown h2 {
   font-size: 0.92rem;
 }
 
+.settings-update-release-notes__markdown h3,
+.settings-update-release-notes__markdown h4,
+.settings-update-release-notes__markdown h5,
+.settings-update-release-notes__markdown h6,
 .app-update-popover__markdown h3,
 .app-update-popover__markdown h4,
 .app-update-popover__markdown h5,
@@ -497,30 +526,41 @@ code {
   font-size: 0.86rem;
 }
 
+.settings-update-release-notes__markdown p,
+.settings-update-release-notes__markdown ul,
+.settings-update-release-notes__markdown ol,
 .app-update-popover__markdown p,
 .app-update-popover__markdown ul,
 .app-update-popover__markdown ol {
   margin: 0 0 0.95em;
 }
 
+.settings-update-release-notes__markdown ul,
+.settings-update-release-notes__markdown ol,
 .app-update-popover__markdown ul,
 .app-update-popover__markdown ol {
   padding-left: 1.2rem;
   color: inherit;
 }
 
+.settings-update-release-notes__markdown li,
 .app-update-popover__markdown li {
   margin: 0 0 0.45em;
 }
 
+.settings-update-release-notes__markdown li > p,
 .app-update-popover__markdown li > p {
   margin-bottom: 0.45em;
 }
 
+.settings-update-release-notes__markdown strong,
 .app-update-popover__markdown strong {
   color: #1f2937;
 }
 
+.settings-update-release-notes__markdown li:last-child,
+.settings-update-release-notes__markdown ul:last-child,
+.settings-update-release-notes__markdown ol:last-child,
 .app-update-popover__markdown li:last-child,
 .app-update-popover__markdown ul:last-child,
 .app-update-popover__markdown ol:last-child {
@@ -5460,8 +5500,9 @@ button.settings-form-item:disabled {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 10px;
-  width: fit-content;
+  flex-wrap: wrap;
+  gap: 8px;
+  width: min(100%, 320px);
   min-width: 0;
 }
 
@@ -5469,11 +5510,37 @@ button.settings-form-item:disabled {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
+  gap: 5px;
   width: auto;
-  min-width: 168px;
+  min-width: 128px;
   max-width: 100%;
+  min-height: 30px;
+  padding: 0 10px;
+  border-radius: 10px;
+  font-size: 0.76rem;
+  line-height: 1;
   white-space: nowrap;
+}
+
+.settings-update-button--notes {
+  min-width: 104px;
+}
+
+.settings-update-button--install {
+  background: linear-gradient(180deg, #7ca8ff 0%, #5b8ff9 100%);
+  border-color: rgba(91, 143, 249, 0.56);
+  box-shadow: 0 4px 10px rgba(91, 143, 249, 0.16);
+}
+
+.settings-update-button--install:hover:not(:disabled) {
+  background: linear-gradient(180deg, #88b0ff 0%, #6698fb 100%);
+  border-color: rgba(91, 143, 249, 0.64);
+  box-shadow: 0 6px 14px rgba(91, 143, 249, 0.2);
+}
+
+.settings-update-button--install:active:not(:disabled) {
+  background: linear-gradient(180deg, #6c9cfb 0%, #4f86f2 100%);
+  box-shadow: 0 3px 8px rgba(91, 143, 249, 0.18);
 }
 
 .settings-update-button__icon {
@@ -5491,6 +5558,31 @@ button.settings-form-item:disabled {
 
 .settings-update-button__svg.is-spinning {
   animation: spin 0.8s linear infinite;
+}
+
+.settings-update-block {
+  border-top: 1px solid rgba(220, 228, 240, 0.78);
+}
+
+.settings-update-block > .settings-form-item {
+  border-top: 0;
+}
+
+.settings-update-release-notes {
+  border-top: 1px solid rgba(220, 228, 240, 0.78);
+  background: rgba(246, 249, 253, 0.94);
+}
+
+.settings-update-release-notes__header {
+  padding: 12px 20px 0;
+}
+
+.settings-update-release-notes__title {
+  display: inline-flex;
+  font-size: 0.78rem;
+  font-weight: 600;
+  line-height: 1.35;
+  color: #475467;
 }
 
 .settings-toggle-control {
@@ -6875,8 +6967,19 @@ button.settings-form-item:disabled {
   }
 
   .settings-update-actions .settings-update-button {
-    flex: 1;
-    width: 100%;
+    flex: 1 1 132px;
+    width: auto;
+  }
+
+  .settings-update-release-notes__header {
+    padding-right: 14px;
+    padding-left: 14px;
+  }
+
+  .settings-update-release-notes__content {
+    padding-right: 14px;
+    padding-bottom: 14px;
+    padding-left: 14px;
   }
 
   .settings-open-button {
