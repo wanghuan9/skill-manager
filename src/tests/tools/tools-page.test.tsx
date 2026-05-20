@@ -25,7 +25,7 @@ test("renders installed tools only with manage action", async () => {
   expect(screen.getAllByText("MCP 配置：").length).toBeGreaterThan(0);
   expect(screen.getByText("/Users/demo/.claude.json")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "打开 Claude Code MCP 配置" })).toBeInTheDocument();
-  expect(screen.getByText("/Users/demo/.gemini/antigravity/mcp_config.json")).toBeInTheDocument();
+  expect(screen.getByText("/Users/demo/.gemini/config/mcp_config.json")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "打开 Antigravity MCP 配置" })).toBeEnabled();
 });
 

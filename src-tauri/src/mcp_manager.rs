@@ -815,8 +815,8 @@ fn target_app_specs() -> Result<Vec<McpTargetAppSpec>, String> {
         supported_app_spec(
             "antigravity",
             "Antigravity",
-            home_dir.join(".gemini/antigravity/mcp_config.json"),
-            home_dir.join(".gemini/antigravity"),
+            home_dir.join(".gemini/config/mcp_config.json"),
+            home_dir.join(".gemini/config"),
         ),
         supported_app_spec(
             APP_WINDSURF,
