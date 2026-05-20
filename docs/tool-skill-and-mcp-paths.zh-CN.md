@@ -29,7 +29,7 @@
 | IntelliJ IDEA | `intellij` | `~/.junie/skills` | 不支持 | - |
 | OpenCode | `opencode` | `~/.config/opencode/skills` | 支持 | `~/.config/opencode/opencode.json` |
 | Gemini CLI | `gemini` | `~/.gemini/skills` | 支持 | `~/.gemini/settings.json` |
-| Antigravity | `antigravity` | `~/.gemini/config/skills` | 支持 | `~/.gemini/config/mcp_config.json` |
+| Antigravity | `antigravity` | `~/.gemini/config/skills` | 支持 | `~/.gemini/antigravity/mcp_config.json` |
 | Continue | `continue` | `~/.continue/skills` | 支持 | `~/.continue/config.yaml` |
 | GitHub Copilot | `github-copilot` | `~/.copilot/skills` | 支持 | `~/.copilot/mcp-config.json` |
 | Qwen Code | `qwen-code` | `~/.qwen/skills` | 支持 | `~/.qwen/settings.json` |

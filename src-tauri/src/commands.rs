@@ -1513,7 +1513,7 @@ fn mcp_config_path_for_tool(tool_id: &str, home_path: &Path) -> PathBuf {
         "commandcode" => home_path.join(".commandcode/mcp.json"),
         "cursor" => home_path.join(".cursor/mcp.json"),
         "gemini" => home_path.join(".gemini/settings.json"),
-        "antigravity" => home_path.join(".gemini/config/mcp_config.json"),
+        "antigravity" => home_path.join(".gemini/antigravity/mcp_config.json"),
         "github-copilot" => home_path.join(".copilot/mcp-config.json"),
         "goose" => home_path.join(".config/goose/config.yaml"),
         "hermes" => home_path.join(".hermes/config.yaml"),
