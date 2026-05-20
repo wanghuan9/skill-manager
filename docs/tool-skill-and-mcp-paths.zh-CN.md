@@ -29,7 +29,7 @@
 | IntelliJ IDEA | `intellij` | `~/.junie/skills` | 不支持 | - |
 | OpenCode | `opencode` | `~/.config/opencode/skills` | 支持 | `~/.config/opencode/opencode.json` |
 | Gemini CLI | `gemini` | `~/.gemini/skills` | 支持 | `~/.gemini/settings.json` |
-| Antigravity | `antigravity` | `~/.gemini/config/skills` | 支持 | `~/.gemini/antigravity/mcp_config.json` |
+| Antigravity | `antigravity` | `~/.gemini/config/skills` | 支持 | `~/.gemini/config/mcp_config.json` |
 | Continue | `continue` | `~/.continue/skills` | 支持 | `~/.continue/config.yaml` |
 | GitHub Copilot | `github-copilot` | `~/.copilot/skills` | 支持 | `~/.copilot/mcp-config.json` |
 | Qwen Code | `qwen-code` | `~/.qwen/skills` | 支持 | `~/.qwen/settings.json` |
@@ -58,5 +58,5 @@
 - 同一个工具如果官方后续调整了本地配置位置，需要同步更新代码与这份文档。
 - `Trae`、`Trae CN` 的 `skills` 路径与 MCP 路径不在同一目录，这属于当前实现的预期行为。
 - `Droid` 当前使用 `~/.factory/skills` 与 `~/.factory/mcp.json`。
-- `Antigravity` 当前使用 Gemini 新版共享 skills 目录：`~/.gemini/config/skills`；MCP 配置仍位于 `~/.gemini/antigravity/mcp_config.json`。
+- `Antigravity` 当前使用 Gemini 新版共享 skills 目录：`~/.gemini/config/skills`；MCP 配置仍位于 `~/.gemini/config/mcp_config.json`。
 - `Goose` 当前以 `~/.agents/skills` 作为首选 skill 路径，同时兼容扫描旧路径 `~/.config/goose/skills`。
