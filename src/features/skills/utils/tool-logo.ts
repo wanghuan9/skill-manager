@@ -1,34 +1,6 @@
-const TOOL_LOGO_URLS: Record<string, string> = {
-  cursor: "/tool-logos/cursor.svg",
-  "claude-code": "/tool-logos/claude-code.png",
-  "github-copilot": "/tool-logos/github-copilot.svg",
-  codex: "/tool-logos/codex.png",
-  gemini: "/tool-logos/gemini.svg",
-  windsurf: "/tool-logos/windsurf.ico",
-  intellij: "/tool-logos/intellij.svg",
-  droid: "/tool-logos/droid.svg",
-  goose: "/tool-logos/goose.svg",
-  junie: "/tool-logos/junie.svg",
-  qoder: "/tool-logos/qoder.svg",
-  "qwen-code": "/tool-logos/qwen-code.svg",
-  continue: "/tool-logos/continue.ico",
-  kiro: "/tool-logos/kiro.ico",
-  cline: "/tool-logos/cline.ico",
-  augment: "/tool-logos/augment.ico",
-  trae: "/tool-logos/trae.ico",
-  "trae-cn": "/tool-logos/trae-cn.ico",
-  codebuddy: "/tool-logos/codebuddy.ico",
-  "kilo-code": "/tool-logos/kilo-code.ico",
-  "roo-code": "/tool-logos/roo-code.ico",
-  zencoder: "/tool-logos/zencoder.ico",
-  antigravity: "/tool-logos/antigravity.svg",
-  opencode: "/tool-logos/opencode.ico",
-  iflow: "/tool-logos/iflow.png",
-  commandcode: "/tool-logos/commandcode.ico",
-  crush: "/tool-logos/crush.ico",
-  openclaw: "/tool-logos/openclaw.ico",
-  hermes: "/tool-logos/hermes.ico",
-};
+import toolLogoManifest from "./tool-logo-manifest.json";
+
+const TOOL_LOGO_URLS: Record<string, string> = toolLogoManifest;
 
 const TOOL_NAME_IDS: Record<string, string> = {
   "Claude Code": "claude-code",
