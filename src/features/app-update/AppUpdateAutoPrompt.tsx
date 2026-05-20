@@ -7,6 +7,7 @@ import { useFailureReporter } from "@/app/failure-feedback";
 import {
   type AppUpdateCheckResult,
   type AppUpdateProgress,
+  type AppUpdateReleaseNoteEntry,
   checkForAppUpdate,
 } from "@/features/app-update/app-update-client";
 
@@ -58,7 +59,7 @@ export function AppUpdateAutoPrompt() {
     };
   }, []);
 
-  const releaseNotes = useMemo(() => buildReleaseNotesMarkdown(update), [update]);
+  const releaseNoteEntries = useMemo(() => buildReleaseNoteEntries(update), [update]);
 
   if (!update?.available || !update.install) {
     return null;
@@ -108,7 +109,11 @@ export function AppUpdateAutoPrompt() {
       >
         {isInstalling ? "Updating" : "Update"}
       </button>
-      <section className="app-update-popover" aria-label={t("updates.popover.aria")} aria-hidden={!isPanelOpen}>
+      <section
+        className="app-update-popover"
+        aria-label={t("updates.popover.aria")}
+        aria-hidden={!isPanelOpen}
+      >
         <header className="app-update-popover__header">
           <div>
             <h2>What's in this update</h2>
@@ -117,7 +122,12 @@ export function AppUpdateAutoPrompt() {
         </header>
         <div className="app-update-popover__content">
           <div className="app-update-popover__markdown">
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>{releaseNotes}</ReactMarkdown>
+            {releaseNoteEntries.map((entry) => (
+              <section key={entry.version || entry.body} className="app-update-popover__release-section">
+                {entry.version ? <p className="app-update-popover__release-version">{`Version ${entry.version}`}</p> : null}
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>{entry.body}</ReactMarkdown>
+              </section>
+            ))}
           </div>
         </div>
         {progress ? <p className="app-update-popover__progress">{formatUpdateSize(progress)}</p> : null}
@@ -126,13 +136,28 @@ export function AppUpdateAutoPrompt() {
   );
 }
 
-function buildReleaseNotesMarkdown(update: AppUpdateCheckResult | null) {
-  const body = update?.body?.trim();
-  if (body) {
-    return body;
+function buildReleaseNoteEntries(update: AppUpdateCheckResult | null): AppUpdateReleaseNoteEntry[] {
+  const history = update?.releaseNotesHistory?.filter((entry) => entry.body.trim()) ?? [];
+  if (history.length > 0) {
+    return history;
   }
 
-  return DEFAULT_RELEASE_NOTES_TEXT;
+  const body = update?.body?.trim();
+  if (body) {
+    return [
+      {
+        version: update?.version ?? "",
+        body,
+      },
+    ];
+  }
+
+  return [
+    {
+      version: update?.version ?? "",
+      body: DEFAULT_RELEASE_NOTES_TEXT,
+    },
+  ];
 }
 
 function formatUpdateSize(progress: AppUpdateProgress) {

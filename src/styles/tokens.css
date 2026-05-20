@@ -414,8 +414,51 @@ code {
 }
 
 .app-update-popover__content {
-  overflow: auto;
+  max-height: 248px;
+  overflow-x: hidden;
+  overflow-y: auto;
   padding: 12px 16px 16px;
+  scrollbar-gutter: stable;
+  overscroll-behavior: contain;
+}
+
+.app-update-popover__content::-webkit-scrollbar {
+  width: 10px;
+}
+
+.app-update-popover__content::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.app-update-popover__content::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.55);
+  background-clip: padding-box;
+}
+
+.app-update-popover__content::-webkit-scrollbar-thumb:hover {
+  background: rgba(100, 116, 139, 0.75);
+}
+
+.app-update-popover__markdown {
+  font-size: 0.82rem;
+  line-height: 1.65;
+  color: #475467;
+}
+
+.app-update-popover__release-section + .app-update-popover__release-section {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(220, 226, 236, 0.94);
+}
+
+.app-update-popover__release-version {
+  margin: 0 0 10px;
+  font-size: 0.74rem;
+  font-weight: 700;
+  line-height: 1.4;
+  color: #4052d6;
 }
 
 .app-update-popover__markdown > :first-child {
@@ -432,30 +475,50 @@ code {
 .app-update-popover__markdown h4,
 .app-update-popover__markdown h5,
 .app-update-popover__markdown h6 {
-  margin: 0 0 10px;
-  font-size: 0.95rem;
+  margin: 1.25em 0 0.55em;
+  font-weight: 700;
   line-height: 1.35;
-  color: #263142;
+  color: #111827;
+  letter-spacing: -0.01em;
 }
 
-.app-update-popover__markdown p {
-  margin: 0 0 10px;
-  font-size: 0.82rem;
-  line-height: 1.65;
-  color: #475467;
+.app-update-popover__markdown h1 {
+  font-size: 0.98rem;
+}
+
+.app-update-popover__markdown h2 {
+  font-size: 0.92rem;
+}
+
+.app-update-popover__markdown h3,
+.app-update-popover__markdown h4,
+.app-update-popover__markdown h5,
+.app-update-popover__markdown h6 {
+  font-size: 0.86rem;
+}
+
+.app-update-popover__markdown p,
+.app-update-popover__markdown ul,
+.app-update-popover__markdown ol {
+  margin: 0 0 0.95em;
 }
 
 .app-update-popover__markdown ul,
 .app-update-popover__markdown ol {
-  margin: 0 0 18px;
-  padding-left: 22px;
-  color: #344054;
+  padding-left: 1.2rem;
+  color: inherit;
 }
 
 .app-update-popover__markdown li {
-  margin: 0 0 8px;
-  font-size: 0.82rem;
-  line-height: 1.65;
+  margin: 0 0 0.45em;
+}
+
+.app-update-popover__markdown li > p {
+  margin-bottom: 0.45em;
+}
+
+.app-update-popover__markdown strong {
+  color: #1f2937;
 }
 
 .app-update-popover__markdown li:last-child,
