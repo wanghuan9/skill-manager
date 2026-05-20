@@ -58,5 +58,5 @@
 - 同一个工具如果官方后续调整了本地配置位置，需要同步更新代码与这份文档。
 - `Trae`、`Trae CN` 的 `skills` 路径与 MCP 路径不在同一目录，这属于当前实现的预期行为。
 - `Droid` 当前使用 `~/.factory/skills` 与 `~/.factory/mcp.json`。
-- `Antigravity` 当前使用 Gemini 新版共享配置目录：skills 位于 `~/.gemini/config/skills`，MCP 配置位于 `~/.gemini/config/mcp_config.json`。
+- `Antigravity` 当前使用 Gemini 新版共享 skills 目录：`~/.gemini/config/skills`；MCP 配置仍位于 `~/.gemini/antigravity/mcp_config.json`。
 - `Goose` 当前以 `~/.agents/skills` 作为首选 skill 路径，同时兼容扫描旧路径 `~/.config/goose/skills`。
