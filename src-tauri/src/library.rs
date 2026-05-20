@@ -1639,7 +1639,7 @@ pub fn get_tool_skills_path(tool_id: &str) -> Result<String, String> {
         "opencode" => home_path.join(".config/opencode/skills"),
         "cursor" => home_path.join(".cursor/skills"),
         "gemini" => home_path.join(".gemini/skills"),
-        "antigravity" => home_path.join(".gemini/antigravity/skills"),
+        "antigravity" => home_path.join(".gemini/config/skills"),
         "windsurf" => home_path.join(".codeium/windsurf/skills"),
         "intellij" => home_path.join(".junie/skills"),
         "openclaw" => home_path.join(".openclaw/skills"),

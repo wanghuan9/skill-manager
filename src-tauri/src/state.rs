@@ -200,7 +200,7 @@ pub fn scan_local_skill_candidates(installed_skills: &[SkillSummary]) -> Vec<(St
         home_dir.join(".config/opencode/skills"),
         home_dir.join(".cursor/skills"),
         home_dir.join(".gemini/skills"),
-        home_dir.join(".gemini/antigravity/skills"),
+        home_dir.join(".gemini/config/skills"),
         home_dir.join(".codeium/windsurf/skills"),
         home_dir.join(".continue/skills"),
         home_dir.join(".iflow/skills"),
