@@ -3690,21 +3690,69 @@ pub struct AppSettingsLanguageDetection {
 }
 
 fn detect_preferred_app_language_from_system() -> &'static str {
+    detect_preferred_app_language_from_locale_env()
+        .or_else(detect_preferred_app_language_from_apple_languages)
+        .unwrap_or("en")
+}
+
+fn detect_preferred_app_language_from_locale_env() -> Option<&'static str> {
     let locale_candidates = [
         env::var("LC_ALL").ok(),
         env::var("LC_MESSAGES").ok(),
         env::var("LANG").ok(),
     ];
 
-    for locale in locale_candidates.into_iter().flatten() {
-        let normalized_locale = locale.trim().to_lowercase();
-        if normalized_locale.starts_with("zh") {
-            return "zh-CN";
-        }
-        return "en";
+    locale_candidates
+        .into_iter()
+        .flatten()
+        .find_map(|locale| detect_preferred_app_language_from_locale(&locale))
+}
+
+fn detect_preferred_app_language_from_locale(locale: &str) -> Option<&'static str> {
+    let normalized_locale = locale.trim().to_lowercase();
+    if normalized_locale.is_empty()
+        || matches!(normalized_locale.as_str(), "c" | "c.utf-8" | "posix")
+    {
+        return None;
     }
 
-    "en"
+    if normalized_locale.starts_with("zh") {
+        return Some("zh-CN");
+    }
+
+    Some("en")
+}
+
+fn detect_preferred_app_language_from_apple_languages() -> Option<&'static str> {
+    #[cfg(target_os = "macos")]
+    {
+        let output = Command::new("defaults")
+            .args(["read", "-g", "AppleLanguages"])
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        return parse_apple_languages_output(&stdout);
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        None
+    }
+}
+
+fn parse_apple_languages_output(output: &str) -> Option<&'static str> {
+    output.lines().find_map(|line| {
+        let language = line
+            .split('"')
+            .nth(1)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())?;
+        detect_preferred_app_language_from_locale(language)
+    })
 }
 
 #[tauri::command]
@@ -5050,11 +5098,11 @@ mod tests {
     use super::{
         build_local_candidates, build_repo_skill_source_url, cleanup_local_skill_install_on_error,
         collect_local_skill_dirs, collect_skills_manager_cached_items, collect_skillsmp_items,
-        copy_local_skill_dir, import_local_skill, insert_trusted_project_path,
-        detect_preferred_app_language_from_system,
-        install_selected_local_skill_dirs, intellij_trusted_locations_for_project,
-        load_marketplace_cache_page, map_skillsmp_items_to_marketplace,
-        normalize_installed_skill_source_url, open_target_path_for_skill, parse_repo_install_spec,
+        copy_local_skill_dir, detect_preferred_app_language_from_system, import_local_skill,
+        insert_trusted_project_path, install_selected_local_skill_dirs,
+        intellij_trusted_locations_for_project, load_marketplace_cache_page,
+        map_skillsmp_items_to_marketplace, normalize_installed_skill_source_url,
+        open_target_path_for_skill, parse_apple_languages_output, parse_repo_install_spec,
         parse_skills_sh_homepage_items, remove_trusted_project_paths, save_marketplace_cache,
         scan_local_install_skill_candidates, scan_repo_skill_candidates,
         should_use_skills_sh_homepage_page,
@@ -5385,6 +5433,20 @@ mod tests {
         restore_env_var("LC_ALL", original_lc_all);
         restore_env_var("LC_MESSAGES", original_lc_messages);
         restore_env_var("LANG", original_lang);
+    }
+
+    #[test]
+    fn parses_apple_languages_output_for_chinese_locale() {
+        let output = "(\n    \"zh-Hans-CN\",\n    \"en-US\"\n)\n";
+
+        assert_eq!(parse_apple_languages_output(output), Some("zh-CN"));
+    }
+
+    #[test]
+    fn parses_apple_languages_output_for_non_chinese_locale() {
+        let output = "(\n    \"fr-FR\",\n    \"en-US\"\n)\n";
+
+        assert_eq!(parse_apple_languages_output(output), Some("en"));
     }
 
     #[test]
@@ -5899,10 +5961,11 @@ mod tests {
         }
 
         let target_dir = home_dir.join(".skilldock/skills/broken-skill");
-        let result: Result<(), String> = cleanup_local_skill_install_on_error(&target_dir, true, || {
-            let _ = copy_local_skill_dir(&legacy_skill_dir, &target_dir)?;
-            Err("forced failure".into())
-        });
+        let result: Result<(), String> =
+            cleanup_local_skill_install_on_error(&target_dir, true, || {
+                let _ = copy_local_skill_dir(&legacy_skill_dir, &target_dir)?;
+                Err("forced failure".into())
+            });
 
         restore_env_var("HOME", original_home);
 

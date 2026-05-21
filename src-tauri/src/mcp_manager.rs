@@ -489,12 +489,8 @@ pub async fn import_mcp_servers_from_apps(app_handle: AppHandle) -> Result<usize
                 basic_upsert.changed,
             )?;
 
-            let hydrated_changed = hydrate_imported_record_by_id(
-                &mut records,
-                &id,
-                metadata_client.as_ref(),
-            )
-            .await?;
+            let hydrated_changed =
+                hydrate_imported_record_by_id(&mut records, &id, metadata_client.as_ref()).await?;
             if hydrated_changed {
                 save_and_emit_mcp_import_progress(
                     &app_handle,
@@ -532,9 +528,12 @@ pub async fn upsert_mcp_server(server: McpServerRecord) -> Result<McpWorkspaceSn
             normalized.tools = previous.tools.clone();
         }
     }
-    normalized
-        .imported_from_app_ids
-        .retain(|app_id| normalized.enabled_app_ids.iter().any(|enabled_app_id| enabled_app_id == app_id));
+    normalized.imported_from_app_ids.retain(|app_id| {
+        normalized
+            .enabled_app_ids
+            .iter()
+            .any(|enabled_app_id| enabled_app_id == app_id)
+    });
     enrich_mcp_record_metadata(&mut normalized, mcp_metadata_client().as_ref()).await;
 
     for app_id in &normalized.enabled_app_ids {
@@ -1015,8 +1014,12 @@ fn sync_server_to_app(app_id: &str, server_id: &str, server: &Value) -> Result<(
         APP_CLAUDE_CODE => {
             upsert_json_mcp_server(&spec.config_path, "mcpServers", server_id, server)
         }
-        APP_ZENCODER => upsert_json_mcp_server(&spec.config_path, "zencoder.mcpServers", server_id, server),
-        APP_GEMINI | "antigravity" => upsert_gemini_mcp_server(&spec.config_path, server_id, server),
+        APP_ZENCODER => {
+            upsert_json_mcp_server(&spec.config_path, "zencoder.mcpServers", server_id, server)
+        }
+        APP_GEMINI | "antigravity" => {
+            upsert_gemini_mcp_server(&spec.config_path, server_id, server)
+        }
         APP_CODEX => upsert_codex_mcp_server(&spec.config_path, server_id, server),
         APP_CURSOR => upsert_json_mcp_server(&spec.config_path, "mcpServers", server_id, server),
         APP_OPENCODE => upsert_agent_json_mcp_server(&spec.config_path, server_id, server),
@@ -1028,7 +1031,9 @@ fn sync_server_to_app(app_id: &str, server_id: &str, server: &Value) -> Result<(
             upsert_json_mcp_server(&spec.config_path, "mcpServers", server_id, server)
         }
         APP_CONTINUE => upsert_continue_mcp_server(&spec.config_path, server_id, server),
-        APP_GITHUB_COPILOT => upsert_json_mcp_server(&spec.config_path, "mcpServers", server_id, server),
+        APP_GITHUB_COPILOT => {
+            upsert_json_mcp_server(&spec.config_path, "mcpServers", server_id, server)
+        }
         APP_GOOSE => upsert_goose_mcp_server(&spec.config_path, server_id, server),
         APP_HERMES => upsert_hermes_mcp_server(&spec.config_path, server_id, server),
         APP_IFLOW => upsert_iflow_mcp_server(server_id, server),
@@ -1057,7 +1062,9 @@ fn remove_server_from_app(app_id: &str, server_id: &str) -> Result<(), String> {
         APP_AUGMENT => remove_json_mcp_server(&spec.config_path, "mcpServers", server_id),
         APP_CLAUDE_CODE => remove_json_mcp_server(&spec.config_path, "mcpServers", server_id),
         APP_ZENCODER => remove_json_mcp_server(&spec.config_path, "zencoder.mcpServers", server_id),
-        APP_GEMINI | "antigravity" => remove_json_mcp_server(&spec.config_path, "mcpServers", server_id),
+        APP_GEMINI | "antigravity" => {
+            remove_json_mcp_server(&spec.config_path, "mcpServers", server_id)
+        }
         APP_CODEX => remove_codex_mcp_server(&spec.config_path, server_id),
         APP_CURSOR => remove_json_mcp_server(&spec.config_path, "mcpServers", server_id),
         APP_OPENCODE => remove_agent_json_mcp_server(&spec.config_path, server_id),
@@ -1110,7 +1117,9 @@ fn read_json_mcp_servers(
     }
 
     let root = read_json_value(path, allow_json5)?;
-    let mut servers = get_json_object_at_path(&root, field_name).cloned().unwrap_or_default();
+    let mut servers = get_json_object_at_path(&root, field_name)
+        .cloned()
+        .unwrap_or_default();
     for spec in servers.values_mut() {
         normalize_imported_mcp_server(spec);
     }
@@ -1164,7 +1173,10 @@ fn json_field_segments(field_name: &str) -> impl Iterator<Item = &str> {
     field_name.split('.').filter(|segment| !segment.is_empty())
 }
 
-fn get_json_object_at_path<'a>(root: &'a Value, field_name: &str) -> Option<&'a Map<String, Value>> {
+fn get_json_object_at_path<'a>(
+    root: &'a Value,
+    field_name: &str,
+) -> Option<&'a Map<String, Value>> {
     let mut current = root;
     for segment in json_field_segments(field_name) {
         current = current.get(segment)?;
@@ -1787,10 +1799,7 @@ fn goose_extension_to_unified(extension: &Value) -> Result<Value, String> {
         .as_object()
         .cloned()
         .ok_or_else(|| "Goose extension 定义必须为 YAML 对象".to_string())?;
-    let extension_type = obj
-        .get("type")
-        .and_then(Value::as_str)
-        .unwrap_or("stdio");
+    let extension_type = obj.get("type").and_then(Value::as_str).unwrap_or("stdio");
     let mut out = Map::new();
 
     match extension_type {
@@ -2201,10 +2210,7 @@ fn save_and_emit_mcp_import_progress(
     Ok(())
 }
 
-async fn hydrate_imported_record(
-    record: &mut McpServerRecord,
-    metadata_client: Option<&Client>,
-) {
+async fn hydrate_imported_record(record: &mut McpServerRecord, metadata_client: Option<&Client>) {
     enrich_mcp_record_metadata(record, metadata_client).await;
 }
 
@@ -2246,15 +2252,13 @@ fn normalize_record(mut record: McpServerRecord) -> Result<McpServerRecord, Stri
         .retain(|app_id| supported_app_ids.contains(app_id));
     record.enabled_app_ids.sort();
     record.enabled_app_ids.dedup();
-    record
-        .imported_from_app_ids
-        .retain(|app_id| {
-            supported_app_ids.contains(app_id)
-                && record
-                    .enabled_app_ids
-                    .iter()
-                    .any(|enabled_app_id| enabled_app_id == app_id)
-        });
+    record.imported_from_app_ids.retain(|app_id| {
+        supported_app_ids.contains(app_id)
+            && record
+                .enabled_app_ids
+                .iter()
+                .any(|enabled_app_id| enabled_app_id == app_id)
+    });
     record.imported_from_app_ids.sort();
     record.imported_from_app_ids.dedup();
     normalize_mcp_tool_statuses(&mut record.tools);
@@ -2518,8 +2522,13 @@ fn discover_http_mcp_tools(server: &Value) -> Result<Vec<String>, String> {
         &session_id,
         mcp_initialized_notification(),
     )?;
-    let tools_response =
-        post_mcp_http_message(&client, url, server, &session_id, mcp_tools_list_request(2, None))?;
+    let tools_response = post_mcp_http_message(
+        &client,
+        url,
+        server,
+        &session_id,
+        mcp_tools_list_request(2, None),
+    )?;
     let response = parse_mcp_http_json_response(tools_response)?;
     let mut page = parse_mcp_tools_list_response(&response)?;
     let mut tools = page.tools;
@@ -4111,7 +4120,11 @@ fn load_mcp_records() -> Result<Vec<McpServerRecord>, String> {
     };
     let persistence = serde_json::from_str::<McpPersistence>(&content)
         .map_err(|error| format!("解析 MCP 状态失败: {error}"))?;
-    persistence.servers.into_iter().map(normalize_record).collect()
+    persistence
+        .servers
+        .into_iter()
+        .map(normalize_record)
+        .collect()
 }
 
 fn save_mcp_records(records: &[McpServerRecord]) -> Result<(), String> {
@@ -4292,6 +4305,38 @@ fn mcp_http_client() -> Result<Client, String> {
         .timeout(Duration::from_secs(14))
         .build()
         .map_err(|error| format!("创建 MCP 市场请求客户端失败: {error}"))
+}
+
+fn format_mcp_marketplace_request_error(error: &reqwest::Error) -> String {
+    classify_mcp_marketplace_request_error(error.is_timeout(), error.is_connect(), &error.to_string())
+}
+
+fn classify_mcp_marketplace_request_error(
+    is_timeout: bool,
+    is_connect: bool,
+    message: &str,
+) -> String {
+    if is_timeout {
+        return "请求超时，请稍后重试".to_string();
+    }
+
+    if is_connect {
+        return "连接 MCP.Directory 失败，请检查网络后重试".to_string();
+    }
+
+    let lower_message = message.to_lowercase();
+    if lower_message.contains("dns") || lower_message.contains("failed to lookup address") {
+        return "无法解析 MCP.Directory 地址，请检查网络或 DNS 设置".to_string();
+    }
+
+    if lower_message.contains("certificate")
+        || lower_message.contains("tls")
+        || lower_message.contains("ssl")
+    {
+        return "与 MCP.Directory 建立安全连接失败，请稍后重试".to_string();
+    }
+
+    message.to_string()
 }
 
 fn mcp_marketplace_cache_file() -> Option<PathBuf> {
@@ -4500,11 +4545,31 @@ async fn fetch_mcp_marketplace_install_config(
         "https://mcp.directory/api/v1/servers/{}/install-configs",
         encode_query_component(&slug)
     );
-    let payload = client
-        .get(endpoint)
-        .send()
-        .await
-        .map_err(|error| format!("请求 MCP 安装配置失败: {error}"))?
+    let mut last_error = String::new();
+    let mut response = None;
+    for attempt in 1..=2 {
+        match client.get(&endpoint).send().await {
+            Ok(next_response) => {
+                response = Some(next_response);
+                break;
+            }
+            Err(error) => {
+                let formatted_error = format_mcp_marketplace_request_error(&error);
+                last_error = if attempt == 1 {
+                    format!(
+                        "请求 MCP 安装配置失败: {formatted_error}；正在重试一次"
+                    )
+                } else {
+                    format!(
+                        "请求 MCP 安装配置失败: {formatted_error}；已重试 1 次"
+                    )
+                };
+            }
+        }
+    }
+
+    let payload = response
+        .ok_or(last_error)?
         .error_for_status()
         .map_err(|error| format!("MCP 安装配置返回异常状态: {error}"))?
         .json::<McpDirectoryInstallConfigsResponse>()
@@ -5382,7 +5447,10 @@ A comprehensive GitLab MCP server for AI clients. Manage projects, merge request
         assert!(!upsert.changed);
         assert!(!upsert.was_created);
         assert_eq!(records[0].enabled_app_ids, vec![APP_CODEX.to_string()]);
-        assert_eq!(records[0].imported_from_app_ids, vec![APP_CODEX.to_string()]);
+        assert_eq!(
+            records[0].imported_from_app_ids,
+            vec![APP_CODEX.to_string()]
+        );
     }
 
     #[test]
@@ -5421,7 +5489,8 @@ A comprehensive GitLab MCP server for AI clients. Manage projects, merge request
             "args": ["-y", "@modelcontextprotocol/server-filesystem"]
         });
 
-        if let Err(error) = upsert_codex_mcp_server(&codex_config_path, server_id, &imported_server) {
+        if let Err(error) = upsert_codex_mcp_server(&codex_config_path, server_id, &imported_server)
+        {
             cleanup();
             panic!("seed codex config failed: {error}");
         }
@@ -5526,8 +5595,14 @@ A comprehensive GitLab MCP server for AI clients. Manage projects, merge request
         };
         assert_eq!(persisted_records.len(), 1);
         assert_eq!(persisted_records[0].id, server_id);
-        assert_eq!(persisted_records[0].enabled_app_ids, vec![APP_CODEX.to_string()]);
-        assert_eq!(persisted_records[0].imported_from_app_ids, vec![APP_CODEX.to_string()]);
+        assert_eq!(
+            persisted_records[0].enabled_app_ids,
+            vec![APP_CODEX.to_string()]
+        );
+        assert_eq!(
+            persisted_records[0].imported_from_app_ids,
+            vec![APP_CODEX.to_string()]
+        );
 
         cleanup();
     }
@@ -5568,7 +5643,9 @@ A comprehensive GitLab MCP server for AI clients. Manage projects, merge request
             "args": ["-y", "@playwright/mcp"]
         });
 
-        if let Err(error) = upsert_gemini_mcp_server(&gemini_config_path, server_id, &managed_server) {
+        if let Err(error) =
+            upsert_gemini_mcp_server(&gemini_config_path, server_id, &managed_server)
+        {
             cleanup();
             panic!("seed gemini config failed: {error}");
         }
@@ -5646,7 +5723,8 @@ A comprehensive GitLab MCP server for AI clients. Manage projects, merge request
             "args": ["-y", "@modelcontextprotocol/server-filesystem"]
         });
 
-        if let Err(error) = upsert_codex_mcp_server(&codex_config_path, server_id, &imported_server) {
+        if let Err(error) = upsert_codex_mcp_server(&codex_config_path, server_id, &imported_server)
+        {
             cleanup();
             panic!("seed codex config failed: {error}");
         }
@@ -5672,9 +5750,7 @@ A comprehensive GitLab MCP server for AI clients. Manage projects, merge request
         }
 
         let snapshot = match tauri::async_runtime::block_on(toggle_mcp_server_app(
-            server_id,
-            APP_CODEX,
-            false,
+            server_id, APP_CODEX, false,
         )) {
             Ok(snapshot) => snapshot,
             Err(error) => {
@@ -5692,7 +5768,11 @@ A comprehensive GitLab MCP server for AI clients. Manage projects, merge request
         };
         assert!(codex_servers.is_empty());
 
-        let record = match snapshot.servers.iter().find(|server| server.id == server_id) {
+        let record = match snapshot
+            .servers
+            .iter()
+            .find(|server| server.id == server_id)
+        {
             Some(record) => record,
             None => {
                 cleanup();
@@ -5700,7 +5780,10 @@ A comprehensive GitLab MCP server for AI clients. Manage projects, merge request
             }
         };
         assert!(record.enabled_app_count == 0);
-        assert!(record.apps.iter().any(|app| app.app_id == APP_CODEX && !app.is_enabled));
+        assert!(record
+            .apps
+            .iter()
+            .any(|app| app.app_id == APP_CODEX && !app.is_enabled));
 
         let persisted_records = match load_mcp_records() {
             Ok(records) => records,
@@ -6259,6 +6342,22 @@ mcpServers:
     }
 
     #[test]
+    fn formats_timeout_marketplace_request_error_message() {
+        assert_eq!(
+            classify_mcp_marketplace_request_error(true, false, "operation timed out"),
+            "请求超时，请稍后重试"
+        );
+    }
+
+    #[test]
+    fn formats_connect_marketplace_request_error_message() {
+        assert_eq!(
+            classify_mcp_marketplace_request_error(false, true, "connection refused"),
+            "连接 MCP.Directory 失败，请检查网络后重试"
+        );
+    }
+
+    #[test]
     fn selects_first_parseable_marketplace_install_config_in_returned_order() {
         let configs = vec![
             McpDirectoryInstallConfig {
@@ -6366,12 +6465,9 @@ mcpServers:
     fn parses_context7_initialize_response_when_protocol_header_is_present() {
         let payload = r#"data: {"result":{"protocolVersion":"2024-11-05","capabilities":{"tools":{"listChanged":true}},"serverInfo":{"name":"Context7","version":"2.2.5"}},"jsonrpc":"2.0","id":1}"#;
 
-        let value = serde_json::from_str::<Value>(
-            payload
-                .strip_prefix("data: ")
-                .expect("sse data prefix"),
-        )
-        .expect("parse context7 initialize payload");
+        let value =
+            serde_json::from_str::<Value>(payload.strip_prefix("data: ").expect("sse data prefix"))
+                .expect("parse context7 initialize payload");
 
         let protocol_version = value
             .get("result")

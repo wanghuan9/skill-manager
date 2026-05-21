@@ -160,6 +160,13 @@ fn build_compact_failure_log(entry: &FailureLogEntry, log_path: &str) -> String 
         format!("diagnosticId: {}", entry.id),
     ];
 
+    if let Some(root_cause) = extract_context_string(&entry.context, &["errorDetails", "rootCause"]) {
+        lines.push(format!("rootCause: {}", root_cause));
+    }
+    if let Some(cause_chain) = extract_context_string_list(&entry.context, &["errorDetails", "causeChain"]) {
+        lines.push(format!("causeChain: {}", cause_chain.join(" -> ")));
+    }
+
     if let Some(failed_app) = extract_labeled_value(&entry.message, "导入 ", " MCP ") {
         lines.push(format!("failedApp: {}", failed_app));
     }
@@ -203,6 +210,41 @@ fn extract_quoted_value(value: &str) -> Option<String> {
     } else {
         Some(extracted.to_string())
     }
+}
+
+fn extract_context_string(value: &Value, path: &[&str]) -> Option<String> {
+    let nested = find_nested_value(value, path)?;
+    let text = nested.as_str()?.trim();
+    if text.is_empty() {
+        None
+    } else {
+        Some(text.to_string())
+    }
+}
+
+fn extract_context_string_list(value: &Value, path: &[&str]) -> Option<Vec<String>> {
+    let nested = find_nested_value(value, path)?;
+    let items = nested.as_array()?;
+    let values = items
+        .iter()
+        .filter_map(|item| item.as_str())
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    if values.is_empty() {
+        None
+    } else {
+        Some(values)
+    }
+}
+
+fn find_nested_value<'a>(value: &'a Value, path: &[&str]) -> Option<&'a Value> {
+    let mut current = value;
+    for key in path {
+        current = current.get(*key)?;
+    }
+    Some(current)
 }
 
 fn redact_home_path(value: &str) -> String {

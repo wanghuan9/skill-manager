@@ -329,7 +329,7 @@ test("clears installed MCP badge after the server is deleted from the MCP page",
   const expandButton = await screen.findByRole("button", { name: "展开 playwright" });
   await userEvent.click(expandButton);
   await userEvent.click(screen.getByRole("button", { name: "删除 playwright" }));
-  await userEvent.click(screen.getByRole("button", { name: "确认删除 playwright" }));
+  await userEvent.click(screen.getByRole("button", { name: "确认 playwright" }));
 
   await waitFor(() => {
     expect(screen.queryByText("playwright")).not.toBeInTheDocument();

@@ -73,6 +73,18 @@ function shouldRefreshMcpToolsOnManualRefresh(
   return shouldAutoRefreshMcpTools(server) || shouldRefreshFailedMcpTools(server);
 }
 
+function buildMcpAutoProbeSignature(
+  server: Pick<McpServerSummary, "id" | "serverJson" | "tools" | "toolsDiscoveredAt" | "toolsDiscoveryError">,
+) {
+  return JSON.stringify({
+    id: server.id,
+    serverJson: server.serverJson,
+    tools: server.tools,
+    toolsDiscoveredAt: server.toolsDiscoveredAt.trim(),
+    toolsDiscoveryError: server.toolsDiscoveryError.trim(),
+  });
+}
+
 function buildMcpFeedbackContext(workspace: McpWorkspaceSnapshot | null) {
   return {
     route: "mcp",
@@ -568,6 +580,7 @@ export function McpRoute(props: McpRouteProps = {}) {
   const importActionLockedRef = useRef(false);
   const refreshActionLockedRef = useRef(false);
   const probingToolServerIdsRef = useRef(new Set<string>());
+  const autoProbedToolSignaturesRef = useRef(new Set<string>());
 
   function commitWorkspace(
     snapshot: McpWorkspaceSnapshot | null,
@@ -588,6 +601,7 @@ export function McpRoute(props: McpRouteProps = {}) {
   async function probeMcpTools(
     snapshot: McpWorkspaceSnapshot | null,
     predicate: (server: McpServerSummary) => boolean,
+    options: { dedupeAutoRefresh?: boolean } = {},
   ) {
     if (shouldUseFixtureData() || !snapshot) {
       return snapshot;
@@ -597,7 +611,16 @@ export function McpRoute(props: McpRouteProps = {}) {
       if (!predicate(server) || probingToolServerIdsRef.current.has(server.id)) {
         continue;
       }
+      const autoProbeSignature = options.dedupeAutoRefresh
+        ? buildMcpAutoProbeSignature(server)
+        : "";
+      if (autoProbeSignature && autoProbedToolSignaturesRef.current.has(autoProbeSignature)) {
+        continue;
+      }
       probingToolServerIdsRef.current.add(server.id);
+      if (autoProbeSignature) {
+        autoProbedToolSignaturesRef.current.add(autoProbeSignature);
+      }
       try {
         nextSnapshot = await refreshMcpServerTools(server.id);
         if (!isMountedRef.current) {
@@ -669,7 +692,7 @@ export function McpRoute(props: McpRouteProps = {}) {
         const snapshot = await fetchMcpWorkspace();
         if (active) {
           commitWorkspace(snapshot);
-          void probeMcpTools(snapshot, shouldAutoRefreshMcpTools);
+          void probeMcpTools(snapshot, shouldAutoRefreshMcpTools, { dedupeAutoRefresh: true });
         }
       } catch (error) {
         if (active) {
@@ -764,7 +787,7 @@ export function McpRoute(props: McpRouteProps = {}) {
       } else {
         cacheMcpWorkspace(snapshot);
       }
-      await probeMcpTools(snapshot, shouldAutoRefreshMcpTools);
+      await probeMcpTools(snapshot, shouldAutoRefreshMcpTools, { dedupeAutoRefresh: true });
       notify({
         tone: "success",
         message: count > 0 ? t("mcp.import.added", { count }) : t("mcp.import.none"),
