@@ -41,9 +41,9 @@ test("calls delete only after the second click and shows success notification", 
   await userEvent.click(screen.getByRole("button", { name: /删除 drawio-diagram/ }));
 
   expect(deleteSkillMock).not.toHaveBeenCalled();
-  expect(screen.getByRole("button", { name: /确认删除 drawio-diagram/ })).toHaveTextContent("确认");
+  expect(screen.getByRole("button", { name: /确认 drawio-diagram/ })).toHaveTextContent("确认");
 
-  await userEvent.click(screen.getByRole("button", { name: /确认删除 drawio-diagram/ }));
+  await userEvent.click(screen.getByRole("button", { name: /确认 drawio-diagram/ }));
 
   expect(deleteSkillMock).toHaveBeenCalledOnce();
   expect(deleteSkillMock).toHaveBeenCalledWith("drawio-diagram");

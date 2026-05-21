@@ -196,7 +196,7 @@ test("uses inline confirmation before deleting a skill", async () => {
   await userEvent.click(screen.getByRole("button", { name: /删除 drawio-diagram/ }));
 
   expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-  expect(screen.getByRole("button", { name: /确认删除 drawio-diagram/ })).toHaveTextContent("确认");
+  expect(screen.getByRole("button", { name: /确认 drawio-diagram/ })).toHaveTextContent("确认");
   expect(screen.getByText("drawio-diagram")).toBeInTheDocument();
 });
 
