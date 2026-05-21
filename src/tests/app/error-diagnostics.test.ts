@@ -2,10 +2,14 @@ import { expect, test } from "vitest";
 import { buildErrorDiagnostics } from "@/app/error-diagnostics";
 
 test("extracts root cause and cause chain from nested errors", () => {
-  const error = new Error("error sending request for url (https://github.com/example/latest.json)", {
-    cause: new Error("client error (Connect)"),
-  });
-  (error.cause as Error).cause = new Error("dns error: failed to lookup address information");
+  const rootCause = new Error("dns error: failed to lookup address information");
+  const cause = new Error("client error (Connect)") as Error & { cause?: unknown };
+  cause.cause = rootCause;
+
+  const error = new Error("error sending request for url (https://github.com/example/latest.json)") as Error & {
+    cause?: unknown;
+  };
+  error.cause = cause;
 
   expect(buildErrorDiagnostics(error)).toEqual(expect.objectContaining({
     message: "error sending request for url (https://github.com/example/latest.json)",
