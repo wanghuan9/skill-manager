@@ -684,6 +684,12 @@ export async function recordFailureFeedback(input: FailureFeedbackInput): Promis
     : inCurrentLanguage("未知异常", "Unknown Error");
   const title = `[Bug] ${input.operation} ${failureKind}: ${input.message}`.slice(0, 120);
   const context = input.context ?? {};
+  const errorDetails = typeof context.errorDetails === "object" && context.errorDetails !== null
+    ? context.errorDetails as Record<string, unknown>
+    : null;
+  const causeChain = Array.isArray(errorDetails?.causeChain)
+    ? errorDetails.causeChain.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+    : [];
   const body = [
     inCurrentLanguage("## 问题描述", "## What Happened"),
     inCurrentLanguage(
@@ -696,6 +702,8 @@ export async function recordFailureFeedback(input: FailureFeedbackInput): Promis
     `kind: ${input.kind ?? "unknown"}`,
     `operation: ${input.operation}`,
     `error: ${input.message}`,
+    typeof errorDetails?.rootCause === "string" ? `rootCause: ${errorDetails.rootCause}` : "",
+    causeChain.length > 0 ? `causeChain: ${causeChain.join(" -> ")}` : "",
     `time: ${new Date().toISOString()}`,
     "localLog: ~/.skilldock/logs/errors.jsonl",
     typeof context.route === "string" ? `route: ${context.route}` : "",

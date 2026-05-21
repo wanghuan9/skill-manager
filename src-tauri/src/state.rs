@@ -1012,7 +1012,10 @@ mod tests {
                     ),
                     (
                         "goose-modern".to_string(),
-                        temp_home.join(".agents/skills").to_string_lossy().to_string()
+                        temp_home
+                            .join(".agents/skills")
+                            .to_string_lossy()
+                            .to_string()
                     ),
                 ]
             );

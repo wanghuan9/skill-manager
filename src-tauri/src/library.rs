@@ -2164,7 +2164,10 @@ mod tests {
         );
         assert_eq!(
             get_tool_skills_path("goose").expect("goose path"),
-            home_dir.join(".agents/skills").to_string_lossy().to_string()
+            home_dir
+                .join(".agents/skills")
+                .to_string_lossy()
+                .to_string()
         );
 
         if let Some(home) = original_home {

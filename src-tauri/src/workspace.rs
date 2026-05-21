@@ -40,12 +40,18 @@ pub fn ensure_workspace_initialized() -> Result<PathBuf, String> {
     fs::create_dir_all(workspace_root.join("imports"))
         .map_err(|error| format!("创建 imports 目录失败: {error}"))?;
 
-    ensure_workspace_file_with_default_content(&workspace_root.join("state.json"), "{\n  \"installedSkills\": []\n}\n")?;
+    ensure_workspace_file_with_default_content(
+        &workspace_root.join("state.json"),
+        "{\n  \"installedSkills\": []\n}\n",
+    )?;
     ensure_workspace_file_with_default_content(
         &workspace_root.join("settings.json"),
         "{\n  \"defaultOpenToolId\": \"\",\n  \"skillInstallActivation\": \"apply-all-tools\",\n  \"mcpInstallActivation\": \"disable-all-tools\"\n}\n",
     )?;
-    ensure_workspace_file_with_default_content(&workspace_root.join("mcp-servers.json"), "{\n  \"servers\": []\n}\n")?;
+    ensure_workspace_file_with_default_content(
+        &workspace_root.join("mcp-servers.json"),
+        "{\n  \"servers\": []\n}\n",
+    )?;
 
     Ok(workspace_root)
 }
@@ -89,7 +95,10 @@ pub fn normalize_workspace_path(value: &str) -> String {
     value.replace(LEGACY_WORKSPACE_DIR_NAME, WORKSPACE_DIR_NAME)
 }
 
-fn ensure_workspace_file_with_default_content(path: &Path, default_content: &str) -> Result<(), String> {
+fn ensure_workspace_file_with_default_content(
+    path: &Path,
+    default_content: &str,
+) -> Result<(), String> {
     if path.exists() {
         return Ok(());
     }
@@ -374,7 +383,8 @@ mod tests {
     #[test]
     fn initializes_workspace_directories_and_files_when_missing() {
         run_with_temp_home("bootstrap", |temp_home| {
-            let workspace_root = ensure_workspace_initialized().expect("workspace should initialize");
+            let workspace_root =
+                ensure_workspace_initialized().expect("workspace should initialize");
 
             assert_eq!(workspace_root, temp_home.join(WORKSPACE_DIR_NAME));
             assert!(workspace_root.join("skills").is_dir());

@@ -1,4 +1,5 @@
 import { useCallback } from "react";
+import { buildErrorDiagnostics } from "@/app/error-diagnostics";
 import { useTranslate } from "@/app/i18n";
 import { useNotifications } from "@/app/notifications";
 import { classifyError, normalizeErrorMessage } from "@/app/errors";
@@ -22,11 +23,15 @@ export function useFailureReporter() {
 
   return useCallback((error: unknown, input: UseFailureReporterInput) => {
     const classification = classifyError(error, input.fallbackMessage);
+    const errorDetails = buildErrorDiagnostics(error);
     const feedbackInput: FailureFeedbackInput = {
       operation: input.operation,
       message: classification.message,
       kind: classification.kind,
-      context: input.context,
+      context: {
+        ...input.context,
+        ...(errorDetails ? { errorDetails } : {}),
+      },
     };
 
     const feedbackDraftPromise = recordFailureFeedback(feedbackInput).catch(() => null);
