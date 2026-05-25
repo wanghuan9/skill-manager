@@ -32,6 +32,7 @@ import {
   openSkillInEditor,
   openPathInFinder,
   openSkillRepository,
+  pushSkillToCurrentBranch,
   saveSkillFileContent,
   setSkillAllToolStatuses,
   setToolSkillStatuses,
@@ -138,6 +139,7 @@ type SkillWorkspaceContextValue = {
     createBranchName?: string;
   }) => Promise<PushPreviewSnapshot>;
   loadPushTargets: (skillName: string) => Promise<PushTargetSnapshot>;
+  pushSkillToCurrentBranch: (skillName: string) => Promise<void>;
   openSkillRepository: (skillName: string) => Promise<void>;
   openSkillInEditor: (input: { skillName: string; editorId: string }) => Promise<void>;
   defaultOpenToolId: string;
@@ -879,6 +881,11 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
     setInstalledSkills((current) => [updatedSkill, ...current.filter((item) => item.name !== updatedSkill.name)]);
   }
 
+  async function handlePushSkillToCurrentBranch(skillName: string) {
+    const updatedSkill = await pushSkillToCurrentBranch(skillName);
+    setInstalledSkills((current) => mergeUpdatedSkillsPreservingOrder(current, [updatedSkill]));
+  }
+
   async function handleUpdateAllSkills() {
     const updatableSkills = installedSkills.filter((skill) => skill.collabStatus === "update-available");
     if (updatableSkills.length === 0) {
@@ -1081,6 +1088,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       setSkillAllToolStatuses: handleSetSkillAllToolStatuses,
       loadPushPreview: fetchPushPreviewSnapshot,
       loadPushTargets: fetchPushTargetSnapshot,
+      pushSkillToCurrentBranch: handlePushSkillToCurrentBranch,
       openSkillRepository,
       openSkillInEditor,
       defaultOpenToolId,

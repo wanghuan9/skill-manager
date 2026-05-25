@@ -665,6 +665,25 @@ export async function fetchPushPreviewSnapshot(input: PushPreviewInput): Promise
   return invokeOrFallback("get_push_preview_snapshot", input, fallback);
 }
 
+export async function pushSkillToCurrentBranch(skillName: string): Promise<SkillSummary> {
+  const fallbackSource =
+    installedSkillFixtures.find((skill) => skill.name === skillName) ??
+    installedSkillFixtures[0];
+  const fallback = {
+    ...fallbackSource,
+    collabStatus: "clean" as const,
+    statusText: inCurrentLanguage("已推送到当前分支。", "Pushed to the current branch."),
+    lastCheckedAt: inCurrentLanguage("刚刚检查", "Checked just now"),
+  };
+
+  const updatedSkill = await invokeOrFallback<LegacySkillSummary>(
+    "push_skill_to_current_branch",
+    { skillName },
+    fallback,
+  );
+  return normalizeSkillSummary(updatedSkill);
+}
+
 export async function openSkillRepository(skillName: string): Promise<void> {
   return invokeOrFallback("open_skill_repository", { skillName }, undefined);
 }
