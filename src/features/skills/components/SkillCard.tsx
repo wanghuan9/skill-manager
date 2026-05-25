@@ -24,6 +24,11 @@ type SkillCardProps = {
   onExpandedChange?: (expanded: boolean) => void;
 };
 
+type PushConfirmState = {
+  branch: string;
+  commands: string[];
+};
+
 const SUMMARY_DESCRIPTION_LIMIT = 76;
 
 function SkillMonogram({ name }: { name: string }) {
@@ -143,6 +148,26 @@ function RefreshIcon({ isSpinning = false }: { isSpinning?: boolean }) {
   );
 }
 
+function UploadIcon({ isSpinning = false }: { isSpinning?: boolean }) {
+  return (
+    <svg className={isSpinning ? "skill-card__refresh-icon is-spinning" : "skill-card__refresh-icon"} viewBox="0 0 20 20" fill="none" aria-hidden="true">
+      <path
+        d="M10 15.5V4.75M6.25 8.25 10 4.5l3.75 3.75"
+        stroke="currentColor"
+        strokeWidth="1.7"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M4.75 14.75v.75c0 .69.56 1.25 1.25 1.25h8c.69 0 1.25-.56 1.25-1.25v-.75"
+        stroke="currentColor"
+        strokeWidth="1.7"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
 function DeleteIcon() {
   return (
     <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
@@ -161,12 +186,22 @@ export function SkillCard({ skill, expanded: expandedProp, onExpandedChange }: S
   const { t } = useTranslate();
   const { notify } = useNotifications();
   const reportFailure = useFailureReporter();
-  const { deleteSkill, openSkillWithDefaultTool, toolConfigs, updateSkill } = useSkillWorkspace();
+  const {
+    deleteSkill,
+    loadPushPreview,
+    loadPushTargets,
+    openSkillWithDefaultTool,
+    pushSkillToCurrentBranch,
+    toolConfigs,
+    updateSkill,
+  } = useSkillWorkspace();
   const [expandedState, setExpandedState] = useState(false);
   const [showFileDialog, setShowFileDialog] = useState(false);
   const [isDeleteConfirming, setIsDeleteConfirming] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
+  const [isPushing, setIsPushing] = useState(false);
+  const [pushConfirmState, setPushConfirmState] = useState<PushConfirmState | null>(null);
   const [showEnabledTools, setShowEnabledTools] = useState(false);
   const deleteActionRef = useRef<HTMLButtonElement | null>(null);
   const skillTools = mergeSkillToolsWithInstalledTools(skill.tools, toolConfigs);
@@ -185,7 +220,8 @@ export function SkillCard({ skill, expanded: expandedProp, onExpandedChange }: S
   const summaryToolsLabel = enabledTools.length > 0
     ? t("skill.card.enabledTools", { tools: enabledTools.map((tool) => tool.name).join("、") })
     : t("skill.card.enabledToolsNone");
-  const showDetailAction = skill.collabStatus === "update-available";
+  const showUpdateAction = skill.collabStatus === "update-available";
+  const showPushAction = skill.collabStatus === "pending-push";
   const showRemoteUpdateInfo = skill.sourceType !== "local";
   const displaySourceLabel =
     sourceLabel === "本地" || sourceLabel === "Local"
@@ -245,6 +281,65 @@ export function SkillCard({ skill, expanded: expandedProp, onExpandedChange }: S
     }
   }
 
+  async function handlePushAction() {
+    if (isPushing) {
+      return;
+    }
+
+    setIsPushing(true);
+    try {
+      const targetSnapshot = await loadPushTargets(skill.name);
+      const currentBranch = targetSnapshot.currentBranch || skill.branch;
+      const preview = await loadPushPreview({
+        skillName: skill.name,
+        targetBranch: currentBranch,
+      });
+      const commands = [
+        `cd ${preview.repositoryPath}`,
+        ...(preview.uncommittedFiles.length > 0
+          ? [
+              "git add -- .",
+              `git commit -m "chore: update ${skill.name}" -- .`,
+            ]
+          : []),
+        `git push origin ${currentBranch}`,
+      ];
+      setPushConfirmState({
+        branch: currentBranch,
+        commands,
+      });
+    } catch (error) {
+      reportFailure(error, {
+        operation: "load_push_preview",
+        fallbackMessage: t("skill.card.error.pushPreview"),
+        context: { skillName: skill.name },
+      });
+    } finally {
+      setIsPushing(false);
+    }
+  }
+
+  async function handleConfirmPush() {
+    if (isPushing) {
+      return;
+    }
+
+    setIsPushing(true);
+    try {
+      await pushSkillToCurrentBranch(skill.name);
+      setPushConfirmState(null);
+      notify({ tone: "success", message: t("skill.card.success.pushed", { name: skill.name }) });
+    } catch (error) {
+      reportFailure(error, {
+        operation: "push_skill_to_current_branch",
+        fallbackMessage: t("skill.card.error.push"),
+        context: { skillName: skill.name },
+      });
+    } finally {
+      setIsPushing(false);
+    }
+  }
+
   async function handleDeleteAction() {
     if (isDeleting) {
       return;
@@ -300,6 +395,7 @@ export function SkillCard({ skill, expanded: expandedProp, onExpandedChange }: S
   }
 
   const updateTooltipLabel = isUpdating ? t("skill.card.tooltip.updating") : t("skill.card.tooltip.update");
+  const pushTooltipLabel = isPushing ? t("skill.card.tooltip.pushing") : t("skill.card.tooltip.push");
   const deleteConfirmTooltipLabel = isDeleting ? t("skill.card.tooltip.deleting") : t("skill.card.tooltip.deleteConfirm");
 
   return (
@@ -343,7 +439,7 @@ export function SkillCard({ skill, expanded: expandedProp, onExpandedChange }: S
           </div>
           <div className="skill-card__list-actions">
             <SkillStatusBadge status={skill.collabStatus} />
-            {showDetailAction ? (
+            {showUpdateAction ? (
               <button
                 className="skill-card__icon-button skill-card__icon-button--update"
                 type="button"
@@ -353,6 +449,19 @@ export function SkillCard({ skill, expanded: expandedProp, onExpandedChange }: S
                 disabled={isUpdating}
               >
                 <RefreshIcon isSpinning={isUpdating} />
+              </button>
+            ) : null}
+            {showPushAction ? (
+              <button
+                className="skill-card__push-button"
+                type="button"
+                onClick={() => void handlePushAction()}
+                aria-label={t("skill.card.aria.push", { name: skill.name })}
+                data-tooltip={pushTooltipLabel}
+                disabled={isPushing}
+              >
+                <UploadIcon isSpinning={isPushing} />
+                <span>{isPushing ? t("skill.card.pushLoading") : t("skill.card.pushButton")}</span>
               </button>
             ) : null}
             <button
@@ -479,6 +588,48 @@ export function SkillCard({ skill, expanded: expandedProp, onExpandedChange }: S
       </article>
       {showFileDialog ? (
         <SkillFileDialog skill={skill} isOpen={showFileDialog} onClose={() => setShowFileDialog(false)} />
+      ) : null}
+      {pushConfirmState ? (
+        <div className="dialog-backdrop" role="presentation" onClick={() => setPushConfirmState(null)}>
+          <div
+            className="dialog-card skill-push-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby={`push-dialog-title-${skill.name}`}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="dialog-card__header">
+              <div>
+                <h3 id={`push-dialog-title-${skill.name}`}>{t("skill.card.pushDialog.title")}</h3>
+                <p>{t("skill.card.pushDialog.target", { name: skill.name, branch: pushConfirmState.branch })}</p>
+              </div>
+            </div>
+            <div className="dialog-card__body">
+              <section className="dialog-section">
+                <h4>{t("skill.card.pushDialog.commands")}</h4>
+                <pre className="dialog-command-preview">{pushConfirmState.commands.join("\n")}</pre>
+              </section>
+            </div>
+            <div className="dialog-card__footer">
+              <button
+                className="secondary-button secondary-button--compact"
+                type="button"
+                onClick={() => setPushConfirmState(null)}
+                disabled={isPushing}
+              >
+                {t("skill.card.pushDialog.cancel")}
+              </button>
+              <button
+                className="primary-button primary-button--compact"
+                type="button"
+                onClick={() => void handleConfirmPush()}
+                disabled={isPushing}
+              >
+                {isPushing ? t("skill.card.pushDialog.running") : t("skill.card.pushDialog.confirm")}
+              </button>
+            </div>
+          </div>
+        </div>
       ) : null}
     </>
   );

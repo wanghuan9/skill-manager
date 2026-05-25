@@ -2774,6 +2774,16 @@ fn refresh_and_persist_skill(skill_name: &str) -> Result<SkillSummary, String> {
     Ok(refreshed_skill)
 }
 
+fn refresh_and_persist_pending_push_skill(skill_name: &str) -> Result<SkillSummary, String> {
+    let (mut installed_skills, skill_index) = find_skill_by_name(skill_name)?;
+    let refreshed_skill = enrich_skill_with_local_git_state(&normalize_installed_skill_source_url(
+        &installed_skills[skill_index],
+    ));
+    installed_skills[skill_index] = refreshed_skill.clone();
+    save_installed_skills(&installed_skills)?;
+    Ok(refreshed_skill)
+}
+
 fn skill_base_path(skill_name: &str) -> Result<PathBuf, String> {
     let (installed_skills, skill_index) = find_skill_by_name(skill_name)?;
     Ok(PathBuf::from(&installed_skills[skill_index].local_path))
@@ -3777,6 +3787,15 @@ pub async fn refresh_local_git_states() -> Vec<SkillSummary> {
     })
     .await
     .unwrap_or_default()
+}
+
+#[tauri::command]
+pub async fn refresh_pending_push_skill_state(skill_name: String) -> Result<SkillSummary, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        refresh_and_persist_pending_push_skill(&skill_name)
+    })
+    .await
+    .map_err(|error| format!("后台刷新待推送 skill 状态失败: {error}"))?
 }
 
 #[tauri::command]

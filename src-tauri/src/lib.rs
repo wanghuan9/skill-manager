@@ -69,6 +69,7 @@ pub fn run() {
             commands::set_skill_all_tool_statuses,
             commands::refresh_git_states,
             commands::refresh_local_git_states,
+            commands::refresh_pending_push_skill_state,
             commands::get_local_git_state_signatures,
             mcp_manager::list_mcp_workspace,
             mcp_manager::list_mcp_marketplace_servers,

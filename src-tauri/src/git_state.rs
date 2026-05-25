@@ -298,9 +298,21 @@ pub fn enrich_skill_with_local_git_state(skill: &SkillSummary) -> SkillSummary {
         .unwrap_or_else(|| skill.branch.clone());
     let commit_label = run_git(skill_path, &["rev-parse", "--short", "HEAD"])
         .unwrap_or_else(|| skill.commit_label.clone());
+    let head = run_git(skill_path, &["rev-parse", "HEAD"]).unwrap_or_else(|| commit_label.clone());
     let working_tree_signature =
         run_git(skill_path, &["status", "--porcelain", "--", "."]).unwrap_or_default();
     let working_tree_dirty = !working_tree_signature.trim().is_empty();
+    let remote_counts = cached_update_counts(skill, &branch, &head)
+        .or_else(|| local_branch_divergence(skill_path, &branch));
+    let (collab_status, status_text) = derive_collab_status(working_tree_dirty, remote_counts);
+    sync_pending_push_cache(
+        skill,
+        &branch,
+        &head,
+        &working_tree_signature,
+        remote_counts,
+        collab_status,
+    );
     let fallback_local_updated_at = if skill.local_updated_at.trim().is_empty() {
         skill.last_synced_at.clone()
     } else {
@@ -318,13 +330,14 @@ pub fn enrich_skill_with_local_git_state(skill: &SkillSummary) -> SkillSummary {
     let mut enriched = skill.clone();
     enriched.branch = branch;
     enriched.commit_label = commit_label;
+    enriched.collab_status = collab_status.to_string();
+    enriched.status_text = status_text;
     enriched.local_updated_at = local_updated_at.clone();
     enriched.last_synced_at = local_updated_at;
+    enriched.last_checked_at = "刚刚检查".into();
+    enriched.last_editor =
+        latest_commit_author(skill_path).unwrap_or_else(|| skill.last_editor.clone());
     enriched.git_linked = true;
-    if working_tree_dirty {
-        enriched.collab_status = STATUS_PENDING_PUSH.into();
-        enriched.status_text = "本地存在领先或未提交改动，可继续推送到团队仓库。".into();
-    }
     enriched
 }
 
@@ -398,6 +411,25 @@ fn git_fetch_with_timeout(skill_path: &Path) {
 fn branch_divergence(skill_path: &Path, branch: &str) -> Option<(usize, usize)> {
     git_fetch_with_timeout(skill_path);
 
+    let remote_branch = resolve_remote_branch(skill_path, branch)?;
+    let output = run_git(
+        skill_path,
+        &[
+            "rev-list",
+            "--left-right",
+            "--count",
+            &format!("{remote_branch}...HEAD"),
+            "--",
+            ".",
+        ],
+    )?;
+    let mut parts = output.split_whitespace();
+    let behind = parts.next()?.parse::<usize>().ok()?;
+    let ahead = parts.next()?.parse::<usize>().ok()?;
+    Some((behind, ahead))
+}
+
+fn local_branch_divergence(skill_path: &Path, branch: &str) -> Option<(usize, usize)> {
     let remote_branch = resolve_remote_branch(skill_path, branch)?;
     let output = run_git(
         skill_path,

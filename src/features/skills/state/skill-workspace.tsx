@@ -15,6 +15,7 @@ import {
   discoverLocalInstallSkills,
   fetchGitAccount,
   fetchGitStates,
+  refreshPendingPushSkillState,
   fetchLocalSkillCandidates,
   fetchMarketplaceSkillsByPage,
   fetchSkillFileBrowser,
@@ -32,6 +33,7 @@ import {
   openSkillInEditor,
   openPathInFinder,
   openSkillRepository,
+  pushSkillToCurrentBranch,
   saveSkillFileContent,
   setSkillAllToolStatuses,
   setToolSkillStatuses,
@@ -78,6 +80,7 @@ const FALLBACK_OPEN_TOOL_ID = "finder";
 const MARKETPLACE_PAGE_SIZE = 18;
 const MARKETPLACE_SOURCE_SITES: MarketplaceSourceSite[] = ["skills.sh", "skillsmp"];
 const STARTUP_LOAD_DELAY_MS = 0;
+const PENDING_PUSH_POLL_INTERVAL_MS = 2500;
 const STARTUP_CACHED_COLLAB_STATUSES = new Set<SkillSummary["collabStatus"]>([
   "update-available",
   "pending-push",
@@ -138,6 +141,7 @@ type SkillWorkspaceContextValue = {
     createBranchName?: string;
   }) => Promise<PushPreviewSnapshot>;
   loadPushTargets: (skillName: string) => Promise<PushTargetSnapshot>;
+  pushSkillToCurrentBranch: (skillName: string) => Promise<void>;
   openSkillRepository: (skillName: string) => Promise<void>;
   openSkillInEditor: (input: { skillName: string; editorId: string }) => Promise<void>;
   defaultOpenToolId: string;
@@ -440,6 +444,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
     "skills.sh": true,
     skillsmp: true,
   });
+  const pendingPushRefreshInFlightRef = useRef(new Set<string>());
   const defaultOpenToolId = appSettings.defaultOpenToolId;
   const language = appSettings.language;
 
@@ -658,6 +663,28 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
     }
   }
 
+  async function refreshPendingPushSkillInBackground(
+    skillName: string,
+    shouldApply: () => boolean = () => true,
+  ) {
+    if (pendingPushRefreshInFlightRef.current.has(skillName)) {
+      return;
+    }
+
+    pendingPushRefreshInFlightRef.current.add(skillName);
+    try {
+      const updatedSkill = await refreshPendingPushSkillState(skillName);
+      if (!shouldApply()) {
+        return;
+      }
+      setInstalledSkills((current) => mergeUpdatedSkillsPreservingOrder(current, [updatedSkill]));
+    } catch (error) {
+      console.error(`Failed to refresh pending-push skill ${skillName}:`, error);
+    } finally {
+      pendingPushRefreshInFlightRef.current.delete(skillName);
+    }
+  }
+
   useEffect(() => {
     if (usesFixtureData) {
       return;
@@ -703,6 +730,39 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       window.clearTimeout(timer);
     };
   }, [startupCache, usesFixtureData]);
+
+  const pendingPushSkillNames = useMemo(
+    () => installedSkills
+      .filter((skill) => skill.collabStatus === "pending-push")
+      .map((skill) => skill.name),
+    [installedSkills],
+  );
+  const pendingPushSkillNamesKey = pendingPushSkillNames.join("\u001f");
+
+  useEffect(() => {
+    if (usesFixtureData || pendingPushSkillNamesKey.length === 0) {
+      return;
+    }
+
+    const skillNames = pendingPushSkillNamesKey.split("\u001f").filter(Boolean);
+    let active = true;
+    const shouldApply = () => active;
+
+    skillNames.forEach((skillName) => {
+      void refreshPendingPushSkillInBackground(skillName, shouldApply);
+    });
+
+    const interval = window.setInterval(() => {
+      skillNames.forEach((skillName) => {
+        void refreshPendingPushSkillInBackground(skillName, shouldApply);
+      });
+    }, PENDING_PUSH_POLL_INTERVAL_MS);
+
+    return () => {
+      active = false;
+      window.clearInterval(interval);
+    };
+  }, [pendingPushSkillNamesKey, usesFixtureData]);
 
   async function handleInstallFromMarket(skill: MarketplaceSkill) {
     if (installingMarketplaceSkillIdsRef.current.has(skill.id)) {
@@ -877,6 +937,11 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
   async function handleUpdateSkill(skillName: string) {
     const updatedSkill = await updateSkill({ skillName });
     setInstalledSkills((current) => [updatedSkill, ...current.filter((item) => item.name !== updatedSkill.name)]);
+  }
+
+  async function handlePushSkillToCurrentBranch(skillName: string) {
+    const updatedSkill = await pushSkillToCurrentBranch(skillName);
+    setInstalledSkills((current) => mergeUpdatedSkillsPreservingOrder(current, [updatedSkill]));
   }
 
   async function handleUpdateAllSkills() {
@@ -1081,6 +1146,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       setSkillAllToolStatuses: handleSetSkillAllToolStatuses,
       loadPushPreview: fetchPushPreviewSnapshot,
       loadPushTargets: fetchPushTargetSnapshot,
+      pushSkillToCurrentBranch: handlePushSkillToCurrentBranch,
       openSkillRepository,
       openSkillInEditor,
       defaultOpenToolId,
