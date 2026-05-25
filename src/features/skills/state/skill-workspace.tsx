@@ -78,6 +78,8 @@ const FALLBACK_OPEN_TOOL_ID = "finder";
 const MARKETPLACE_PAGE_SIZE = 18;
 const MARKETPLACE_SOURCE_SITES: MarketplaceSourceSite[] = ["skills.sh", "skillsmp"];
 const STARTUP_LOAD_DELAY_MS = 0;
+const AUTO_GIT_STATE_REFRESH_INTERVAL_MS = 10 * 60 * 1000;
+const AUTO_GIT_STATE_REFRESH_COOLDOWN_MS = 60 * 1000;
 const STARTUP_CACHED_COLLAB_STATUSES = new Set<SkillSummary["collabStatus"]>([
   "update-available",
   "pending-push",
@@ -440,6 +442,8 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
     "skills.sh": true,
     skillsmp: true,
   });
+  const gitStateRefreshInFlightRef = useRef<Promise<void> | null>(null);
+  const lastGitStateRefreshAtRef = useRef(0);
   const defaultOpenToolId = appSettings.defaultOpenToolId;
   const language = appSettings.language;
 
@@ -646,16 +650,42 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
     }
   }
 
-  async function refreshGitStatesInBackground(shouldApply: () => boolean = () => true) {
-    try {
-      const skillsWithGitState = await fetchGitStates();
-      if (!shouldApply()) {
-        return;
-      }
-      setInstalledSkills(skillsWithGitState);
-    } catch (error) {
-      console.error("Failed to refresh git states:", error);
+  async function refreshGitStatesInBackground(
+    shouldApply: () => boolean = () => true,
+    options: { minimumIntervalMs?: number } = {},
+  ) {
+    const minimumIntervalMs = options.minimumIntervalMs ?? 0;
+    const now = Date.now();
+    if (
+      minimumIntervalMs > 0
+      && now - lastGitStateRefreshAtRef.current < minimumIntervalMs
+    ) {
+      return gitStateRefreshInFlightRef.current ?? Promise.resolve();
     }
+    if (gitStateRefreshInFlightRef.current) {
+      return gitStateRefreshInFlightRef.current;
+    }
+
+    lastGitStateRefreshAtRef.current = now;
+    let nextRefreshPromise: Promise<void> | null = null;
+    nextRefreshPromise = (async () => {
+      try {
+        const skillsWithGitState = await fetchGitStates();
+        if (!shouldApply()) {
+          return;
+        }
+        setInstalledSkills(skillsWithGitState);
+      } catch (error) {
+        console.error("Failed to refresh git states:", error);
+      } finally {
+        lastGitStateRefreshAtRef.current = Date.now();
+        if (gitStateRefreshInFlightRef.current === nextRefreshPromise) {
+          gitStateRefreshInFlightRef.current = null;
+        }
+      }
+    })();
+    gitStateRefreshInFlightRef.current = nextRefreshPromise;
+    return nextRefreshPromise;
   }
 
   useEffect(() => {
@@ -703,6 +733,39 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       window.clearTimeout(timer);
     };
   }, [startupCache, usesFixtureData]);
+
+  useEffect(() => {
+    if (usesFixtureData) {
+      return;
+    }
+
+    let active = true;
+    const refreshGitStatesIfNeeded = () => {
+      void refreshGitStatesInBackground(
+        () => active,
+        { minimumIntervalMs: AUTO_GIT_STATE_REFRESH_COOLDOWN_MS },
+      );
+    };
+    const handleVisibilityChange = () => {
+      if (document.visibilityState !== "visible") {
+        return;
+      }
+      refreshGitStatesIfNeeded();
+    };
+    const intervalId = window.setInterval(
+      refreshGitStatesIfNeeded,
+      AUTO_GIT_STATE_REFRESH_INTERVAL_MS,
+    );
+    window.addEventListener("focus", refreshGitStatesIfNeeded);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    return () => {
+      active = false;
+      window.clearInterval(intervalId);
+      window.removeEventListener("focus", refreshGitStatesIfNeeded);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [usesFixtureData]);
 
   async function handleInstallFromMarket(skill: MarketplaceSkill) {
     if (installingMarketplaceSkillIdsRef.current.has(skill.id)) {

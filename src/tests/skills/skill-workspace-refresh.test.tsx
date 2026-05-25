@@ -34,6 +34,8 @@ vi.mock("@/app/utils/wait-for-next-paint", () => ({
 }));
 
 const mockedInvoke = vi.mocked(invoke);
+const AUTO_GIT_STATE_REFRESH_INTERVAL_MS = 10 * 60 * 1000;
+const AUTO_GIT_STATE_REFRESH_COOLDOWN_MS = 60 * 1000;
 
 function createDeferred<T>() {
   let resolve!: (value: T) => void;
@@ -405,4 +407,136 @@ test("persists selected language into local storage", async () => {
 
   expect(screen.getByTestId("language-value").textContent).toBe("en");
   expect(window.localStorage.getItem("skilldock.settings.language")).toBe("en");
+});
+
+test("auto refreshes git state on interval and throttles rapid focus refreshes", async () => {
+  vi.useFakeTimers();
+  const initialSkills: SkillSummary[] = [installedSkillFixtures[0]];
+  const intervalSkills: SkillSummary[] = [{ ...installedSkillFixtures[0], name: "interval-refresh" }];
+  const focusSkills: SkillSummary[] = [{ ...installedSkillFixtures[0], name: "focus-refresh" }];
+  let gitStateCallCount = 0;
+
+  mockedInvoke.mockImplementation(async (command, args) => {
+    switch (command) {
+      case "list_startup_installed_skills":
+        return initialSkills;
+      case "refresh_git_states":
+        gitStateCallCount += 1;
+        if (gitStateCallCount === 1) {
+          return initialSkills;
+        }
+        if (gitStateCallCount === 2) {
+          return intervalSkills;
+        }
+        return focusSkills;
+      case "list_local_skill_candidates":
+        return localSkillFixtures;
+      case "list_tool_configs":
+        return toolConfigFixtures;
+      case "get_git_account_summary":
+        return gitAccountFixture;
+      case "get_app_settings":
+        return appSettingsFixture;
+      case "update_app_settings":
+        return (args as { settings: AppSettings }).settings;
+      default:
+        throw new Error(`Unexpected command: ${command}`);
+    }
+  });
+
+  render(
+    <SkillWorkspaceProvider>
+      <RefreshProbe />
+    </SkillWorkspaceProvider>,
+  );
+
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(0);
+    await Promise.resolve();
+  });
+
+  expect(screen.getByTestId("loading-state").textContent).toBe("ready");
+  expect(screen.getByTestId("skill-name").textContent).toBe(initialSkills[0].name);
+  expect(gitStateCallCount).toBe(1);
+
+  await act(async () => {
+    window.dispatchEvent(new Event("focus"));
+  });
+  expect(gitStateCallCount).toBe(1);
+
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(AUTO_GIT_STATE_REFRESH_INTERVAL_MS);
+  });
+  expect(gitStateCallCount).toBe(2);
+  expect(screen.getByTestId("skill-name").textContent).toBe("interval-refresh");
+
+  await act(async () => {
+    window.dispatchEvent(new Event("focus"));
+  });
+  expect(gitStateCallCount).toBe(2);
+
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(AUTO_GIT_STATE_REFRESH_COOLDOWN_MS + 1000);
+    window.dispatchEvent(new Event("focus"));
+  });
+  expect(gitStateCallCount).toBe(3);
+  expect(screen.getByTestId("skill-name").textContent).toBe("focus-refresh");
+});
+
+test("does not start another focus refresh while a git refresh is already in flight", async () => {
+  vi.useFakeTimers();
+  const initialSkills: SkillSummary[] = [installedSkillFixtures[0]];
+  const pendingGitRefresh = createDeferred<SkillSummary[]>();
+  let gitStateCallCount = 0;
+
+  mockedInvoke.mockImplementation(async (command, args) => {
+    switch (command) {
+      case "list_startup_installed_skills":
+        return initialSkills;
+      case "refresh_git_states":
+        gitStateCallCount += 1;
+        return pendingGitRefresh.promise;
+      case "list_local_skill_candidates":
+        return localSkillFixtures;
+      case "list_tool_configs":
+        return toolConfigFixtures;
+      case "get_git_account_summary":
+        return gitAccountFixture;
+      case "get_app_settings":
+        return appSettingsFixture;
+      case "update_app_settings":
+        return (args as { settings: AppSettings }).settings;
+      default:
+        throw new Error(`Unexpected command: ${command}`);
+    }
+  });
+
+  render(
+    <SkillWorkspaceProvider>
+      <RefreshProbe />
+    </SkillWorkspaceProvider>,
+  );
+
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(0);
+    await Promise.resolve();
+  });
+
+  expect(screen.getByTestId("loading-state").textContent).toBe("ready");
+  expect(screen.getByTestId("skill-name").textContent).toBe(initialSkills[0].name);
+  expect(gitStateCallCount).toBe(1);
+
+  await act(async () => {
+    window.dispatchEvent(new Event("focus"));
+    window.dispatchEvent(new Event("focus"));
+  });
+  expect(gitStateCallCount).toBe(1);
+
+  await act(async () => {
+    pendingGitRefresh.resolve([{ ...installedSkillFixtures[0], name: "resolved-refresh" }]);
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+
+  expect(screen.getByTestId("skill-name").textContent).toBe("resolved-refresh");
 });
