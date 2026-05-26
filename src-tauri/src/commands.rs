@@ -15,7 +15,7 @@ use zip::ZipArchive;
 use crate::git_state::{
     clear_skill_update_cache, enrich_newly_installed_skill_with_git_state,
     enrich_skill_with_cached_update_state, enrich_skill_with_git_state,
-    enrich_skill_with_local_git_state, local_git_state_signature,
+    enrich_skill_with_local_git_state,
 };
 use crate::library::{
     clone_repo_for_discovery, clone_repo_for_discovery_with_sparse_paths, clone_repo_skill,
@@ -26,11 +26,11 @@ use crate::library::{
     skill_directory,
 };
 use crate::models::{
-    AppSettings, GitAccountSummary, GitChangeFile, LocalGitStateSignature,
-    LocalInstallSkillCandidate, LocalSkillCandidate, MarketplaceSkill, PushBranchOption,
-    PushPreviewSnapshot, PushTargetSnapshot, RepoSkillCandidate, SkillFileBrowserSnapshot,
-    SkillFileDocument, SkillFileEntry, SkillSummary, ToolConfig, ToolSyncStatus,
-    UpdatePreviewSnapshot, WorkspaceSnapshot,
+    AppSettings, GitAccountSummary, GitChangeFile, LocalInstallSkillCandidate,
+    LocalSkillCandidate, MarketplaceSkill, PushBranchOption, PushPreviewSnapshot,
+    PushTargetSnapshot, RepoSkillCandidate, SkillFileBrowserSnapshot, SkillFileDocument,
+    SkillFileEntry, SkillSummary, ToolConfig, ToolSyncStatus, UpdatePreviewSnapshot,
+    WorkspaceSnapshot,
 };
 use crate::state::{
     load_app_settings, load_installed_skills, normalize_skill_install_activation,
@@ -3798,18 +3798,6 @@ pub async fn refresh_local_git_state(skill_name: String) -> Result<SkillSummary,
     })
     .await
     .map_err(|error| format!("后台刷新本地 Git 状态失败: {error}"))?
-}
-
-#[tauri::command]
-pub async fn get_local_git_state_signatures() -> Vec<LocalGitStateSignature> {
-    tauri::async_runtime::spawn_blocking(|| {
-        load_installed_skills(&default_installed_skills())
-            .iter()
-            .map(|skill| local_git_state_signature(skill))
-            .collect()
-    })
-    .await
-    .unwrap_or_default()
 }
 
 #[tauri::command]

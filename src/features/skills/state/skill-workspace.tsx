@@ -16,7 +16,6 @@ import {
   discoverLocalInstallSkills,
   fetchGitAccount,
   fetchGitStates,
-  fetchLocalGitStateSignatures,
   fetchLocalSkillCandidates,
   fetchMarketplaceSkillsByPage,
   refreshLocalGitState,
@@ -39,6 +38,7 @@ import {
   setSkillAllToolStatuses,
   setToolSkillStatuses,
   shouldUseFixtureData,
+  subscribeSkillLibraryChanges,
   toggleSkillTool,
   updateAppSettings,
   updateSkill,
@@ -55,7 +55,6 @@ import type {
   AppSettings,
   GitAccountSummary,
   InstallActivationMode,
-  LocalGitStateSignature,
   LocalSkillCandidate,
   LocalInstallSkillCandidate,
   MarketplaceSkill,
@@ -82,9 +81,7 @@ const FALLBACK_OPEN_TOOL_ID = "finder";
 const MARKETPLACE_PAGE_SIZE = 18;
 const MARKETPLACE_SOURCE_SITES: MarketplaceSourceSite[] = ["skills.sh", "skillsmp"];
 const STARTUP_LOAD_DELAY_MS = 0;
-const PENDING_PUSH_POLL_INTERVAL_MS = 2500;
-const ACTIVE_CLEAN_SKILL_POLL_INTERVAL_MS = 2500;
-const ACTIVE_CLEAN_SKILL_WINDOW_MS = 60_000;
+const SKILL_LIBRARY_CHANGE_DEBOUNCE_MS = 500;
 const STARTUP_CACHED_COLLAB_STATUSES = new Set<SkillSummary["collabStatus"]>([
   "update-available",
   "pending-push",
@@ -176,24 +173,6 @@ type StartupWorkspaceCache = {
 type CachedSkillSummary = Partial<SkillSummary> & {
   lastSyncedAt?: string;
 };
-
-function signatureKey(signature: LocalGitStateSignature) {
-  return [
-    signature.branch,
-    signature.head,
-    signature.workingTreeSignature,
-    signature.localUpdatedAt,
-  ].join("\u001f");
-}
-
-function hasLocalGitStateDelta(skill: SkillSummary, signature: LocalGitStateSignature) {
-  return (
-    skill.branch !== signature.branch ||
-    skill.commitLabel !== signature.head.slice(0, skill.commitLabel.length) ||
-    skill.localUpdatedAt !== signature.localUpdatedAt ||
-    signature.workingTreeSignature.trim().length > 0
-  );
-}
 
 function removeInstalledMarketplaceSkill(
   skills: MarketplaceSkill[],
@@ -467,12 +446,16 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
     "skills.sh": true,
     skillsmp: true,
   });
-  const [activeSkillMarkerVersion, setActiveSkillMarkerVersion] = useState(0);
   const localGitRefreshInFlightRef = useRef(new Set<string>());
-  const activeSkillTouchedAtRef = useRef(new Map<string, number>());
-  const localGitSignatureCacheRef = useRef(new Map<string, string>());
+  const localGitRefreshDebounceTimersRef = useRef(new Map<string, number>());
+  const installedSkillsRef = useRef(installedSkills);
+  const startupWatchedSkillNamesRef = useRef(new Set<string>());
   const defaultOpenToolId = appSettings.defaultOpenToolId;
   const language = appSettings.language;
+
+  useEffect(() => {
+    installedSkillsRef.current = installedSkills;
+  }, [installedSkills]);
 
   useEffect(() => {
     if (usesFixtureData || !gitAccount) {
@@ -695,10 +678,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
     }
   }
 
-  const markSkillAsActive = useCallback((skillName: string) => {
-    activeSkillTouchedAtRef.current.set(skillName, Date.now());
-    setActiveSkillMarkerVersion((current) => current + 1);
-  }, []);
+  const markSkillAsActive = useCallback((_skillName: string) => undefined, []);
 
   async function refreshSkillLocalGitStateInBackground(
     skillName: string,
@@ -745,6 +725,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
 
         const cachedSkills = startupCache?.installedSkills ?? [];
         const skillsWithCachedStatus = mergeStartupSkillStatusCache(skills, cachedSkills);
+        startupWatchedSkillNamesRef.current = new Set(skills.map((skill) => skill.name));
         setInstalledSkills(skillsWithCachedStatus);
         setIsLoading(false);
         void refreshGitStatesInBackground(() => active);
@@ -768,108 +749,59 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
     };
   }, [startupCache, usesFixtureData]);
 
-  const pendingPushSkillNames = useMemo(
-    () => installedSkills
-      .filter((skill) => skill.collabStatus === "pending-push")
-      .map((skill) => skill.name),
-    [installedSkills],
-  );
-  const pendingPushSkillNamesKey = pendingPushSkillNames.join("\u001f");
-
   useEffect(() => {
-    if (usesFixtureData || pendingPushSkillNamesKey.length === 0) {
+    if (usesFixtureData) {
       return;
     }
 
-    const skillNames = pendingPushSkillNamesKey.split("\u001f").filter(Boolean);
     let active = true;
-    const shouldApply = () => active;
+    let unlisten: (() => void) | null = null;
 
-    skillNames.forEach((skillName) => {
-      void refreshSkillLocalGitStateInBackground(skillName, shouldApply);
+    void subscribeSkillLibraryChanges(({ skillName }) => {
+      if (!active) {
+        return;
+      }
+
+      if (!startupWatchedSkillNamesRef.current.has(skillName)) {
+        return;
+      }
+
+      const installedSkillExists = installedSkillsRef.current.some((skill) => skill.name === skillName);
+      if (!installedSkillExists) {
+        return;
+      }
+
+      const existingTimer = localGitRefreshDebounceTimersRef.current.get(skillName);
+      if (existingTimer !== undefined) {
+        window.clearTimeout(existingTimer);
+      }
+
+      const timer = window.setTimeout(() => {
+        localGitRefreshDebounceTimersRef.current.delete(skillName);
+        void refreshSkillLocalGitStateInBackground(skillName, () => active);
+      }, SKILL_LIBRARY_CHANGE_DEBOUNCE_MS);
+      localGitRefreshDebounceTimersRef.current.set(skillName, timer);
+    }).then((cleanup) => {
+      if (!active) {
+        cleanup();
+        return;
+      }
+      unlisten = cleanup;
+    }).catch((error) => {
+      console.error("Failed to subscribe to skill library changes:", error);
     });
 
-    const interval = window.setInterval(() => {
-      skillNames.forEach((skillName) => {
-        void refreshSkillLocalGitStateInBackground(skillName, shouldApply);
-      });
-    }, PENDING_PUSH_POLL_INTERVAL_MS);
-
     return () => {
       active = false;
-      window.clearInterval(interval);
-    };
-  }, [pendingPushSkillNamesKey, usesFixtureData]);
-
-  const activeCleanSkillNames = useMemo(() => {
-    const now = Date.now();
-    return installedSkills
-      .filter((skill) => {
-        if (skill.collabStatus !== "clean") {
-          return false;
-        }
-        const touchedAt = activeSkillTouchedAtRef.current.get(skill.name);
-        return typeof touchedAt === "number" && now - touchedAt <= ACTIVE_CLEAN_SKILL_WINDOW_MS;
-      })
-      .map((skill) => skill.name);
-  }, [activeSkillMarkerVersion, installedSkills]);
-  const activeCleanSkillNamesKey = activeCleanSkillNames.join("\u001f");
-
-  useEffect(() => {
-    if (usesFixtureData || isLoading || activeCleanSkillNamesKey.length === 0) {
-      return;
-    }
-
-    const watchedSkillsByName = new Map(
-      installedSkills
-        .filter((skill) =>
-          skill.collabStatus === "clean" && activeCleanSkillNames.includes(skill.name),
-        )
-        .map((skill) => [skill.name, skill]),
-    );
-    const watchedSkillNames = new Set(activeCleanSkillNamesKey.split("\u001f").filter(Boolean));
-    let active = true;
-
-    async function pollActiveCleanSkills() {
-      try {
-        const signatures = await fetchLocalGitStateSignatures();
-        if (!active) {
-          return;
-        }
-        for (const signature of signatures) {
-          if (!watchedSkillNames.has(signature.skillName)) {
-            continue;
-          }
-          const nextSignatureKey = signatureKey(signature);
-          const previousSignatureKey = localGitSignatureCacheRef.current.get(signature.skillName);
-          localGitSignatureCacheRef.current.set(signature.skillName, nextSignatureKey);
-          const watchedSkill = watchedSkillsByName.get(signature.skillName);
-          const shouldRefreshOnInitialSample =
-            !previousSignatureKey &&
-            watchedSkill !== undefined &&
-            hasLocalGitStateDelta(watchedSkill, signature);
-          if (
-            shouldRefreshOnInitialSample ||
-            (previousSignatureKey && previousSignatureKey !== nextSignatureKey)
-          ) {
-            void refreshSkillLocalGitStateInBackground(signature.skillName, () => active);
-          }
-        }
-      } catch (error) {
-        console.error("Failed to poll active clean skill signatures:", error);
+      if (unlisten) {
+        unlisten();
       }
-    }
-
-    void pollActiveCleanSkills();
-    const interval = window.setInterval(() => {
-      void pollActiveCleanSkills();
-    }, ACTIVE_CLEAN_SKILL_POLL_INTERVAL_MS);
-
-    return () => {
-      active = false;
-      window.clearInterval(interval);
+      for (const timer of localGitRefreshDebounceTimersRef.current.values()) {
+        window.clearTimeout(timer);
+      }
+      localGitRefreshDebounceTimersRef.current.clear();
     };
-  }, [activeCleanSkillNames, activeCleanSkillNamesKey, installedSkills, isLoading, usesFixtureData]);
+  }, [usesFixtureData]);
 
   async function handleInstallFromMarket(skill: MarketplaceSkill) {
     if (installingMarketplaceSkillIdsRef.current.has(skill.id)) {

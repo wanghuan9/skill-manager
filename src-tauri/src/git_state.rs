@@ -5,7 +5,7 @@ use std::process::Command;
 use std::sync::mpsc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use crate::models::{LocalGitStateSignature, SkillSummary};
+use crate::models::SkillSummary;
 use crate::workspace::{
     remove_legacy_workspace_file, workspace_file_candidates, workspace_file_path,
 };
@@ -339,43 +339,6 @@ pub fn enrich_skill_with_local_git_state(skill: &SkillSummary) -> SkillSummary {
     enriched.last_editor = skill.last_editor.clone();
     enriched.git_linked = true;
     enriched
-}
-
-pub fn local_git_state_signature(skill: &SkillSummary) -> LocalGitStateSignature {
-    let skill_path = Path::new(&skill.local_path);
-    let branch = if skill_path.exists() && repo_root(skill_path).is_some() {
-        run_git(skill_path, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap_or_default()
-    } else {
-        String::new()
-    };
-    let head = if skill_path.exists() && repo_root(skill_path).is_some() {
-        run_git(skill_path, &["rev-parse", "HEAD"]).unwrap_or_default()
-    } else {
-        String::new()
-    };
-    let working_tree_signature = if skill_path.exists() && repo_root(skill_path).is_some() {
-        run_git(skill_path, &["status", "--porcelain", "--", "."]).unwrap_or_default()
-    } else {
-        String::new()
-    };
-    let fallback_local_updated_at = if skill.local_updated_at.trim().is_empty() {
-        skill.last_synced_at.clone()
-    } else {
-        skill.local_updated_at.clone()
-    };
-    let local_updated_at = prefer_newer_local_updated_at(
-        &fallback_local_updated_at,
-        latest_local_content_modified_at(skill_path),
-    );
-
-    LocalGitStateSignature {
-        skill_name: skill.name.clone(),
-        local_path: skill.local_path.clone(),
-        branch,
-        head,
-        working_tree_signature,
-        local_updated_at,
-    }
 }
 
 pub fn clear_skill_update_cache(skill: &SkillSummary) {

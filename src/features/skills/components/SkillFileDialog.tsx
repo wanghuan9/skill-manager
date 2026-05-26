@@ -138,7 +138,7 @@ export function SkillFileDialog({ skill, isOpen, onClose }: SkillFileDialogProps
     }
 
     markSkillAsActive(skill.name);
-  }, [isOpen, skill.name]);
+  }, [isOpen, markSkillAsActive, skill.name]);
 
   useEffect(() => {
     if (!isOpen) {

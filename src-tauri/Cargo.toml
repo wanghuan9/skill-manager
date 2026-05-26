@@ -35,3 +35,4 @@ base64 = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["std"] }
 tauri-plugin-updater = "2.10.1"
 tauri-plugin-process = "2.3.1"
+notify = "6.1"

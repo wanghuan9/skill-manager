@@ -25,7 +25,6 @@ import type {
   FailureFeedbackInput,
   FeedbackIssueDraft,
   GitAccountSummary,
-  LocalGitStateSignature,
   LocalSkillCandidate,
   LocalInstallSkillCandidate,
   MarketplaceSkill,
@@ -157,6 +156,10 @@ type UpdateAppSettingsInput = {
 
 type DetectedAppLanguage = {
   language: AppLanguage;
+};
+
+type SkillLibraryChangeEvent = {
+  skillName: string;
 };
 
 type LegacySkillSummary = Partial<SkillSummary> & {
@@ -381,8 +384,16 @@ export async function refreshLocalGitState(skillName: string): Promise<SkillSumm
   return normalizeSkillSummary(updatedSkill);
 }
 
-export async function fetchLocalGitStateSignatures(): Promise<LocalGitStateSignature[]> {
-  return invokeOrFallback("get_local_git_state_signatures", {}, []);
+export async function subscribeSkillLibraryChanges(
+  handler: (payload: SkillLibraryChangeEvent) => void,
+): Promise<UnlistenFn> {
+  if (shouldUseFixtureData()) {
+    return () => undefined;
+  }
+
+  return listen<SkillLibraryChangeEvent>("skill-library-changed", (event) => {
+    handler(event.payload);
+  });
 }
 
 export async function fetchMarketplaceSkills(): Promise<MarketplaceSkill[]> {
