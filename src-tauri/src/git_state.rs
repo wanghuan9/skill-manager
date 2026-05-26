@@ -332,11 +332,11 @@ pub fn enrich_skill_with_local_git_state(skill: &SkillSummary) -> SkillSummary {
     enriched.commit_label = commit_label;
     enriched.collab_status = collab_status.to_string();
     enriched.status_text = status_text;
+    enriched.remote_updated_at = skill.remote_updated_at.clone();
     enriched.local_updated_at = local_updated_at.clone();
     enriched.last_synced_at = local_updated_at;
     enriched.last_checked_at = "刚刚检查".into();
-    enriched.last_editor =
-        latest_commit_author(skill_path).unwrap_or_else(|| skill.last_editor.clone());
+    enriched.last_editor = skill.last_editor.clone();
     enriched.git_linked = true;
     enriched
 }
@@ -1042,6 +1042,77 @@ mod tests {
 
         assert_eq!(skill_a_divergence, (0, 0));
         assert_eq!(skill_b_divergence, (1, 0));
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn local_git_refresh_preserves_existing_remote_metadata() {
+        let temp_dir = unique_temp_dir("preserve-remote-metadata");
+        let remote_dir = temp_dir.join("remote.git");
+        let local_dir = temp_dir.join("local");
+        let skill_dir = local_dir.join("skills/technical-design-test");
+
+        run_git_test(["init", "--bare", remote_dir.to_str().expect("remote path")]);
+        run_git_test([
+            "clone",
+            remote_dir.to_str().expect("remote path"),
+            local_dir.to_str().expect("local path"),
+        ]);
+        fs::create_dir_all(&skill_dir).expect("create skill dir");
+        fs::write(skill_dir.join("SKILL.md"), "# technical-design-test").expect("write skill file");
+
+        run_git_test([
+            "-C",
+            local_dir.to_str().expect("local path"),
+            "config",
+            "user.name",
+            "SkillDock Test",
+        ]);
+        run_git_test([
+            "-C",
+            local_dir.to_str().expect("local path"),
+            "config",
+            "user.email",
+            "skilldock@example.com",
+        ]);
+        run_git_test([
+            "-C",
+            local_dir.to_str().expect("local path"),
+            "add",
+            ".",
+        ]);
+        run_git_test([
+            "-C",
+            local_dir.to_str().expect("local path"),
+            "commit",
+            "-m",
+            "init",
+        ]);
+        run_git_test([
+            "-C",
+            local_dir.to_str().expect("local path"),
+            "push",
+            "origin",
+            "HEAD:main",
+        ]);
+        run_git_test([
+            "-C",
+            local_dir.to_str().expect("local path"),
+            "checkout",
+            "-B",
+            "main",
+        ]);
+
+        let mut skill = skill_summary("technical-design-test", &skill_dir);
+        skill.branch = "main".into();
+        skill.remote_updated_at = "2026/5/26 19:30:00".into();
+        skill.last_editor = "Remote Author".into();
+
+        let enriched = enrich_skill_with_local_git_state(&skill);
+
+        assert_eq!(enriched.remote_updated_at, "2026/5/26 19:30:00");
+        assert_eq!(enriched.last_editor, "Remote Author");
 
         let _ = fs::remove_dir_all(temp_dir);
     }

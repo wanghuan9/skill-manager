@@ -1,6 +1,6 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { invoke } from "@tauri-apps/api/core";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { resetMcpImportSessionForTests } from "@/features/skills/api/skill-client";
 import {
@@ -61,6 +61,7 @@ function RefreshProbe() {
       <span data-testid="refresh-state">{refreshState}</span>
       <span data-testid="loading-state">{isLoading ? "loading" : "ready"}</span>
       <span data-testid="skill-name">{installedSkills[0]?.name ?? "none"}</span>
+      <span data-testid="remote-updated-at">{installedSkills[0]?.remoteUpdatedAt ?? "none"}</span>
     </div>
   );
 }
@@ -82,6 +83,21 @@ function LanguageProbe() {
       </button>
     </div>
   );
+}
+
+function ActiveSkillProbe({ skillName }: { skillName: string }) {
+  const { markSkillAsActive } = useSkillWorkspace();
+  const hasMarkedRef = useRef(false);
+
+  useEffect(() => {
+    if (hasMarkedRef.current) {
+      return;
+    }
+    hasMarkedRef.current = true;
+    markSkillAsActive(skillName);
+  }, [markSkillAsActive, skillName]);
+
+  return null;
 }
 
 function MarketplaceProbe() {
@@ -152,7 +168,7 @@ test("refresh resolves after startup skills without waiting for ancillary reques
     switch (command) {
       case "list_startup_installed_skills":
         startupCallCount += 1;
-        return startupCallCount === 1 ? initialSkills : refreshedSkills;
+        return initialSkills;
       case "list_local_skill_candidates":
         candidateCallCount += 1;
         return candidateCallCount === 1 ? localSkillFixtures : pendingCandidates.promise;
@@ -170,8 +186,10 @@ test("refresh resolves after startup skills without waiting for ancillary reques
       case "refresh_git_states":
         gitStateCallCount += 1;
         return gitStateCallCount === 1 ? initialSkills : refreshedSkills;
-      case "refresh_pending_push_skill_state":
+      case "refresh_local_git_state":
         return initialSkills[0];
+      case "get_local_git_state_signatures":
+        return [];
       default:
         throw new Error(`Unexpected command: ${command}`);
     }
@@ -204,6 +222,74 @@ test("refresh resolves after startup skills without waiting for ancillary reques
   pendingSettings.resolve(appSettingsFixture);
 
   await act(async () => undefined);
+
+  expect(startupCallCount).toBe(1);
+  expect(gitStateCallCount).toBe(2);
+});
+
+test("refresh keeps the fetched remote updated time instead of reverting to the startup snapshot", async () => {
+  const startupSkill: SkillSummary = {
+    ...installedSkillFixtures[0],
+    name: "technical-design-test",
+    remoteUpdatedAt: "2026/5/7 19:27:55",
+  };
+  const refreshedSkill: SkillSummary = {
+    ...startupSkill,
+    remoteUpdatedAt: "2026/5/26 19:07:25",
+  };
+
+  let startupCallCount = 0;
+  let gitStateCallCount = 0;
+
+  mockedInvoke.mockImplementation(async (command, args) => {
+    switch (command) {
+      case "list_startup_installed_skills":
+        startupCallCount += 1;
+        return [startupSkill];
+      case "refresh_git_states":
+        gitStateCallCount += 1;
+        return [refreshedSkill];
+      case "list_local_skill_candidates":
+        return localSkillFixtures;
+      case "list_tool_configs":
+        return toolConfigFixtures;
+      case "get_git_account_summary":
+        return gitAccountFixture;
+      case "get_app_settings":
+      case "update_app_settings":
+        return args && "settings" in (args as Record<string, unknown>)
+          ? (args as { settings: AppSettings }).settings
+          : appSettingsFixture;
+      case "refresh_local_git_state":
+        return refreshedSkill;
+      case "get_local_git_state_signatures":
+        return [];
+      default:
+        throw new Error(`Unexpected command: ${command}`);
+    }
+  });
+
+  render(
+    <SkillWorkspaceProvider>
+      <RefreshProbe />
+    </SkillWorkspaceProvider>,
+  );
+
+  await waitFor(() => {
+    expect(screen.getByTestId("remote-updated-at").textContent).toBe("2026/5/26 19:07:25");
+  });
+
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "刷新工作区" }));
+  });
+
+  await waitFor(() => {
+    expect(screen.getByTestId("refresh-state").textContent).toBe("done");
+    expect(screen.getByTestId("remote-updated-at").textContent).toBe("2026/5/26 19:07:25");
+  });
+
+  expect(startupCallCount).toBe(1);
+  expect(gitStateCallCount).toBeGreaterThanOrEqual(2);
 });
 
 test("does not overwrite saved default open tool while settings are still loading", async () => {
@@ -228,8 +314,10 @@ test("does not overwrite saved default open tool while settings are still loadin
         return pendingSettings.promise;
       case "update_app_settings":
         return (args as { settings: AppSettings }).settings;
-      case "refresh_pending_push_skill_state":
+      case "refresh_local_git_state":
         return installedSkillFixtures[0];
+      case "get_local_git_state_signatures":
+        return [];
       default:
         throw new Error(`Unexpected command: ${command}`);
     }
@@ -284,8 +372,10 @@ test("persists preferred default open tool after startup refresh when settings a
       case "update_app_settings":
         updateAppSettingsPayload = (args as { settings: AppSettings }).settings;
         return updateAppSettingsPayload;
-      case "refresh_pending_push_skill_state":
+      case "refresh_local_git_state":
         return installedSkillFixtures[0];
+      case "get_local_git_state_signatures":
+        return [];
       default:
         throw new Error(`Unexpected command: ${command}`);
     }
@@ -336,8 +426,10 @@ test("refreshes skillsmp marketplace after serving the initial cached page", asy
         return appSettingsFixture;
       case "update_app_settings":
         return (args as { settings: AppSettings }).settings;
-      case "refresh_pending_push_skill_state":
+      case "refresh_local_git_state":
         return installedSkillFixtures[0];
+      case "get_local_git_state_signatures":
+        return [];
       case "list_marketplace_skills":
         marketplaceCalls.push(args as Record<string, unknown> | undefined);
         return marketplaceCalls.length === 1
@@ -393,8 +485,10 @@ test("persists selected language into local storage", async () => {
         return appSettingsFixture;
       case "update_app_settings":
         return (args as { settings: AppSettings }).settings;
-      case "refresh_pending_push_skill_state":
+      case "refresh_local_git_state":
         return installedSkillFixtures[0];
+      case "get_local_git_state_signatures":
+        return [];
       default:
         throw new Error(`Unexpected command: ${command}`);
     }
@@ -444,11 +538,13 @@ test("polls only pending-push skills for lightweight local git refresh", async (
           return appSettingsFixture;
         case "update_app_settings":
           return (args as { settings: AppSettings }).settings;
-        case "refresh_pending_push_skill_state":
+        case "refresh_local_git_state":
           if ((args as { skillName: string }).skillName !== pendingSkill.name) {
             throw new Error(`Unexpected pending-push refresh target: ${(args as { skillName: string }).skillName}`);
           }
           return refreshedPendingSkill;
+        case "get_local_git_state_signatures":
+          return [];
         default:
           throw new Error(`Unexpected command: ${command}`);
       }
@@ -456,6 +552,7 @@ test("polls only pending-push skills for lightweight local git refresh", async (
 
     const view = render(
       <SkillWorkspaceProvider>
+        <ActiveSkillProbe skillName={cleanSkill.name} />
         <RefreshProbe />
       </SkillWorkspaceProvider>,
     );
@@ -472,8 +569,13 @@ test("polls only pending-push skills for lightweight local git refresh", async (
       await Promise.resolve();
     });
 
+    await act(async () => {
+      vi.advanceTimersByTime(2600);
+      await Promise.resolve();
+    });
+
     const pendingRefreshCalls = mockedInvoke.mock.calls.filter(
-      ([command]) => command === "refresh_pending_push_skill_state",
+      ([command]) => command === "refresh_local_git_state",
     );
     expect(pendingRefreshCalls.length).toBeGreaterThan(0);
     expect(

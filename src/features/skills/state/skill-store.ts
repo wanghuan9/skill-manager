@@ -30,6 +30,15 @@ export type SkillSummary = {
   tools: SkillToolSyncStatus[];
 };
 
+export type LocalGitStateSignature = {
+  skillName: string;
+  localPath: string;
+  branch: string;
+  head: string;
+  workingTreeSignature: string;
+  localUpdatedAt: string;
+};
+
 export type PushBranchOption = {
   name: string;
   isCurrent: boolean;

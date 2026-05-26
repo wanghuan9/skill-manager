@@ -2774,7 +2774,7 @@ fn refresh_and_persist_skill(skill_name: &str) -> Result<SkillSummary, String> {
     Ok(refreshed_skill)
 }
 
-fn refresh_and_persist_pending_push_skill(skill_name: &str) -> Result<SkillSummary, String> {
+fn refresh_and_persist_local_git_skill(skill_name: &str) -> Result<SkillSummary, String> {
     let (mut installed_skills, skill_index) = find_skill_by_name(skill_name)?;
     let refreshed_skill = enrich_skill_with_local_git_state(&normalize_installed_skill_source_url(
         &installed_skills[skill_index],
@@ -3768,11 +3768,13 @@ fn parse_apple_languages_output(output: &str) -> Option<&'static str> {
 #[tauri::command]
 pub async fn refresh_git_states() -> Vec<SkillSummary> {
     let skills = load_installed_skills(&default_installed_skills());
-    skills
+    let refreshed_skills = skills
         .iter()
         .map(normalize_skill_tools)
         .map(|skill| enrich_skill_with_git_state(&skill))
-        .collect()
+        .collect::<Vec<_>>();
+    let _ = save_installed_skills(&refreshed_skills);
+    refreshed_skills
 }
 
 #[tauri::command]
@@ -3790,12 +3792,12 @@ pub async fn refresh_local_git_states() -> Vec<SkillSummary> {
 }
 
 #[tauri::command]
-pub async fn refresh_pending_push_skill_state(skill_name: String) -> Result<SkillSummary, String> {
+pub async fn refresh_local_git_state(skill_name: String) -> Result<SkillSummary, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        refresh_and_persist_pending_push_skill(&skill_name)
+        refresh_and_persist_local_git_skill(&skill_name)
     })
     .await
-    .map_err(|error| format!("后台刷新待推送 skill 状态失败: {error}"))?
+    .map_err(|error| format!("后台刷新本地 Git 状态失败: {error}"))?
 }
 
 #[tauri::command]

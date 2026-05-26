@@ -1,4 +1,5 @@
 import {
+  useCallback,
   createContext,
   useContext,
   useEffect,
@@ -15,9 +16,10 @@ import {
   discoverLocalInstallSkills,
   fetchGitAccount,
   fetchGitStates,
-  refreshPendingPushSkillState,
+  fetchLocalGitStateSignatures,
   fetchLocalSkillCandidates,
   fetchMarketplaceSkillsByPage,
+  refreshLocalGitState,
   fetchSkillFileBrowser,
   fetchSkillFileContent,
   fetchPushPreviewSnapshot,
@@ -53,6 +55,7 @@ import type {
   AppSettings,
   GitAccountSummary,
   InstallActivationMode,
+  LocalGitStateSignature,
   LocalSkillCandidate,
   LocalInstallSkillCandidate,
   MarketplaceSkill,
@@ -80,6 +83,8 @@ const MARKETPLACE_PAGE_SIZE = 18;
 const MARKETPLACE_SOURCE_SITES: MarketplaceSourceSite[] = ["skills.sh", "skillsmp"];
 const STARTUP_LOAD_DELAY_MS = 0;
 const PENDING_PUSH_POLL_INTERVAL_MS = 2500;
+const ACTIVE_CLEAN_SKILL_POLL_INTERVAL_MS = 2500;
+const ACTIVE_CLEAN_SKILL_WINDOW_MS = 60_000;
 const STARTUP_CACHED_COLLAB_STATUSES = new Set<SkillSummary["collabStatus"]>([
   "update-available",
   "pending-push",
@@ -112,6 +117,7 @@ type SkillWorkspaceContextValue = {
   updateSkill: (skillName: string) => Promise<void>;
   updateAllSkills: () => Promise<void>;
   deleteSkill: (skillName: string) => Promise<void>;
+  markSkillAsActive: (skillName: string) => void;
   loadSkillFileBrowser: (skillName: string) => Promise<SkillFileBrowserSnapshot>;
   loadSkillFileContent: (input: {
     skillName: string;
@@ -122,6 +128,7 @@ type SkillWorkspaceContextValue = {
     relativePath: string;
     content: string;
   }) => Promise<SkillFileDocument>;
+  refreshSkillLocalGitState: (skillName: string) => Promise<void>;
   toggleSkillTool: (input: { skillName: string; toolName: string; toolNames: string[] }) => Promise<void>;
   setToolSkillStatuses: (input: {
     toolName: string;
@@ -169,6 +176,24 @@ type StartupWorkspaceCache = {
 type CachedSkillSummary = Partial<SkillSummary> & {
   lastSyncedAt?: string;
 };
+
+function signatureKey(signature: LocalGitStateSignature) {
+  return [
+    signature.branch,
+    signature.head,
+    signature.workingTreeSignature,
+    signature.localUpdatedAt,
+  ].join("\u001f");
+}
+
+function hasLocalGitStateDelta(skill: SkillSummary, signature: LocalGitStateSignature) {
+  return (
+    skill.branch !== signature.branch ||
+    skill.commitLabel !== signature.head.slice(0, skill.commitLabel.length) ||
+    skill.localUpdatedAt !== signature.localUpdatedAt ||
+    signature.workingTreeSignature.trim().length > 0
+  );
+}
 
 function removeInstalledMarketplaceSkill(
   skills: MarketplaceSkill[],
@@ -442,7 +467,10 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
     "skills.sh": true,
     skillsmp: true,
   });
-  const pendingPushRefreshInFlightRef = useRef(new Set<string>());
+  const [activeSkillMarkerVersion, setActiveSkillMarkerVersion] = useState(0);
+  const localGitRefreshInFlightRef = useRef(new Set<string>());
+  const activeSkillTouchedAtRef = useRef(new Map<string, number>());
+  const localGitSignatureCacheRef = useRef(new Map<string, string>());
   const defaultOpenToolId = appSettings.defaultOpenToolId;
   const language = appSettings.language;
 
@@ -617,6 +645,12 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
 
   async function loadWorkspaceSnapshot() {
     const shouldBlockSkillList = installedSkills.length === 0;
+    if (!shouldBlockSkillList) {
+      await refreshGitStatesInBackground();
+      void refreshWorkspaceAncillaryData();
+      return;
+    }
+
     if (shouldBlockSkillList) {
       setIsLoading(true);
     }
@@ -661,25 +695,30 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
     }
   }
 
-  async function refreshPendingPushSkillInBackground(
+  const markSkillAsActive = useCallback((skillName: string) => {
+    activeSkillTouchedAtRef.current.set(skillName, Date.now());
+    setActiveSkillMarkerVersion((current) => current + 1);
+  }, []);
+
+  async function refreshSkillLocalGitStateInBackground(
     skillName: string,
     shouldApply: () => boolean = () => true,
   ) {
-    if (pendingPushRefreshInFlightRef.current.has(skillName)) {
+    if (localGitRefreshInFlightRef.current.has(skillName)) {
       return;
     }
 
-    pendingPushRefreshInFlightRef.current.add(skillName);
+    localGitRefreshInFlightRef.current.add(skillName);
     try {
-      const updatedSkill = await refreshPendingPushSkillState(skillName);
+      const updatedSkill = await refreshLocalGitState(skillName);
       if (!shouldApply()) {
         return;
       }
       setInstalledSkills((current) => mergeUpdatedSkillsPreservingOrder(current, [updatedSkill]));
     } catch (error) {
-      console.error(`Failed to refresh pending-push skill ${skillName}:`, error);
+      console.error(`Failed to refresh local git state for skill ${skillName}:`, error);
     } finally {
-      pendingPushRefreshInFlightRef.current.delete(skillName);
+      localGitRefreshInFlightRef.current.delete(skillName);
     }
   }
 
@@ -747,12 +786,12 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
     const shouldApply = () => active;
 
     skillNames.forEach((skillName) => {
-      void refreshPendingPushSkillInBackground(skillName, shouldApply);
+      void refreshSkillLocalGitStateInBackground(skillName, shouldApply);
     });
 
     const interval = window.setInterval(() => {
       skillNames.forEach((skillName) => {
-        void refreshPendingPushSkillInBackground(skillName, shouldApply);
+        void refreshSkillLocalGitStateInBackground(skillName, shouldApply);
       });
     }, PENDING_PUSH_POLL_INTERVAL_MS);
 
@@ -761,6 +800,76 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       window.clearInterval(interval);
     };
   }, [pendingPushSkillNamesKey, usesFixtureData]);
+
+  const activeCleanSkillNames = useMemo(() => {
+    const now = Date.now();
+    return installedSkills
+      .filter((skill) => {
+        if (skill.collabStatus !== "clean") {
+          return false;
+        }
+        const touchedAt = activeSkillTouchedAtRef.current.get(skill.name);
+        return typeof touchedAt === "number" && now - touchedAt <= ACTIVE_CLEAN_SKILL_WINDOW_MS;
+      })
+      .map((skill) => skill.name);
+  }, [activeSkillMarkerVersion, installedSkills]);
+  const activeCleanSkillNamesKey = activeCleanSkillNames.join("\u001f");
+
+  useEffect(() => {
+    if (usesFixtureData || isLoading || activeCleanSkillNamesKey.length === 0) {
+      return;
+    }
+
+    const watchedSkillsByName = new Map(
+      installedSkills
+        .filter((skill) =>
+          skill.collabStatus === "clean" && activeCleanSkillNames.includes(skill.name),
+        )
+        .map((skill) => [skill.name, skill]),
+    );
+    const watchedSkillNames = new Set(activeCleanSkillNamesKey.split("\u001f").filter(Boolean));
+    let active = true;
+
+    async function pollActiveCleanSkills() {
+      try {
+        const signatures = await fetchLocalGitStateSignatures();
+        if (!active) {
+          return;
+        }
+        for (const signature of signatures) {
+          if (!watchedSkillNames.has(signature.skillName)) {
+            continue;
+          }
+          const nextSignatureKey = signatureKey(signature);
+          const previousSignatureKey = localGitSignatureCacheRef.current.get(signature.skillName);
+          localGitSignatureCacheRef.current.set(signature.skillName, nextSignatureKey);
+          const watchedSkill = watchedSkillsByName.get(signature.skillName);
+          const shouldRefreshOnInitialSample =
+            !previousSignatureKey &&
+            watchedSkill !== undefined &&
+            hasLocalGitStateDelta(watchedSkill, signature);
+          if (
+            shouldRefreshOnInitialSample ||
+            (previousSignatureKey && previousSignatureKey !== nextSignatureKey)
+          ) {
+            void refreshSkillLocalGitStateInBackground(signature.skillName, () => active);
+          }
+        }
+      } catch (error) {
+        console.error("Failed to poll active clean skill signatures:", error);
+      }
+    }
+
+    void pollActiveCleanSkills();
+    const interval = window.setInterval(() => {
+      void pollActiveCleanSkills();
+    }, ACTIVE_CLEAN_SKILL_POLL_INTERVAL_MS);
+
+    return () => {
+      active = false;
+      window.clearInterval(interval);
+    };
+  }, [activeCleanSkillNames, activeCleanSkillNamesKey, installedSkills, isLoading, usesFixtureData]);
 
   async function handleInstallFromMarket(skill: MarketplaceSkill) {
     if (installingMarketplaceSkillIdsRef.current.has(skill.id)) {
@@ -934,7 +1043,14 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
 
   async function handleUpdateSkill(skillName: string) {
     const updatedSkill = await updateSkill({ skillName });
+    markSkillAsActive(skillName);
     setInstalledSkills((current) => [updatedSkill, ...current.filter((item) => item.name !== updatedSkill.name)]);
+  }
+
+  async function handleRefreshSkillLocalGitState(skillName: string) {
+    markSkillAsActive(skillName);
+    const updatedSkill = await refreshLocalGitState(skillName);
+    setInstalledSkills((current) => mergeUpdatedSkillsPreservingOrder(current, [updatedSkill]));
   }
 
   async function handleUpdateAllSkills() {
@@ -1069,6 +1185,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
   }
 
   async function handleOpenSkillWithDefaultTool(skillName: string) {
+    markSkillAsActive(skillName);
     const availableTools = buildOpenToolOptions(toolConfigs, appSettings.language);
     const availableToolIds = new Set(availableTools.map((tool) => tool.id));
     const resolvedOpenToolId = availableToolIds.has(defaultOpenToolId)
@@ -1131,9 +1248,11 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       updateSkill: handleUpdateSkill,
       updateAllSkills: handleUpdateAllSkills,
       deleteSkill: handleDeleteSkill,
+      markSkillAsActive,
       loadSkillFileBrowser: fetchSkillFileBrowser,
       loadSkillFileContent: fetchSkillFileContent,
       saveSkillFileContent,
+      refreshSkillLocalGitState: handleRefreshSkillLocalGitState,
       toggleSkillTool: handleToggleSkillTool,
       setToolSkillStatuses: handleSetToolSkillStatuses,
       setSkillAllToolStatuses: handleSetSkillAllToolStatuses,

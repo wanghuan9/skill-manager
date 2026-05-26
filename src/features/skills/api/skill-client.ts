@@ -25,6 +25,7 @@ import type {
   FailureFeedbackInput,
   FeedbackIssueDraft,
   GitAccountSummary,
+  LocalGitStateSignature,
   LocalSkillCandidate,
   LocalInstallSkillCandidate,
   MarketplaceSkill,
@@ -368,16 +369,20 @@ export async function fetchGitStates(): Promise<SkillSummary[]> {
   return normalizeSkillSummaryList(skills);
 }
 
-export async function refreshPendingPushSkillState(skillName: string): Promise<SkillSummary> {
+export async function refreshLocalGitState(skillName: string): Promise<SkillSummary> {
   const fallbackSource =
     installedSkillFixtures.find((skill) => skill.name === skillName) ??
     installedSkillFixtures[0];
   const updatedSkill = await invokeOrFallback<LegacySkillSummary>(
-    "refresh_pending_push_skill_state",
+    "refresh_local_git_state",
     { skillName },
     fallbackSource,
   );
   return normalizeSkillSummary(updatedSkill);
+}
+
+export async function fetchLocalGitStateSignatures(): Promise<LocalGitStateSignature[]> {
+  return invokeOrFallback("get_local_git_state_signatures", {}, []);
 }
 
 export async function fetchMarketplaceSkills(): Promise<MarketplaceSkill[]> {
