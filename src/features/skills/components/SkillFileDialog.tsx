@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useTranslate } from "@/app/i18n";
@@ -16,6 +16,48 @@ const MARKDOWN_FILE_PATTERN = /\.(md|markdown)$/i;
 const FRONTMATTER_PATTERN = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/;
 
 type ViewMode = "edit" | "preview";
+
+function ViewModeIcon({ mode }: { mode: ViewMode }) {
+  if (mode === "preview") {
+    return (
+      <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+        <path
+          d="M2.5 10s2.7-4.5 7.5-4.5S17.5 10 17.5 10 14.8 14.5 10 14.5 2.5 10 2.5 10Z"
+          stroke="currentColor"
+          strokeWidth="1.5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+        <path
+          d="M10 12.2a2.2 2.2 0 1 0 0-4.4 2.2 2.2 0 0 0 0 4.4Z"
+          stroke="currentColor"
+          strokeWidth="1.5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+    );
+  }
+
+  return (
+    <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+      <path
+        d="m7.4 6.2-3.7 3.7 3.7 3.9"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        d="m12.6 6.2 3.7 3.7-3.7 3.9"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
 
 function entryIndent(entry: SkillFileEntry) {
   return {
@@ -86,6 +128,51 @@ function splitFrontmatter(content: string) {
   };
 }
 
+function normalizeSkillFilePath(path: string) {
+  const segments: string[] = [];
+
+  for (const segment of path.split("/")) {
+    if (!segment || segment === ".") {
+      continue;
+    }
+    if (segment === "..") {
+      if (segments.length === 0) {
+        return "";
+      }
+      segments.pop();
+      continue;
+    }
+    segments.push(segment);
+  }
+
+  return segments.join("/");
+}
+
+function resolveSkillFileLinkPath(href: string, selectedPath: string, fileEntries: SkillFileEntry[]) {
+  if (!href || href.startsWith("#") || /^[a-z][a-z\d+.-]*:/i.test(href) || href.startsWith("//")) {
+    return "";
+  }
+
+  const pathWithoutHash = href.split("#")[0] ?? "";
+  const pathWithoutQuery = pathWithoutHash.split("?")[0] ?? "";
+  if (!pathWithoutQuery) {
+    return "";
+  }
+
+  let decodedPath = pathWithoutQuery;
+  try {
+    decodedPath = decodeURIComponent(pathWithoutQuery);
+  } catch {
+    return "";
+  }
+
+  const linkPath = decodedPath.startsWith("/")
+    ? decodedPath.slice(1)
+    : [parentDirectoryPath(selectedPath), decodedPath].filter(Boolean).join("/");
+  const normalizedPath = normalizeSkillFilePath(linkPath);
+  return fileEntries.some((entry) => entry.path === normalizedPath) ? normalizedPath : "";
+}
+
 export function SkillFileDialog({ skill, isOpen, onClose }: SkillFileDialogProps) {
   const { t } = useTranslate();
   const reportFailure = useFailureReporter();
@@ -97,6 +184,7 @@ export function SkillFileDialog({ skill, isOpen, onClose }: SkillFileDialogProps
     saveSkillFileContent,
   } = useSkillWorkspace();
   const dialogTitleId = useId();
+  const previewRef = useRef<HTMLDivElement | null>(null);
   const [entries, setEntries] = useState<SkillFileEntry[]>([]);
   const [selectedPath, setSelectedPath] = useState("");
   const [content, setContent] = useState("");
@@ -131,6 +219,45 @@ export function SkillFileDialog({ skill, isOpen, onClose }: SkillFileDialogProps
   }, [entries]);
   const isMarkdownFile = MARKDOWN_FILE_PATTERN.test(selectedPath);
   const previewDocument = useMemo(() => splitFrontmatter(content), [content]);
+
+  const handleSave = useCallback(async () => {
+    if (!selectedPath || isSaving) {
+      return;
+    }
+
+    setIsSaving(true);
+    setErrorMessage("");
+
+    try {
+      const document = await saveSkillFileContent({
+        skillName: skill.name,
+        relativePath: selectedPath,
+        content,
+      });
+      setContent(document.content);
+      setHasDirtyChanges(false);
+      setIsSaving(false);
+      void refreshSkillLocalGitState(skill.name).catch((error) => {
+        reportFailure(error, {
+          operation: "refresh_skill_local_git_state",
+          fallbackMessage: t("skill.files.error.refreshState"),
+          context: { skillName: skill.name },
+        });
+      });
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : t("skill.files.error.save"));
+      setIsSaving(false);
+    }
+  }, [
+    content,
+    isSaving,
+    refreshSkillLocalGitState,
+    reportFailure,
+    saveSkillFileContent,
+    selectedPath,
+    skill.name,
+    t,
+  ]);
 
   useEffect(() => {
     if (!isOpen) {
@@ -212,6 +339,34 @@ export function SkillFileDialog({ skill, isOpen, onClose }: SkillFileDialogProps
     }
   }, [isOpen]);
 
+  useEffect(() => {
+    if (!isOpen) {
+      return;
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      const isSaveShortcut = event.key.toLowerCase() === "s" && (event.metaKey || event.ctrlKey);
+      if (!isSaveShortcut) {
+        return;
+      }
+
+      event.preventDefault();
+      void handleSave();
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [handleSave, isOpen]);
+
+  useEffect(() => {
+    if (viewMode === "preview" && previewRef.current) {
+      previewRef.current.scrollTop = 0;
+    }
+  }, [selectedPath, viewMode]);
+
   if (!isOpen) {
     return null;
   }
@@ -246,36 +401,6 @@ export function SkillFileDialog({ skill, isOpen, onClose }: SkillFileDialogProps
     }
   }
 
-  async function handleSave() {
-    if (!selectedPath) {
-      return;
-    }
-
-    setIsSaving(true);
-    setErrorMessage("");
-
-    try {
-      const document = await saveSkillFileContent({
-        skillName: skill.name,
-        relativePath: selectedPath,
-        content,
-      });
-      setContent(document.content);
-      setHasDirtyChanges(false);
-      setIsSaving(false);
-      void refreshSkillLocalGitState(skill.name).catch((error) => {
-        reportFailure(error, {
-          operation: "refresh_skill_local_git_state",
-          fallbackMessage: t("skill.files.error.refreshState"),
-          context: { skillName: skill.name },
-        });
-      });
-    } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : t("skill.files.error.save"));
-      setIsSaving(false);
-    }
-  }
-
   function handleToggleDirectory(path: string) {
     setCollapsedDirectories((current) => ({
       ...current,
@@ -297,21 +422,25 @@ export function SkillFileDialog({ skill, isOpen, onClose }: SkillFileDialogProps
             <h3 id={dialogTitleId}>{skill.name}</h3>
           </div>
           <div className="skill-file-dialog__toolbar">
-              <div className="skill-file-dialog__actions">
+            <div className="skill-file-dialog__actions">
               <div className="skill-file-dialog__view-toggle" role="group" aria-label={t("skill.files.viewMode")}>
                 <button
-                  className={`secondary-button secondary-button--compact${viewMode === "preview" ? " is-selected" : ""}`}
+                  className={`skill-file-dialog__view-toggle-button${viewMode === "preview" ? " is-selected" : ""}`}
                   type="button"
+                  aria-label={t("skill.files.preview")}
+                  aria-pressed={viewMode === "preview"}
                   onClick={() => setViewMode("preview")}
                 >
-                  {t("skill.files.preview")}
+                  <ViewModeIcon mode="preview" />
                 </button>
                 <button
-                  className={`secondary-button secondary-button--compact${viewMode === "edit" ? " is-selected" : ""}`}
+                  className={`skill-file-dialog__view-toggle-button${viewMode === "edit" ? " is-selected" : ""}`}
                   type="button"
+                  aria-label={t("skill.files.edit")}
+                  aria-pressed={viewMode === "edit"}
                   onClick={() => setViewMode("edit")}
                 >
-                  {t("skill.files.edit")}
+                  <ViewModeIcon mode="edit" />
                 </button>
               </div>
               <button
@@ -393,7 +522,7 @@ export function SkillFileDialog({ skill, isOpen, onClose }: SkillFileDialogProps
                 disabled={isLoading || isSaving || !selectedPath}
               />
             ) : (
-              <div className="skill-file-dialog__preview">
+              <div className="skill-file-dialog__preview" ref={previewRef}>
                 {isMarkdownFile ? (
                   <>
                     {previewDocument.frontmatter ? (
@@ -403,7 +532,32 @@ export function SkillFileDialog({ skill, isOpen, onClose }: SkillFileDialogProps
                     ) : null}
                     {previewDocument.body.trim() ? (
                       <div className="skill-file-dialog__markdown">
-                        <ReactMarkdown remarkPlugins={[remarkGfm]}>{previewDocument.body}</ReactMarkdown>
+                        <ReactMarkdown
+                          remarkPlugins={[remarkGfm]}
+                          components={{
+                            a({ href = "", children, node: _node, ...anchorProps }) {
+                              const targetPath = resolveSkillFileLinkPath(href, selectedPath, fileEntries);
+
+                              return (
+                                <a
+                                  {...anchorProps}
+                                  href={href}
+                                  onClick={(event) => {
+                                    if (!targetPath) {
+                                      return;
+                                    }
+                                    event.preventDefault();
+                                    void handleSelectFile(targetPath);
+                                  }}
+                                >
+                                  {children}
+                                </a>
+                              );
+                            },
+                          }}
+                        >
+                          {previewDocument.body}
+                        </ReactMarkdown>
                       </div>
                     ) : (
                       <div className="skill-file-dialog__empty">{t("skill.files.emptyMarkdown")}</div>
