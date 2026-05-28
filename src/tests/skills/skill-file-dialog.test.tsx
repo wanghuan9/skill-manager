@@ -1,4 +1,4 @@
-import { act, render, screen } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
@@ -98,7 +98,7 @@ beforeEach(() => {
           path: (args as { relativePath: string }).relativePath,
           content:
             (args as { relativePath: string }).relativePath === "SKILL.md"
-              ? "# drawio-diagram\n\n用于根据项目上下文生成 Draw.io 图表。\n\n## 使用时机\n\n- 需要输出架构图\n- 需要输出流程图\n"
+              ? "# drawio-diagram\n\n用于根据项目上下文生成 Draw.io 图表。\n\n## 使用时机\n\n- 需要输出架构图\n- 需要输出流程图\n\n## 规范文件\n\n[生成说明](reference/generation.md)\n"
               : "reference doc",
         };
       case "save_skill_file_content":
@@ -143,6 +143,31 @@ test("switches between edit and markdown preview views", async () => {
   expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
 });
 
+test("opens relative markdown links inside the skill file dialog", async () => {
+  renderSkillFileDialog();
+
+  await screen.findByRole("dialog", { name: "drawio-diagram" });
+
+  const preview = document.querySelector(".skill-file-dialog__preview");
+  if (!(preview instanceof HTMLElement)) {
+    throw new Error("missing preview container");
+  }
+  preview.scrollTop = 120;
+
+  await userEvent.click(screen.getByRole("link", { name: "生成说明" }));
+
+  expect(await screen.findByText("reference doc")).toBeInTheDocument();
+  expect(preview.scrollTop).toBe(0);
+  expect(screen.getByRole("button", { name: "generation.md" })).toHaveClass("is-selected");
+  expect(
+    mockedInvoke.mock.calls.some(
+      ([command, args]) =>
+        command === "get_skill_file_content" &&
+        (args as { relativePath: string }).relativePath === "reference/generation.md",
+    ),
+  ).toBe(true);
+});
+
 test("shows a close button instead of a back button in the header", async () => {
   renderSkillFileDialog();
 
@@ -172,6 +197,40 @@ test("keeps edit mode after workspace activity rerenders the dialog", async () =
   await userEvent.click(screen.getByRole("button", { name: "编辑" }));
 
   expect(screen.getByRole("textbox")).toBeInTheDocument();
+});
+
+test("saves the selected file with the system save shortcut", async () => {
+  renderSkillFileDialog();
+
+  await screen.findByRole("dialog", { name: "drawio-diagram" });
+  await userEvent.click(screen.getByRole("button", { name: "编辑" }));
+
+  const textbox = screen.getByRole("textbox");
+  await userEvent.clear(textbox);
+  await userEvent.type(textbox, "# changed");
+
+  const event = new KeyboardEvent("keydown", {
+    key: "s",
+    metaKey: true,
+    bubbles: true,
+    cancelable: true,
+  });
+  const preventDefault = vi.spyOn(event, "preventDefault");
+  await act(async () => {
+    window.dispatchEvent(event);
+    await Promise.resolve();
+  });
+
+  await waitFor(() => {
+    expect(
+      mockedInvoke.mock.calls.some(
+        ([command, args]) =>
+          command === "save_skill_file_content" &&
+          (args as { content: string }).content === "# changed",
+      ),
+    ).toBe(true);
+  });
+  expect(preventDefault).toHaveBeenCalled();
 });
 
 test("finishes saving immediately and refreshes only the edited skill in background", async () => {

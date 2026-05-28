@@ -4551,6 +4551,49 @@ code {
   border-right: 1px solid var(--line);
 }
 
+.skill-file-dialog__view-toggle {
+  gap: 0;
+  padding: 2px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-strong);
+}
+
+.skill-file-dialog__view-toggle-button {
+  display: inline-grid;
+  place-items: center;
+  width: 32px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #374151;
+  cursor: pointer;
+  transition:
+    background-color 120ms ease,
+    color 120ms ease;
+}
+
+.skill-file-dialog__view-toggle-button:hover {
+  background: #f8fafe;
+}
+
+.skill-file-dialog__view-toggle-button:focus-visible {
+  outline: 2px solid rgba(47, 120, 255, 0.35);
+  outline-offset: 2px;
+}
+
+.skill-file-dialog__view-toggle-button.is-selected {
+  background: rgba(47, 120, 255, 0.08);
+  color: var(--accent);
+}
+
+.skill-file-dialog__view-toggle-button svg {
+  width: 17px;
+  height: 17px;
+}
+
 .skill-file-dialog__toolbar {
   padding-right: 34px;
 }
