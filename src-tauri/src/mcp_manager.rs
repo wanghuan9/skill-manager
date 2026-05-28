@@ -4308,7 +4308,11 @@ fn mcp_http_client() -> Result<Client, String> {
 }
 
 fn format_mcp_marketplace_request_error(error: &reqwest::Error) -> String {
-    classify_mcp_marketplace_request_error(error.is_timeout(), error.is_connect(), &error.to_string())
+    classify_mcp_marketplace_request_error(
+        error.is_timeout(),
+        error.is_connect(),
+        &error.to_string(),
+    )
 }
 
 fn classify_mcp_marketplace_request_error(
@@ -4556,13 +4560,9 @@ async fn fetch_mcp_marketplace_install_config(
             Err(error) => {
                 let formatted_error = format_mcp_marketplace_request_error(&error);
                 last_error = if attempt == 1 {
-                    format!(
-                        "请求 MCP 安装配置失败: {formatted_error}；正在重试一次"
-                    )
+                    format!("请求 MCP 安装配置失败: {formatted_error}；正在重试一次")
                 } else {
-                    format!(
-                        "请求 MCP 安装配置失败: {formatted_error}；已重试 1 次"
-                    )
+                    format!("请求 MCP 安装配置失败: {formatted_error}；已重试 1 次")
                 };
             }
         }

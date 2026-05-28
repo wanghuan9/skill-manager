@@ -2,6 +2,7 @@ import { useEffect, useId, useMemo, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useTranslate } from "@/app/i18n";
+import { useFailureReporter } from "@/app/failure-feedback";
 import { useSkillWorkspace } from "@/features/skills/state/skill-workspace";
 import type { SkillFileEntry, SkillSummary } from "@/features/skills/state/skill-store";
 
@@ -87,7 +88,14 @@ function splitFrontmatter(content: string) {
 
 export function SkillFileDialog({ skill, isOpen, onClose }: SkillFileDialogProps) {
   const { t } = useTranslate();
-  const { loadSkillFileBrowser, loadSkillFileContent, saveSkillFileContent } = useSkillWorkspace();
+  const reportFailure = useFailureReporter();
+  const {
+    loadSkillFileBrowser,
+    loadSkillFileContent,
+    markSkillAsActive,
+    refreshSkillLocalGitState,
+    saveSkillFileContent,
+  } = useSkillWorkspace();
   const dialogTitleId = useId();
   const [entries, setEntries] = useState<SkillFileEntry[]>([]);
   const [selectedPath, setSelectedPath] = useState("");
@@ -123,6 +131,14 @@ export function SkillFileDialog({ skill, isOpen, onClose }: SkillFileDialogProps
   }, [entries]);
   const isMarkdownFile = MARKDOWN_FILE_PATTERN.test(selectedPath);
   const previewDocument = useMemo(() => splitFrontmatter(content), [content]);
+
+  useEffect(() => {
+    if (!isOpen) {
+      return;
+    }
+
+    markSkillAsActive(skill.name);
+  }, [isOpen, markSkillAsActive, skill.name]);
 
   useEffect(() => {
     if (!isOpen) {
@@ -246,9 +262,16 @@ export function SkillFileDialog({ skill, isOpen, onClose }: SkillFileDialogProps
       });
       setContent(document.content);
       setHasDirtyChanges(false);
+      setIsSaving(false);
+      void refreshSkillLocalGitState(skill.name).catch((error) => {
+        reportFailure(error, {
+          operation: "refresh_skill_local_git_state",
+          fallbackMessage: t("skill.files.error.refreshState"),
+          context: { skillName: skill.name },
+        });
+      });
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : t("skill.files.error.save"));
-    } finally {
       setIsSaving(false);
     }
   }

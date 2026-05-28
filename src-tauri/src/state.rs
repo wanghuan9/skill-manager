@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
@@ -71,6 +72,7 @@ pub fn load_installed_skills(default_skills: &[SkillSummary]) -> Vec<SkillSummar
     let filtered_skills = original_skills
         .into_iter()
         .map(normalize_skill_workspace_path)
+        .map(repair_skill_local_path)
         .filter(is_skill_local_path_valid)
         .map(hydrate_skill_description)
         .collect::<Vec<_>>();
@@ -105,8 +107,8 @@ pub fn save_installed_skills(skills: &[SkillSummary]) -> Result<(), String> {
     };
     let payload = serde_json::to_string_pretty(&persistence)
         .map_err(|error| format!("序列化状态失败: {error}"))?;
-
-    fs::write(state_file, payload).map_err(|error| format!("写入状态文件失败: {error}"))?;
+    atomic_write_workspace_file(&state_file, &payload)
+        .map_err(|error| format!("写入状态文件失败: {error}"))?;
     remove_legacy_workspace_file(STATE_FILE_NAME);
     Ok(())
 }
@@ -418,6 +420,14 @@ fn normalize_skill_workspace_path(mut skill: SkillSummary) -> SkillSummary {
     skill
 }
 
+fn repair_skill_local_path(mut skill: SkillSummary) -> SkillSummary {
+    let repaired_path = resolve_skill_local_path(&skill);
+    if repaired_path != skill.local_path {
+        skill.local_path = repaired_path;
+    }
+    skill
+}
+
 fn is_skill_local_path_valid(skill: &SkillSummary) -> bool {
     if is_reserved_workspace_name(skill.name.trim()) {
         return false;
@@ -435,6 +445,46 @@ fn is_skill_local_path_valid(skill: &SkillSummary) -> bool {
         return false;
     }
     skill_path.join("SKILL.md").is_file()
+}
+
+fn resolve_skill_local_path(skill: &SkillSummary) -> String {
+    let current_path = PathBuf::from(&skill.local_path);
+    if current_path.join("SKILL.md").is_file() {
+        return skill.local_path.clone();
+    }
+
+    let nested_path = current_path.join("skills").join(skill.name.trim());
+    if nested_path.join("SKILL.md").is_file() {
+        return nested_path.to_string_lossy().to_string();
+    }
+
+    skill.local_path.clone()
+}
+
+fn atomic_write_workspace_file(path: &Path, contents: &str) -> Result<(), String> {
+    let parent_dir = path
+        .parent()
+        .ok_or_else(|| "工作区文件目录无效".to_string())?;
+    let file_name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| "工作区文件名无效".to_string())?;
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| format!("生成工作区文件时间戳失败: {error}"))?
+        .as_nanos();
+    let temp_path = parent_dir.join(format!(
+        ".{file_name}.tmp-{}-{timestamp}",
+        std::process::id()
+    ));
+
+    fs::write(&temp_path, contents).map_err(|error| format!("写入临时工作区文件失败: {error}"))?;
+    fs::rename(&temp_path, path).map_err(|error| {
+        let _ = fs::remove_file(&temp_path);
+        format!("替换工作区文件失败: {error}")
+    })?;
+
+    Ok(())
 }
 
 fn needs_description_refresh(description: &str) -> bool {
@@ -715,6 +765,69 @@ mod tests {
             .expect("deserialize rewritten state");
             assert_eq!(rewritten.installed_skills.len(), 1);
             assert_eq!(rewritten.installed_skills[0].name, "kept-skill");
+        });
+    }
+
+    #[test]
+    fn repairs_nested_skill_paths_and_rewrites_state_file() {
+        with_temp_home(|temp_home| {
+            let repo_root = temp_home.join(".skilldock/skills/example-migration");
+            let nested_skill_dir = repo_root.join("skills/example-migration");
+            fs::create_dir_all(&nested_skill_dir).expect("create nested skill dir");
+            fs::write(
+                nested_skill_dir.join("SKILL.md"),
+                "---\nname: example-migration\ndescription: repaired path\n---\n",
+            )
+            .expect("write nested SKILL.md");
+
+            let persisted = WorkspacePersistence {
+                installed_skills: vec![SkillSummary {
+                    name: "example-migration".into(),
+                    source_label: "GitHub".into(),
+                    source_type: "github".into(),
+                    source_url: "https://github.com/demo/example-migration".into(),
+                    description: "---".into(),
+                    local_path: repo_root.to_string_lossy().to_string(),
+                    branch: "main".into(),
+                    collab_status: "clean".into(),
+                    status_text: "ok".into(),
+                    remote_updated_at: "刚刚".into(),
+                    local_updated_at: "刚刚".into(),
+                    last_synced_at: "刚刚".into(),
+                    last_checked_at: "刚刚".into(),
+                    synced_tool_count: 0,
+                    last_editor: "".into(),
+                    commit_label: "abc123".into(),
+                    git_linked: false,
+                    tools: vec![],
+                }],
+            };
+            let state_file = temp_home.join(".skilldock/state.json");
+            fs::create_dir_all(state_file.parent().expect("state parent exists"))
+                .expect("create state parent");
+            fs::write(
+                &state_file,
+                serde_json::to_string_pretty(&persisted).expect("serialize persistence"),
+            )
+            .expect("write state file");
+
+            let loaded = load_installed_skills(&[]);
+            assert_eq!(loaded.len(), 1);
+            assert_eq!(
+                loaded[0].local_path,
+                nested_skill_dir.to_string_lossy().to_string()
+            );
+            assert_eq!(loaded[0].description, "repaired path");
+
+            let rewritten: WorkspacePersistence = serde_json::from_str(
+                &fs::read_to_string(&state_file).expect("read rewritten state file"),
+            )
+            .expect("deserialize rewritten state");
+            assert_eq!(rewritten.installed_skills.len(), 1);
+            assert_eq!(
+                rewritten.installed_skills[0].local_path,
+                nested_skill_dir.to_string_lossy().to_string()
+            );
         });
     }
 

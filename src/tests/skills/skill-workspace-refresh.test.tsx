@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { useState } from "react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { resetMcpImportSessionForTests } from "@/features/skills/api/skill-client";
@@ -34,6 +35,7 @@ vi.mock("@/app/utils/wait-for-next-paint", () => ({
 }));
 
 const mockedInvoke = vi.mocked(invoke);
+const mockedListen = vi.mocked(listen);
 const AUTO_GIT_STATE_REFRESH_INTERVAL_MS = 10 * 60 * 1000;
 const AUTO_GIT_STATE_REFRESH_COOLDOWN_MS = 60 * 1000;
 
@@ -63,6 +65,7 @@ function RefreshProbe() {
       <span data-testid="refresh-state">{refreshState}</span>
       <span data-testid="loading-state">{isLoading ? "loading" : "ready"}</span>
       <span data-testid="skill-name">{installedSkills[0]?.name ?? "none"}</span>
+      <span data-testid="remote-updated-at">{installedSkills[0]?.remoteUpdatedAt ?? "none"}</span>
     </div>
   );
 }
@@ -124,11 +127,25 @@ function createMarketplaceSkill(name: string): MarketplaceSkill {
   };
 }
 
+function emitSkillLibraryChange(skillName: string) {
+  const subscription = mockedListen.mock.calls.find(
+    ([eventName]) => eventName === "skill-library-changed",
+  );
+  if (!subscription) {
+    throw new Error("skill-library-changed subscription was not registered");
+  }
+
+  const [, handler] = subscription;
+  return handler({ payload: { skillName } } as never);
+}
+
 beforeEach(() => {
   vi.useRealTimers();
   window.localStorage.clear();
   resetMcpImportSessionForTests();
   mockedInvoke.mockReset();
+  mockedListen.mockReset();
+  mockedListen.mockImplementation(() => Promise.resolve(() => undefined));
 });
 
 afterEach(() => {
@@ -203,6 +220,69 @@ test("refresh resolves after startup skills without waiting for ancillary reques
   pendingSettings.resolve(appSettingsFixture);
 
   await act(async () => undefined);
+});
+
+test("refresh keeps the fetched remote updated time instead of reverting to the startup snapshot", async () => {
+  const startupSkill: SkillSummary = {
+    ...installedSkillFixtures[0],
+    name: "technical-design-test",
+    remoteUpdatedAt: "2026/5/7 19:27:55",
+  };
+  const refreshedSkill: SkillSummary = {
+    ...startupSkill,
+    remoteUpdatedAt: "2026/5/26 19:07:25",
+  };
+
+  let startupCallCount = 0;
+  let gitStateCallCount = 0;
+
+  mockedInvoke.mockImplementation(async (command, args) => {
+    switch (command) {
+      case "list_startup_installed_skills":
+        startupCallCount += 1;
+        return [startupSkill];
+      case "refresh_git_states":
+        gitStateCallCount += 1;
+        return [refreshedSkill];
+      case "list_local_skill_candidates":
+        return localSkillFixtures;
+      case "list_tool_configs":
+        return toolConfigFixtures;
+      case "get_git_account_summary":
+        return gitAccountFixture;
+      case "get_app_settings":
+      case "update_app_settings":
+        return args && "settings" in (args as Record<string, unknown>)
+          ? (args as { settings: AppSettings }).settings
+          : appSettingsFixture;
+      case "refresh_local_git_state":
+        return refreshedSkill;
+      default:
+        throw new Error(`Unexpected command: ${command}`);
+    }
+  });
+
+  render(
+    <SkillWorkspaceProvider>
+      <RefreshProbe />
+    </SkillWorkspaceProvider>,
+  );
+
+  await waitFor(() => {
+    expect(screen.getByTestId("remote-updated-at").textContent).toBe("2026/5/26 19:07:25");
+  });
+
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "刷新工作区" }));
+  });
+
+  await waitFor(() => {
+    expect(screen.getByTestId("refresh-state").textContent).toBe("done");
+    expect(screen.getByTestId("remote-updated-at").textContent).toBe("2026/5/26 19:07:25");
+  });
+
+  expect(startupCallCount).toBe(1);
+  expect(gitStateCallCount).toBeGreaterThanOrEqual(2);
 });
 
 test("does not overwrite saved default open tool while settings are still loading", async () => {
@@ -539,4 +619,143 @@ test("does not start another focus refresh while a git refresh is already in fli
   });
 
   expect(screen.getByTestId("skill-name").textContent).toBe("resolved-refresh");
+});
+
+test("refreshes a startup skill once after debounced library change events", async () => {
+  vi.useFakeTimers();
+  try {
+    const watchedSkill = installedSkillFixtures[0];
+    const refreshedSkill: SkillSummary = {
+      ...watchedSkill,
+      collabStatus: "pending-push",
+      statusText: "本地存在待推送内容，建议提交并推送。",
+    };
+
+    mockedInvoke.mockImplementation(async (command, args) => {
+      switch (command) {
+        case "list_startup_installed_skills":
+        case "refresh_git_states":
+          return [watchedSkill];
+        case "list_local_skill_candidates":
+          return localSkillFixtures;
+        case "list_tool_configs":
+          return toolConfigFixtures;
+        case "get_git_account_summary":
+          return gitAccountFixture;
+        case "get_app_settings":
+          return appSettingsFixture;
+        case "update_app_settings":
+          return (args as { settings: AppSettings }).settings;
+        case "refresh_local_git_state":
+          if ((args as { skillName: string }).skillName !== watchedSkill.name) {
+            throw new Error(`Unexpected refresh target: ${(args as { skillName: string }).skillName}`);
+          }
+          return refreshedSkill;
+        default:
+          throw new Error(`Unexpected command: ${command}`);
+      }
+    });
+
+    render(
+      <SkillWorkspaceProvider>
+        <RefreshProbe />
+      </SkillWorkspaceProvider>,
+    );
+
+    await act(async () => {
+      vi.runOnlyPendingTimers();
+      await Promise.resolve();
+    });
+
+    expect(screen.getByTestId("loading-state").textContent).toBe("ready");
+
+    await act(async () => {
+      emitSkillLibraryChange(watchedSkill.name);
+      emitSkillLibraryChange(watchedSkill.name);
+    });
+
+    await act(async () => {
+      vi.advanceTimersByTime(499);
+      await Promise.resolve();
+    });
+
+    expect(
+      mockedInvoke.mock.calls.filter(([command]) => command === "refresh_local_git_state"),
+    ).toHaveLength(0);
+
+    await act(async () => {
+      vi.advanceTimersByTime(1);
+      await Promise.resolve();
+    });
+
+    const refreshCalls = mockedInvoke.mock.calls.filter(
+      ([command]) => command === "refresh_local_git_state",
+    );
+    expect(refreshCalls).toHaveLength(1);
+    expect((refreshCalls[0][1] as { skillName: string }).skillName).toBe(watchedSkill.name);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("ignores library change events for skills that appear only after startup", async () => {
+  vi.useFakeTimers();
+  try {
+    const startupSkill: SkillSummary = {
+      ...installedSkillFixtures[0],
+      name: "startup-skill",
+    };
+    const newlyInstalledSkill: SkillSummary = {
+      ...installedSkillFixtures[1],
+      name: "imported-after-startup",
+    };
+
+    mockedInvoke.mockImplementation(async (command, args) => {
+      switch (command) {
+        case "list_startup_installed_skills":
+          return [startupSkill];
+        case "refresh_git_states":
+          return [startupSkill, newlyInstalledSkill];
+        case "list_local_skill_candidates":
+          return localSkillFixtures;
+        case "list_tool_configs":
+          return toolConfigFixtures;
+        case "get_git_account_summary":
+          return gitAccountFixture;
+        case "get_app_settings":
+          return appSettingsFixture;
+        case "update_app_settings":
+          return (args as { settings: AppSettings }).settings;
+        case "refresh_local_git_state":
+          throw new Error(`Unexpected refresh target: ${(args as { skillName: string }).skillName}`);
+        default:
+          throw new Error(`Unexpected command: ${command}`);
+      }
+    });
+
+    render(
+      <SkillWorkspaceProvider>
+        <RefreshProbe />
+      </SkillWorkspaceProvider>,
+    );
+
+    await act(async () => {
+      vi.runOnlyPendingTimers();
+      await Promise.resolve();
+    });
+
+    expect(screen.getByTestId("loading-state").textContent).toBe("ready");
+
+    await act(async () => {
+      emitSkillLibraryChange(newlyInstalledSkill.name);
+      vi.advanceTimersByTime(500);
+      await Promise.resolve();
+    });
+
+    expect(
+      mockedInvoke.mock.calls.filter(([command]) => command === "refresh_local_git_state"),
+    ).toHaveLength(0);
+  } finally {
+    vi.useRealTimers();
+  }
 });

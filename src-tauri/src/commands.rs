@@ -15,7 +15,7 @@ use zip::ZipArchive;
 use crate::git_state::{
     clear_skill_update_cache, enrich_newly_installed_skill_with_git_state,
     enrich_skill_with_cached_update_state, enrich_skill_with_git_state,
-    enrich_skill_with_local_git_state, local_git_state_signature,
+    enrich_skill_with_local_git_state,
 };
 use crate::library::{
     clone_repo_for_discovery, clone_repo_for_discovery_with_sparse_paths, clone_repo_skill,
@@ -26,11 +26,10 @@ use crate::library::{
     skill_directory,
 };
 use crate::models::{
-    AppSettings, GitAccountSummary, GitChangeFile, LocalGitStateSignature,
-    LocalInstallSkillCandidate, LocalSkillCandidate, MarketplaceSkill, PushBranchOption,
-    PushPreviewSnapshot, PushTargetSnapshot, RepoSkillCandidate, SkillFileBrowserSnapshot,
-    SkillFileDocument, SkillFileEntry, SkillSummary, ToolConfig, ToolSyncStatus,
-    UpdatePreviewSnapshot, WorkspaceSnapshot,
+    AppSettings, GitAccountSummary, GitChangeFile, LocalInstallSkillCandidate, LocalSkillCandidate,
+    MarketplaceSkill, PushBranchOption, PushPreviewSnapshot, PushTargetSnapshot,
+    RepoSkillCandidate, SkillFileBrowserSnapshot, SkillFileDocument, SkillFileEntry, SkillSummary,
+    ToolConfig, ToolSyncStatus, UpdatePreviewSnapshot, WorkspaceSnapshot,
 };
 use crate::state::{
     load_app_settings, load_installed_skills, normalize_skill_install_activation,
@@ -2105,6 +2104,10 @@ fn normalize_installed_skill_source_url(skill: &SkillSummary) -> SkillSummary {
     if !skill.git_linked || skill.source_type == "local" {
         return skill.clone();
     }
+    let should_repair_missing_source_url = skill.source_url.trim().is_empty();
+    if !should_repair_missing_source_url {
+        return skill.clone();
+    }
 
     let Some(repository_url) =
         run_git_command(&skill.local_path, &["config", "--get", "remote.origin.url"])
@@ -2131,9 +2134,10 @@ fn normalize_installed_skill_source_url(skill: &SkillSummary) -> SkillSummary {
         .or_else(|| current_branch_name(&skill.local_path).ok());
 
     let mut normalized = skill.clone();
+    let source_type = source_type_for_url(&repository_url);
     normalized.source_url = build_tree_source_url(
         &repository_url,
-        &skill.source_type,
+        source_type,
         branch.as_deref(),
         &relative_path,
     );
@@ -2206,7 +2210,24 @@ fn enable_skill_for_all_installed_tools(
 fn resolve_startup_installed_skills() -> Vec<SkillSummary> {
     let tool_configs = build_tool_configs();
     let installed_tool_entries = installed_tool_sync_entries_from_configs(&tool_configs);
-    load_installed_skills(&default_installed_skills())
+    let installed_skills = load_installed_skills(&default_installed_skills());
+    let normalized_skills = installed_skills
+        .iter()
+        .map(normalize_installed_skill_source_url)
+        .collect::<Vec<_>>();
+    if normalized_skills
+        .iter()
+        .zip(installed_skills.iter())
+        .any(|(current, original)| {
+            current.source_url != original.source_url
+                || current.source_type != original.source_type
+                || current.source_label != original.source_label
+        })
+    {
+        let _ = save_installed_skills(&normalized_skills);
+    }
+
+    normalized_skills
         .iter()
         .map(|skill| normalize_skill_tools_with_entries(&skill, &installed_tool_entries))
         .map(|skill| enrich_skill_with_cached_update_state(&skill))
@@ -2767,6 +2788,16 @@ fn collect_working_tree_changes(skill_path: &str) -> Result<Vec<GitChangeFile>, 
 fn refresh_and_persist_skill(skill_name: &str) -> Result<SkillSummary, String> {
     let (mut installed_skills, skill_index) = find_skill_by_name(skill_name)?;
     let refreshed_skill = enrich_skill_with_git_state(&normalize_installed_skill_source_url(
+        &installed_skills[skill_index],
+    ));
+    installed_skills[skill_index] = refreshed_skill.clone();
+    save_installed_skills(&installed_skills)?;
+    Ok(refreshed_skill)
+}
+
+fn refresh_and_persist_local_git_skill(skill_name: &str) -> Result<SkillSummary, String> {
+    let (mut installed_skills, skill_index) = find_skill_by_name(skill_name)?;
+    let refreshed_skill = enrich_skill_with_local_git_state(&normalize_installed_skill_source_url(
         &installed_skills[skill_index],
     ));
     installed_skills[skill_index] = refreshed_skill.clone();
@@ -3758,11 +3789,14 @@ fn parse_apple_languages_output(output: &str) -> Option<&'static str> {
 #[tauri::command]
 pub async fn refresh_git_states() -> Vec<SkillSummary> {
     let skills = load_installed_skills(&default_installed_skills());
-    skills
+    let refreshed_skills = skills
         .iter()
-        .map(normalize_skill_tools)
+        .map(normalize_installed_skill_source_url)
+        .map(|skill| normalize_skill_tools(&skill))
         .map(|skill| enrich_skill_with_git_state(&skill))
-        .collect()
+        .collect::<Vec<_>>();
+    let _ = save_installed_skills(&refreshed_skills);
+    refreshed_skills
 }
 
 #[tauri::command]
@@ -3780,15 +3814,10 @@ pub async fn refresh_local_git_states() -> Vec<SkillSummary> {
 }
 
 #[tauri::command]
-pub async fn get_local_git_state_signatures() -> Vec<LocalGitStateSignature> {
-    tauri::async_runtime::spawn_blocking(|| {
-        load_installed_skills(&default_installed_skills())
-            .iter()
-            .map(|skill| local_git_state_signature(skill))
-            .collect()
-    })
-    .await
-    .unwrap_or_default()
+pub async fn refresh_local_git_state(skill_name: String) -> Result<SkillSummary, String> {
+    tauri::async_runtime::spawn_blocking(move || refresh_and_persist_local_git_skill(&skill_name))
+        .await
+        .map_err(|error| format!("后台刷新本地 Git 状态失败: {error}"))?
 }
 
 #[tauri::command]
@@ -5103,11 +5132,12 @@ mod tests {
         intellij_trusted_locations_for_project, load_marketplace_cache_page,
         map_skillsmp_items_to_marketplace, normalize_installed_skill_source_url,
         open_target_path_for_skill, parse_apple_languages_output, parse_repo_install_spec,
-        parse_skills_sh_homepage_items, remove_trusted_project_paths, save_marketplace_cache,
+        parse_skills_sh_homepage_items, remove_trusted_project_paths,
+        resolve_startup_installed_skills, save_marketplace_cache,
         scan_local_install_skill_candidates, scan_repo_skill_candidates,
         should_use_skills_sh_homepage_page,
     };
-    use crate::models::{MarketplaceSkill, SkillSummary};
+    use crate::models::{MarketplaceSkill, SkillSummary, WorkspacePersistence};
     use crate::workspace::TEST_ENV_LOCK;
     use std::env;
     use std::fs;
@@ -5989,7 +6019,7 @@ mod tests {
     }
 
     #[test]
-    fn normalizes_installed_skill_source_url_from_git_remote_and_relative_path() {
+    fn keeps_existing_installed_skill_source_url() {
         let temp_dir = temp_test_dir("normalize-source-url");
         let repo_path = temp_dir.join("planning-with-files");
         let skill_path = repo_path.join("skills/planning-with-files-zh");
@@ -6026,6 +6056,13 @@ mod tests {
             "git symbolic-ref failed: {}",
             String::from_utf8_lossy(&output.stderr)
         );
+        run_git_test(&repo_path, &["config", "user.name", "SkillDock Test"]);
+        run_git_test(
+            &repo_path,
+            &["config", "user.email", "skilldock@example.com"],
+        );
+        run_git_test(&repo_path, &["add", "."]);
+        run_git_test(&repo_path, &["commit", "-m", "init"]);
 
         let skill = SkillSummary {
             name: "planning-with-files-zh".into(),
@@ -6051,9 +6088,161 @@ mod tests {
         let normalized = normalize_installed_skill_source_url(&skill);
         assert_eq!(
             normalized.source_url,
-            "https://github.com/OthmanAdi/planning-with-files/tree/master/skills/planning-with-files-zh"
+            "https://github.com/OthmanAdi/planning-with-files/tree/main/skills/planning-with-files-zh"
         );
 
         let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn normalizes_missing_installed_skill_source_url_from_git_remote() {
+        let temp_dir = temp_test_dir("normalize-missing-source-url");
+        let repo_path = temp_dir.join("larksuite-cli");
+        let skill_path = repo_path.join("skills/lark-doc");
+        fs::create_dir_all(&skill_path).expect("create skill path");
+        fs::write(skill_path.join("SKILL.md"), "# lark-doc").expect("write skill file");
+
+        run_git_test(
+            &temp_dir,
+            &["init", "--quiet", repo_path.to_str().expect("repo path")],
+        );
+        run_git_test(&repo_path, &["checkout", "-b", "main"]);
+        run_git_test(
+            &repo_path,
+            &[
+                "remote",
+                "add",
+                "origin",
+                "https://github.com/larksuite/cli.git",
+            ],
+        );
+        run_git_test(&repo_path, &["config", "user.name", "SkillDock Test"]);
+        run_git_test(
+            &repo_path,
+            &["config", "user.email", "skilldock@example.com"],
+        );
+        run_git_test(&repo_path, &["add", "."]);
+        run_git_test(&repo_path, &["commit", "-m", "init"]);
+
+        let skill = SkillSummary {
+            name: "lark-doc".into(),
+            source_label: "GitHub".into(),
+            source_type: "github".into(),
+            source_url: String::new(),
+            description: String::new(),
+            local_path: skill_path.to_string_lossy().to_string(),
+            branch: "main".into(),
+            collab_status: "clean".into(),
+            status_text: String::new(),
+            remote_updated_at: String::new(),
+            local_updated_at: String::new(),
+            last_synced_at: String::new(),
+            last_checked_at: String::new(),
+            synced_tool_count: 0,
+            last_editor: String::new(),
+            commit_label: String::new(),
+            git_linked: true,
+            tools: vec![],
+        };
+
+        let normalized = normalize_installed_skill_source_url(&skill);
+
+        assert_eq!(
+            normalized.source_url,
+            "https://github.com/larksuite/cli/tree/main/skills/lark-doc"
+        );
+        assert_eq!(normalized.source_type, "github");
+        assert_eq!(normalized.source_label, "GitHub");
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn startup_installed_skills_persists_repaired_missing_source_url() {
+        let _guard = TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let original_home = env::var_os("HOME");
+        let temp_home = temp_test_dir("startup-repair-source-home");
+        let repo_path = temp_home.join(".skilldock/skills/larksuite-cli");
+        let skill_path = repo_path.join("skills/lark-doc");
+        fs::create_dir_all(&skill_path).expect("create skill path");
+        fs::write(skill_path.join("SKILL.md"), "# lark-doc").expect("write skill file");
+
+        run_git_test(
+            &temp_home,
+            &["init", "--quiet", repo_path.to_str().expect("repo path")],
+        );
+        run_git_test(&repo_path, &["checkout", "-b", "main"]);
+        run_git_test(
+            &repo_path,
+            &[
+                "remote",
+                "add",
+                "origin",
+                "https://github.com/larksuite/cli.git",
+            ],
+        );
+        run_git_test(&repo_path, &["config", "user.name", "SkillDock Test"]);
+        run_git_test(
+            &repo_path,
+            &["config", "user.email", "skilldock@example.com"],
+        );
+        run_git_test(&repo_path, &["add", "."]);
+        run_git_test(&repo_path, &["commit", "-m", "init"]);
+
+        let state_file = temp_home.join(".skilldock/state.json");
+        fs::create_dir_all(state_file.parent().expect("state parent exists"))
+            .expect("create state parent");
+        let persisted = WorkspacePersistence {
+            installed_skills: vec![SkillSummary {
+                name: "lark-doc".into(),
+                source_label: "GitHub".into(),
+                source_type: "github".into(),
+                source_url: String::new(),
+                description: String::new(),
+                local_path: skill_path.to_string_lossy().to_string(),
+                branch: "main".into(),
+                collab_status: "clean".into(),
+                status_text: String::new(),
+                remote_updated_at: String::new(),
+                local_updated_at: String::new(),
+                last_synced_at: String::new(),
+                last_checked_at: String::new(),
+                synced_tool_count: 0,
+                last_editor: String::new(),
+                commit_label: String::new(),
+                git_linked: true,
+                tools: vec![],
+            }],
+        };
+        fs::write(
+            &state_file,
+            serde_json::to_string_pretty(&persisted).expect("serialize state"),
+        )
+        .expect("write state file");
+
+        // SAFETY: this test holds TEST_ENV_LOCK and restores HOME before returning.
+        unsafe {
+            env::set_var("HOME", &temp_home);
+        }
+
+        let loaded = resolve_startup_installed_skills();
+        let rewritten: WorkspacePersistence =
+            serde_json::from_str(&fs::read_to_string(&state_file).expect("read rewritten state"))
+                .expect("deserialize rewritten state");
+
+        restore_env_var("HOME", original_home);
+
+        assert_eq!(
+            loaded[0].source_url,
+            "https://github.com/larksuite/cli/tree/main/skills/lark-doc"
+        );
+        assert_eq!(
+            rewritten.installed_skills[0].source_url,
+            "https://github.com/larksuite/cli/tree/main/skills/lark-doc"
+        );
+
+        let _ = fs::remove_dir_all(temp_home);
     }
 }

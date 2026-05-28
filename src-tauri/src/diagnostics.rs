@@ -160,10 +160,13 @@ fn build_compact_failure_log(entry: &FailureLogEntry, log_path: &str) -> String 
         format!("diagnosticId: {}", entry.id),
     ];
 
-    if let Some(root_cause) = extract_context_string(&entry.context, &["errorDetails", "rootCause"]) {
+    if let Some(root_cause) = extract_context_string(&entry.context, &["errorDetails", "rootCause"])
+    {
         lines.push(format!("rootCause: {}", root_cause));
     }
-    if let Some(cause_chain) = extract_context_string_list(&entry.context, &["errorDetails", "causeChain"]) {
+    if let Some(cause_chain) =
+        extract_context_string_list(&entry.context, &["errorDetails", "causeChain"])
+    {
         lines.push(format!("causeChain: {}", cause_chain.join(" -> ")));
     }
 

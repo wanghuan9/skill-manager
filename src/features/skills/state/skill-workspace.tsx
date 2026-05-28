@@ -1,5 +1,6 @@
 import {
   createContext,
+  useCallback,
   useContext,
   useEffect,
   useMemo,
@@ -32,10 +33,12 @@ import {
   openSkillInEditor,
   openPathInFinder,
   openSkillRepository,
+  refreshLocalGitState,
   saveSkillFileContent,
   setSkillAllToolStatuses,
   setToolSkillStatuses,
   shouldUseFixtureData,
+  subscribeSkillLibraryChanges,
   toggleSkillTool,
   updateAppSettings,
   updateSkill,
@@ -80,9 +83,9 @@ const MARKETPLACE_SOURCE_SITES: MarketplaceSourceSite[] = ["skills.sh", "skillsm
 const STARTUP_LOAD_DELAY_MS = 0;
 const AUTO_GIT_STATE_REFRESH_INTERVAL_MS = 10 * 60 * 1000;
 const AUTO_GIT_STATE_REFRESH_COOLDOWN_MS = 60 * 1000;
-const STARTUP_CACHED_COLLAB_STATUSES = new Set<SkillSummary["collabStatus"]>([
+const SKILL_LIBRARY_CHANGE_DEBOUNCE_MS = 500;
+const STARTUP_CACHED_REMOTE_COLLAB_STATUSES = new Set<SkillSummary["collabStatus"]>([
   "update-available",
-  "pending-push",
   "diverged",
 ]);
 
@@ -112,6 +115,7 @@ type SkillWorkspaceContextValue = {
   updateSkill: (skillName: string) => Promise<void>;
   updateAllSkills: () => Promise<void>;
   deleteSkill: (skillName: string) => Promise<void>;
+  markSkillAsActive: (skillName: string) => void;
   loadSkillFileBrowser: (skillName: string) => Promise<SkillFileBrowserSnapshot>;
   loadSkillFileContent: (input: {
     skillName: string;
@@ -122,6 +126,7 @@ type SkillWorkspaceContextValue = {
     relativePath: string;
     content: string;
   }) => Promise<SkillFileDocument>;
+  refreshSkillLocalGitState: (skillName: string) => Promise<void>;
   toggleSkillTool: (input: { skillName: string; toolName: string; toolNames: string[] }) => Promise<void>;
   setToolSkillStatuses: (input: {
     toolName: string;
@@ -351,7 +356,7 @@ export function mergeStartupSkillStatusCache(
     if (
       !cachedSkill ||
       skill.collabStatus !== "clean" ||
-      !STARTUP_CACHED_COLLAB_STATUSES.has(cachedSkill.collabStatus)
+      !STARTUP_CACHED_REMOTE_COLLAB_STATUSES.has(cachedSkill.collabStatus)
     ) {
       return skill;
     }
@@ -444,8 +449,16 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
   });
   const gitStateRefreshInFlightRef = useRef<Promise<void> | null>(null);
   const lastGitStateRefreshAtRef = useRef(0);
+  const localGitRefreshInFlightRef = useRef(new Set<string>());
+  const localGitRefreshDebounceTimersRef = useRef(new Map<string, number>());
+  const installedSkillsRef = useRef(installedSkills);
+  const startupWatchedSkillNamesRef = useRef(new Set<string>());
   const defaultOpenToolId = appSettings.defaultOpenToolId;
   const language = appSettings.language;
+
+  useEffect(() => {
+    installedSkillsRef.current = installedSkills;
+  }, [installedSkills]);
 
   useEffect(() => {
     if (usesFixtureData || !gitAccount) {
@@ -618,6 +631,12 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
 
   async function loadWorkspaceSnapshot() {
     const shouldBlockSkillList = installedSkills.length === 0;
+    if (!shouldBlockSkillList) {
+      await refreshGitStatesInBackground();
+      void refreshWorkspaceAncillaryData();
+      return;
+    }
+
     if (shouldBlockSkillList) {
       setIsLoading(true);
     }
@@ -688,6 +707,30 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
     return nextRefreshPromise;
   }
 
+  const markSkillAsActive = useCallback((_skillName: string) => undefined, []);
+
+  async function refreshSkillLocalGitStateInBackground(
+    skillName: string,
+    shouldApply: () => boolean = () => true,
+  ) {
+    if (localGitRefreshInFlightRef.current.has(skillName)) {
+      return;
+    }
+
+    localGitRefreshInFlightRef.current.add(skillName);
+    try {
+      const updatedSkill = await refreshLocalGitState(skillName);
+      if (!shouldApply()) {
+        return;
+      }
+      setInstalledSkills((current) => mergeUpdatedSkillsPreservingOrder(current, [updatedSkill]));
+    } catch (error) {
+      console.error(`Failed to refresh local git state for skill ${skillName}:`, error);
+    } finally {
+      localGitRefreshInFlightRef.current.delete(skillName);
+    }
+  }
+
   useEffect(() => {
     if (usesFixtureData) {
       return;
@@ -711,6 +754,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
 
         const cachedSkills = startupCache?.installedSkills ?? [];
         const skillsWithCachedStatus = mergeStartupSkillStatusCache(skills, cachedSkills);
+        startupWatchedSkillNamesRef.current = new Set(skills.map((skill) => skill.name));
         setInstalledSkills(skillsWithCachedStatus);
         setIsLoading(false);
         void refreshGitStatesInBackground(() => active);
@@ -764,6 +808,60 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       window.clearInterval(intervalId);
       window.removeEventListener("focus", refreshGitStatesIfNeeded);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [usesFixtureData]);
+
+  useEffect(() => {
+    if (usesFixtureData) {
+      return;
+    }
+
+    let active = true;
+    let unlisten: (() => void) | null = null;
+
+    void subscribeSkillLibraryChanges(({ skillName }) => {
+      if (!active) {
+        return;
+      }
+
+      if (!startupWatchedSkillNamesRef.current.has(skillName)) {
+        return;
+      }
+
+      const installedSkillExists = installedSkillsRef.current.some((skill) => skill.name === skillName);
+      if (!installedSkillExists) {
+        return;
+      }
+
+      const existingTimer = localGitRefreshDebounceTimersRef.current.get(skillName);
+      if (existingTimer !== undefined) {
+        window.clearTimeout(existingTimer);
+      }
+
+      const timer = window.setTimeout(() => {
+        localGitRefreshDebounceTimersRef.current.delete(skillName);
+        void refreshSkillLocalGitStateInBackground(skillName, () => active);
+      }, SKILL_LIBRARY_CHANGE_DEBOUNCE_MS);
+      localGitRefreshDebounceTimersRef.current.set(skillName, timer);
+    }).then((cleanup) => {
+      if (!active) {
+        cleanup();
+        return;
+      }
+      unlisten = cleanup;
+    }).catch((error) => {
+      console.error("Failed to subscribe to skill library changes:", error);
+    });
+
+    return () => {
+      active = false;
+      if (unlisten) {
+        unlisten();
+      }
+      for (const timer of localGitRefreshDebounceTimersRef.current.values()) {
+        window.clearTimeout(timer);
+      }
+      localGitRefreshDebounceTimersRef.current.clear();
     };
   }, [usesFixtureData]);
 
@@ -939,7 +1037,14 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
 
   async function handleUpdateSkill(skillName: string) {
     const updatedSkill = await updateSkill({ skillName });
+    markSkillAsActive(skillName);
     setInstalledSkills((current) => [updatedSkill, ...current.filter((item) => item.name !== updatedSkill.name)]);
+  }
+
+  async function handleRefreshSkillLocalGitState(skillName: string) {
+    markSkillAsActive(skillName);
+    const updatedSkill = await refreshLocalGitState(skillName);
+    setInstalledSkills((current) => mergeUpdatedSkillsPreservingOrder(current, [updatedSkill]));
   }
 
   async function handleUpdateAllSkills() {
@@ -1074,6 +1179,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
   }
 
   async function handleOpenSkillWithDefaultTool(skillName: string) {
+    markSkillAsActive(skillName);
     const availableTools = buildOpenToolOptions(toolConfigs, appSettings.language);
     const availableToolIds = new Set(availableTools.map((tool) => tool.id));
     const resolvedOpenToolId = availableToolIds.has(defaultOpenToolId)
@@ -1136,9 +1242,11 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       updateSkill: handleUpdateSkill,
       updateAllSkills: handleUpdateAllSkills,
       deleteSkill: handleDeleteSkill,
+      markSkillAsActive,
       loadSkillFileBrowser: fetchSkillFileBrowser,
       loadSkillFileContent: fetchSkillFileContent,
       saveSkillFileContent,
+      refreshSkillLocalGitState: handleRefreshSkillLocalGitState,
       toggleSkillTool: handleToggleSkillTool,
       setToolSkillStatuses: handleSetToolSkillStatuses,
       setSkillAllToolStatuses: handleSetSkillAllToolStatuses,

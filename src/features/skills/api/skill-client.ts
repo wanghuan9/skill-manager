@@ -158,6 +158,10 @@ type DetectedAppLanguage = {
   language: AppLanguage;
 };
 
+type SkillLibraryChangeEvent = {
+  skillName: string;
+};
+
 type LegacySkillSummary = Partial<SkillSummary> & {
   lastSyncedAt?: string;
 };
@@ -366,6 +370,30 @@ export async function fetchGitStates(): Promise<SkillSummary[]> {
     installedSkillFixtures,
   );
   return normalizeSkillSummaryList(skills);
+}
+
+export async function refreshLocalGitState(skillName: string): Promise<SkillSummary> {
+  const fallbackSource =
+    installedSkillFixtures.find((skill) => skill.name === skillName) ??
+    installedSkillFixtures[0];
+  const updatedSkill = await invokeOrFallback<LegacySkillSummary>(
+    "refresh_local_git_state",
+    { skillName },
+    fallbackSource,
+  );
+  return normalizeSkillSummary(updatedSkill);
+}
+
+export async function subscribeSkillLibraryChanges(
+  handler: (payload: SkillLibraryChangeEvent) => void,
+): Promise<UnlistenFn> {
+  if (shouldUseFixtureData()) {
+    return () => undefined;
+  }
+
+  return listen<SkillLibraryChangeEvent>("skill-library-changed", (event) => {
+    handler(event.payload);
+  });
 }
 
 export async function fetchMarketplaceSkills(): Promise<MarketplaceSkill[]> {

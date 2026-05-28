@@ -106,17 +106,6 @@ pub struct GitAccountSummary {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct LocalGitStateSignature {
-    pub skill_name: String,
-    pub local_path: String,
-    pub branch: String,
-    pub head: String,
-    pub working_tree_signature: String,
-    pub local_updated_at: String,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct WorkspaceSnapshot {
     pub installed_skills: Vec<SkillSummary>,
     pub marketplace_skills: Vec<MarketplaceSkill>,

@@ -4,6 +4,7 @@ mod git_state;
 mod library;
 mod mcp_manager;
 mod models;
+mod skill_watcher;
 mod state;
 mod workspace;
 
@@ -24,6 +25,9 @@ pub fn run() {
                 .plugin(tauri_plugin_updater::Builder::new().build())?;
             let _ = library::migrate_legacy_skill_symlinks_from_all_tools();
             let _ = library::remove_reserved_workspace_symlinks_from_all_tools();
+            if let Err(error) = skill_watcher::start_skill_library_watcher(app.handle().clone()) {
+                log::warn!("Failed to start skill library watcher: {error}");
+            }
             Ok(())
         })
         .plugin(tauri_plugin_dialog::init())
@@ -69,7 +73,7 @@ pub fn run() {
             commands::set_skill_all_tool_statuses,
             commands::refresh_git_states,
             commands::refresh_local_git_states,
-            commands::get_local_git_state_signatures,
+            commands::refresh_local_git_state,
             mcp_manager::list_mcp_workspace,
             mcp_manager::list_mcp_marketplace_servers,
             mcp_manager::resolve_mcp_marketplace_source_link,
