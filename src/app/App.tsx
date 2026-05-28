@@ -248,7 +248,7 @@ function SidebarToggleButton(props: {
 }
 
 function AppContent() {
-  const { installedSkills, language, refreshWorkspace, toolConfigs } = useSkillWorkspace();
+  const { installedSkills, isWorkspaceRefreshing, language, refreshWorkspace, toolConfigs } = useSkillWorkspace();
   const { t } = useTranslate();
   const reportFailure = useFailureReporter();
   const initialSkillViewMode = readSkillViewModePreference();
@@ -266,7 +266,6 @@ function AppContent() {
   const [activeInstallTab, setActiveInstallTab] = useState<InstallTab>("market");
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [sidebarHandleTop, setSidebarHandleTop] = useState<number | null>(null);
-  const [isToolsRefreshing, setIsToolsRefreshing] = useState(false);
   const [mcpServerCount, setMcpServerCount] = useState(() => getCachedMcpWorkspace()?.servers.length ?? 0);
   const activeDefinition = routes.find((route) => route.key === activeRoute) ?? routes[0];
   const updatableSkillCount = installedSkills.filter((skill) => skill.collabStatus === "update-available").length;
@@ -336,21 +335,18 @@ function AppContent() {
   }, [isMacOS, isSidebarCollapsed]);
 
   async function handleToolsRefresh() {
-    if (isToolsRefreshing) {
+    if (isWorkspaceRefreshing) {
       return;
     }
 
-    setIsToolsRefreshing(true);
     await waitForNextPaint();
     try {
-      await refreshWorkspace();
+      await refreshWorkspace({ showRefreshing: true });
     } catch (error) {
       reportFailure(error, {
         operation: "refresh_workspace_from_app_shell",
         fallbackMessage: t("app.header.refreshFailed"),
       });
-    } finally {
-      setIsToolsRefreshing(false);
     }
   }
 
@@ -492,13 +488,13 @@ function AppContent() {
               <div className="page-header__row">
                 <h1>{tx(language, activeDefinition.labelKey)}</h1>
                 <button
-                  className={`ghost-button tools-refresh-button${isToolsRefreshing ? " is-loading" : ""}`}
+                  className={`ghost-button tools-refresh-button${isWorkspaceRefreshing ? " is-loading" : ""}`}
                   type="button"
                   onClick={() => void handleToolsRefresh()}
-                  disabled={isToolsRefreshing}
+                  disabled={isWorkspaceRefreshing}
                 >
                   <span aria-hidden="true" className="skills-toolbar-button__icon">
-                    <svg className={isToolsRefreshing ? "skills-toolbar-button__svg is-spinning" : "skills-toolbar-button__svg"} viewBox="0 0 20 20" fill="none">
+                    <svg className={isWorkspaceRefreshing ? "skills-toolbar-button__svg is-spinning" : "skills-toolbar-button__svg"} viewBox="0 0 20 20" fill="none">
                       <path
                         d="M16.2 9.1a6.2 6.2 0 0 0-10.7-3.6"
                         stroke="currentColor"

@@ -37,6 +37,8 @@ use crate::state::{
 };
 use crate::workspace::{self, APP_BRAND_NAME};
 
+const REFRESH_GIT_STATES_CONCURRENCY: usize = 5;
+
 fn default_installed_skills() -> Vec<SkillSummary> {
     Vec::new()
 }
@@ -2805,6 +2807,51 @@ fn refresh_and_persist_local_git_skill(skill_name: &str) -> Result<SkillSummary,
     Ok(refreshed_skill)
 }
 
+fn refresh_installed_skill_git_state(skill: &SkillSummary) -> SkillSummary {
+    let normalized_skill = normalize_installed_skill_source_url(skill);
+    let normalized_skill = normalize_skill_tools(&normalized_skill);
+    enrich_skill_with_git_state(&normalized_skill)
+}
+
+fn map_in_parallel_preserving_order<T, R, F>(items: &[T], concurrency: usize, mapper: F) -> Vec<R>
+where
+    T: Sync,
+    R: Send,
+    F: Fn(&T) -> R + Sync,
+{
+    let safe_concurrency = concurrency.max(1);
+    let mut mapped_items = Vec::with_capacity(items.len());
+    for chunk in items.chunks(safe_concurrency) {
+        let chunk_results = thread::scope(|scope| {
+            let handles = chunk
+                .iter()
+                .map(|item| {
+                    let mapper = &mapper;
+                    scope.spawn(move || mapper(item))
+                })
+                .collect::<Vec<_>>();
+            handles
+                .into_iter()
+                .map(|handle| {
+                    handle
+                        .join()
+                        .expect("parallel refresh worker should finish")
+                })
+                .collect::<Vec<_>>()
+        });
+        mapped_items.extend(chunk_results);
+    }
+    mapped_items
+}
+
+fn refresh_installed_skill_git_states(skills: &[SkillSummary]) -> Vec<SkillSummary> {
+    map_in_parallel_preserving_order(
+        skills,
+        REFRESH_GIT_STATES_CONCURRENCY,
+        refresh_installed_skill_git_state,
+    )
+}
+
 fn skill_base_path(skill_name: &str) -> Result<PathBuf, String> {
     let (installed_skills, skill_index) = find_skill_by_name(skill_name)?;
     Ok(PathBuf::from(&installed_skills[skill_index].local_path))
@@ -3788,15 +3835,14 @@ fn parse_apple_languages_output(output: &str) -> Option<&'static str> {
 
 #[tauri::command]
 pub async fn refresh_git_states() -> Vec<SkillSummary> {
-    let skills = load_installed_skills(&default_installed_skills());
-    let refreshed_skills = skills
-        .iter()
-        .map(normalize_installed_skill_source_url)
-        .map(|skill| normalize_skill_tools(&skill))
-        .map(|skill| enrich_skill_with_git_state(&skill))
-        .collect::<Vec<_>>();
-    let _ = save_installed_skills(&refreshed_skills);
-    refreshed_skills
+    tauri::async_runtime::spawn_blocking(|| {
+        let skills = load_installed_skills(&default_installed_skills());
+        let refreshed_skills = refresh_installed_skill_git_states(&skills);
+        let _ = save_installed_skills(&refreshed_skills);
+        refreshed_skills
+    })
+    .await
+    .unwrap_or_default()
 }
 
 #[tauri::command]
@@ -5130,12 +5176,12 @@ mod tests {
         copy_local_skill_dir, detect_preferred_app_language_from_system, import_local_skill,
         insert_trusted_project_path, install_selected_local_skill_dirs,
         intellij_trusted_locations_for_project, load_marketplace_cache_page,
-        map_skillsmp_items_to_marketplace, normalize_installed_skill_source_url,
-        open_target_path_for_skill, parse_apple_languages_output, parse_repo_install_spec,
-        parse_skills_sh_homepage_items, remove_trusted_project_paths,
-        resolve_startup_installed_skills, save_marketplace_cache,
+        map_in_parallel_preserving_order, map_skillsmp_items_to_marketplace,
+        normalize_installed_skill_source_url, open_target_path_for_skill,
+        parse_apple_languages_output, parse_repo_install_spec, parse_skills_sh_homepage_items,
+        remove_trusted_project_paths, resolve_startup_installed_skills, save_marketplace_cache,
         scan_local_install_skill_candidates, scan_repo_skill_candidates,
-        should_use_skills_sh_homepage_page,
+        should_use_skills_sh_homepage_page, REFRESH_GIT_STATES_CONCURRENCY,
     };
     use crate::models::{MarketplaceSkill, SkillSummary, WorkspacePersistence};
     use crate::workspace::TEST_ENV_LOCK;
@@ -5143,6 +5189,10 @@ mod tests {
     use std::fs;
     use std::path::PathBuf;
     use std::process::Command;
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc, Barrier,
+    };
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn temp_test_dir(label: &str) -> PathBuf {
@@ -5207,6 +5257,40 @@ mod tests {
                 env::remove_var(name);
             }
         }
+    }
+
+    #[test]
+    fn parallel_map_preserves_order_and_handles_partial_batches() {
+        let items = (0..7).collect::<Vec<_>>();
+        let active_count = Arc::new(AtomicUsize::new(0));
+        let max_active_count = Arc::new(AtomicUsize::new(0));
+        let batch_barrier = Arc::new(Barrier::new(REFRESH_GIT_STATES_CONCURRENCY));
+
+        let mapped_items =
+            map_in_parallel_preserving_order(&items, REFRESH_GIT_STATES_CONCURRENCY, |item| {
+                let active = active_count.fetch_add(1, Ordering::SeqCst) + 1;
+                max_active_count.fetch_max(active, Ordering::SeqCst);
+                if *item < REFRESH_GIT_STATES_CONCURRENCY {
+                    batch_barrier.wait();
+                }
+                active_count.fetch_sub(1, Ordering::SeqCst);
+                item * 10
+            });
+
+        assert_eq!(mapped_items, vec![0, 10, 20, 30, 40, 50, 60]);
+        assert_eq!(
+            max_active_count.load(Ordering::SeqCst),
+            REFRESH_GIT_STATES_CONCURRENCY
+        );
+
+        let underfilled_items = [1, 2, 3];
+        let underfilled_mapped_items = map_in_parallel_preserving_order(
+            &underfilled_items,
+            REFRESH_GIT_STATES_CONCURRENCY,
+            |item| item * 10,
+        );
+
+        assert_eq!(underfilled_mapped_items, vec![10, 20, 30]);
     }
 
     #[test]

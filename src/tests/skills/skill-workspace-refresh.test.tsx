@@ -48,12 +48,12 @@ function createDeferred<T>() {
 }
 
 function RefreshProbe() {
-  const { installedSkills, isLoading, refreshWorkspace } = useSkillWorkspace();
+  const { installedSkills, isLoading, isWorkspaceRefreshing, refreshWorkspace } = useSkillWorkspace();
   const [refreshState, setRefreshState] = useState("idle");
 
   async function handleRefresh() {
     setRefreshState("pending");
-    await refreshWorkspace();
+    await refreshWorkspace({ showRefreshing: true });
     setRefreshState("done");
   }
 
@@ -64,8 +64,22 @@ function RefreshProbe() {
       </button>
       <span data-testid="refresh-state">{refreshState}</span>
       <span data-testid="loading-state">{isLoading ? "loading" : "ready"}</span>
+      <span data-testid="workspace-refreshing">{isWorkspaceRefreshing ? "refreshing" : "idle"}</span>
       <span data-testid="skill-name">{installedSkills[0]?.name ?? "none"}</span>
       <span data-testid="remote-updated-at">{installedSkills[0]?.remoteUpdatedAt ?? "none"}</span>
+    </div>
+  );
+}
+
+function RouteSwitchRefreshProbe() {
+  const [showsSkillsPage, setShowsSkillsPage] = useState(true);
+
+  return (
+    <div>
+      <button type="button" onClick={() => setShowsSkillsPage((current) => !current)}>
+        切换页面
+      </button>
+      {showsSkillsPage ? <RefreshProbe /> : <span data-testid="other-page">其他页面</span>}
     </div>
   );
 }
@@ -537,6 +551,7 @@ test("auto refreshes git state on interval and throttles rapid focus refreshes",
 
   expect(screen.getByTestId("loading-state").textContent).toBe("ready");
   expect(screen.getByTestId("skill-name").textContent).toBe(initialSkills[0].name);
+  expect(screen.getByTestId("workspace-refreshing").textContent).toBe("idle");
   expect(gitStateCallCount).toBe(1);
 
   await act(async () => {
@@ -549,6 +564,7 @@ test("auto refreshes git state on interval and throttles rapid focus refreshes",
   });
   expect(gitStateCallCount).toBe(2);
   expect(screen.getByTestId("skill-name").textContent).toBe("interval-refresh");
+  expect(screen.getByTestId("workspace-refreshing").textContent).toBe("idle");
 
   await act(async () => {
     window.dispatchEvent(new Event("focus"));
@@ -561,6 +577,7 @@ test("auto refreshes git state on interval and throttles rapid focus refreshes",
   });
   expect(gitStateCallCount).toBe(3);
   expect(screen.getByTestId("skill-name").textContent).toBe("focus-refresh");
+  expect(screen.getByTestId("workspace-refreshing").textContent).toBe("idle");
 });
 
 test("does not start another focus refresh while a git refresh is already in flight", async () => {
@@ -604,6 +621,7 @@ test("does not start another focus refresh while a git refresh is already in fli
 
   expect(screen.getByTestId("loading-state").textContent).toBe("ready");
   expect(screen.getByTestId("skill-name").textContent).toBe(initialSkills[0].name);
+  expect(screen.getByTestId("workspace-refreshing").textContent).toBe("idle");
   expect(gitStateCallCount).toBe(1);
 
   await act(async () => {
@@ -619,6 +637,78 @@ test("does not start another focus refresh while a git refresh is already in fli
   });
 
   expect(screen.getByTestId("skill-name").textContent).toBe("resolved-refresh");
+});
+
+test("keeps manual refresh active across route switches", async () => {
+  const initialSkills: SkillSummary[] = [installedSkillFixtures[0]];
+  const refreshedSkills: SkillSummary[] = [{ ...installedSkillFixtures[0], name: "route-refresh-done" }];
+  const pendingManualRefresh = createDeferred<SkillSummary[]>();
+  let gitStateCallCount = 0;
+
+  mockedInvoke.mockImplementation(async (command, args) => {
+    switch (command) {
+      case "list_startup_installed_skills":
+        return initialSkills;
+      case "refresh_git_states":
+        gitStateCallCount += 1;
+        return gitStateCallCount === 1 ? initialSkills : pendingManualRefresh.promise;
+      case "list_local_skill_candidates":
+        return localSkillFixtures;
+      case "list_tool_configs":
+        return toolConfigFixtures;
+      case "get_git_account_summary":
+        return gitAccountFixture;
+      case "get_app_settings":
+        return appSettingsFixture;
+      case "update_app_settings":
+        return (args as { settings: AppSettings }).settings;
+      default:
+        throw new Error(`Unexpected command: ${command}`);
+    }
+  });
+
+  render(
+    <SkillWorkspaceProvider>
+      <RouteSwitchRefreshProbe />
+    </SkillWorkspaceProvider>,
+  );
+
+  await waitFor(() => {
+    expect(screen.getByTestId("loading-state").textContent).toBe("ready");
+    expect(screen.getByTestId("skill-name").textContent).toBe(initialSkills[0].name);
+  });
+  await waitFor(() => {
+    expect(screen.getByTestId("workspace-refreshing").textContent).toBe("idle");
+  });
+
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "刷新工作区" }));
+  });
+
+  await waitFor(() => {
+    expect(screen.getByTestId("workspace-refreshing").textContent).toBe("refreshing");
+  });
+
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "切换页面" }));
+  });
+  expect(screen.getByTestId("other-page").textContent).toBe("其他页面");
+
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "切换页面" }));
+  });
+  expect(screen.getByTestId("workspace-refreshing").textContent).toBe("refreshing");
+  expect(screen.getByTestId("skill-name").textContent).toBe(initialSkills[0].name);
+
+  await act(async () => {
+    pendingManualRefresh.resolve(refreshedSkills);
+    await Promise.resolve();
+  });
+
+  await waitFor(() => {
+    expect(screen.getByTestId("workspace-refreshing").textContent).toBe("idle");
+    expect(screen.getByTestId("skill-name").textContent).toBe(refreshedSkills[0].name);
+  });
 });
 
 test("refreshes a startup skill once after debounced library change events", async () => {

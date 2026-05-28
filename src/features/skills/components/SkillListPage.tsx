@@ -126,9 +126,8 @@ function SkillGroupMonogram({ label }: { label: string }) {
 export function SkillListToolbar(props: SkillToolbarProps) {
   const { t } = useTranslate();
   const { query, statusFilter, onQueryChange, onStatusFilterChange, showGroupView, onShowGroupViewChange } = props;
-  const { installedSkills, isLoading, refreshWorkspace, updateAllSkills } = useSkillWorkspace();
+  const { installedSkills, isLoading, isWorkspaceRefreshing, refreshWorkspace, updateAllSkills } = useSkillWorkspace();
   const reportFailure = useFailureReporter();
-  const [isRefreshing, setIsRefreshing] = useState(false);
   const [isUpdatingAll, setIsUpdatingAll] = useState(false);
   const statusFilterCounts = useMemo(
     () => ({
@@ -156,21 +155,18 @@ export function SkillListToolbar(props: SkillToolbarProps) {
     : t("skills.updateAll");
 
   async function handleRefreshWorkspace() {
-    if (isRefreshing) {
+    if (isWorkspaceRefreshing) {
       return;
     }
 
-    setIsRefreshing(true);
     await waitForNextPaint();
     try {
-      await refreshWorkspace();
+      await refreshWorkspace({ showRefreshing: true });
     } catch (error) {
       reportFailure(error, {
         operation: "refresh_workspace",
         fallbackMessage: t("skills.error.refresh"),
       });
-    } finally {
-      setIsRefreshing(false);
     }
   }
 
@@ -233,13 +229,13 @@ export function SkillListToolbar(props: SkillToolbarProps) {
         </select>
       </label>
       <button
-        className={`secondary-button secondary-button--compact skills-toolbar-button skills-toolbar-button--refresh${isRefreshing ? " is-loading" : ""}`}
+        className={`secondary-button secondary-button--compact skills-toolbar-button skills-toolbar-button--refresh${isWorkspaceRefreshing ? " is-loading" : ""}`}
         type="button"
         onClick={() => void handleRefreshWorkspace()}
-        disabled={isRefreshing}
+        disabled={isWorkspaceRefreshing}
       >
         <span aria-hidden="true" className="skills-toolbar-button__icon">
-          <RefreshIcon isSpinning={isRefreshing} />
+          <RefreshIcon isSpinning={isWorkspaceRefreshing} />
         </span>
         <span>{t("skills.refresh")}</span>
       </button>

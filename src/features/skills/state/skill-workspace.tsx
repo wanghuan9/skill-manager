@@ -89,6 +89,10 @@ const STARTUP_CACHED_REMOTE_COLLAB_STATUSES = new Set<SkillSummary["collabStatus
   "diverged",
 ]);
 
+type RefreshWorkspaceOptions = {
+  showRefreshing?: boolean;
+};
+
 type SkillWorkspaceContextValue = {
   installedSkills: SkillSummary[];
   marketplaceSkills: MarketplaceSkill[];
@@ -96,6 +100,7 @@ type SkillWorkspaceContextValue = {
   toolConfigs: ToolConfig[];
   gitAccount: GitAccountSummary | null;
   isLoading: boolean;
+  isWorkspaceRefreshing: boolean;
   isMarketplaceLoadingBySource: Record<MarketplaceSourceSite, boolean>;
   isSearchLoading: boolean;
   installingMarketplaceSkillIds: Set<string>;
@@ -111,7 +116,7 @@ type SkillWorkspaceContextValue = {
   installSelectedLocalSkills: (localPath: string, selectedPaths: string[]) => Promise<void>;
   importCandidate: (localPath: string) => Promise<void>;
   refreshLocalCandidates: () => Promise<void>;
-  refreshWorkspace: () => Promise<void>;
+  refreshWorkspace: (options?: RefreshWorkspaceOptions) => Promise<void>;
   updateSkill: (skillName: string) => Promise<void>;
   updateAllSkills: () => Promise<void>;
   deleteSkill: (skillName: string) => Promise<void>;
@@ -449,6 +454,8 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
   });
   const gitStateRefreshInFlightRef = useRef<Promise<void> | null>(null);
   const lastGitStateRefreshAtRef = useRef(0);
+  const [isWorkspaceRefreshing, setIsWorkspaceRefreshing] = useState(false);
+  const visibleGitStateRefreshInFlightRef = useRef<Promise<void> | null>(null);
   const localGitRefreshInFlightRef = useRef(new Set<string>());
   const localGitRefreshDebounceTimersRef = useRef(new Map<string, number>());
   const installedSkillsRef = useRef(installedSkills);
@@ -629,10 +636,12 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
     };
   }
 
-  async function loadWorkspaceSnapshot() {
+  async function loadWorkspaceSnapshot(options: RefreshWorkspaceOptions = {}) {
     const shouldBlockSkillList = installedSkills.length === 0;
     if (!shouldBlockSkillList) {
-      await refreshGitStatesInBackground();
+      await refreshGitStatesInBackground(undefined, {
+        showRefreshing: options.showRefreshing,
+      });
       void refreshWorkspaceAncillaryData();
       return;
     }
@@ -646,7 +655,9 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       if (shouldBlockSkillList) {
         setIsLoading(false);
       }
-      void refreshGitStatesInBackground();
+      void refreshGitStatesInBackground(undefined, {
+        showRefreshing: options.showRefreshing,
+      });
       void refreshWorkspaceAncillaryData();
       return;
     } catch (startupError) {
@@ -661,7 +672,9 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
         account: workspace.account,
         settings: workspace.settings,
       });
-      void refreshGitStatesInBackground();
+      void refreshGitStatesInBackground(undefined, {
+        showRefreshing: options.showRefreshing,
+      });
     } finally {
       if (shouldBlockSkillList) {
         setIsLoading(false);
@@ -671,7 +684,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
 
   async function refreshGitStatesInBackground(
     shouldApply: () => boolean = () => true,
-    options: { minimumIntervalMs?: number } = {},
+    options: { minimumIntervalMs?: number; showRefreshing?: boolean } = {},
   ) {
     const minimumIntervalMs = options.minimumIntervalMs ?? 0;
     const now = Date.now();
@@ -679,9 +692,16 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       minimumIntervalMs > 0
       && now - lastGitStateRefreshAtRef.current < minimumIntervalMs
     ) {
-      return gitStateRefreshInFlightRef.current ?? Promise.resolve();
+      const pendingRefresh = gitStateRefreshInFlightRef.current ?? Promise.resolve();
+      if (options.showRefreshing && gitStateRefreshInFlightRef.current) {
+        showRefreshIndicatorUntil(pendingRefresh);
+      }
+      return pendingRefresh;
     }
     if (gitStateRefreshInFlightRef.current) {
+      if (options.showRefreshing) {
+        showRefreshIndicatorUntil(gitStateRefreshInFlightRef.current);
+      }
       return gitStateRefreshInFlightRef.current;
     }
 
@@ -704,7 +724,22 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       }
     })();
     gitStateRefreshInFlightRef.current = nextRefreshPromise;
+    if (options.showRefreshing) {
+      showRefreshIndicatorUntil(nextRefreshPromise);
+    }
     return nextRefreshPromise;
+  }
+
+  function showRefreshIndicatorUntil(refreshPromise: Promise<void>) {
+    visibleGitStateRefreshInFlightRef.current = refreshPromise;
+    setIsWorkspaceRefreshing(true);
+    void refreshPromise.finally(() => {
+      if (visibleGitStateRefreshInFlightRef.current !== refreshPromise) {
+        return;
+      }
+      visibleGitStateRefreshInFlightRef.current = null;
+      setIsWorkspaceRefreshing(false);
+    });
   }
 
   const markSkillAsActive = useCallback((_skillName: string) => undefined, []);
@@ -1223,6 +1258,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       toolConfigs,
       gitAccount,
       isLoading,
+      isWorkspaceRefreshing,
       isMarketplaceLoadingBySource,
       isSearchLoading,
       installingMarketplaceSkillIds,
@@ -1273,6 +1309,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       installedSkills,
       installingMarketplaceSkillIds,
       isLoading,
+      isWorkspaceRefreshing,
       isMarketplaceLoadingBySource,
       isSearchLoading,
       localCandidates,

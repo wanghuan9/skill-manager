@@ -1,8 +1,9 @@
 use std::cmp::Ordering;
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::mpsc;
+use std::sync::{mpsc, Condvar, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::models::SkillSummary;
@@ -18,6 +19,9 @@ const GIT_BINARY: &str = "git";
 const ORIGIN_REMOTE: &str = "origin";
 const REMOTE_BRANCH_PREFIX: &str = "origin/";
 const UPDATE_CACHE_FILE_NAME: &str = "git-update-cache.json";
+
+static UPDATE_CACHE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+static GIT_FETCH_LOCKS: OnceLock<(Mutex<HashSet<String>>, Condvar)> = OnceLock::new();
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 struct GitUpdateCache {
@@ -44,6 +48,27 @@ struct GitPendingPushCacheEntry {
     head: String,
     working_tree_signature: String,
     ahead: usize,
+}
+
+#[derive(Clone, Debug, Default)]
+struct GitCommitMetadata {
+    updated_at: Option<String>,
+    author: Option<String>,
+}
+
+struct GitFetchLockGuard {
+    repo_key: String,
+}
+
+impl Drop for GitFetchLockGuard {
+    fn drop(&mut self) {
+        let (active_repos, waiters) = git_fetch_locks();
+        let mut active_repos = active_repos
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        active_repos.remove(&self.repo_key);
+        waiters.notify_all();
+    }
 }
 
 pub fn enrich_skill_with_git_state(skill: &SkillSummary) -> SkillSummary {
@@ -98,19 +123,25 @@ pub fn enrich_skill_with_git_state(skill: &SkillSummary) -> SkillSummary {
     } else {
         skill.remote_updated_at.clone()
     };
+    let local_commit_metadata = latest_commit_metadata(skill_path);
+    let remote_commit_metadata = latest_remote_commit_metadata(skill_path, &branch);
     let local_updated_at = prefer_newer_local_updated_at(
         &fallback_local_updated_at,
-        if working_tree_dirty {
-            latest_local_content_modified_at(skill_path).or_else(|| latest_commit_time(skill_path))
-        } else {
-            latest_commit_time(skill_path).or_else(|| latest_local_content_modified_at(skill_path))
-        },
+        local_updated_at_candidate(
+            skill_path,
+            working_tree_dirty,
+            local_commit_metadata.updated_at.clone(),
+        ),
     );
-    let remote_updated_at = latest_remote_commit_time(skill_path, &branch)
-        .or_else(|| latest_commit_time(skill_path))
+    let remote_updated_at = remote_commit_metadata
+        .as_ref()
+        .and_then(|metadata| metadata.updated_at.clone())
+        .or_else(|| local_commit_metadata.updated_at.clone())
         .unwrap_or_else(|| fallback_remote_updated_at.clone());
-    let remote_updated_by = latest_remote_commit_author(skill_path, &branch)
-        .or_else(|| latest_commit_author(skill_path))
+    let remote_updated_by = remote_commit_metadata
+        .as_ref()
+        .and_then(|metadata| metadata.author.clone())
+        .or_else(|| local_commit_metadata.author.clone())
         .unwrap_or_else(|| skill.last_editor.clone());
 
     let mut enriched = skill.clone();
@@ -166,15 +197,24 @@ pub fn enrich_newly_installed_skill_with_git_state(skill: &SkillSummary) -> Skil
     } else {
         skill.remote_updated_at.clone()
     };
+    let local_commit_metadata = latest_commit_metadata(skill_path);
+    let remote_commit_metadata = latest_remote_commit_metadata(skill_path, &branch);
     let local_updated_at = prefer_newer_local_updated_at(
         &fallback_local_updated_at,
-        latest_commit_time(skill_path).or_else(|| latest_local_content_modified_at(skill_path)),
+        local_commit_metadata
+            .updated_at
+            .clone()
+            .or_else(|| latest_local_content_modified_at(skill_path)),
     );
-    let remote_updated_at = latest_remote_commit_time(skill_path, &branch)
-        .or_else(|| latest_commit_time(skill_path))
+    let remote_updated_at = remote_commit_metadata
+        .as_ref()
+        .and_then(|metadata| metadata.updated_at.clone())
+        .or_else(|| local_commit_metadata.updated_at.clone())
         .unwrap_or_else(|| fallback_remote_updated_at.clone());
-    let remote_updated_by = latest_remote_commit_author(skill_path, &branch)
-        .or_else(|| latest_commit_author(skill_path))
+    let remote_updated_by = remote_commit_metadata
+        .as_ref()
+        .and_then(|metadata| metadata.author.clone())
+        .or_else(|| local_commit_metadata.author.clone())
         .unwrap_or_else(|| skill.last_editor.clone());
 
     let mut enriched = skill.clone();
@@ -231,11 +271,11 @@ pub fn enrich_skill_with_cached_update_state(skill: &SkillSummary) -> SkillSumma
     };
     let local_updated_at = prefer_newer_local_updated_at(
         &fallback_local_updated_at,
-        if working_tree_dirty {
-            latest_local_content_modified_at(skill_path).or_else(|| latest_commit_time(skill_path))
-        } else {
-            latest_commit_time(skill_path).or_else(|| latest_local_content_modified_at(skill_path))
-        },
+        local_updated_at_candidate(
+            skill_path,
+            working_tree_dirty,
+            latest_commit_metadata(skill_path).updated_at,
+        ),
     );
 
     if cached_pending_push_entry(skill, &branch, &head, &working_tree_signature).is_some() {
@@ -320,11 +360,11 @@ pub fn enrich_skill_with_local_git_state(skill: &SkillSummary) -> SkillSummary {
     };
     let local_updated_at = prefer_newer_local_updated_at(
         &fallback_local_updated_at,
-        if working_tree_dirty {
-            latest_local_content_modified_at(skill_path).or_else(|| latest_commit_time(skill_path))
-        } else {
-            latest_commit_time(skill_path).or_else(|| latest_local_content_modified_at(skill_path))
-        },
+        local_updated_at_candidate(
+            skill_path,
+            working_tree_dirty,
+            latest_commit_metadata(skill_path).updated_at,
+        ),
     );
 
     let mut enriched = skill.clone();
@@ -352,6 +392,8 @@ fn repo_root(skill_path: &Path) -> Option<String> {
 
 fn git_fetch_with_timeout(skill_path: &Path) {
     let path_str = skill_path.to_string_lossy().to_string();
+    let repo_key = repo_root(skill_path).unwrap_or_else(|| path_str.clone());
+    let _fetch_guard = acquire_git_fetch_lock(repo_key);
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
         let result = Command::new(GIT_BINARY)
@@ -412,6 +454,7 @@ fn local_branch_divergence(skill_path: &Path, branch: &str) -> Option<(usize, us
 }
 
 fn cached_update_counts(skill: &SkillSummary, branch: &str, head: &str) -> Option<(usize, usize)> {
+    let _guard = lock_update_cache();
     let cache = load_update_cache();
     cache
         .entries
@@ -426,6 +469,7 @@ fn cached_pending_push_entry(
     head: &str,
     working_tree_signature: &str,
 ) -> Option<GitPendingPushCacheEntry> {
+    let _guard = lock_update_cache();
     let cache = load_update_cache();
     cache.pending_push_entries.into_iter().find(|entry| {
         pending_push_cache_entry_matches(entry, skill, branch, head, working_tree_signature)
@@ -494,6 +538,7 @@ fn pending_push_cache_entry_matches(
 }
 
 fn save_update_cache_entry(skill: &SkillSummary, branch: &str, head: &str, behind: usize) {
+    let _guard = lock_update_cache();
     let mut cache = load_update_cache();
     cache
         .entries
@@ -515,6 +560,7 @@ fn save_pending_push_cache_entry(
     working_tree_signature: &str,
     ahead: usize,
 ) {
+    let _guard = lock_update_cache();
     let mut cache = load_update_cache();
     cache
         .pending_push_entries
@@ -531,6 +577,7 @@ fn save_pending_push_cache_entry(
 }
 
 fn remove_update_cache_entry(skill: &SkillSummary) {
+    let _guard = lock_update_cache();
     let mut cache = load_update_cache();
     let original_len = cache.entries.len();
     cache
@@ -542,6 +589,7 @@ fn remove_update_cache_entry(skill: &SkillSummary) {
 }
 
 fn remove_pending_push_cache_entry(skill: &SkillSummary) {
+    let _guard = lock_update_cache();
     let mut cache = load_update_cache();
     let original_len = cache.pending_push_entries.len();
     cache
@@ -582,6 +630,34 @@ fn save_update_cache(cache: &GitUpdateCache) -> Result<(), String> {
 
 fn update_cache_file() -> Option<PathBuf> {
     workspace_file_path(UPDATE_CACHE_FILE_NAME).ok()
+}
+
+fn update_cache_lock() -> &'static Mutex<()> {
+    UPDATE_CACHE_LOCK.get_or_init(|| Mutex::new(()))
+}
+
+fn lock_update_cache() -> MutexGuard<'static, ()> {
+    update_cache_lock()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+}
+
+fn git_fetch_locks() -> &'static (Mutex<HashSet<String>>, Condvar) {
+    GIT_FETCH_LOCKS.get_or_init(|| (Mutex::new(HashSet::new()), Condvar::new()))
+}
+
+fn acquire_git_fetch_lock(repo_key: String) -> GitFetchLockGuard {
+    let (active_repos, waiters) = git_fetch_locks();
+    let mut active_repos = active_repos
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    while active_repos.contains(&repo_key) {
+        active_repos = waiters
+            .wait(active_repos)
+            .unwrap_or_else(|error| error.into_inner());
+    }
+    active_repos.insert(repo_key.clone());
+    GitFetchLockGuard { repo_key }
 }
 
 fn resolve_remote_branch(skill_path: &Path, branch: &str) -> Option<String> {
@@ -681,57 +757,65 @@ fn run_git_owned(skill_path: &Path, args: &[String]) -> Option<String> {
     Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
-fn latest_commit_author(skill_path: &Path) -> Option<String> {
-    latest_commit_author_for_ref(skill_path, None)
+fn latest_commit_metadata(skill_path: &Path) -> GitCommitMetadata {
+    latest_commit_metadata_for_ref(skill_path, None).unwrap_or_default()
 }
 
-fn latest_commit_time(skill_path: &Path) -> Option<String> {
-    latest_commit_time_for_ref(skill_path, None)
-}
-
+#[cfg(test)]
 fn latest_remote_commit_author(skill_path: &Path, branch: &str) -> Option<String> {
+    latest_remote_commit_metadata(skill_path, branch).and_then(|metadata| metadata.author)
+}
+
+fn latest_remote_commit_metadata(skill_path: &Path, branch: &str) -> Option<GitCommitMetadata> {
     let remote_branch = resolve_remote_branch(skill_path, branch)?;
-    latest_commit_author_for_ref(skill_path, Some(remote_branch.as_str()))
+    latest_commit_metadata_for_ref(skill_path, Some(remote_branch.as_str()))
 }
 
-fn latest_remote_commit_time(skill_path: &Path, branch: &str) -> Option<String> {
-    let remote_branch = resolve_remote_branch(skill_path, branch)?;
-    latest_commit_time_for_ref(skill_path, Some(remote_branch.as_str()))
-}
-
-fn latest_commit_author_for_ref(skill_path: &Path, git_ref: Option<&str>) -> Option<String> {
-    latest_commit_value_for_ref(skill_path, git_ref, false)
-}
-
-fn latest_commit_time_for_ref(skill_path: &Path, git_ref: Option<&str>) -> Option<String> {
-    latest_commit_value_for_ref(skill_path, git_ref, true)
-}
-
-fn latest_commit_value_for_ref(
+fn latest_commit_metadata_for_ref(
     skill_path: &Path,
     git_ref: Option<&str>,
-    include_date_format: bool,
-) -> Option<String> {
+) -> Option<GitCommitMetadata> {
     let mut args = vec!["log".to_string()];
     if let Some(reference) = git_ref.filter(|value| !value.trim().is_empty()) {
         args.push(reference.to_string());
     }
     args.push("-1".to_string());
-    if include_date_format {
-        args.push("--date=format-local:%Y/%-m/%-d %H:%M:%S".to_string());
-        args.push("--pretty=format:%cd".to_string());
-    } else {
-        args.push("--pretty=format:%an".to_string());
-    }
+    args.push("--date=format-local:%Y/%-m/%-d %H:%M:%S".to_string());
+    args.push("--pretty=format:%cd%x00%an".to_string());
     args.push("--".to_string());
     args.push(".".to_string());
 
-    run_git_owned(skill_path, &args).filter(|value| !value.trim().is_empty())
+    let output = run_git_owned(skill_path, &args).filter(|value| !value.trim().is_empty())?;
+    let mut parts = output.splitn(2, '\0');
+    let updated_at = parts
+        .next()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+    let author = parts
+        .next()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+
+    Some(GitCommitMetadata { updated_at, author })
 }
 
 fn latest_local_content_modified_at(skill_path: &Path) -> Option<String> {
     let latest = latest_modified_in_directory(skill_path)?;
     format_system_time(latest)
+}
+
+fn local_updated_at_candidate(
+    skill_path: &Path,
+    working_tree_dirty: bool,
+    commit_updated_at: Option<String>,
+) -> Option<String> {
+    if working_tree_dirty {
+        latest_local_content_modified_at(skill_path).or(commit_updated_at)
+    } else {
+        commit_updated_at.or_else(|| latest_local_content_modified_at(skill_path))
+    }
 }
 
 fn latest_modified_in_directory(path: &Path) -> Option<SystemTime> {
