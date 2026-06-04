@@ -613,6 +613,9 @@ mod tests {
             last_editor: "".into(),
             commit_label: "abc123".into(),
             git_linked: false,
+            lifecycle_source: "direct".into(),
+            owner_plugin_id: String::new(),
+            owner_plugin_name: String::new(),
             tools: vec![],
         }
     }
@@ -638,6 +641,9 @@ mod tests {
                 last_editor: "skills.sh".into(),
                 commit_label: "v1.0.0".into(),
                 git_linked: true,
+                lifecycle_source: "direct".into(),
+                owner_plugin_id: String::new(),
+                owner_plugin_name: String::new(),
                 tools: vec![ToolSyncStatus {
                     name: "Codex".into(),
                     status_label: "已同步".into(),
@@ -679,6 +685,9 @@ mod tests {
             last_editor: "skills.sh".into(),
             commit_label: "v1.0.0".into(),
             git_linked: false,
+            lifecycle_source: "direct".into(),
+            owner_plugin_id: String::new(),
+            owner_plugin_name: String::new(),
             tools: vec![ToolSyncStatus {
                 name: "Codex".into(),
                 status_label: "已同步".into(),
@@ -721,6 +730,9 @@ mod tests {
                         last_editor: "".into(),
                         commit_label: "abc123".into(),
                         git_linked: false,
+                        lifecycle_source: "direct".into(),
+                        owner_plugin_id: String::new(),
+                        owner_plugin_name: String::new(),
                         tools: vec![],
                     },
                     SkillSummary {
@@ -741,6 +753,9 @@ mod tests {
                         last_editor: "".into(),
                         commit_label: "def456".into(),
                         git_linked: false,
+                        lifecycle_source: "direct".into(),
+                        owner_plugin_id: String::new(),
+                        owner_plugin_name: String::new(),
                         tools: vec![],
                     },
                 ],
@@ -799,6 +814,9 @@ mod tests {
                     last_editor: "".into(),
                     commit_label: "abc123".into(),
                     git_linked: false,
+                    lifecycle_source: "direct".into(),
+                    owner_plugin_id: String::new(),
+                    owner_plugin_name: String::new(),
                     tools: vec![],
                 }],
             };
@@ -864,6 +882,9 @@ mod tests {
                         last_editor: "".into(),
                         commit_label: "abc123".into(),
                         git_linked: false,
+                        lifecycle_source: "direct".into(),
+                        owner_plugin_id: String::new(),
+                        owner_plugin_name: String::new(),
                         tools: vec![],
                     },
                     SkillSummary {
@@ -884,6 +905,9 @@ mod tests {
                         last_editor: "".into(),
                         commit_label: "def456".into(),
                         git_linked: false,
+                        lifecycle_source: "direct".into(),
+                        owner_plugin_id: String::new(),
+                        owner_plugin_name: String::new(),
                         tools: vec![],
                     },
                 ],
@@ -1089,6 +1113,9 @@ mod tests {
                 last_editor: "".into(),
                 commit_label: "abc123".into(),
                 git_linked: false,
+                lifecycle_source: "direct".into(),
+                owner_plugin_id: String::new(),
+                owner_plugin_name: String::new(),
                 tools: vec![],
             }];
 

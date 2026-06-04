@@ -2126,6 +2126,9 @@ mod tests {
                 last_editor: "".into(),
                 commit_label: "abc123".into(),
                 git_linked: false,
+                lifecycle_source: "direct".into(),
+                owner_plugin_id: String::new(),
+                owner_plugin_name: String::new(),
                 tools: vec![],
             }],
         )

@@ -4,6 +4,7 @@ import { tx } from "@/app/i18n";
 import { isTauriRuntime } from "@/app/is-tauri-runtime";
 import {
   appSettingsFixture,
+  cliToolFixtures,
   gitAccountFixture,
   installedSkillFixtures,
   localSkillFixtures,
@@ -11,6 +12,8 @@ import {
   marketplaceSkillFixtures,
   mcpMarketplaceServerFixtures,
   mcpWorkspaceFixture,
+  pluginFixtures,
+  pluginProbeFixture,
   pushPreviewFixtures,
   pushTargetFixtures,
   repoSkillCandidateFixtures,
@@ -22,6 +25,7 @@ import {
 import type {
   AppLanguage,
   AppSettings,
+  CliToolSummary,
   FailureFeedbackInput,
   FeedbackIssueDraft,
   GitAccountSummary,
@@ -34,6 +38,17 @@ import type {
   McpImportProgress,
   McpServerRecord,
   McpWorkspaceSnapshot,
+  PluginComponentSummary,
+  PluginComponentPreview,
+  PluginEnabledState,
+  PluginHostTool,
+  PluginInstallState,
+  PluginKind,
+  PluginProbeResult,
+  PluginScopeSummary,
+  PluginSummary,
+  PluginStatus,
+  PluginUpdateMode,
   PushPreviewSnapshot,
   PushTargetSnapshot,
   RepoSkillCandidate,
@@ -57,6 +72,24 @@ import {
 
 type InstallFromRepoInput = {
   repoUrl: string;
+};
+
+type ProbePluginRepoInput = {
+  path: string;
+  hintHostTool?: PluginHostTool;
+};
+
+type PluginComponentPreviewInput = {
+  pluginRoot: string;
+  componentId: string;
+  assetType: PluginComponentSummary["assetType"];
+};
+
+type SetPluginEnabledInput = {
+  pluginId: string;
+  hostTool: PluginHostTool;
+  rootPath: string;
+  enabled: boolean;
 };
 
 type InstallSelectedRepoSkillsInput = {
@@ -165,6 +198,18 @@ type SkillLibraryChangeEvent = {
 type LegacySkillSummary = Partial<SkillSummary> & {
   lastSyncedAt?: string;
 };
+
+type LegacyPluginSummary = Partial<PluginSummary> & {
+  components?: PluginComponentSummary[];
+};
+
+type LegacyPluginProbeResult = Partial<PluginProbeResult> & {
+  components?: PluginComponentSummary[];
+};
+
+type LegacyPluginComponentPreview = Partial<PluginComponentPreview>;
+
+type LegacyCliToolSummary = Partial<CliToolSummary>;
 
 export type McpImportSessionSnapshot = {
   isImporting: boolean;
@@ -306,6 +351,9 @@ function normalizeSkillSummary(skill: LegacySkillSummary): SkillSummary {
     || skill.remoteUpdatedAt?.trim()
     || skill.lastSyncedAt?.trim()
     || "";
+  const lifecycleSource = skill.lifecycleSource === "plugin" ? "plugin" : skill.lifecycleSource === "direct" ? "direct" : undefined;
+  const ownerPluginId = skill.ownerPluginId?.trim() || undefined;
+  const ownerPluginName = skill.ownerPluginName?.trim() || undefined;
 
   return {
     name: skill.name ?? "",
@@ -324,6 +372,9 @@ function normalizeSkillSummary(skill: LegacySkillSummary): SkillSummary {
     lastEditor: skill.lastEditor ?? "",
     commitLabel: skill.commitLabel ?? "",
     gitLinked: skill.gitLinked ?? false,
+    lifecycleSource,
+    ownerPluginId,
+    ownerPluginName,
     tools: (skill.tools ?? []).map((tool) => ({
       ...tool,
       statusLabel: localizeToolStatusLabel(tool.statusLabel, language),
@@ -333,6 +384,204 @@ function normalizeSkillSummary(skill: LegacySkillSummary): SkillSummary {
 
 function normalizeSkillSummaryList(skills: LegacySkillSummary[]): SkillSummary[] {
   return skills.map((skill) => normalizeSkillSummary(skill));
+}
+
+function normalizePluginHostTool(tool: string | undefined): PluginHostTool {
+  if (tool === "claude-code" || tool === "cursor" || tool === "codex") {
+    return tool;
+  }
+
+  return "codex";
+}
+
+function normalizePluginKind(kind: string | undefined): PluginKind {
+  if (kind === "plugin-repo" || kind === "marketplace-root" || kind === "standalone-assets" || kind === "unknown") {
+    return kind;
+  }
+
+  return "unknown";
+}
+
+function normalizePluginUpdateMode(updateMode: string | undefined): PluginUpdateMode {
+  return updateMode === "auto" ? "auto" : "unsupported";
+}
+
+function normalizePluginInstallState(installState: string | undefined): PluginInstallState {
+  if (installState === "installed" || installState === "broken" || installState === "detected") {
+    return installState;
+  }
+
+  return "installed";
+}
+
+function normalizePluginEnabledState(enabledState: string | undefined): PluginEnabledState {
+  if (enabledState === "enabled" || enabledState === "disabled" || enabledState === "unknown") {
+    return enabledState;
+  }
+
+  return "unknown";
+}
+
+function normalizePluginStatus(status: string | undefined): PluginStatus {
+  if (
+    status === "ready"
+    || status === "update-available"
+    || status === "invalid"
+    || status === "scan-error"
+    || status === "unsupported"
+  ) {
+    return status;
+  }
+
+  return "invalid";
+}
+
+function normalizePluginComponents(components: PluginComponentSummary[] | undefined): PluginComponentSummary[] {
+  if (!Array.isArray(components)) {
+    return [];
+  }
+
+  return components.map((component) => ({
+    id: component.id ?? "",
+    name: component.name ?? "",
+    description: component.description ?? "",
+    assetType:
+      component.assetType === "skill"
+      || component.assetType === "subagent"
+      || component.assetType === "mcp"
+      || component.assetType === "command"
+      || component.assetType === "rule"
+      || component.assetType === "hook"
+        ? component.assetType
+        : "command",
+    ownerPluginId: component.ownerPluginId ?? "",
+    packageItemId: component.packageItemId ?? "",
+  }));
+}
+
+function normalizePluginScopes(scopes: PluginScopeSummary[] | undefined): PluginScopeSummary[] {
+  if (!Array.isArray(scopes)) {
+    return [];
+  }
+
+  return scopes.map((scope) => ({
+    scopeId:
+      scope.scopeId === "user" || scope.scopeId === "project" || scope.scopeId === "local-project"
+        ? scope.scopeId
+        : "user",
+    scopeLabel: scope.scopeLabel ?? "",
+    enabledState: normalizePluginEnabledState(scope.enabledState),
+    location: scope.location ?? "",
+  }));
+}
+
+function normalizePluginSummary(plugin: LegacyPluginSummary): PluginSummary {
+  return {
+    id: plugin.id ?? "",
+    name: plugin.name ?? "",
+    description: plugin.description ?? "",
+    hostTool: normalizePluginHostTool(plugin.hostTool),
+    relatedHostTools: Array.isArray(plugin.relatedHostTools)
+      ? plugin.relatedHostTools.filter((tool): tool is PluginHostTool => tool === "claude-code" || tool === "cursor" || tool === "codex")
+      : [],
+    kind: normalizePluginKind(plugin.kind),
+    rootPath: plugin.rootPath ?? "",
+    manifestPath: plugin.manifestPath ?? "",
+    sourceType: plugin.sourceType === "git" || plugin.sourceType === "local" || plugin.sourceType === "marketplace"
+      ? plugin.sourceType
+      : "local",
+    sourceLabel: plugin.sourceLabel ?? "",
+    sourceUrl: plugin.sourceUrl ?? "",
+    sourceRef: plugin.sourceRef ?? "",
+    sourceRevision: plugin.sourceRevision ?? "",
+    currentVersion: plugin.currentVersion ?? "",
+    currentBranch: plugin.currentBranch ?? "",
+    currentCommit: plugin.currentCommit ?? "",
+    isGitRepo: plugin.isGitRepo ?? false,
+    updateMode: normalizePluginUpdateMode(plugin.updateMode),
+    updateAvailable: plugin.updateAvailable ?? false,
+    installedAt: plugin.installedAt ?? "",
+    updatedAt: plugin.updatedAt ?? "",
+    lastScannedAt: plugin.lastScannedAt ?? "",
+    status: normalizePluginStatus(plugin.status),
+    installState: normalizePluginInstallState(plugin.installState),
+    enabledState: normalizePluginEnabledState(plugin.enabledState),
+    scopes: normalizePluginScopes(plugin.scopes),
+    components: normalizePluginComponents(plugin.components),
+  };
+}
+
+function normalizePluginSummaryList(plugins: LegacyPluginSummary[]): PluginSummary[] {
+  return plugins.map((plugin) => normalizePluginSummary(plugin));
+}
+
+function normalizePluginProbeResult(probe: LegacyPluginProbeResult): PluginProbeResult {
+  return {
+    tool:
+      probe.tool === "claude-code" || probe.tool === "cursor" || probe.tool === "codex"
+        ? probe.tool
+        : "unknown",
+    kind: normalizePluginKind(probe.kind),
+    pluginRoot: probe.pluginRoot ?? "",
+    manifestPath: probe.manifestPath ?? "",
+    marketplaceManifestPath: probe.marketplaceManifestPath ?? "",
+    components: normalizePluginComponents(probe.components),
+    sourceType: probe.sourceType === "git" || probe.sourceType === "local" || probe.sourceType === "marketplace"
+      ? probe.sourceType
+      : "local",
+    sourceUrl: probe.sourceUrl ?? "",
+    isGitRepo: probe.isGitRepo ?? false,
+    gitRoot: probe.gitRoot ?? "",
+    confidence: probe.confidence === "high" || probe.confidence === "medium" || probe.confidence === "low"
+      ? probe.confidence
+      : "low",
+    installStrategy:
+      probe.installStrategy === "codex-marketplace"
+      || probe.installStrategy === "claude-plugin-dir"
+      || probe.installStrategy === "cursor-registration"
+      || probe.installStrategy === "unsupported"
+        ? probe.installStrategy
+        : "unsupported",
+    warnings: Array.isArray(probe.warnings) ? probe.warnings : [],
+  };
+}
+
+function normalizeCliToolSummary(cliTool: LegacyCliToolSummary): CliToolSummary {
+  return {
+    id: cliTool.id ?? "",
+    name: cliTool.name ?? "",
+    ownerPluginId: cliTool.ownerPluginId?.trim() || undefined,
+    ownerPluginName: cliTool.ownerPluginName?.trim() || undefined,
+    lifecycleSource: cliTool.lifecycleSource === "plugin" ? "plugin" : "direct",
+    command: cliTool.command ?? "",
+    executablePath: cliTool.executablePath?.trim() || undefined,
+    statusLabel: cliTool.statusLabel?.trim() || undefined,
+    updateCommand: cliTool.updateCommand?.trim() || undefined,
+    updateStrategy: cliTool.updateStrategy === "self-only" ? "self-only" : "linked-skills",
+    bundledSkills: Array.isArray(cliTool.bundledSkills) ? cliTool.bundledSkills.filter((item): item is string => typeof item === "string" && item.trim().length > 0) : [],
+    description: cliTool.description ?? "",
+  };
+}
+
+function normalizeCliToolSummaryList(cliTools: LegacyCliToolSummary[]): CliToolSummary[] {
+  return cliTools.map((cliTool) => normalizeCliToolSummary(cliTool));
+}
+
+function normalizePluginComponentPreview(preview: LegacyPluginComponentPreview): PluginComponentPreview {
+  return {
+    path: preview.path ?? "",
+    title: preview.title ?? "",
+    assetType:
+      preview.assetType === "skill"
+      || preview.assetType === "subagent"
+      || preview.assetType === "mcp"
+      || preview.assetType === "command"
+      || preview.assetType === "rule"
+      || preview.assetType === "hook"
+        ? preview.assetType
+        : "command",
+    content: preview.content ?? "",
+  };
 }
 
 export async function fetchWorkspaceSnapshot(): Promise<WorkspaceSnapshot> {
@@ -352,6 +601,72 @@ export async function fetchInstalledSkills(): Promise<SkillSummary[]> {
     installedSkillFixtures,
   );
   return normalizeSkillSummaryList(skills);
+}
+
+export async function fetchInstalledPlugins(): Promise<PluginSummary[]> {
+  const plugins = await invokeOrFallback<LegacyPluginSummary[]>("list_installed_plugins", {}, pluginFixtures);
+  return normalizePluginSummaryList(plugins);
+}
+
+export async function setPluginEnabled(input: SetPluginEnabledInput): Promise<PluginSummary> {
+  if (shouldUseFixtureData()) {
+    const plugin = pluginFixtures.find((candidate) =>
+      candidate.id === input.pluginId
+      || (candidate.hostTool === input.hostTool && candidate.rootPath === input.rootPath)
+    );
+    if (!plugin) {
+      throw new Error("Plugin fixture not found");
+    }
+
+    plugin.enabledState = input.enabled ? "enabled" : "disabled";
+    plugin.scopes = plugin.scopes.map((scope) => ({
+      ...scope,
+      enabledState: input.enabled ? "enabled" : "disabled",
+    }));
+    return normalizePluginSummary(plugin);
+  }
+
+  const plugin = await invokeOrFallback<LegacyPluginSummary>(
+    "set_plugin_enabled",
+    {
+      hostTool: input.hostTool,
+      rootPath: input.rootPath,
+      enabled: input.enabled,
+    },
+    pluginFixtures[0],
+  );
+  return normalizePluginSummary(plugin);
+}
+
+export async function fetchCliTools(): Promise<CliToolSummary[]> {
+  const cliTools = await invokeOrFallback<LegacyCliToolSummary[]>("list_cli_tools", {}, cliToolFixtures);
+  return normalizeCliToolSummaryList(cliTools);
+}
+
+export async function probePluginRepo(input: ProbePluginRepoInput): Promise<PluginProbeResult> {
+  const probe = await invokeOrFallback<LegacyPluginProbeResult>("probe_plugin_repo", input, pluginProbeFixture);
+  return normalizePluginProbeResult(probe);
+}
+
+export async function fetchPluginComponentPreview(
+  input: PluginComponentPreviewInput,
+): Promise<PluginComponentPreview> {
+  const fallbackPath =
+    input.assetType === "skill"
+      ? `${input.componentId.replace(/\/+$/, "")}/SKILL.md`
+      : input.componentId;
+  const fallback = {
+    path: fallbackPath,
+    title: fallbackPath.split("/").at(-2) || fallbackPath.split("/").pop() || fallbackPath,
+    assetType: input.assetType,
+    content: `# ${input.componentId}\n\n本地开发预览内容。`,
+  };
+  const preview = await invokeOrFallback<LegacyPluginComponentPreview>(
+    "get_plugin_component_preview",
+    input,
+    fallback,
+  );
+  return normalizePluginComponentPreview(preview);
 }
 
 export async function fetchStartupInstalledSkills(): Promise<SkillSummary[]> {

@@ -4,6 +4,7 @@ mod git_state;
 mod library;
 mod mcp_manager;
 mod models;
+mod plugin_manager;
 mod skill_watcher;
 mod state;
 mod workspace;
@@ -74,6 +75,11 @@ pub fn run() {
             commands::refresh_git_states,
             commands::refresh_local_git_states,
             commands::refresh_local_git_state,
+            plugin_manager::list_installed_plugins,
+            plugin_manager::list_cli_tools,
+            plugin_manager::probe_plugin_repo,
+            plugin_manager::get_plugin_component_preview,
+            plugin_manager::set_plugin_enabled,
             mcp_manager::list_mcp_workspace,
             mcp_manager::list_mcp_marketplace_servers,
             mcp_manager::resolve_mcp_marketplace_source_link,

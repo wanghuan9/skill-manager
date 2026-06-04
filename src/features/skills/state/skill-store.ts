@@ -4,10 +4,117 @@ export type SkillStatusFilter = "all" | SkillCollabStatus | "disabled";
 export type SourceType = "github" | "gitlab" | "gitee" | "local";
 export type MarketplaceSourceSite = "skills.sh" | "skillsmp";
 export type McpMarketplaceSourceSite = "MCP.Directory";
+export type PluginHostTool = "claude-code" | "cursor" | "codex";
+export type PluginKind = "plugin-repo" | "marketplace-root" | "standalone-assets" | "unknown";
+export type PluginProbeKind = PluginKind;
+export type PluginProbeConfidence = "high" | "medium" | "low";
+export type PluginInstallStrategy =
+  | "codex-marketplace"
+  | "claude-plugin-dir"
+  | "cursor-registration"
+  | "unsupported";
+export type PluginSourceType = "git" | "local" | "marketplace";
+export type PluginUpdateMode = "auto" | "unsupported";
+export type PluginStatus = "ready" | "update-available" | "invalid" | "unsupported" | "scan-error";
+export type PluginInstallState = "installed" | "broken" | "detected";
+export type PluginEnabledState = "enabled" | "disabled" | "unknown";
+export type PluginScopeId = "user" | "project" | "local-project";
+export type PluginAssetType =
+  | "skill"
+  | "subagent"
+  | "mcp"
+  | "command"
+  | "rule"
+  | "hook";
+export type PluginLifecycleSource = "direct" | "plugin";
 
 export type SkillToolSyncStatus = {
   name: string;
   statusLabel: string;
+};
+
+export type PluginComponentSummary = {
+  id: string;
+  name: string;
+  description: string;
+  assetType: PluginAssetType;
+  ownerPluginId: string;
+  packageItemId: string;
+};
+
+export type PluginComponentPreview = {
+  path: string;
+  title: string;
+  assetType: PluginAssetType;
+  content: string;
+};
+
+export type PluginScopeSummary = {
+  scopeId: PluginScopeId;
+  scopeLabel: string;
+  enabledState: PluginEnabledState;
+  location: string;
+};
+
+export type PluginSummary = {
+  id: string;
+  name: string;
+  description: string;
+  hostTool: PluginHostTool;
+  relatedHostTools?: PluginHostTool[];
+  kind: PluginKind;
+  rootPath: string;
+  manifestPath: string;
+  sourceType: PluginSourceType;
+  sourceLabel: string;
+  sourceUrl: string;
+  sourceRef: string;
+  sourceRevision: string;
+  currentVersion: string;
+  currentBranch: string;
+  currentCommit: string;
+  isGitRepo: boolean;
+  updateMode: PluginUpdateMode;
+  updateAvailable: boolean;
+  installedAt: string;
+  updatedAt: string;
+  lastScannedAt: string;
+  status: PluginStatus;
+  installState: PluginInstallState;
+  enabledState: PluginEnabledState;
+  scopes: PluginScopeSummary[];
+  components: PluginComponentSummary[];
+};
+
+export type PluginProbeResult = {
+  tool: PluginHostTool | "unknown";
+  kind: PluginProbeKind;
+  pluginRoot: string;
+  manifestPath: string;
+  marketplaceManifestPath: string;
+  components: PluginComponentSummary[];
+  sourceType: PluginSourceType;
+  sourceUrl: string;
+  isGitRepo: boolean;
+  gitRoot: string;
+  confidence: PluginProbeConfidence;
+  installStrategy: PluginInstallStrategy;
+  warnings: string[];
+};
+
+export type CliToolSummary = {
+  id: string;
+  name: string;
+  ownerPluginId?: string;
+  ownerPluginName?: string;
+  lifecycleSource: "direct" | "plugin";
+  command: string;
+  executablePath?: string;
+  statusLabel?: string;
+  updateCommand?: string;
+  updateStrategy?: "linked-skills" | "self-only";
+  bundledSkills: string[];
+  description: string;
 };
 
 export type SkillSummary = {
@@ -27,6 +134,9 @@ export type SkillSummary = {
   lastEditor: string;
   commitLabel: string;
   gitLinked: boolean;
+  lifecycleSource?: PluginLifecycleSource;
+  ownerPluginId?: string;
+  ownerPluginName?: string;
   tools: SkillToolSyncStatus[];
 };
 
@@ -203,6 +313,9 @@ export type McpServerSummary = {
   toolsDiscoveredAt: string;
   toolsDiscoveryError: string;
   installedAt: string;
+  lifecycleSource?: PluginLifecycleSource;
+  ownerPluginId?: string;
+  ownerPluginName?: string;
 };
 
 export type McpServerRecord = {
@@ -217,6 +330,9 @@ export type McpServerRecord = {
   toolsDiscoveryError: string;
   installedAt: string;
   updatedAt: string;
+  lifecycleSource?: PluginLifecycleSource;
+  ownerPluginId?: string;
+  ownerPluginName?: string;
 };
 
 export type McpWorkspaceSnapshot = {

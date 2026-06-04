@@ -7,6 +7,114 @@ pub struct ToolSyncStatus {
     pub status_label: String,
 }
 
+#[allow(dead_code)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginComponentSummary {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    pub asset_type: String,
+    pub owner_plugin_id: String,
+    pub package_item_id: String,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginComponentPreview {
+    pub path: String,
+    pub title: String,
+    pub asset_type: String,
+    pub content: String,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginScopeSummary {
+    pub scope_id: String,
+    pub scope_label: String,
+    pub enabled_state: String,
+    pub location: String,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginSummary {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    pub host_tool: String,
+    #[serde(default)]
+    pub related_host_tools: Vec<String>,
+    pub kind: String,
+    pub root_path: String,
+    pub manifest_path: String,
+    pub source_type: String,
+    #[serde(default)]
+    pub source_label: String,
+    pub source_url: String,
+    #[serde(default)]
+    pub source_ref: String,
+    #[serde(default)]
+    pub source_revision: String,
+    pub current_version: String,
+    pub current_branch: String,
+    pub current_commit: String,
+    pub is_git_repo: bool,
+    pub update_mode: String,
+    pub update_available: bool,
+    pub installed_at: String,
+    pub updated_at: String,
+    pub last_scanned_at: String,
+    pub status: String,
+    pub install_state: String,
+    pub enabled_state: String,
+    pub scopes: Vec<PluginScopeSummary>,
+    pub components: Vec<PluginComponentSummary>,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginProbeResult {
+    pub tool: String,
+    pub kind: String,
+    pub plugin_root: String,
+    pub manifest_path: String,
+    pub marketplace_manifest_path: String,
+    pub components: Vec<PluginComponentSummary>,
+    pub source_type: String,
+    pub source_url: String,
+    pub is_git_repo: bool,
+    pub git_root: String,
+    pub confidence: String,
+    pub install_strategy: String,
+    pub warnings: Vec<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CliToolSummary {
+    pub id: String,
+    pub name: String,
+    pub owner_plugin_id: Option<String>,
+    pub owner_plugin_name: Option<String>,
+    pub lifecycle_source: String,
+    pub command: String,
+    pub executable_path: Option<String>,
+    pub status_label: Option<String>,
+    pub update_command: Option<String>,
+    pub update_strategy: Option<String>,
+    pub bundled_skills: Vec<String>,
+    pub description: String,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SkillSummary {
@@ -31,6 +139,12 @@ pub struct SkillSummary {
     pub commit_label: String,
     #[serde(default)]
     pub git_linked: bool,
+    #[serde(default)]
+    pub lifecycle_source: String,
+    #[serde(default)]
+    pub owner_plugin_id: String,
+    #[serde(default)]
+    pub owner_plugin_name: String,
     pub tools: Vec<ToolSyncStatus>,
 }
 

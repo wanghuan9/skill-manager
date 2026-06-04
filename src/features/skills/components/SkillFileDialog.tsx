@@ -15,9 +15,33 @@ type SkillFileDialogProps = {
 const MARKDOWN_FILE_PATTERN = /\.(md|markdown)$/i;
 const FRONTMATTER_PATTERN = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/;
 
-type ViewMode = "edit" | "preview";
+export type SkillFileViewMode = "edit" | "preview";
 
-function ViewModeIcon({ mode }: { mode: ViewMode }) {
+type SkillFileViewModeToggleProps = {
+  viewMode: SkillFileViewMode;
+  groupLabel: string;
+  previewLabel: string;
+  editLabel: string;
+  onViewModeChange: (mode: SkillFileViewMode) => void;
+};
+
+type SkillFileContentSurfaceProps = {
+  selectedPath: string;
+  content: string;
+  viewMode: SkillFileViewMode;
+  fileEntries: SkillFileEntry[];
+  isLoading: boolean;
+  isSaving: boolean;
+  hasDirtyChanges: boolean;
+  noEditableFileLabel: string;
+  unsavedLabel: string;
+  emptyLabel: string;
+  emptyMarkdownLabel: string;
+  onContentChange: (content: string) => void;
+  onSelectFile: (path: string) => void;
+};
+
+function ViewModeIcon({ mode }: { mode: SkillFileViewMode }) {
   if (mode === "preview") {
     return (
       <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
@@ -56,6 +80,37 @@ function ViewModeIcon({ mode }: { mode: ViewMode }) {
         strokeLinejoin="round"
       />
     </svg>
+  );
+}
+
+export function SkillFileViewModeToggle({
+  viewMode,
+  groupLabel,
+  previewLabel,
+  editLabel,
+  onViewModeChange,
+}: SkillFileViewModeToggleProps) {
+  return (
+    <div className="skill-file-dialog__view-toggle" role="group" aria-label={groupLabel}>
+      <button
+        className={`skill-file-dialog__view-toggle-button${viewMode === "preview" ? " is-selected" : ""}`}
+        type="button"
+        aria-label={previewLabel}
+        aria-pressed={viewMode === "preview"}
+        onClick={() => onViewModeChange("preview")}
+      >
+        <ViewModeIcon mode="preview" />
+      </button>
+      <button
+        className={`skill-file-dialog__view-toggle-button${viewMode === "edit" ? " is-selected" : ""}`}
+        type="button"
+        aria-label={editLabel}
+        aria-pressed={viewMode === "edit"}
+        onClick={() => onViewModeChange("edit")}
+      >
+        <ViewModeIcon mode="edit" />
+      </button>
+    </div>
   );
 }
 
@@ -173,6 +228,98 @@ function resolveSkillFileLinkPath(href: string, selectedPath: string, fileEntrie
   return fileEntries.some((entry) => entry.path === normalizedPath) ? normalizedPath : "";
 }
 
+export function SkillFileContentSurface({
+  selectedPath,
+  content,
+  viewMode,
+  fileEntries,
+  isLoading,
+  isSaving,
+  hasDirtyChanges,
+  noEditableFileLabel,
+  unsavedLabel,
+  emptyLabel,
+  emptyMarkdownLabel,
+  onContentChange,
+  onSelectFile,
+}: SkillFileContentSurfaceProps) {
+  const previewRef = useRef<HTMLDivElement | null>(null);
+  const isMarkdownFile = MARKDOWN_FILE_PATTERN.test(selectedPath);
+  const previewDocument = useMemo(() => splitFrontmatter(content), [content]);
+
+  useEffect(() => {
+    if (viewMode === "preview" && previewRef.current) {
+      previewRef.current.scrollTop = 0;
+    }
+  }, [selectedPath, viewMode]);
+
+  return (
+    <>
+      <div className="skill-file-dialog__editor-header">
+        <strong>{selectedPath || noEditableFileLabel}</strong>
+        {hasDirtyChanges ? <span className="skill-file-dialog__dirty">{unsavedLabel}</span> : null}
+      </div>
+      {fileEntries.length === 0 ? (
+        <div className="skill-file-dialog__empty">{emptyLabel}</div>
+      ) : viewMode === "edit" ? (
+        <textarea
+          className="skill-file-dialog__textarea"
+          value={content}
+          onChange={(event) => onContentChange(event.target.value)}
+          spellCheck={false}
+          disabled={isLoading || isSaving || !selectedPath}
+        />
+      ) : (
+        <div className="skill-file-dialog__preview" ref={previewRef}>
+          {isMarkdownFile ? (
+            <>
+              {previewDocument.frontmatter ? (
+                <pre className="skill-file-dialog__frontmatter">
+                  <code>{`---\n${previewDocument.frontmatter}\n---`}</code>
+                </pre>
+              ) : null}
+              {previewDocument.body.trim() ? (
+                <div className="skill-file-dialog__markdown">
+                  <ReactMarkdown
+                    remarkPlugins={[remarkGfm]}
+                    components={{
+                      a({ href = "", children, node: _node, ...anchorProps }) {
+                        const targetPath = resolveSkillFileLinkPath(href, selectedPath, fileEntries);
+
+                        return (
+                          <a
+                            {...anchorProps}
+                            href={href}
+                            onClick={(event) => {
+                              if (!targetPath) {
+                                return;
+                              }
+                              event.preventDefault();
+                              onSelectFile(targetPath);
+                            }}
+                          >
+                            {children}
+                          </a>
+                        );
+                      },
+                    }}
+                  >
+                    {previewDocument.body}
+                  </ReactMarkdown>
+                </div>
+              ) : (
+                <div className="skill-file-dialog__empty">{emptyMarkdownLabel}</div>
+              )}
+            </>
+          ) : (
+            <pre className="skill-file-dialog__plain-preview">{content}</pre>
+          )}
+        </div>
+      )}
+    </>
+  );
+}
+
 export function SkillFileDialog({ skill, isOpen, onClose }: SkillFileDialogProps) {
   const { t } = useTranslate();
   const reportFailure = useFailureReporter();
@@ -184,7 +331,6 @@ export function SkillFileDialog({ skill, isOpen, onClose }: SkillFileDialogProps
     saveSkillFileContent,
   } = useSkillWorkspace();
   const dialogTitleId = useId();
-  const previewRef = useRef<HTMLDivElement | null>(null);
   const [entries, setEntries] = useState<SkillFileEntry[]>([]);
   const [selectedPath, setSelectedPath] = useState("");
   const [content, setContent] = useState("");
@@ -192,7 +338,7 @@ export function SkillFileDialog({ skill, isOpen, onClose }: SkillFileDialogProps
   const [isSaving, setIsSaving] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
   const [hasDirtyChanges, setHasDirtyChanges] = useState(false);
-  const [viewMode, setViewMode] = useState<ViewMode>("preview");
+  const [viewMode, setViewMode] = useState<SkillFileViewMode>("preview");
   const [collapsedDirectories, setCollapsedDirectories] = useState<Record<string, boolean>>({});
 
   const fileEntries = useMemo(
@@ -217,9 +363,6 @@ export function SkillFileDialog({ skill, isOpen, onClose }: SkillFileDialogProps
 
     return childCounts;
   }, [entries]);
-  const isMarkdownFile = MARKDOWN_FILE_PATTERN.test(selectedPath);
-  const previewDocument = useMemo(() => splitFrontmatter(content), [content]);
-
   const handleSave = useCallback(async () => {
     if (!selectedPath || isSaving) {
       return;
@@ -361,12 +504,6 @@ export function SkillFileDialog({ skill, isOpen, onClose }: SkillFileDialogProps
     };
   }, [handleSave, isOpen]);
 
-  useEffect(() => {
-    if (viewMode === "preview" && previewRef.current) {
-      previewRef.current.scrollTop = 0;
-    }
-  }, [selectedPath, viewMode]);
-
   if (!isOpen) {
     return null;
   }
@@ -423,26 +560,13 @@ export function SkillFileDialog({ skill, isOpen, onClose }: SkillFileDialogProps
           </div>
           <div className="skill-file-dialog__toolbar">
             <div className="skill-file-dialog__actions">
-              <div className="skill-file-dialog__view-toggle" role="group" aria-label={t("skill.files.viewMode")}>
-                <button
-                  className={`skill-file-dialog__view-toggle-button${viewMode === "preview" ? " is-selected" : ""}`}
-                  type="button"
-                  aria-label={t("skill.files.preview")}
-                  aria-pressed={viewMode === "preview"}
-                  onClick={() => setViewMode("preview")}
-                >
-                  <ViewModeIcon mode="preview" />
-                </button>
-                <button
-                  className={`skill-file-dialog__view-toggle-button${viewMode === "edit" ? " is-selected" : ""}`}
-                  type="button"
-                  aria-label={t("skill.files.edit")}
-                  aria-pressed={viewMode === "edit"}
-                  onClick={() => setViewMode("edit")}
-                >
-                  <ViewModeIcon mode="edit" />
-                </button>
-              </div>
+              <SkillFileViewModeToggle
+                viewMode={viewMode}
+                groupLabel={t("skill.files.viewMode")}
+                previewLabel={t("skill.files.preview")}
+                editLabel={t("skill.files.edit")}
+                onViewModeChange={setViewMode}
+              />
               <button
                 className="secondary-button secondary-button--compact"
                 type="button"
@@ -504,70 +628,24 @@ export function SkillFileDialog({ skill, isOpen, onClose }: SkillFileDialogProps
             )}
           </aside>
           <section className="skill-file-dialog__editor">
-            <div className="skill-file-dialog__editor-header">
-              <strong>{selectedPath || t("skill.files.noEditableFile")}</strong>
-              {hasDirtyChanges ? <span className="skill-file-dialog__dirty">{t("skill.files.unsaved")}</span> : null}
-            </div>
-            {fileEntries.length === 0 ? (
-              <div className="skill-file-dialog__empty">{t("skill.files.empty")}</div>
-            ) : viewMode === "edit" ? (
-              <textarea
-                className="skill-file-dialog__textarea"
-                value={content}
-                onChange={(event) => {
-                  setContent(event.target.value);
-                  setHasDirtyChanges(true);
-                }}
-                spellCheck={false}
-                disabled={isLoading || isSaving || !selectedPath}
-              />
-            ) : (
-              <div className="skill-file-dialog__preview" ref={previewRef}>
-                {isMarkdownFile ? (
-                  <>
-                    {previewDocument.frontmatter ? (
-                      <pre className="skill-file-dialog__frontmatter">
-                        <code>{`---\n${previewDocument.frontmatter}\n---`}</code>
-                      </pre>
-                    ) : null}
-                    {previewDocument.body.trim() ? (
-                      <div className="skill-file-dialog__markdown">
-                        <ReactMarkdown
-                          remarkPlugins={[remarkGfm]}
-                          components={{
-                            a({ href = "", children, node: _node, ...anchorProps }) {
-                              const targetPath = resolveSkillFileLinkPath(href, selectedPath, fileEntries);
-
-                              return (
-                                <a
-                                  {...anchorProps}
-                                  href={href}
-                                  onClick={(event) => {
-                                    if (!targetPath) {
-                                      return;
-                                    }
-                                    event.preventDefault();
-                                    void handleSelectFile(targetPath);
-                                  }}
-                                >
-                                  {children}
-                                </a>
-                              );
-                            },
-                          }}
-                        >
-                          {previewDocument.body}
-                        </ReactMarkdown>
-                      </div>
-                    ) : (
-                      <div className="skill-file-dialog__empty">{t("skill.files.emptyMarkdown")}</div>
-                    )}
-                  </>
-                ) : (
-                  <pre className="skill-file-dialog__plain-preview">{content}</pre>
-                )}
-              </div>
-            )}
+            <SkillFileContentSurface
+              selectedPath={selectedPath}
+              content={content}
+              viewMode={viewMode}
+              fileEntries={fileEntries}
+              isLoading={isLoading}
+              isSaving={isSaving}
+              hasDirtyChanges={hasDirtyChanges}
+              noEditableFileLabel={t("skill.files.noEditableFile")}
+              unsavedLabel={t("skill.files.unsaved")}
+              emptyLabel={t("skill.files.empty")}
+              emptyMarkdownLabel={t("skill.files.emptyMarkdown")}
+              onContentChange={(nextContent) => {
+                setContent(nextContent);
+                setHasDirtyChanges(true);
+              }}
+              onSelectFile={(path) => void handleSelectFile(path)}
+            />
             {isLoading ? <p className="dialog-note">{t("skill.files.loading")}</p> : null}
             {errorMessage ? <p className="dialog-error">{errorMessage}</p> : null}
           </section>

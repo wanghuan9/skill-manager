@@ -3901,6 +3901,9 @@ fn install_skill_from_market_blocking(skill: MarketplaceSkill) -> Result<SkillSu
         last_editor: skill.maintainer.clone(),
         commit_label: "v1.0.0".into(),
         git_linked: true,
+        lifecycle_source: String::new(),
+        owner_plugin_id: String::new(),
+        owner_plugin_name: String::new(),
         tools: vec![ToolSyncStatus {
             name: "Codex".into(),
             status_label: "待同步".into(),
@@ -3970,6 +3973,9 @@ pub fn install_skill_from_repo(repo_url: &str) -> Result<SkillSummary, String> {
         last_editor: "".into(),
         commit_label: "initial".into(),
         git_linked: true,
+        lifecycle_source: String::new(),
+        owner_plugin_id: String::new(),
+        owner_plugin_name: String::new(),
         tools: vec![],
     };
 
@@ -4126,6 +4132,9 @@ pub async fn install_selected_repo_skills(
                 last_editor: "".into(),
                 commit_label: "initial".into(),
                 git_linked: true,
+                lifecycle_source: String::new(),
+                owner_plugin_id: String::new(),
+                owner_plugin_name: String::new(),
                 tools: vec![],
             };
             let enriched = enrich_newly_installed_skill_with_git_state(&normalize_skill_tools(
@@ -4259,6 +4268,9 @@ fn install_local_skill_from_source_dir(
         last_editor: "".into(),
         commit_label: "local-only".into(),
         git_linked: false,
+        lifecycle_source: String::new(),
+        owner_plugin_id: String::new(),
+        owner_plugin_name: String::new(),
         tools: vec![],
     };
 
@@ -4644,6 +4656,9 @@ pub fn import_local_skill(local_path: &str) -> Result<SkillSummary, String> {
             last_editor: "".into(),
             commit_label: "local-only".into(),
             git_linked: false,
+            lifecycle_source: String::new(),
+            owner_plugin_id: String::new(),
+            owner_plugin_name: String::new(),
             tools: vec![],
         };
 
@@ -6166,6 +6181,9 @@ mod tests {
             last_editor: String::new(),
             commit_label: String::new(),
             git_linked: true,
+            lifecycle_source: "direct".into(),
+            owner_plugin_id: String::new(),
+            owner_plugin_name: String::new(),
             tools: vec![],
         };
 
@@ -6226,6 +6244,9 @@ mod tests {
             last_editor: String::new(),
             commit_label: String::new(),
             git_linked: true,
+            lifecycle_source: "direct".into(),
+            owner_plugin_id: String::new(),
+            owner_plugin_name: String::new(),
             tools: vec![],
         };
 
@@ -6297,6 +6318,9 @@ mod tests {
                 last_editor: String::new(),
                 commit_label: String::new(),
                 git_linked: true,
+                lifecycle_source: "direct".into(),
+                owner_plugin_id: String::new(),
+                owner_plugin_name: String::new(),
                 tools: vec![],
             }],
         };

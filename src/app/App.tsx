@@ -1,17 +1,32 @@
-import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+} from "react";
 import { SkillsRoute } from "@/app/routes/skills";
 import { ToolsRoute } from "@/app/routes/tools";
 import { McpRoute } from "@/app/routes/mcp";
-import { MarketRoute, type InstallCategory, type InstallTab } from "@/app/routes/market";
+import {
+  MarketRoute,
+  type InstallCategory,
+  type InstallTab,
+} from "@/app/routes/market";
 import { SettingsRoute } from "@/app/routes/settings";
 import { AboutRoute } from "@/app/routes/about";
+import { PluginsRoute } from "@/app/routes/plugins";
+import { CliRoute } from "@/app/routes/cli";
 import { AppI18nProvider, tx, useTranslate } from "@/app/i18n";
 import { NotificationProvider } from "@/app/notifications";
 import { useFailureReporter } from "@/app/failure-feedback";
 import { FailureTracker } from "@/app/failure-tracker";
 import { waitForNextPaint } from "@/app/utils/wait-for-next-paint";
 import { AppUpdateAutoPrompt } from "@/features/app-update/AppUpdateAutoPrompt";
-import { SkillWorkspaceProvider, useSkillWorkspace } from "@/features/skills/state/skill-workspace";
+import {
+  SkillWorkspaceProvider,
+  useSkillWorkspace,
+} from "@/features/skills/state/skill-workspace";
 import { SkillListToolbar } from "@/features/skills/components/SkillListPage";
 import type { SkillStatusFilter } from "@/features/skills/state/skill-store";
 import {
@@ -25,7 +40,14 @@ import {
 } from "@/features/skills/utils/mcp-workspace-cache";
 import { isToolInstalledStatus } from "@/features/skills/utils/tool-status";
 
-type RouteKey = "skills" | "tools" | "install" | "settings" | "about";
+type RouteKey =
+  | "skills"
+  | "tools"
+  | "plugins"
+  | "cli"
+  | "install"
+  | "settings"
+  | "about";
 type SkillsSectionKey = "skills" | "mcp";
 
 type RouteDefinition = {
@@ -35,11 +57,41 @@ type RouteDefinition = {
 };
 
 const routes: RouteDefinition[] = [
-  { key: "skills", labelKey: "app.nav.skills.label", descriptionKey: "app.nav.skills.description" },
-  { key: "tools", labelKey: "app.nav.tools.label", descriptionKey: "app.nav.tools.description" },
-  { key: "install", labelKey: "app.nav.install.label", descriptionKey: "app.nav.install.description" },
-  { key: "settings", labelKey: "app.nav.settings.label", descriptionKey: "app.nav.settings.description" },
-  { key: "about", labelKey: "app.nav.about.label", descriptionKey: "app.nav.about.description" },
+  {
+    key: "skills",
+    labelKey: "app.nav.skills.label",
+    descriptionKey: "app.nav.skills.description",
+  },
+  {
+    key: "tools",
+    labelKey: "app.nav.tools.label",
+    descriptionKey: "app.nav.tools.description",
+  },
+  {
+    key: "plugins",
+    labelKey: "app.nav.plugins.label",
+    descriptionKey: "app.nav.plugins.description",
+  },
+  {
+    key: "cli",
+    labelKey: "app.nav.cli.label",
+    descriptionKey: "app.nav.cli.description",
+  },
+  {
+    key: "install",
+    labelKey: "app.nav.install.label",
+    descriptionKey: "app.nav.install.description",
+  },
+  {
+    key: "settings",
+    labelKey: "app.nav.settings.label",
+    descriptionKey: "app.nav.settings.description",
+  },
+  {
+    key: "about",
+    labelKey: "app.nav.about.label",
+    descriptionKey: "app.nav.about.description",
+  },
 ];
 
 function isMacOSWindow() {
@@ -117,7 +169,12 @@ function NavRouteIcon(props: { route: RouteKey }) {
           strokeWidth="1.8"
           strokeLinecap="round"
         />
-        <path d="M12 7.6h.01" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" />
+        <path
+          d="M12 7.6h.01"
+          stroke="currentColor"
+          strokeWidth="2.4"
+          strokeLinecap="round"
+        />
       </svg>
     );
   }
@@ -159,6 +216,12 @@ function renderRoute(
         onInstallTabChange={onInstallTabChange}
       />
     );
+  }
+  if (route === "plugins") {
+    return <PluginsRoute />;
+  }
+  if (route === "cli") {
+    return <CliRoute />;
   }
   if (route === "settings") {
     return <SettingsRoute />;
@@ -220,7 +283,9 @@ function SidebarToggleButton(props: {
   const { t } = useTranslate();
   const { className, isSidebarCollapsed, onToggle, style } = props;
   const buttonClassName = `sidebar-toggle${className ? ` ${className}` : ""}`;
-  const label = isSidebarCollapsed ? t("app.sidebar.expand") : t("app.sidebar.collapse");
+  const label = isSidebarCollapsed
+    ? t("app.sidebar.expand")
+    : t("app.sidebar.collapse");
 
   return (
     <button
@@ -232,8 +297,23 @@ function SidebarToggleButton(props: {
       style={style}
     >
       <svg viewBox="0 0 24 24" aria-hidden="true">
-        <rect x="3" y="3" width="18" height="18" rx="2" fill="none" stroke="currentColor" strokeWidth="2" />
-        <path d="M9 3v18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+        <rect
+          x="3"
+          y="3"
+          width="18"
+          height="18"
+          rx="2"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+        />
+        <path
+          d="M9 3v18"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+        />
         <path
           d={isSidebarCollapsed ? "m14 9 3 3-3 3" : "m16 15-3-3 3-3"}
           fill="none"
@@ -248,31 +328,58 @@ function SidebarToggleButton(props: {
 }
 
 function AppContent() {
-  const { installedSkills, isWorkspaceRefreshing, language, refreshWorkspace, toolConfigs } = useSkillWorkspace();
+  const {
+    installedSkills,
+    isWorkspaceRefreshing,
+    language,
+    refreshWorkspace,
+    toolConfigs,
+  } = useSkillWorkspace();
   const { t } = useTranslate();
   const reportFailure = useFailureReporter();
   const initialSkillViewMode = readSkillViewModePreference();
   const isMacOS = isMacOSWindow();
   const brandIconRef = useRef<HTMLDivElement | null>(null);
   const [activeRoute, setActiveRoute] = useState<RouteKey>("skills");
-  const [activeSkillsSection, setActiveSkillsSection] = useState<SkillsSectionKey>("skills");
+  const [activeSkillsSection, setActiveSkillsSection] =
+    useState<SkillsSectionKey>("skills");
   const [skillQuery, setSkillQuery] = useState("");
-  const [skillStatusFilter, setSkillStatusFilter] = useState<SkillStatusFilter>("all");
+  const [skillStatusFilter, setSkillStatusFilter] =
+    useState<SkillStatusFilter>("all");
   const [showGroupView, setShowGroupView] = useState(
-    () => resolveSkillViewModePreference(initialSkillViewMode, installedSkills.length) === "grouped",
+    () =>
+      resolveSkillViewModePreference(
+        initialSkillViewMode,
+        installedSkills.length,
+      ) === "grouped",
   );
-  const [hasSavedSkillViewPreference, setHasSavedSkillViewPreference] = useState(initialSkillViewMode !== null);
-  const [activeInstallCategory, setActiveInstallCategory] = useState<InstallCategory>("skill");
-  const [activeInstallTab, setActiveInstallTab] = useState<InstallTab>("market");
+  const [hasSavedSkillViewPreference, setHasSavedSkillViewPreference] =
+    useState(initialSkillViewMode !== null);
+  const [activeInstallCategory, setActiveInstallCategory] =
+    useState<InstallCategory>("skill");
+  const [activeInstallTab, setActiveInstallTab] =
+    useState<InstallTab>("market");
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [sidebarHandleTop, setSidebarHandleTop] = useState<number | null>(null);
-  const [mcpServerCount, setMcpServerCount] = useState(() => getCachedMcpWorkspace()?.servers.length ?? 0);
-  const activeDefinition = routes.find((route) => route.key === activeRoute) ?? routes[0];
-  const updatableSkillCount = installedSkills.filter((skill) => skill.collabStatus === "update-available").length;
-  const pendingPushSkillCount = installedSkills.filter((skill) => skill.collabStatus === "pending-push").length;
-  const installedToolCount = toolConfigs.filter((tool) => isToolInstalledStatus(tool.statusLabel)).length;
+  const [mcpServerCount, setMcpServerCount] = useState(
+    () => getCachedMcpWorkspace()?.servers.length ?? 0,
+  );
+  const activeDefinition =
+    routes.find((route) => route.key === activeRoute) ?? routes[0];
+  const updatableSkillCount = installedSkills.filter(
+    (skill) => skill.collabStatus === "update-available",
+  ).length;
+  const pendingPushSkillCount = installedSkills.filter(
+    (skill) => skill.collabStatus === "pending-push",
+  ).length;
+  const installedToolCount = toolConfigs.filter((tool) =>
+    isToolInstalledStatus(tool.statusLabel),
+  ).length;
   const mcpToolCount = toolConfigs.filter(
-    (tool) => isToolInstalledStatus(tool.statusLabel) && tool.supportsMcp && tool.mcpConfigPathRecognized,
+    (tool) =>
+      isToolInstalledStatus(tool.statusLabel) &&
+      tool.supportsMcp &&
+      tool.mcpConfigPathRecognized,
   ).length;
   const activeDescription =
     activeRoute === "skills" && activeSkillsSection === "skills"
@@ -282,21 +389,33 @@ function AppContent() {
           pending: pendingPushSkillCount,
         })
       : activeRoute === "skills"
-        ? tx(language, "app.header.mcp.summary", { count: mcpServerCount, tools: mcpToolCount })
-      : activeRoute === "tools"
-        ? tx(language, "app.header.tools.summary", { count: installedToolCount })
-      : tx(language, activeDefinition.descriptionKey);
+        ? tx(language, "app.header.mcp.summary", {
+            count: mcpServerCount,
+            tools: mcpToolCount,
+          })
+        : activeRoute === "tools"
+          ? tx(language, "app.header.tools.summary", {
+              count: installedToolCount,
+            })
+          : tx(language, activeDefinition.descriptionKey);
 
-  useEffect(() => subscribeMcpWorkspaceChange((snapshot) => {
-    setMcpServerCount(snapshot?.servers.length ?? 0);
-  }), []);
+  useEffect(
+    () =>
+      subscribeMcpWorkspaceChange((snapshot) => {
+        setMcpServerCount(snapshot?.servers.length ?? 0);
+      }),
+    [],
+  );
 
   useEffect(() => {
     if (hasSavedSkillViewPreference) {
       return;
     }
 
-    const defaultSkillViewMode = resolveSkillViewModePreference(null, installedSkills.length);
+    const defaultSkillViewMode = resolveSkillViewModePreference(
+      null,
+      installedSkills.length,
+    );
     setShowGroupView(defaultSkillViewMode === "grouped");
   }, [hasSavedSkillViewPreference, installedSkills.length]);
 
@@ -377,33 +496,75 @@ function AppContent() {
           className="sidebar-toggle--macos"
           isSidebarCollapsed={isSidebarCollapsed}
           onToggle={() => setIsSidebarCollapsed((current) => !current)}
-          style={sidebarHandleTop == null ? undefined : { top: `${sidebarHandleTop}px` }}
+          style={
+            sidebarHandleTop == null
+              ? undefined
+              : { top: `${sidebarHandleTop}px` }
+          }
         />
       ) : null}
       <aside className="sidebar">
         {isMacOS ? (
           <div className="window-topbar window-topbar--sidebar">
-            <div className="window-topbar__drag-region" data-tauri-drag-region aria-hidden="true" />
+            <div
+              className="window-topbar__drag-region"
+              data-tauri-drag-region
+              aria-hidden="true"
+            />
           </div>
         ) : null}
         <div className="brand-block">
           <div ref={brandIconRef} className="brand-icon" aria-hidden="true">
             <svg viewBox="0 0 228 228" role="img">
               <defs>
-                <linearGradient id="brand-gradient" x1="24" y1="24" x2="210" y2="204" gradientUnits="userSpaceOnUse">
+                <linearGradient
+                  id="brand-gradient"
+                  x1="24"
+                  y1="24"
+                  x2="210"
+                  y2="204"
+                  gradientUnits="userSpaceOnUse"
+                >
                   <stop offset="0" stopColor="#163257" />
                   <stop offset="0.55" stopColor="#116396" />
                   <stop offset="1" stopColor="#1fc4b1" />
                 </linearGradient>
-                <linearGradient id="brand-star" x1="114" y1="54" x2="114" y2="176" gradientUnits="userSpaceOnUse">
+                <linearGradient
+                  id="brand-star"
+                  x1="114"
+                  y1="54"
+                  x2="114"
+                  y2="176"
+                  gradientUnits="userSpaceOnUse"
+                >
                   <stop offset="0" stopColor="#ffffff" />
                   <stop offset="1" stopColor="#d7f8ff" />
                 </linearGradient>
               </defs>
-              <rect x="18" y="18" width="192" height="192" rx="50" fill="url(#brand-gradient)" />
-              <circle cx="114" cy="114" r="54" fill="none" stroke="rgba(255,255,255,0.26)" strokeWidth="14" />
-              <path d="M114 56c11 26 18 33 44 44c-26 11-33 18-44 44c-11-26-18-33-44-44c26-11 33-18 44-44Z" fill="url(#brand-star)" />
-              <path d="M114 84c6 14 10 18 24 24c-14 6-18 10-24 24c-6-14-10-18-24-24c14-6 18-10 24-24Z" fill="#16b3a8" />
+              <rect
+                x="18"
+                y="18"
+                width="192"
+                height="192"
+                rx="50"
+                fill="url(#brand-gradient)"
+              />
+              <circle
+                cx="114"
+                cy="114"
+                r="54"
+                fill="none"
+                stroke="rgba(255,255,255,0.26)"
+                strokeWidth="14"
+              />
+              <path
+                d="M114 56c11 26 18 33 44 44c-26 11-33 18-44 44c-11-26-18-33-44-44c26-11 33-18 44-44Z"
+                fill="url(#brand-star)"
+              />
+              <path
+                d="M114 84c6 14 10 18 24 24c-14 6-18 10-24 24c-6-14-10-18-24-24c14-6 18-10 24-24Z"
+                fill="#16b3a8"
+              />
               <circle cx="114" cy="114" r="10" fill="#ffffff" />
             </svg>
           </div>
@@ -418,9 +579,9 @@ function AppContent() {
         <div className="sidebar-divider" aria-hidden="true" />
         <nav aria-label="Primary" className="nav-list">
           {routes.map((route) => {
-            const selected = route.key === activeRoute && (
-              route.key !== "skills" || activeSkillsSection === "skills"
-            );
+            const selected =
+              route.key === activeRoute &&
+              (route.key !== "skills" || activeSkillsSection === "skills");
 
             return (
               <div key={route.key} className="nav-group">
@@ -437,12 +598,16 @@ function AppContent() {
                   <span className="nav-icon" aria-hidden="true">
                     <NavRouteIcon route={route.key} />
                   </span>
-                  <span className="nav-label">{tx(language, route.labelKey)}</span>
+                  <span className="nav-label">
+                    {tx(language, route.labelKey)}
+                  </span>
                 </button>
                 {route.key === "skills" ? (
                   <button
                     className={`nav-item nav-sub-item${
-                      activeRoute === "skills" && activeSkillsSection === "mcp" ? " is-selected" : ""
+                      activeRoute === "skills" && activeSkillsSection === "mcp"
+                        ? " is-selected"
+                        : ""
                     }`}
                     type="button"
                     onClick={() => {
@@ -462,12 +627,22 @@ function AppContent() {
         </nav>
       </aside>
       <main className="main-panel" data-active-route={activeRoute}>
-        {isMacOS ? <div className="window-topbar window-topbar--main" data-tauri-drag-region aria-hidden="true" /> : null}
+        {isMacOS ? (
+          <div
+            className="window-topbar window-topbar--main"
+            data-tauri-drag-region
+            aria-hidden="true"
+          />
+        ) : null}
         <header className="page-header">
           {activeRoute === "skills" ? (
             <div className="page-header--split">
               <div className="page-header__row">
-                <h1>{activeSkillsSection === "mcp" ? "MCP" : tx(language, activeDefinition.labelKey)}</h1>
+                <h1>
+                  {activeSkillsSection === "mcp"
+                    ? "MCP"
+                    : tx(language, activeDefinition.labelKey)}
+                </h1>
                 {activeSkillsSection === "skills" ? (
                   <SkillListToolbar
                     query={skillQuery}
@@ -478,7 +653,10 @@ function AppContent() {
                     onShowGroupViewChange={handleShowGroupViewChange}
                   />
                 ) : (
-                  <div className="mcp-header-toolbar-slot" id="mcp-header-toolbar-slot" />
+                  <div
+                    className="mcp-header-toolbar-slot"
+                    id="mcp-header-toolbar-slot"
+                  />
                 )}
               </div>
               <p>{activeDescription}</p>
@@ -493,8 +671,19 @@ function AppContent() {
                   onClick={() => void handleToolsRefresh()}
                   disabled={isWorkspaceRefreshing}
                 >
-                  <span aria-hidden="true" className="skills-toolbar-button__icon">
-                    <svg className={isWorkspaceRefreshing ? "skills-toolbar-button__svg is-spinning" : "skills-toolbar-button__svg"} viewBox="0 0 20 20" fill="none">
+                  <span
+                    aria-hidden="true"
+                    className="skills-toolbar-button__icon"
+                  >
+                    <svg
+                      className={
+                        isWorkspaceRefreshing
+                          ? "skills-toolbar-button__svg is-spinning"
+                          : "skills-toolbar-button__svg"
+                      }
+                      viewBox="0 0 20 20"
+                      fill="none"
+                    >
                       <path
                         d="M16.2 9.1a6.2 6.2 0 0 0-10.7-3.6"
                         stroke="currentColor"
@@ -534,7 +723,32 @@ function AppContent() {
             <div className="page-header--split">
               <div className="page-header__row page-header__row--install">
                 <h1>{tx(language, activeDefinition.labelKey)}</h1>
-                <div className="install-header-toolbar-slot" id="install-header-toolbar-slot" />
+                <div
+                  className="install-header-toolbar-slot"
+                  id="install-header-toolbar-slot"
+                />
+              </div>
+              <p>{activeDescription}</p>
+            </div>
+          ) : activeRoute === "cli" ? (
+            <div className="page-header--split">
+              <div className="page-header__row">
+                <h1>{tx(language, activeDefinition.labelKey)}</h1>
+                <div
+                  className="mcp-header-toolbar-slot"
+                  id="tool-list-header-toolbar-slot"
+                />
+              </div>
+              <p>{activeDescription}</p>
+            </div>
+          ) : activeRoute === "plugins" ? (
+            <div className="page-header--split">
+              <div className="page-header__row">
+                <h1>{tx(language, activeDefinition.labelKey)}</h1>
+                <div
+                  className="mcp-header-toolbar-slot"
+                  id="plugins-header-toolbar-slot"
+                />
               </div>
               <p>{activeDescription}</p>
             </div>

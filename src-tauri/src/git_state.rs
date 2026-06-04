@@ -949,6 +949,9 @@ mod tests {
             last_editor: "".into(),
             commit_label: "initial".into(),
             git_linked: true,
+            lifecycle_source: "direct".into(),
+            owner_plugin_id: String::new(),
+            owner_plugin_name: String::new(),
             tools: vec![],
         }
     }

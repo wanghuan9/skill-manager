@@ -125,6 +125,12 @@ pub struct McpServerRecord {
     #[serde(default)]
     pub installed_at: String,
     pub updated_at: String,
+    #[serde(default)]
+    pub lifecycle_source: String,
+    #[serde(default)]
+    pub owner_plugin_id: String,
+    #[serde(default)]
+    pub owner_plugin_name: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -144,6 +150,12 @@ pub struct McpServerSummary {
     #[serde(default)]
     pub tools_discovery_error: String,
     pub installed_at: String,
+    #[serde(default)]
+    pub lifecycle_source: String,
+    #[serde(default)]
+    pub owner_plugin_id: String,
+    #[serde(default)]
+    pub owner_plugin_name: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -411,6 +423,9 @@ pub async fn install_mcp_server_from_marketplace(
         tools_discovery_error: String::new(),
         installed_at: now_label(),
         updated_at: now_label(),
+        lifecycle_source: String::new(),
+        owner_plugin_id: String::new(),
+        owner_plugin_name: String::new(),
     };
     enrich_mcp_record_metadata(&mut record, metadata_client.as_ref()).await;
     if record.source_url.trim().is_empty() {
@@ -738,6 +753,9 @@ fn to_server_summary(
         tools_discovered_at: record.tools_discovered_at.trim().to_string(),
         tools_discovery_error: record.tools_discovery_error.trim().to_string(),
         installed_at: record.installed_at.trim().to_string(),
+        lifecycle_source: record.lifecycle_source.trim().to_string(),
+        owner_plugin_id: record.owner_plugin_id.trim().to_string(),
+        owner_plugin_name: record.owner_plugin_name.trim().to_string(),
     })
 }
 
@@ -2093,6 +2111,9 @@ fn upsert_imported_record_basic(
             tools_discovery_error: previous.tools_discovery_error,
             installed_at: previous.installed_at,
             updated_at: previous.updated_at,
+            lifecycle_source: previous.lifecycle_source,
+            owner_plugin_id: previous.owner_plugin_id,
+            owner_plugin_name: previous.owner_plugin_name,
         }
     } else {
         McpServerRecord {
@@ -2108,6 +2129,9 @@ fn upsert_imported_record_basic(
             tools_discovery_error: String::new(),
             installed_at: now_label(),
             updated_at: now_label(),
+            lifecycle_source: String::new(),
+            owner_plugin_id: String::new(),
+            owner_plugin_name: String::new(),
         }
     };
 
@@ -5430,6 +5454,9 @@ A comprehensive GitLab MCP server for AI clients. Manage projects, merge request
             tools_discovery_error: String::new(),
             installed_at: "2026/5/14 20:00:00".to_string(),
             updated_at: "2026/5/14 20:00:00".to_string(),
+            lifecycle_source: "direct".to_string(),
+            owner_plugin_id: String::new(),
+            owner_plugin_name: String::new(),
         }];
 
         let upsert = upsert_imported_record_basic(
@@ -5508,6 +5535,9 @@ A comprehensive GitLab MCP server for AI clients. Manage projects, merge request
             tools_discovery_error: String::new(),
             installed_at: "2026/5/15 12:00:00".to_string(),
             updated_at: "2026/5/15 12:00:00".to_string(),
+            lifecycle_source: "direct".to_string(),
+            owner_plugin_id: String::new(),
+            owner_plugin_name: String::new(),
         }];
 
         if let Err(error) = save_mcp_records(&initial_records) {
@@ -5663,6 +5693,9 @@ A comprehensive GitLab MCP server for AI clients. Manage projects, merge request
             tools_discovery_error: String::new(),
             installed_at: "2026/5/15 12:00:00".to_string(),
             updated_at: "2026/5/15 12:00:00".to_string(),
+            lifecycle_source: "direct".to_string(),
+            owner_plugin_id: String::new(),
+            owner_plugin_name: String::new(),
         }];
 
         if let Err(error) = save_mcp_records(&initial_records) {
@@ -5742,6 +5775,9 @@ A comprehensive GitLab MCP server for AI clients. Manage projects, merge request
             tools_discovery_error: String::new(),
             installed_at: "2026/5/15 12:00:00".to_string(),
             updated_at: "2026/5/15 12:00:00".to_string(),
+            lifecycle_source: "direct".to_string(),
+            owner_plugin_id: String::new(),
+            owner_plugin_name: String::new(),
         }];
 
         if let Err(error) = save_mcp_records(&initial_records) {
@@ -5816,6 +5852,9 @@ A comprehensive GitLab MCP server for AI clients. Manage projects, merge request
             tools_discovery_error: String::new(),
             installed_at: "2026/5/15 12:00:00".to_string(),
             updated_at: "2026/5/15 12:00:00".to_string(),
+            lifecycle_source: "direct".to_string(),
+            owner_plugin_id: String::new(),
+            owner_plugin_name: String::new(),
         };
 
         let normalized = normalize_record(server).expect("normalize record");
@@ -6501,6 +6540,9 @@ mcpServers:
             tools_discovery_error: String::new(),
             installed_at: "2026/5/15 13:15:18".to_string(),
             updated_at: "2026/5/15 14:16:46".to_string(),
+            lifecycle_source: "direct".to_string(),
+            owner_plugin_id: String::new(),
+            owner_plugin_name: String::new(),
         };
 
         let normalized = normalize_record(server).expect("normalize record");
