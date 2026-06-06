@@ -7,6 +7,7 @@ import {
   openExternalLink,
   openPathInFinder,
   setPluginEnabled,
+  shouldUseFixtureData,
 } from "@/features/skills/api/skill-client";
 import {
   SkillFileContentSurface,
@@ -19,6 +20,11 @@ import {
 } from "@/features/skills/components/ToolListRows";
 import { getToolLogoUrl } from "@/features/skills/utils/tool-logo";
 import { getMonogramLabel } from "@/features/skills/utils/monogram";
+import {
+  cachePlugins,
+  getCachedPlugins,
+  subscribePluginsChange,
+} from "@/features/skills/utils/plugin-cache";
 import type {
   PluginAssetType,
   PluginComponentPreview,
@@ -48,6 +54,11 @@ type PreviewState = {
   isLoading: boolean;
   errorMessage: string;
 };
+type PluginScanSession = {
+  isScanning: boolean;
+  plugins: PluginSummary[] | null;
+};
+type PluginScanSessionListener = (session: PluginScanSession) => void;
 const pluginHostTabs: { key: PluginHostTool; label: string }[] = [
   { key: "claude-code", label: "Claude Code" },
   { key: "codex", label: "Codex" },
@@ -81,6 +92,78 @@ const pluginFilterOptions: PluginFilterOption[] = [
   { value: "disabled", label: "未启用" },
   { value: "error", label: "异常" },
 ];
+let pluginScanSession: PluginScanSession = {
+  isScanning: false,
+  plugins: null,
+};
+let activePluginScanPromise: Promise<PluginSummary[]> | null = null;
+const pluginScanSessionListeners = new Set<PluginScanSessionListener>();
+
+function getPluginScanSessionSnapshot() {
+  return { ...pluginScanSession };
+}
+
+function setPluginScanSession(nextSession: PluginScanSession) {
+  pluginScanSession = nextSession;
+  for (const listener of pluginScanSessionListeners) {
+    listener(getPluginScanSessionSnapshot());
+  }
+}
+
+function subscribePluginScanSessionChange(listener: PluginScanSessionListener) {
+  pluginScanSessionListeners.add(listener);
+  listener(getPluginScanSessionSnapshot());
+
+  return () => {
+    pluginScanSessionListeners.delete(listener);
+  };
+}
+
+function startPluginScanImport() {
+  if (activePluginScanPromise) {
+    return activePluginScanPromise;
+  }
+
+  setPluginScanSession({
+    isScanning: true,
+    plugins: null,
+  });
+  activePluginScanPromise = fetchInstalledPlugins()
+    .then((plugins) => {
+      if (!shouldUseFixtureData()) {
+        cachePlugins(plugins);
+      }
+      setPluginScanSession({
+        isScanning: false,
+        plugins,
+      });
+      return plugins;
+    })
+    .catch((error) => {
+      setPluginScanSession({
+        isScanning: false,
+        plugins: null,
+      });
+      throw error;
+    })
+    .finally(() => {
+      activePluginScanPromise = null;
+    });
+  return activePluginScanPromise;
+}
+
+export function resetPluginScanSessionForTests() {
+  activePluginScanPromise = null;
+  pluginScanSession = {
+    isScanning: false,
+    plugins: null,
+  };
+  pluginScanSessionListeners.clear();
+}
+
+function getRuntimeCachedPlugins() {
+  return shouldUseFixtureData() ? null : getCachedPlugins();
+}
 
 function RefreshIcon({ isSpinning = false }: { isSpinning?: boolean }) {
   return (
@@ -542,9 +625,9 @@ function isHttpUrl(value: string) {
 }
 
 export function PluginsRoute() {
-  const [plugins, setPlugins] = useState<PluginSummary[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [plugins, setPlugins] = useState<PluginSummary[]>(() => getRuntimeCachedPlugins() ?? []);
+  const [isLoading, setIsLoading] = useState(() => getRuntimeCachedPlugins() === null);
+  const [isRefreshing, setIsRefreshing] = useState(() => getPluginScanSessionSnapshot().isScanning);
   const [errorMessage, setErrorMessage] = useState("");
   const [actionErrorMessage, setActionErrorMessage] = useState("");
   const [previewState, setPreviewState] = useState<PreviewState | null>(null);
@@ -563,22 +646,54 @@ export function PluginsRoute() {
   const [expandedComponentSections, setExpandedComponentSections] =
     useState<ExpandedComponentSections>({});
   const pendingPluginIdsRef = useRef(new Set<string>());
+  const localAlignInFlightRef = useRef<Promise<PluginSummary[]> | null>(null);
+  const pluginsRef = useRef(plugins);
   const [toolbarContainer, setToolbarContainer] = useState<HTMLElement | null>(
     null,
   );
   const { expandedId, handleExpandedChange } = useSingleExpandedRow();
 
+  useEffect(() => {
+    pluginsRef.current = plugins;
+  }, [plugins]);
+
+  function commitPlugins(nextPlugins: PluginSummary[]) {
+    if (!shouldUseFixtureData()) {
+      cachePlugins(nextPlugins);
+    }
+    setPlugins(nextPlugins);
+  }
+
+  async function alignPluginsLocalState() {
+    if (localAlignInFlightRef.current) {
+      return localAlignInFlightRef.current;
+    }
+
+    const alignPromise = fetchInstalledPlugins()
+      .finally(() => {
+        if (localAlignInFlightRef.current === alignPromise) {
+          localAlignInFlightRef.current = null;
+        }
+      });
+
+    localAlignInFlightRef.current = alignPromise;
+    return alignPromise;
+  }
+
   async function loadPlugins(options?: { silent?: boolean }) {
     const isSilent = options?.silent ?? false;
     if (isSilent) {
+      if (getPluginScanSessionSnapshot().isScanning) {
+        return activePluginScanPromise ?? Promise.resolve();
+      }
       setIsRefreshing(true);
     } else {
       setIsLoading(true);
     }
 
     try {
-      const nextPlugins = await fetchInstalledPlugins();
-      setPlugins(nextPlugins);
+      const nextPlugins = isSilent ? await startPluginScanImport() : await alignPluginsLocalState();
+      commitPlugins(nextPlugins);
       setErrorMessage("");
     } catch (error) {
       console.warn("Failed to load installed plugins", error);
@@ -596,10 +711,23 @@ export function PluginsRoute() {
     let shouldIgnore = false;
 
     void (async () => {
-      try {
-        const nextPlugins = await fetchInstalledPlugins();
+      const cachedPlugins = getRuntimeCachedPlugins();
+      if (cachedPlugins && !shouldIgnore) {
+        setPlugins(cachedPlugins);
+        setIsLoading(false);
+      }
+
+      if (getPluginScanSessionSnapshot().isScanning) {
         if (!shouldIgnore) {
-          setPlugins(nextPlugins);
+          setIsLoading(false);
+        }
+        return;
+      }
+
+      try {
+        const nextPlugins = await alignPluginsLocalState();
+        if (!shouldIgnore) {
+          commitPlugins(nextPlugins);
           setErrorMessage("");
         }
       } catch (error) {
@@ -618,6 +746,20 @@ export function PluginsRoute() {
       shouldIgnore = true;
     };
   }, []);
+
+  useEffect(() => subscribePluginsChange((nextPlugins) => {
+    if (nextPlugins && nextPlugins !== pluginsRef.current) {
+      setPlugins(nextPlugins);
+    }
+  }), []);
+
+  useEffect(() => subscribePluginScanSessionChange((session) => {
+    setIsRefreshing(session.isScanning);
+    if (session.plugins) {
+      commitPlugins(session.plugins);
+      setErrorMessage("");
+    }
+  }), []);
 
   useEffect(() => {
     setToolbarContainer(document.getElementById("plugins-header-toolbar-slot"));
@@ -777,7 +919,7 @@ export function PluginsRoute() {
           <span aria-hidden="true" className="skills-toolbar-button__icon">
             <RefreshIcon isSpinning={isRefreshing} />
           </span>
-          <span>{isRefreshing ? "刷新中..." : "刷新"}</span>
+          <span>{isRefreshing ? "扫描中..." : "扫描导入"}</span>
         </button>
       </div>
     </section>
@@ -859,15 +1001,19 @@ export function PluginsRoute() {
         rootPath: plugin.rootPath,
         enabled,
       });
-      setPlugins((current) =>
-        current.map((candidate) =>
+      setPlugins((current) => {
+        const nextPlugins = current.map((candidate) =>
           candidate.id === updatedPlugin.id
           && candidate.hostTool === updatedPlugin.hostTool
           && candidate.rootPath === updatedPlugin.rootPath
             ? updatedPlugin
             : candidate,
-        ),
-      );
+        );
+        if (!shouldUseFixtureData()) {
+          cachePlugins(nextPlugins);
+        }
+        return nextPlugins;
+      });
       setErrorMessage("");
       setActionErrorMessage("");
       void loadPlugins({ silent: true });
@@ -912,9 +1058,13 @@ export function PluginsRoute() {
         hostTool: plugin.hostTool,
         rootPath: plugin.rootPath,
       });
-      setPlugins((current) =>
-        current.filter((candidate) => getPluginInstanceKey(candidate) !== pluginKey),
-      );
+      setPlugins((current) => {
+        const nextPlugins = current.filter((candidate) => getPluginInstanceKey(candidate) !== pluginKey);
+        if (!shouldUseFixtureData()) {
+          cachePlugins(nextPlugins);
+        }
+        return nextPlugins;
+      });
       setPreviewState((current) =>
         current && getPluginInstanceKey(current.plugin) === pluginKey ? null : current,
       );

@@ -54,6 +54,8 @@ type RouteDefinition = {
   descriptionKey: Parameters<typeof tx>[1];
 };
 
+const ROUTE_LOCAL_ALIGN_COOLDOWN_MS = 10_000;
+
 const routes: RouteDefinition[] = [
   {
     key: "skills",
@@ -334,6 +336,7 @@ function SidebarToggleButton(props: {
 
 function AppContent() {
   const {
+    alignLocalWorkspaceState,
     installedSkills,
     isWorkspaceRefreshing,
     language,
@@ -369,6 +372,8 @@ function AppContent() {
   const [mcpServerCount, setMcpServerCount] = useState(
     () => getCachedMcpWorkspace()?.servers.length ?? 0,
   );
+  const routeLocalAlignInFlightRef = useRef(false);
+  const lastRouteLocalAlignRef = useRef<{ key: string; timestamp: number } | null>(null);
   const activeDefinition =
     routes.find((route) => route.key === activeRoute) ?? routes[0];
   const updatableSkillCount = installedSkills.filter(
@@ -457,6 +462,40 @@ function AppContent() {
       resizeObserver?.disconnect();
     };
   }, [isMacOS, isSidebarCollapsed]);
+
+  useEffect(() => {
+    const routeAlignKey =
+      activeRoute === "tools"
+        ? "tools"
+        : activeRoute === "skills" && activeSkillsSection === "skills"
+          ? "skills"
+          : "";
+    if (routeLocalAlignInFlightRef.current || !routeAlignKey) {
+      return;
+    }
+
+    const now = Date.now();
+    const lastRouteAlign = lastRouteLocalAlignRef.current;
+    if (
+      lastRouteAlign?.key === routeAlignKey
+      && now - lastRouteAlign.timestamp < ROUTE_LOCAL_ALIGN_COOLDOWN_MS
+    ) {
+      return;
+    }
+
+    routeLocalAlignInFlightRef.current = true;
+    lastRouteLocalAlignRef.current = { key: routeAlignKey, timestamp: now };
+    void alignLocalWorkspaceState()
+      .catch((error) => {
+        reportFailure(error, {
+          operation: "align_local_workspace_state_on_route_enter",
+          fallbackMessage: t("app.header.refreshFailed"),
+        });
+      })
+      .finally(() => {
+        routeLocalAlignInFlightRef.current = false;
+      });
+  }, [activeRoute, activeSkillsSection, alignLocalWorkspaceState, reportFailure, t]);
 
   async function handleToolsRefresh() {
     if (isWorkspaceRefreshing) {

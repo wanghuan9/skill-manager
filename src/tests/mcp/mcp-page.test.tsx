@@ -2,12 +2,14 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, vi } from "vitest";
 import { App } from "@/app/App";
+import { resetMcpAutoProbeRuntimeForTests } from "@/app/routes/mcp";
 import * as skillClient from "@/features/skills/api/skill-client";
 
 beforeEach(() => {
   window.localStorage.clear();
   delete (window as Window & { __SKILLM_MCP_WORKSPACE__?: unknown }).__SKILLM_MCP_WORKSPACE__;
   skillClient.resetMcpImportSessionForTests();
+  resetMcpAutoProbeRuntimeForTests();
 });
 
 afterEach(() => {
@@ -219,7 +221,7 @@ test("imports MCP servers and probes every server that still lacks tools", async
   }
 });
 
-test("imports MCP servers and reprobes partial tools that were not discovered", async () => {
+test("does not auto probe MCP servers that already have tools even when discovered time is missing", async () => {
   window.localStorage.clear();
   const workspace = await skillClient.fetchMcpWorkspace();
   const partialToolsWorkspace = {
@@ -250,8 +252,9 @@ test("imports MCP servers and reprobes partial tools that were not discovered", 
     await userEvent.click(await screen.findByRole("button", { name: "扫描导入" }));
 
     await waitFor(() => {
-      expect(refreshSpy).toHaveBeenCalledWith("linear");
+      expect(screen.getByRole("button", { name: "扫描导入" })).toBeEnabled();
     });
+    expect(refreshSpy).not.toHaveBeenCalled();
   } finally {
     fixtureSpy.mockRestore();
     refreshSpy.mockRestore();
@@ -526,6 +529,7 @@ test("auto refreshes newly installed MCP servers that still show undiscovered to
     render(<App />);
 
     await userEvent.click(screen.getByRole("button", { name: "MCP" }));
+    await screen.findByText("canva");
 
     await waitFor(() => {
       expect(refreshSpy).toHaveBeenCalledWith("canva");
@@ -537,7 +541,44 @@ test("auto refreshes newly installed MCP servers that still show undiscovered to
   }
 });
 
-test("does not retry failed MCP tools discovery until the user refreshes", async () => {
+test("does not auto refresh MCP servers that already have tools after page load", async () => {
+  window.localStorage.clear();
+  const workspace = await skillClient.fetchMcpWorkspace();
+  const existingWithToolsMissingTimestamp = {
+    ...workspace,
+    servers: workspace.servers.map((server) => (
+      server.id === "linear"
+        ? {
+            ...server,
+            toolsDiscoveredAt: "",
+            toolsDiscoveryError: "",
+          }
+        : server
+    )),
+  };
+  const fetchSpy = vi
+    .spyOn(skillClient, "fetchMcpWorkspace")
+    .mockResolvedValue(existingWithToolsMissingTimestamp);
+  const refreshSpy = vi
+    .spyOn(skillClient, "refreshMcpServerTools")
+    .mockResolvedValue(existingWithToolsMissingTimestamp);
+  const fixtureSpy = vi.spyOn(skillClient, "shouldUseFixtureData").mockReturnValue(false);
+
+  try {
+    render(<App />);
+
+    await userEvent.click(screen.getByRole("button", { name: "MCP" }));
+    await screen.findByText("linear");
+
+    expect(refreshSpy).not.toHaveBeenCalled();
+  } finally {
+    fixtureSpy.mockRestore();
+    refreshSpy.mockRestore();
+    fetchSpy.mockRestore();
+  }
+});
+
+test("retries failed MCP tools discovery after page load", async () => {
   window.localStorage.clear();
   const workspace = await skillClient.fetchMcpWorkspace();
   const failedWorkspace = {
@@ -565,10 +606,6 @@ test("does not retry failed MCP tools discovery until the user refreshes", async
     await userEvent.click(screen.getByRole("button", { name: "MCP" }));
     await screen.findByText("context7");
 
-    expect(refreshSpy).not.toHaveBeenCalled();
-
-    await userEvent.click(screen.getByRole("button", { name: "刷新" }));
-
     await waitFor(() => {
       expect(refreshSpy).toHaveBeenCalledWith("linear");
     });
@@ -579,7 +616,56 @@ test("does not retry failed MCP tools discovery until the user refreshes", async
   }
 });
 
-test("shows failed tools discovery reason after refreshing an undiscovered MCP", async () => {
+test("does not auto reprobe failed MCP tools when switching back to the MCP tab within cooldown", async () => {
+  window.localStorage.clear();
+  const workspace = await skillClient.fetchMcpWorkspace();
+  const failedWorkspace = {
+    ...workspace,
+    servers: workspace.servers.map((server) => (
+      server.id === "linear"
+        ? {
+            ...server,
+            tools: [],
+            toolsDiscoveredAt: "2026/5/10 22:39:32",
+            toolsDiscoveryError: "MCP tools 探测超时",
+          }
+        : server
+    )),
+  };
+  const fetchSpy = vi.spyOn(skillClient, "fetchMcpWorkspace").mockResolvedValue(failedWorkspace);
+  const refreshSpy = vi.spyOn(skillClient, "refreshMcpServerTools").mockResolvedValue(failedWorkspace);
+  const fixtureSpy = vi.spyOn(skillClient, "shouldUseFixtureData").mockReturnValue(false);
+
+  try {
+    render(<App />);
+
+    await userEvent.click(screen.getByRole("button", { name: "MCP" }));
+    await screen.findByText("context7");
+
+    await waitFor(() => {
+      expect(refreshSpy).toHaveBeenCalledTimes(1);
+      expect(refreshSpy).toHaveBeenCalledWith("linear");
+    });
+
+    await userEvent.click(screen.getByRole("button", { name: "工具" }));
+    await userEvent.click(screen.getByRole("button", { name: "MCP" }));
+    await screen.findByText("context7");
+
+    expect(refreshSpy).toHaveBeenCalledTimes(1);
+
+    await userEvent.click(screen.getByRole("button", { name: "刷新" }));
+
+    await waitFor(() => {
+      expect(refreshSpy).toHaveBeenCalledTimes(2);
+    });
+  } finally {
+    fixtureSpy.mockRestore();
+    refreshSpy.mockRestore();
+    fetchSpy.mockRestore();
+  }
+});
+
+test("shows failed tools discovery reason after auto refreshing an undiscovered MCP", async () => {
   window.localStorage.clear();
   const workspace = await skillClient.fetchMcpWorkspace();
   const canvaUndiscovered = {
@@ -635,6 +721,7 @@ test("shows failed tools discovery reason after refreshing an undiscovered MCP",
     await userEvent.click(await screen.findByRole("button", { name: "展开 canva" }));
 
     await waitFor(() => {
+      expect(refreshSpy).toHaveBeenCalledWith("canva");
       expect(screen.getByText("获取失败")).toBeInTheDocument();
       expect(screen.getByText("获取 tools 失败：MCP tools 探测需要 OAuth 授权，请先在目标工具中完成登录")).toBeInTheDocument();
     });
@@ -859,6 +946,67 @@ test("creates MCP without asking the user for an ID", async () => {
     expect(screen.queryByRole("dialog", { name: "新增 MCP" })).not.toBeInTheDocument();
   });
   expect(screen.getByText("playwright tools")).toBeInTheDocument();
+});
+
+test("probes tools right after manually creating an MCP server", async () => {
+  window.localStorage.clear();
+  const workspace = await skillClient.fetchMcpWorkspace();
+  const createdWorkspace = {
+    ...workspace,
+    servers: [
+      {
+        id: "playwright-tools",
+        name: "playwright tools",
+        serverType: "stdio",
+        commandLabel: "npx",
+        description: "playwright tools",
+        sourceUrl: "",
+        serverJson: JSON.stringify({
+          command: "npx",
+          args: [],
+        }, null, 2),
+        enabledAppCount: 0,
+        apps: workspace.apps.map((app) => ({
+          appId: app.id,
+          appName: app.name,
+          configPath: app.configPath,
+          statusLabel: app.statusLabel,
+          isEnabled: false,
+        })),
+        tools: [],
+        toolsDiscoveredAt: "",
+        toolsDiscoveryError: "",
+        installedAt: "2026/5/15 13:09:26",
+      },
+      ...workspace.servers,
+    ],
+  };
+  const fetchSpy = vi.spyOn(skillClient, "fetchMcpWorkspace").mockResolvedValue(workspace);
+  const saveSpy = vi.spyOn(skillClient, "saveMcpServer").mockResolvedValue(createdWorkspace);
+  const refreshSpy = vi.spyOn(skillClient, "refreshMcpServerTools").mockResolvedValue(createdWorkspace);
+  const fixtureSpy = vi.spyOn(skillClient, "shouldUseFixtureData").mockReturnValue(false);
+
+  try {
+    render(<App />);
+
+    await userEvent.click(screen.getByRole("button", { name: "MCP" }));
+    await screen.findByText("context7");
+    refreshSpy.mockClear();
+
+    await userEvent.click(screen.getByRole("button", { name: "新增 MCP" }));
+    await userEvent.type(await screen.findByLabelText("名称"), "Playwright Tools");
+    await userEvent.click(screen.getByRole("button", { name: "保存" }));
+
+    await waitFor(() => {
+      expect(saveSpy).toHaveBeenCalled();
+      expect(refreshSpy).toHaveBeenCalledWith("playwright-tools");
+    });
+  } finally {
+    fixtureSpy.mockRestore();
+    refreshSpy.mockRestore();
+    saveSpy.mockRestore();
+    fetchSpy.mockRestore();
+  }
 });
 
 test("opens GitHub source url from MCP details", async () => {

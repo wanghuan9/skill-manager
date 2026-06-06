@@ -3936,40 +3936,112 @@ code {
   color: var(--heading);
 }
 
+.plugin-install-preview__host-toggle[data-tooltip]::before {
+  top: calc(100% + 8px);
+  bottom: auto;
+  left: 50%;
+  max-width: min(180px, calc(100vw - 48px));
+  text-align: center;
+  white-space: normal;
+  transform: translate(-50%, -2px);
+}
+
+.plugin-install-preview__host-toggle[data-tooltip]::after {
+  top: calc(100% + 3px);
+  bottom: auto;
+  left: 50%;
+  border: 0;
+  border-top: 1px solid var(--tooltip-border);
+  border-left: 1px solid var(--tooltip-border);
+  transform: translate(-50%, -2px) rotate(45deg);
+}
+
+.plugin-install-preview__host-toggle[data-tooltip]:hover::before,
+.plugin-install-preview__host-toggle[data-tooltip]:focus-visible::before {
+  transform: translate(-50%, 0);
+}
+
+.plugin-install-preview__host-toggle[data-tooltip]:hover::after,
+.plugin-install-preview__host-toggle[data-tooltip]:focus-visible::after {
+  transform: translate(-50%, 0) rotate(45deg);
+}
+
 .plugin-install-preview__host-toggle:focus-visible {
   outline: 2px solid rgba(47, 120, 255, 0.2);
   outline-offset: 2px;
 }
 
 .plugin-install-preview__host-toggle.is-selected {
-  border-color: rgba(47, 120, 255, 0.26);
-  background: linear-gradient(180deg, rgba(47, 120, 255, 0.18), rgba(47, 120, 255, 0.11));
-  color: #1d4ed8;
+  border-color: rgba(39, 179, 106, 0.42);
+  background: linear-gradient(180deg, rgba(39, 179, 106, 0.16), rgba(39, 179, 106, 0.09));
+  color: #138a4f;
   box-shadow:
-    0 0 0 1px rgba(47, 120, 255, 0.1),
-    0 6px 14px rgba(47, 120, 255, 0.12);
+    0 0 0 1px rgba(39, 179, 106, 0.14),
+    0 8px 18px rgba(20, 128, 76, 0.14);
 }
 
-.plugin-install-preview__host-toggle.is-selected::after {
-  content: "✓";
+.plugin-install-preview__host-check {
+  position: absolute;
+  right: -4px;
+  bottom: -4px;
+  z-index: 1;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 16px;
-  height: 16px;
-  margin-left: 0;
+  width: 15px;
+  height: 15px;
   border-radius: 999px;
-  background: #1d4ed8;
+  border: 1.5px solid #ffffff;
+  background: linear-gradient(180deg, #31c676 0%, #22a960 100%);
   color: #ffffff;
-  font-size: 0.66rem;
+  font-size: 0.6rem;
   font-weight: 700;
   line-height: 1;
+  box-shadow:
+    0 3px 8px rgba(20, 128, 76, 0.24),
+    0 1px 0 rgba(255, 255, 255, 0.36) inset;
+  pointer-events: none;
+}
+
+.plugin-install-preview__host-check svg {
+  width: 10px;
+  height: 10px;
+  display: block;
+}
+
+.plugin-install-preview__host-check path {
+  fill: none;
+  stroke: #ffffff;
+  stroke-width: 2.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .plugin-install-preview__host-toggle.is-selected .plugin-install-preview__host-icon {
-  border-color: rgba(29, 78, 216, 0.18);
+  border-color: rgba(39, 179, 106, 0.28);
   background: rgba(255, 255, 255, 0.92);
-  color: #1d4ed8;
+  color: #138a4f;
+}
+
+.plugin-install-preview__host-toggle.is-unavailable {
+  border-color: rgba(117, 128, 147, 0.12);
+  background: rgba(117, 128, 147, 0.035);
+  color: rgba(107, 114, 128, 0.52);
+  cursor: not-allowed;
+  opacity: 0.74;
+  box-shadow: none;
+}
+
+.plugin-install-preview__host-toggle.is-unavailable:hover,
+.plugin-install-preview__host-toggle.is-unavailable:focus-visible {
+  border-color: rgba(117, 128, 147, 0.18);
+  background: rgba(117, 128, 147, 0.065);
+  color: rgba(75, 85, 99, 0.62);
+}
+
+.plugin-install-preview__host-toggle.is-unavailable .plugin-install-preview__host-icon {
+  opacity: 0.36;
+  filter: grayscale(1);
 }
 
 @media (max-width: 980px) {
@@ -3989,6 +4061,7 @@ code {
 }
 
 .plugin-install-preview__host-icon {
+  position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -4001,7 +4074,7 @@ code {
   font-size: 0.72rem;
   font-weight: 700;
   line-height: 1;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .plugin-install-preview__host-icon img {

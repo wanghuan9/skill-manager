@@ -179,7 +179,7 @@ export function RepoInstallPanel() {
                 <span className="repo-form__label">{t("install.repo.url")}</span>
                 <input
                   type="text"
-                  placeholder="https://git.example.com/user/repo"
+                  placeholder="https://github.com/anthropics/skills"
                   value={repoInput}
                   onChange={(event) => setRepoInput(event.target.value)}
                 />
@@ -208,8 +208,8 @@ export function RepoInstallPanel() {
             <div className="repo-form__hint-block">
               <p className="repo-form__hint-title">{t("install.repo.supported")}</p>
               <ul className="repo-form__hint-list">
-                <li>https://git.example.com/user/repo</li>
-                <li>https://git.example.com/user/repo/tree/main/skills/my-skill</li>
+                <li>https://github.com/anthropics/skills</li>
+                <li>https://github.com/anthropics/skills/tree/main/skills/frontend-design</li>
               </ul>
             </div>
           </div>

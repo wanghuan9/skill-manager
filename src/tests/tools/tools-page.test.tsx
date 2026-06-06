@@ -49,7 +49,7 @@ test("can open a tool MCP config from the tools page", async () => {
 
   expect(openToolMcpConfigSpy).toHaveBeenCalledWith({
     toolId: "claude-code",
-    editorId: undefined,
+    editorId: "cursor",
   });
   expect(screen.getByRole("button", { name: "打开 Claude Code MCP 配置" })).toBeEnabled();
 });

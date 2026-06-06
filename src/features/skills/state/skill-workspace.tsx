@@ -101,6 +101,7 @@ type SkillWorkspaceContextValue = {
   gitAccount: GitAccountSummary | null;
   isLoading: boolean;
   isWorkspaceRefreshing: boolean;
+  isUpdatingAllSkills: boolean;
   isMarketplaceLoadingBySource: Record<MarketplaceSourceSite, boolean>;
   isSearchLoading: boolean;
   installingMarketplaceSkillIds: Set<string>;
@@ -116,6 +117,7 @@ type SkillWorkspaceContextValue = {
   installSelectedLocalSkills: (localPath: string, selectedPaths: string[]) => Promise<void>;
   importCandidate: (localPath: string) => Promise<void>;
   refreshLocalCandidates: () => Promise<void>;
+  alignLocalWorkspaceState: () => Promise<void>;
   refreshWorkspace: (options?: RefreshWorkspaceOptions) => Promise<void>;
   updateSkill: (skillName: string) => Promise<void>;
   updateAllSkills: () => Promise<void>;
@@ -455,7 +457,10 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
   const gitStateRefreshInFlightRef = useRef<Promise<void> | null>(null);
   const lastGitStateRefreshAtRef = useRef(0);
   const [isWorkspaceRefreshing, setIsWorkspaceRefreshing] = useState(false);
+  const [isUpdatingAllSkills, setIsUpdatingAllSkills] = useState(false);
+  const updateAllSkillsInFlightRef = useRef<Promise<void> | null>(null);
   const visibleGitStateRefreshInFlightRef = useRef<Promise<void> | null>(null);
+  const localWorkspaceAlignInFlightRef = useRef<Promise<void> | null>(null);
   const localGitRefreshInFlightRef = useRef(new Set<string>());
   const localGitRefreshDebounceTimersRef = useRef(new Map<string, number>());
   const installedSkillsRef = useRef(installedSkills);
@@ -489,7 +494,23 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
     return savedSettings;
   }
 
+  function isValidDefaultOpenToolId(toolId: string, nextToolConfigs: ToolConfig[]) {
+    if (toolId === FALLBACK_OPEN_TOOL_ID) {
+      return true;
+    }
+
+    return buildOpenToolOptions(nextToolConfigs, appSettings.language)
+      .some((tool) => tool.id === toolId);
+  }
+
   async function ensureDefaultOpenToolId(nextToolConfigs: ToolConfig[], nextSettings: AppSettings) {
+    if (
+      nextSettings.defaultOpenToolId.trim().length > 0
+      && isValidDefaultOpenToolId(nextSettings.defaultOpenToolId, nextToolConfigs)
+    ) {
+      return nextSettings;
+    }
+
     const resolvedDefaultOpenToolId = resolveDefaultOpenToolId(nextToolConfigs);
     if (nextSettings.defaultOpenToolId === resolvedDefaultOpenToolId) {
       return nextSettings;
@@ -574,50 +595,6 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
     }
   }
 
-  async function refreshWorkspaceAncillaryData(shouldApply: () => boolean = () => true) {
-    const [candidatesResult, toolsResult, accountResult, settingsResult] = await Promise.allSettled([
-      fetchLocalSkillCandidates(),
-      fetchToolConfigs(),
-      fetchGitAccount(),
-      fetchAppSettings(),
-    ]);
-
-    if (!shouldApply()) {
-      return;
-    }
-
-    if (candidatesResult.status === "fulfilled") {
-      setLocalCandidates(candidatesResult.value);
-    } else {
-      console.error("Failed to load local skill candidates:", candidatesResult.reason);
-    }
-
-    if (toolsResult.status === "fulfilled") {
-      setToolConfigs(toolsResult.value);
-    } else {
-      console.error("Failed to load tool configs:", toolsResult.reason);
-    }
-
-    if (accountResult.status === "fulfilled") {
-      setGitAccount(accountResult.value);
-    } else {
-      console.error("Failed to load git account:", accountResult.reason);
-    }
-
-    if (settingsResult.status === "fulfilled") {
-      const nextSettings = settingsResult.value;
-      if (nextSettings.defaultOpenToolId.trim().length === 0 && toolsResult.status === "fulfilled") {
-        const resolvedSettings = await ensureDefaultOpenToolId(toolsResult.value, nextSettings);
-        setAppSettings(resolvedSettings);
-        return;
-      }
-
-      setAppSettings(nextSettings);
-    } else {
-      console.error("Failed to load app settings:", settingsResult.reason);
-    }
-  }
-
   async function loadWorkspaceCore() {
     const [skills, candidates, tools, account, settings] = await Promise.all([
       fetchStartupInstalledSkills(),
@@ -636,13 +613,59 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
     };
   }
 
-  async function loadWorkspaceSnapshot(options: RefreshWorkspaceOptions = {}) {
+  async function alignLocalWorkspaceState(
+    shouldApply: () => boolean = () => true,
+  ) {
+    if (localWorkspaceAlignInFlightRef.current) {
+      return localWorkspaceAlignInFlightRef.current;
+    }
+
+    const alignPromise = (async () => {
+      try {
+        const workspace = await loadWorkspaceCore();
+        if (!shouldApply()) {
+          return;
+        }
+
+        startupWatchedSkillNamesRef.current = new Set(
+          workspace.skills.map((skill) => skill.name),
+        );
+        setInstalledSkills(workspace.skills);
+        const resolvedSettings = await ensureDefaultOpenToolId(
+          workspace.tools,
+          workspace.settings,
+        );
+        applyWorkspaceAncillaryData({
+          candidates: workspace.candidates,
+          tools: workspace.tools,
+          account: workspace.account,
+          settings: resolvedSettings,
+        });
+      } finally {
+        localWorkspaceAlignInFlightRef.current = null;
+      }
+    })();
+
+    localWorkspaceAlignInFlightRef.current = alignPromise;
+    return alignPromise;
+  }
+
+  async function loadWorkspaceSnapshot(options: RefreshWorkspaceOptions = {}): Promise<void> {
+    if (options.showRefreshing) {
+      const refreshPromise: Promise<void> = loadWorkspaceSnapshot({
+        ...options,
+        showRefreshing: false,
+      });
+      showRefreshIndicatorUntil(refreshPromise);
+      return refreshPromise;
+    }
+
     const shouldBlockSkillList = installedSkills.length === 0;
     if (!shouldBlockSkillList) {
+      await alignLocalWorkspaceState();
       await refreshGitStatesInBackground(undefined, {
-        showRefreshing: options.showRefreshing,
+        showRefreshing: false,
       });
-      void refreshWorkspaceAncillaryData();
       return;
     }
 
@@ -650,30 +673,28 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       setIsLoading(true);
     }
     try {
-      const skills = await fetchStartupInstalledSkills();
-      setInstalledSkills(skills);
+      await alignLocalWorkspaceState();
       if (shouldBlockSkillList) {
         setIsLoading(false);
       }
       void refreshGitStatesInBackground(undefined, {
-        showRefreshing: options.showRefreshing,
+        showRefreshing: false,
       });
-      void refreshWorkspaceAncillaryData();
       return;
     } catch (startupError) {
       console.error("Failed to refresh startup skills snapshot:", startupError);
 
       const workspace = await loadWorkspaceCore();
       setInstalledSkills(workspace.skills);
-      await ensureDefaultOpenToolId(workspace.tools, workspace.settings);
+      const resolvedSettings = await ensureDefaultOpenToolId(workspace.tools, workspace.settings);
       applyWorkspaceAncillaryData({
         candidates: workspace.candidates,
         tools: workspace.tools,
         account: workspace.account,
-        settings: workspace.settings,
+        settings: resolvedSettings,
       });
       void refreshGitStatesInBackground(undefined, {
-        showRefreshing: options.showRefreshing,
+        showRefreshing: false,
       });
     } finally {
       if (shouldBlockSkillList) {
@@ -782,18 +803,13 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       await waitForNextPaint();
 
       try {
-        const skills = await fetchStartupInstalledSkills();
+        await alignLocalWorkspaceState(() => active);
         if (!active) {
           return;
         }
 
-        const cachedSkills = startupCache?.installedSkills ?? [];
-        const skillsWithCachedStatus = mergeStartupSkillStatusCache(skills, cachedSkills);
-        startupWatchedSkillNamesRef.current = new Set(skills.map((skill) => skill.name));
-        setInstalledSkills(skillsWithCachedStatus);
         setIsLoading(false);
         void refreshGitStatesInBackground(() => active);
-        await refreshWorkspaceAncillaryData(() => active);
       } catch (error) {
         console.error("Failed to load startup workspace:", error);
       } finally {
@@ -1083,36 +1099,53 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
   }
 
   async function handleUpdateAllSkills() {
+    if (updateAllSkillsInFlightRef.current) {
+      return updateAllSkillsInFlightRef.current;
+    }
+
     const updatableSkills = installedSkills.filter((skill) => skill.collabStatus === "update-available");
-    if (updatableSkills.length === 0) {
-      await loadWorkspaceSnapshot();
-      return;
-    }
+    let updatePromise: Promise<void> | null = null;
+    updatePromise = (async () => {
+      setIsUpdatingAllSkills(true);
+      try {
+        if (updatableSkills.length === 0) {
+          await loadWorkspaceSnapshot();
+          return;
+        }
 
-    const updateResults = await Promise.allSettled(
-      updatableSkills.map((skill) => updateSkill({ skillName: skill.name })),
-    );
-    const updatedSkills = updateResults.flatMap((result) => (result.status === "fulfilled" ? [result.value] : []));
-    const updatedSkillMap = new Map(updatedSkills.map((skill) => [skill.name, skill]));
-    setInstalledSkills((current) =>
-      current.map((skill) => updatedSkillMap.get(skill.name) ?? skill),
-    );
+        const updateResults = await Promise.allSettled(
+          updatableSkills.map((skill) => updateSkill({ skillName: skill.name })),
+        );
+        const updatedSkills = updateResults.flatMap((result) => (result.status === "fulfilled" ? [result.value] : []));
+        const updatedSkillMap = new Map(updatedSkills.map((skill) => [skill.name, skill]));
+        setInstalledSkills((current) =>
+          current.map((skill) => updatedSkillMap.get(skill.name) ?? skill),
+        );
 
-    const failedUpdates = updateResults
-      .map((result, index) => ({
-        result,
-        skillName: updatableSkills[index].name,
-      }))
-      .filter((item) => item.result.status === "rejected");
-    if (failedUpdates.length > 0) {
-      const failedSkillNames = failedUpdates.map((item) => item.skillName).join("、");
-      throw new BusinessError(getPartialSkillUpdateFailedMessage({
-        language,
-        updated: updatedSkills.length,
-        failed: failedUpdates.length,
-        names: failedSkillNames,
-      }));
-    }
+        const failedUpdates = updateResults
+          .map((result, index) => ({
+            result,
+            skillName: updatableSkills[index].name,
+          }))
+          .filter((item) => item.result.status === "rejected");
+        if (failedUpdates.length > 0) {
+          const failedSkillNames = failedUpdates.map((item) => item.skillName).join("、");
+          throw new BusinessError(getPartialSkillUpdateFailedMessage({
+            language,
+            updated: updatedSkills.length,
+            failed: failedUpdates.length,
+            names: failedSkillNames,
+          }));
+        }
+      } finally {
+        if (updateAllSkillsInFlightRef.current === updatePromise) {
+          updateAllSkillsInFlightRef.current = null;
+          setIsUpdatingAllSkills(false);
+        }
+      }
+    })();
+    updateAllSkillsInFlightRef.current = updatePromise;
+    return updatePromise;
   }
 
   async function handleDeleteSkill(skillName: string) {
@@ -1250,6 +1283,11 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
     await openPathInFinder({ path: normalizedPath });
   }
 
+  const handleAlignLocalWorkspaceState = useCallback(
+    () => alignLocalWorkspaceState(),
+    [],
+  );
+
   const value = useMemo<SkillWorkspaceContextValue>(
     () => ({
       installedSkills,
@@ -1259,6 +1297,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       gitAccount,
       isLoading,
       isWorkspaceRefreshing,
+      isUpdatingAllSkills,
       isMarketplaceLoadingBySource,
       isSearchLoading,
       installingMarketplaceSkillIds,
@@ -1274,6 +1313,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       installSelectedLocalSkills: handleInstallSelectedLocalSkills,
       importCandidate: handleImportCandidate,
       refreshLocalCandidates: handleRefreshLocalCandidates,
+      alignLocalWorkspaceState: handleAlignLocalWorkspaceState,
       refreshWorkspace: loadWorkspaceSnapshot,
       updateSkill: handleUpdateSkill,
       updateAllSkills: handleUpdateAllSkills,
@@ -1306,10 +1346,12 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       defaultOpenToolId,
       gitAccount,
       hasMoreMarketplaceSkillsBySource,
+      handleAlignLocalWorkspaceState,
       installedSkills,
       installingMarketplaceSkillIds,
       isLoading,
       isWorkspaceRefreshing,
+      isUpdatingAllSkills,
       isMarketplaceLoadingBySource,
       isSearchLoading,
       localCandidates,

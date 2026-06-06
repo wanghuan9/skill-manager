@@ -11,12 +11,14 @@ import {
 import { useSkillWorkspace } from "@/features/skills/state/skill-workspace";
 import { formatSkillDescription } from "@/features/skills/utils/skill-description";
 import { getToolLogoUrl } from "@/features/skills/utils/tool-logo";
+import { isToolInstalledStatus } from "@/features/skills/utils/tool-status";
 import type {
   GitBranchOption,
   PluginAssetType,
   PluginComponentSummary,
   PluginHostTool,
   PluginProbeResult,
+  ToolConfig,
 } from "@/features/skills/state/skill-store";
 
 const PROBING_MIN_DURATION_MS = 450;
@@ -49,7 +51,13 @@ function hostLabel(hostTool: PluginHostTool) {
   return pluginHostOptions.find((option) => option.key === hostTool)?.label ?? hostTool;
 }
 
-function PluginHostIcon({ hostTool }: { hostTool: PluginHostTool }) {
+function PluginHostIcon({
+  hostTool,
+  isSelected,
+}: {
+  hostTool: PluginHostTool;
+  isSelected: boolean;
+}) {
   const [logoLoadFailed, setLogoLoadFailed] = useState(false);
   const label = hostLabel(hostTool);
   const logoUrl = getToolLogoUrl(hostTool);
@@ -57,8 +65,6 @@ function PluginHostIcon({ hostTool }: { hostTool: PluginHostTool }) {
   return (
     <span
       className="plugin-install-preview__host-icon"
-      title={label}
-      data-tooltip={label}
       aria-hidden="true"
     >
       {logoUrl && !logoLoadFailed ? (
@@ -71,17 +77,14 @@ function PluginHostIcon({ hostTool }: { hostTool: PluginHostTool }) {
       ) : (
         <span aria-hidden="true">{label.slice(0, 1).toUpperCase()}</span>
       )}
+      {isSelected ? (
+        <span className="plugin-install-preview__host-check" aria-hidden="true">
+          <svg viewBox="0 0 12 12" focusable="false">
+            <path d="M3 6.2 5.1 8.3 9 3.8" />
+          </svg>
+        </span>
+      ) : null}
     </span>
-  );
-}
-
-function isHostCompatibleWithSelectedProbes(
-  hostTool: PluginHostTool,
-  selectedProbeRoots: string[],
-  selectableProbes: PluginProbeResult[],
-) {
-  return selectableProbes.some((probe) =>
-    selectedProbeRoots.includes(probe.pluginRoot) && probe.compatibleHostTools.includes(hostTool)
   );
 }
 
@@ -106,6 +109,14 @@ function probeTitle(probe: PluginProbeResult) {
   return probe.name.trim() || probe.pluginRoot.split("/").filter(Boolean).at(-1) || "Plugin";
 }
 
+function hostInstallTargetTooltip(hostTool: PluginHostTool, isInstalled: boolean, isSelected: boolean) {
+  const label = hostLabel(hostTool);
+  if (!isInstalled) {
+    return `${label} · 未安装`;
+  }
+  return isSelected ? `${label} · 取消安装` : `${label} · 选中安装`;
+}
+
 function handleButtonLikeKeyDown(
   event: React.KeyboardEvent<HTMLElement>,
   onActivate: () => void,
@@ -126,6 +137,18 @@ function toggleHost(current: PluginHostTool[], hostTool: PluginHostTool) {
 
 function toggleSelection(current: string[], value: string) {
   return current.includes(value) ? current.filter((item) => item !== value) : [...current, value];
+}
+
+function isPluginHostTool(value: string): value is PluginHostTool {
+  return pluginHostOptions.some((option) => option.key === value);
+}
+
+function buildInstalledPluginHostSet(toolConfigs: ToolConfig[]): Set<PluginHostTool> {
+  return new Set<PluginHostTool>(
+    toolConfigs
+      .filter((tool) => isToolInstalledStatus(tool.statusLabel))
+      .flatMap((tool) => (isPluginHostTool(tool.id) ? [tool.id] : [])),
+  );
 }
 
 function componentSummaryLabels(components: PluginComponentSummary[]) {
@@ -149,16 +172,29 @@ function uniqueHostTools(probes: PluginProbeResult[]) {
 }
 
 function defaultSelectedHosts(hostTools: PluginHostTool[]) {
-  return hostTools.length === 1 ? hostTools : [];
+  return [...hostTools];
+}
+
+function installedCompatibleHostTools(
+  probe: PluginProbeResult,
+  installedPluginHosts: Set<PluginHostTool>,
+) {
+  return uniqueHostTools([probe]).filter((hostTool) => installedPluginHosts.has(hostTool));
 }
 
 function defaultSelectedPluginRoots(probes: PluginProbeResult[]) {
   return probes.length === 1 ? [probes[0].pluginRoot] : [];
 }
 
-function defaultSelectedHostsByPluginRoot(probes: PluginProbeResult[]) {
+function defaultSelectedHostsByPluginRoot(
+  probes: PluginProbeResult[],
+  installedPluginHosts: Set<PluginHostTool>,
+) {
   return Object.fromEntries(
-    probes.map((probe) => [probe.pluginRoot, defaultSelectedHosts(uniqueHostTools([probe]))]),
+    probes.map((probe) => [
+      probe.pluginRoot,
+      defaultSelectedHosts(installedCompatibleHostTools(probe, installedPluginHosts)),
+    ]),
   );
 }
 
@@ -212,7 +248,7 @@ export function PluginInstallPanel() {
   const { t } = useTranslate();
   const { notify } = useNotifications();
   const reportFailure = useFailureReporter();
-  const { refreshWorkspace } = useSkillWorkspace();
+  const { refreshWorkspace, toolConfigs } = useSkillWorkspace();
   const [source, setSource] = useState("");
   const [branches, setBranches] = useState<GitBranchOption[]>([]);
   const [gitRef, setGitRef] = useState("");
@@ -222,6 +258,7 @@ export function PluginInstallPanel() {
   const [isLoadingBranches, setIsLoadingBranches] = useState(false);
   const [isProbing, setIsProbing] = useState(false);
   const [isInstalling, setIsInstalling] = useState(false);
+  const installedPluginHosts = useMemo(() => buildInstalledPluginHostSet(toolConfigs), [toolConfigs]);
   const selectableProbes = useMemo(
     () => probes.filter((probe) => probe.kind === "plugin-repo"),
     [probes],
@@ -234,9 +271,11 @@ export function PluginInstallPanel() {
     () => selectedProbes.map((probe) => ({
       probe,
       hostTools: (selectedHostsByPluginRoot[probe.pluginRoot] ?? [])
-        .filter((hostTool) => probe.compatibleHostTools.includes(hostTool)),
+        .filter((hostTool) =>
+          probe.compatibleHostTools.includes(hostTool) && installedPluginHosts.has(hostTool)
+        ),
     })),
-    [selectedHostsByPluginRoot, selectedProbes],
+    [installedPluginHosts, selectedHostsByPluginRoot, selectedProbes],
   );
   const canInstall = selectedProbeInstallTargets.some((target) => target.hostTools.length > 0);
   const selectedGitRef = gitRef.trim() || undefined;
@@ -317,7 +356,7 @@ export function PluginInstallPanel() {
       );
       setProbes(nextProbes);
       setSelectedPluginRoots(nextSelectedPluginRoots);
-      setSelectedHostsByPluginRoot(defaultSelectedHostsByPluginRoot(nextSelectedProbes));
+      setSelectedHostsByPluginRoot(defaultSelectedHostsByPluginRoot(nextSelectedProbes, installedPluginHosts));
     } catch (error) {
       setProbes([]);
       setSelectedPluginRoots([]);
@@ -340,15 +379,20 @@ export function PluginInstallPanel() {
       const nextEntries = selectedProbes.map((probe) => {
         const compatibleHosts = uniqueHostTools([probe]);
         const currentHosts = current[probe.pluginRoot] ?? [];
-        const nextHosts = currentHosts.filter((hostTool) => compatibleHosts.includes(hostTool));
+        const nextHosts = currentHosts.filter((hostTool) =>
+          compatibleHosts.includes(hostTool) && installedPluginHosts.has(hostTool)
+        );
         if (nextHosts.length > 0 || compatibleHosts.length === 0) {
           return [probe.pluginRoot, nextHosts] as const;
         }
-        return [probe.pluginRoot, defaultSelectedHosts(compatibleHosts)] as const;
+        return [
+          probe.pluginRoot,
+          defaultSelectedHosts(installedCompatibleHostTools(probe, installedPluginHosts)),
+        ] as const;
       });
       return Object.fromEntries(nextEntries);
     });
-  }, [probes.length, selectedProbes]);
+  }, [installedPluginHosts, probes.length, selectedProbes]);
 
   async function handleInstallSelected() {
     if (!canInstall) {
@@ -385,21 +429,22 @@ export function PluginInstallPanel() {
     if (probe.kind !== "plugin-repo") {
       return;
     }
+    if (!installedPluginHosts.has(hostTool)) {
+      notify({
+        message: `${hostLabel(hostTool)} 软件未安装，无法勾选。`,
+        tone: "info",
+      });
+      return;
+    }
 
     setSelectedPluginRoots((currentRoots) => {
-      const nextRoots = currentRoots.includes(probe.pluginRoot)
-        ? currentRoots
-        : [...currentRoots, probe.pluginRoot];
-      setSelectedHostsByPluginRoot((currentHostsByRoot) => {
-        if (!isHostCompatibleWithSelectedProbes(hostTool, nextRoots, selectableProbes)) {
-          return currentHostsByRoot;
-        }
-        return {
-          ...currentHostsByRoot,
-          [probe.pluginRoot]: toggleHost(currentHostsByRoot[probe.pluginRoot] ?? [], hostTool),
-        };
-      });
-      return nextRoots;
+      return currentRoots.includes(probe.pluginRoot) ? currentRoots : [...currentRoots, probe.pluginRoot];
+    });
+    setSelectedHostsByPluginRoot((currentHostsByRoot) => {
+      return {
+        ...currentHostsByRoot,
+        [probe.pluginRoot]: toggleHost(currentHostsByRoot[probe.pluginRoot] ?? [], hostTool),
+      };
     });
   }
 
@@ -411,6 +456,16 @@ export function PluginInstallPanel() {
     setSelectedPluginRoots((current) => {
       const nextRoots = toggleSelection(current, probe.pluginRoot);
       if (nextRoots.includes(probe.pluginRoot)) {
+        setSelectedHostsByPluginRoot((currentHostsByRoot) => {
+          const currentHosts = currentHostsByRoot[probe.pluginRoot] ?? [];
+          if (currentHosts.length > 0) {
+            return currentHostsByRoot;
+          }
+          return {
+            ...currentHostsByRoot,
+            [probe.pluginRoot]: defaultSelectedHosts(installedCompatibleHostTools(probe, installedPluginHosts)),
+          };
+        });
         return nextRoots;
       }
       setSelectedHostsByPluginRoot((currentHostsByRoot) => {
@@ -431,7 +486,7 @@ export function PluginInstallPanel() {
                 <span className="repo-form__label">{t("install.plugin.source")}</span>
                 <input
                   type="text"
-                  placeholder="https://git.example.com/team/plugin-repo"
+                  placeholder="https://github.com/everyinc/compound-engineering-plugin"
                   value={source}
                   onChange={(event) => setSource(event.target.value)}
                 />
@@ -461,8 +516,8 @@ export function PluginInstallPanel() {
             <div className="repo-form__hint-block">
               <p className="repo-form__hint-title">{t("install.plugin.supported")}</p>
               <ul className="repo-form__hint-list">
-                <li>https://git.example.com/team/plugin-repo</li>
-                <li>https://git.example.com/team/plugin-repo/-/tree/main/plugins/demo-plugin</li>
+                <li>https://github.com/everyinc/compound-engineering-plugin</li>
+                <li>https://github.com/everyinc/compound-engineering-plugin/tree/main/plugins/compound-engineering</li>
               </ul>
             </div>
           </div>
@@ -518,23 +573,24 @@ export function PluginInstallPanel() {
                           {hostTools.map((hostTool) => {
                             const hostSelected = (selectedHostsByPluginRoot[probe.pluginRoot] ?? [])
                               .includes(hostTool);
+                            const hostInstalled = installedPluginHosts.has(hostTool);
                             return (
                               <button
                                 key={hostTool}
                                 className={`plugin-install-preview__host-toggle${
                                   hostSelected ? " is-selected" : ""
-                                }`}
+                                }${hostInstalled ? "" : " is-unavailable"}`}
                                 type="button"
-                                title={hostLabel(hostTool)}
-                                data-tooltip={hostLabel(hostTool)}
+                                data-tooltip={hostInstallTargetTooltip(hostTool, hostInstalled, hostSelected)}
                                 aria-pressed={hostSelected}
+                                aria-disabled={!hostInstalled}
                                 aria-label={`${hostSelected ? "取消选择" : "选择"} ${hostLabel(hostTool)} 作为 ${probeTitle(probe)} 安装宿主`}
                                 onClick={(event) => {
                                   event.stopPropagation();
                                   handleProbeHostToggle(probe, hostTool);
                                 }}
                               >
-                                <PluginHostIcon hostTool={hostTool} />
+                                <PluginHostIcon hostTool={hostTool} isSelected={hostSelected} />
                               </button>
                             );
                           })}

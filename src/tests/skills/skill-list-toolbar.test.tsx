@@ -1,4 +1,4 @@
-import { act, fireEvent, screen } from "@testing-library/react";
+import { fireEvent, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { NotificationProvider } from "@/app/notifications";
 import { SkillListToolbar } from "@/features/skills/components/SkillListPage";
@@ -20,27 +20,53 @@ const disabledSkillFixture: SkillSummary = {
 };
 
 beforeEach(() => {
-  vi.useFakeTimers();
   mockedUseSkillWorkspace.mockReturnValue({
     language: "zh-CN",
   } as unknown as ReturnType<typeof useSkillWorkspace>);
-  vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback: FrameRequestCallback) =>
-    window.setTimeout(() => callback(performance.now()), 16),
-  );
 });
 
 afterEach(() => {
   vi.restoreAllMocks();
-  vi.useRealTimers();
 });
 
-test("shows update-all loading state before running the update task", async () => {
+test("shows update-all loading state from the workspace session", () => {
   const updateAllSkills = vi.fn().mockResolvedValue(undefined);
 
   mockedUseSkillWorkspace.mockReturnValue({
     language: "zh-CN",
     installedSkills: installedSkillFixtures,
     isLoading: false,
+    isUpdatingAllSkills: true,
+    refreshWorkspace: vi.fn(),
+    updateAllSkills,
+  } as unknown as ReturnType<typeof useSkillWorkspace>);
+
+  renderWithI18n(
+    <NotificationProvider>
+      <SkillListToolbar
+        query=""
+        statusFilter="all"
+        onQueryChange={vi.fn()}
+        onStatusFilterChange={vi.fn()}
+        showGroupView
+        onShowGroupViewChange={vi.fn()}
+      />
+    </NotificationProvider>,
+  );
+
+  const loadingButton = screen.getByRole("button", { name: "更新中..." });
+  expect(loadingButton).toHaveClass("is-loading");
+  expect(loadingButton.querySelector(".skills-toolbar-button__svg")).toHaveClass("is-spinning");
+});
+
+test("starts update-all from the toolbar", () => {
+  const updateAllSkills = vi.fn().mockResolvedValue(undefined);
+
+  mockedUseSkillWorkspace.mockReturnValue({
+    language: "zh-CN",
+    installedSkills: installedSkillFixtures,
+    isLoading: false,
+    isUpdatingAllSkills: false,
     refreshWorkspace: vi.fn(),
     updateAllSkills,
   } as unknown as ReturnType<typeof useSkillWorkspace>);
@@ -59,16 +85,6 @@ test("shows update-all loading state before running the update task", async () =
   );
 
   fireEvent.click(screen.getByRole("button", { name: "全部更新 (1)" }));
-
-  const loadingButton = screen.getByRole("button", { name: "更新中..." });
-  expect(loadingButton).toHaveClass("is-loading");
-  expect(loadingButton.querySelector(".skills-toolbar-button__svg")).toHaveClass("is-spinning");
-  expect(updateAllSkills).not.toHaveBeenCalled();
-
-  await act(async () => {
-    vi.advanceTimersByTime(32);
-  });
-
   expect(updateAllSkills).toHaveBeenCalledOnce();
 });
 

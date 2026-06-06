@@ -205,6 +205,13 @@ struct InstalledPluginDescriptor {
     scopes: Vec<PluginScopeSummary>,
 }
 
+#[derive(Clone, Copy)]
+struct PluginHostDetectionSpec {
+    label: &'static str,
+    app_names: &'static [&'static str],
+    executable_names: &'static [&'static str],
+}
+
 #[tauri::command]
 pub fn probe_plugin_repo(
     path: String,
@@ -275,6 +282,7 @@ pub fn install_selected_plugin_probes(
             if !plugin_probe_supports_host(&probe, host_tool) {
                 continue;
             }
+            ensure_plugin_host_tool_installed(host_tool)?;
             let installed_root =
                 install_plugin_probe_for_host(&home_dir, &source_root, &probe, host_tool)?;
             installed_roots.push((host_tool.clone(), installed_root));
@@ -1609,6 +1617,95 @@ fn install_plugin_probe_for_host(
         "cursor" => install_cursor_plugin_probe(home_dir, source_root, probe),
         _ => Err(format!("不支持的插件宿主: {host_tool}")),
     }
+}
+
+fn ensure_plugin_host_tool_installed(host_tool: &str) -> Result<(), String> {
+    let spec = plugin_host_detection_spec(host_tool)
+        .ok_or_else(|| format!("不支持的插件宿主: {host_tool}"))?;
+    if plugin_host_software_exists(&spec) {
+        return Ok(());
+    }
+    Err(format!(
+        "未检测到 {}，安装该插件前请先安装 {}。",
+        spec.label, spec.label
+    ))
+}
+
+fn plugin_host_detection_spec(host_tool: &str) -> Option<PluginHostDetectionSpec> {
+    match host_tool {
+        "claude-code" => Some(PluginHostDetectionSpec {
+            label: "Claude Code",
+            app_names: &["Claude"],
+            executable_names: &["claude"],
+        }),
+        "codex" => Some(PluginHostDetectionSpec {
+            label: "Codex",
+            app_names: &["Codex"],
+            executable_names: &["codex"],
+        }),
+        "cursor" => Some(PluginHostDetectionSpec {
+            label: "Cursor",
+            app_names: &["Cursor"],
+            executable_names: &["cursor"],
+        }),
+        _ => None,
+    }
+}
+
+fn plugin_host_software_exists(spec: &PluginHostDetectionSpec) -> bool {
+    (!spec.app_names.is_empty() && find_plugin_host_app_bundle(spec.app_names).is_some())
+        || spec
+            .executable_names
+            .iter()
+            .any(|executable_name| find_plugin_host_executable_path(executable_name).is_some())
+}
+
+fn find_plugin_host_executable_path(executable_name: &str) -> Option<PathBuf> {
+    if executable_name.contains('/') {
+        let executable_path = PathBuf::from(executable_name);
+        return executable_path.exists().then_some(executable_path);
+    }
+
+    let mut search_dirs = env::var_os("PATH")
+        .map(|paths| env::split_paths(&paths).collect::<Vec<_>>())
+        .unwrap_or_default();
+    search_dirs.extend([
+        PathBuf::from("/opt/homebrew/bin"),
+        PathBuf::from("/usr/local/bin"),
+        PathBuf::from("/usr/bin"),
+        PathBuf::from("/bin"),
+        PathBuf::from("/usr/sbin"),
+        PathBuf::from("/sbin"),
+    ]);
+
+    search_dirs.into_iter().find_map(|dir| {
+        let executable_path = dir.join(executable_name);
+        executable_path.exists().then_some(executable_path)
+    })
+}
+
+fn find_plugin_host_app_bundle(app_name_candidates: &[&str]) -> Option<PathBuf> {
+    let mut app_dirs = vec![PathBuf::from("/Applications")];
+    if let Some(home_dir) = env::var_os("HOME") {
+        app_dirs.push(PathBuf::from(home_dir).join("Applications"));
+    }
+
+    for apps_dir in app_dirs {
+        if let Ok(entries) = fs::read_dir(&apps_dir) {
+            for entry in entries.flatten() {
+                let name = entry.file_name();
+                let name_str = name.to_string_lossy();
+                if !name_str.ends_with(".app") {
+                    continue;
+                }
+                let stem = name_str.trim_end_matches(".app");
+                if app_name_candidates.iter().any(|candidate| stem.eq_ignore_ascii_case(candidate)) {
+                    return Some(entry.path());
+                }
+            }
+        }
+    }
+    None
 }
 
 fn install_codex_plugin_probe(

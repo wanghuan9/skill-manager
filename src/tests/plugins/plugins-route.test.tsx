@@ -1,7 +1,7 @@
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, vi } from "vitest";
 import userEvent from "@testing-library/user-event";
-import { PluginsRoute } from "@/app/routes/plugins";
+import { PluginsRoute, resetPluginScanSessionForTests } from "@/app/routes/plugins";
 import * as skillClient from "@/features/skills/api/skill-client";
 import { pluginFixtures } from "@/features/skills/state/skill-fixtures";
 import type { PluginSummary } from "@/features/skills/state/skill-store";
@@ -15,6 +15,8 @@ vi.mock("@/features/skills/state/skill-workspace", () => ({
 const mockedUseSkillWorkspace = vi.mocked(useSkillWorkspace);
 
 beforeEach(() => {
+  delete (window as Window & { __SKILLM_PLUGINS__?: unknown }).__SKILLM_PLUGINS__;
+  resetPluginScanSessionForTests();
   mockedUseSkillWorkspace.mockReturnValue({
     language: "zh-CN",
   } as ReturnType<typeof useSkillWorkspace>);
@@ -42,6 +44,14 @@ test("shows disabled plugin state with description-first source details", async 
   expect(screen.queryByText("启用状态")).not.toBeInTheDocument();
   expect(screen.queryByText("启用范围")).not.toBeInTheDocument();
   expect(screen.queryByText("用户级")).not.toBeInTheDocument();
+});
+
+test("keeps plugin scan import action in the toolbar", async () => {
+  renderWithI18n(<PluginsRoute />);
+
+  await screen.findByRole("tab", { name: /Claude Code/ });
+
+  expect(screen.getByRole("button", { name: "扫描导入" })).toBeInTheDocument();
 });
 
 test("opens plugin git source links externally", async () => {
@@ -145,29 +155,76 @@ test("shows refresh loading animation in the plugin toolbar", async () => {
 
   renderWithI18n(<PluginsRoute />);
 
-  await screen.findByRole("tab", { name: /Claude Code/ });
-  const refreshButton = screen.getByRole("button", { name: "刷新" });
+  try {
+    await screen.findByRole("tab", { name: /Claude Code/ });
+    const refreshButton = screen.getByRole("button", { name: "扫描导入" });
 
-  await userEvent.click(refreshButton);
+    await userEvent.click(refreshButton);
 
-  const loadingButton = await screen.findByRole("button", { name: "刷新中..." });
-  expect(loadingButton).toBeDisabled();
-  expect(
-    loadingButton.querySelector(".skills-toolbar-button__svg.is-spinning"),
-  ).toBeInTheDocument();
-
-  if (!deferredFetch.resolve) {
-    throw new Error("missing plugin fetch resolver");
-  }
-  deferredFetch.resolve(pluginFixtures);
-
-  await waitFor(() => {
+    const loadingButton = await screen.findByRole("button", { name: "扫描中..." });
+    expect(loadingButton).toBeDisabled();
     expect(
-      screen.getByRole("button", { name: "刷新" }),
-    ).toBeEnabled();
-  });
+      loadingButton.querySelector(".skills-toolbar-button__svg.is-spinning"),
+    ).toBeInTheDocument();
 
-  fetchSpy.mockRestore();
+    if (!deferredFetch.resolve) {
+      throw new Error("missing plugin fetch resolver");
+    }
+    deferredFetch.resolve(pluginFixtures);
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: "扫描导入" }),
+      ).toBeEnabled();
+    });
+  } finally {
+    fetchSpy.mockRestore();
+  }
+});
+
+test("keeps plugin scan import animation after remounting the route", async () => {
+  const deferredFetch: {
+    resolve?: (value: PluginSummary[]) => void;
+  } = {};
+  const fetchSpy = vi
+    .spyOn(skillClient, "fetchInstalledPlugins")
+    .mockResolvedValueOnce(pluginFixtures)
+    .mockImplementationOnce(
+      () =>
+        new Promise<PluginSummary[]>((resolve) => {
+          deferredFetch.resolve = resolve;
+        }),
+    );
+
+  const { unmount } = renderWithI18n(<PluginsRoute />);
+
+  try {
+    await screen.findByRole("tab", { name: /Claude Code/ });
+    await userEvent.click(screen.getByRole("button", { name: "扫描导入" }));
+
+    expect(await screen.findByRole("button", { name: "扫描中..." })).toBeDisabled();
+
+    unmount();
+    renderWithI18n(<PluginsRoute />);
+
+    const loadingButton = await screen.findByRole("button", { name: "扫描中..." });
+    expect(loadingButton).toBeDisabled();
+    expect(
+      loadingButton.querySelector(".skills-toolbar-button__svg.is-spinning"),
+    ).toBeInTheDocument();
+
+    if (!deferredFetch.resolve) {
+      throw new Error("missing plugin fetch resolver");
+    }
+    deferredFetch.resolve(pluginFixtures);
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "扫描导入" })).toBeEnabled();
+    });
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+  } finally {
+    fetchSpy.mockRestore();
+  }
 });
 
 test("toggles plugin enabled state from the plugin list", async () => {

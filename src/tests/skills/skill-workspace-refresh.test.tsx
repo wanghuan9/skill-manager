@@ -84,6 +84,35 @@ function RouteSwitchRefreshProbe() {
   );
 }
 
+function UpdateAllProbe() {
+  const { installedSkills, isLoading, isUpdatingAllSkills, updateAllSkills } = useSkillWorkspace();
+
+  return (
+    <div>
+      <button type="button" onClick={() => void updateAllSkills()}>
+        全部更新
+      </button>
+      <span data-testid="loading-state">{isLoading ? "loading" : "ready"}</span>
+      <span data-testid="update-all-state">{isUpdatingAllSkills ? "updating" : "idle"}</span>
+      <span data-testid="skill-name">{installedSkills[0]?.name ?? "none"}</span>
+      <span data-testid="skill-status-text">{installedSkills[0]?.statusText ?? "none"}</span>
+    </div>
+  );
+}
+
+function RouteSwitchUpdateAllProbe() {
+  const [showsSkillsPage, setShowsSkillsPage] = useState(true);
+
+  return (
+    <div>
+      <button type="button" onClick={() => setShowsSkillsPage((current) => !current)}>
+        切换页面
+      </button>
+      {showsSkillsPage ? <UpdateAllProbe /> : <span data-testid="other-page">其他页面</span>}
+    </div>
+  );
+}
+
 function DefaultOpenToolProbe() {
   const { defaultOpenToolId } = useSkillWorkspace();
 
@@ -166,7 +195,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-test("refresh resolves after startup skills without waiting for ancillary requests", async () => {
+test("refresh resolves after local alignment and git state refresh complete", async () => {
   const initialSkills: SkillSummary[] = [installedSkillFixtures[0]];
   const refreshedSkills: SkillSummary[] = [installedSkillFixtures[1]];
   const pendingCandidates = createDeferred<LocalSkillCandidate[]>();
@@ -223,9 +252,8 @@ test("refresh resolves after startup skills without waiting for ancillary reques
   });
 
   await waitFor(() => {
-    expect(screen.getByTestId("refresh-state").textContent).toBe("done");
-    expect(screen.getByTestId("loading-state").textContent).toBe("ready");
-    expect(screen.getByTestId("skill-name").textContent).toBe(refreshedSkills[0].name);
+    expect(screen.getByTestId("refresh-state").textContent).toBe("pending");
+    expect(screen.getByTestId("skill-name").textContent).toBe(initialSkills[0].name);
   });
 
   pendingCandidates.resolve(localSkillFixtures);
@@ -233,7 +261,11 @@ test("refresh resolves after startup skills without waiting for ancillary reques
   pendingAccount.resolve(gitAccountFixture);
   pendingSettings.resolve(appSettingsFixture);
 
-  await act(async () => undefined);
+  await waitFor(() => {
+    expect(screen.getByTestId("refresh-state").textContent).toBe("done");
+    expect(screen.getByTestId("loading-state").textContent).toBe("ready");
+    expect(screen.getByTestId("skill-name").textContent).toBe(refreshedSkills[0].name);
+  });
 });
 
 test("refresh keeps the fetched remote updated time instead of reverting to the startup snapshot", async () => {
@@ -295,7 +327,7 @@ test("refresh keeps the fetched remote updated time instead of reverting to the 
     expect(screen.getByTestId("remote-updated-at").textContent).toBe("2026/5/26 19:07:25");
   });
 
-  expect(startupCallCount).toBe(1);
+  expect(startupCallCount).toBe(2);
   expect(gitStateCallCount).toBeGreaterThanOrEqual(2);
 });
 
@@ -708,6 +740,82 @@ test("keeps manual refresh active across route switches", async () => {
   await waitFor(() => {
     expect(screen.getByTestId("workspace-refreshing").textContent).toBe("idle");
     expect(screen.getByTestId("skill-name").textContent).toBe(refreshedSkills[0].name);
+  });
+});
+
+test("keeps update-all active across route switches", async () => {
+  const updateAvailableSkill: SkillSummary = {
+    ...installedSkillFixtures[0],
+    collabStatus: "update-available",
+  };
+  const updatedSkill: SkillSummary = {
+    ...updateAvailableSkill,
+    collabStatus: "clean",
+    statusText: "已更新完成",
+  };
+  const pendingUpdate = createDeferred<SkillSummary>();
+
+  mockedInvoke.mockImplementation(async (command, args) => {
+    switch (command) {
+      case "list_startup_installed_skills":
+      case "refresh_git_states":
+        return [updateAvailableSkill];
+      case "list_local_skill_candidates":
+        return localSkillFixtures;
+      case "list_tool_configs":
+        return toolConfigFixtures;
+      case "get_git_account_summary":
+        return gitAccountFixture;
+      case "get_app_settings":
+        return appSettingsFixture;
+      case "update_app_settings":
+        return (args as { settings: AppSettings }).settings;
+      case "update_skill":
+        return pendingUpdate.promise;
+      default:
+        throw new Error(`Unexpected command: ${command}`);
+    }
+  });
+
+  render(
+    <SkillWorkspaceProvider>
+      <RouteSwitchUpdateAllProbe />
+    </SkillWorkspaceProvider>,
+  );
+
+  await waitFor(() => {
+    expect(screen.getByTestId("loading-state").textContent).toBe("ready");
+    expect(screen.getByTestId("skill-name").textContent).toBe(updateAvailableSkill.name);
+  });
+
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "全部更新" }));
+  });
+
+  await waitFor(() => {
+    expect(screen.getByTestId("update-all-state").textContent).toBe("updating");
+  });
+
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "切换页面" }));
+  });
+  expect(screen.getByTestId("other-page").textContent).toBe("其他页面");
+
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "切换页面" }));
+  });
+  expect(screen.getByTestId("update-all-state").textContent).toBe("updating");
+  expect(screen.getByTestId("skill-name").textContent).toBe(updateAvailableSkill.name);
+
+  await act(async () => {
+    pendingUpdate.resolve(updatedSkill);
+    await Promise.resolve();
+  });
+
+  await waitFor(() => {
+    expect(screen.getByTestId("update-all-state").textContent).toBe("idle");
+    expect(screen.getByTestId("skill-name").textContent).toBe(updateAvailableSkill.name);
+    expect(screen.getByTestId("skill-status-text").textContent).toBe(updatedSkill.statusText);
   });
 });
 

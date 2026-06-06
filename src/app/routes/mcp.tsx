@@ -50,6 +50,10 @@ const MCP_CONFIG_PLACEHOLDER_PATTERN = /<[^>]*(?:YOUR|TOKEN|KEY|SECRET|PASSWORD|
 const MCP_MISSING_ENV_PATTERN = /缺少环境变量\s+([A-Z0-9_]+)/i;
 const MCP_CONFIG_PARAM_FIELDS = ["env", "headers"];
 const MCP_SUMMARY_APP_ICON_LIMIT = 7;
+const MCP_AUTO_PROBE_COOLDOWN_MS = 5_000;
+
+const mcpAutoProbeAttemptedAtBySignature = new Map<string, number>();
+const mcpAutoProbeInFlightSignatures = new Set<string>();
 
 const EMPTY_FORM_STATE: McpFormState = {
   id: "",
@@ -59,7 +63,8 @@ const EMPTY_FORM_STATE: McpFormState = {
 };
 
 function shouldAutoRefreshMcpTools(server: Pick<McpServerSummary, "tools" | "toolsDiscoveredAt" | "toolsDiscoveryError">) {
-  return !server.toolsDiscoveredAt.trim()
+  return server.tools.length === 0
+    && !server.toolsDiscoveredAt.trim()
     && !server.toolsDiscoveryError.trim();
 }
 
@@ -74,15 +79,40 @@ function shouldRefreshMcpToolsOnManualRefresh(
 }
 
 function buildMcpAutoProbeSignature(
-  server: Pick<McpServerSummary, "id" | "serverJson" | "tools" | "toolsDiscoveredAt" | "toolsDiscoveryError">,
+  server: Pick<McpServerSummary, "id" | "serverJson" | "tools" | "toolsDiscoveryError">,
 ) {
   return JSON.stringify({
     id: server.id,
     serverJson: server.serverJson,
     tools: server.tools,
-    toolsDiscoveredAt: server.toolsDiscoveredAt.trim(),
     toolsDiscoveryError: server.toolsDiscoveryError.trim(),
   });
+}
+
+function shouldStartMcpAutoProbe(autoProbeSignature: string) {
+  if (mcpAutoProbeInFlightSignatures.has(autoProbeSignature)) {
+    return false;
+  }
+
+  const lastAttemptedAt = mcpAutoProbeAttemptedAtBySignature.get(autoProbeSignature);
+  if (lastAttemptedAt !== undefined && Date.now() - lastAttemptedAt < MCP_AUTO_PROBE_COOLDOWN_MS) {
+    return false;
+  }
+
+  mcpAutoProbeAttemptedAtBySignature.set(autoProbeSignature, Date.now());
+  mcpAutoProbeInFlightSignatures.add(autoProbeSignature);
+  return true;
+}
+
+function finishMcpAutoProbe(autoProbeSignature: string) {
+  if (autoProbeSignature) {
+    mcpAutoProbeInFlightSignatures.delete(autoProbeSignature);
+  }
+}
+
+export function resetMcpAutoProbeRuntimeForTests() {
+  mcpAutoProbeAttemptedAtBySignature.clear();
+  mcpAutoProbeInFlightSignatures.clear();
 }
 
 function buildMcpFeedbackContext(workspace: McpWorkspaceSnapshot | null) {
@@ -579,8 +609,10 @@ export function McpRoute(props: McpRouteProps = {}) {
   const isMountedRef = useRef(false);
   const importActionLockedRef = useRef(false);
   const refreshActionLockedRef = useRef(false);
+  const localAlignInFlightRef = useRef<Promise<McpWorkspaceSnapshot | null> | null>(null);
   const probingToolServerIdsRef = useRef(new Set<string>());
   const autoProbedToolSignaturesRef = useRef(new Set<string>());
+  const workspaceRef = useRef(workspace);
 
   function commitWorkspace(
     snapshot: McpWorkspaceSnapshot | null,
@@ -598,6 +630,10 @@ export function McpRoute(props: McpRouteProps = {}) {
     };
   }, []);
 
+  useEffect(() => {
+    workspaceRef.current = workspace;
+  }, [workspace]);
+
   async function probeMcpTools(
     snapshot: McpWorkspaceSnapshot | null,
     predicate: (server: McpServerSummary) => boolean,
@@ -614,7 +650,10 @@ export function McpRoute(props: McpRouteProps = {}) {
       const autoProbeSignature = options.dedupeAutoRefresh
         ? buildMcpAutoProbeSignature(server)
         : "";
-      if (autoProbeSignature && autoProbedToolSignaturesRef.current.has(autoProbeSignature)) {
+      if (autoProbeSignature && (
+        autoProbedToolSignaturesRef.current.has(autoProbeSignature)
+        || !shouldStartMcpAutoProbe(autoProbeSignature)
+      )) {
         continue;
       }
       probingToolServerIdsRef.current.add(server.id);
@@ -674,10 +713,43 @@ export function McpRoute(props: McpRouteProps = {}) {
         }
       } finally {
         probingToolServerIdsRef.current.delete(server.id);
+        finishMcpAutoProbe(autoProbeSignature);
       }
     }
 
     return nextSnapshot;
+  }
+
+  async function alignMcpWorkspaceLocalState() {
+    if (localAlignInFlightRef.current) {
+      return localAlignInFlightRef.current;
+    }
+
+    const alignPromise = (async () => {
+      try {
+        const snapshot = await fetchMcpWorkspace();
+        if (isMountedRef.current) {
+          commitWorkspace(snapshot);
+        } else {
+          cacheMcpWorkspace(snapshot);
+        }
+        return snapshot;
+      } finally {
+        localAlignInFlightRef.current = null;
+      }
+    })();
+
+    localAlignInFlightRef.current = alignPromise;
+    return alignPromise;
+  }
+
+  async function scanImportMcpServers(options: { probeUndiscoveredTools?: boolean } = {}) {
+    const count = await startMcpServersImport(importMcpServersFromApps);
+    const snapshot = await alignMcpWorkspaceLocalState();
+    if (options.probeUndiscoveredTools ?? true) {
+      await probeMcpTools(snapshot, shouldAutoRefreshMcpTools, { dedupeAutoRefresh: true });
+    }
+    return count;
   }
 
   useEffect(() => {
@@ -689,10 +761,12 @@ export function McpRoute(props: McpRouteProps = {}) {
         if (active && cachedWorkspace) {
           commitWorkspace(cachedWorkspace);
         }
-        const snapshot = await fetchMcpWorkspace();
+        const snapshot = await alignMcpWorkspaceLocalState();
+        await probeMcpTools(snapshot, shouldRefreshMcpToolsOnManualRefresh, {
+          dedupeAutoRefresh: true,
+        });
         if (active) {
-          commitWorkspace(snapshot);
-          void probeMcpTools(snapshot, shouldAutoRefreshMcpTools, { dedupeAutoRefresh: true });
+          setErrorMessage("");
         }
       } catch (error) {
         if (active) {
@@ -709,6 +783,9 @@ export function McpRoute(props: McpRouteProps = {}) {
   }, []);
 
   useEffect(() => subscribeMcpWorkspaceChange((snapshot) => {
+    if (snapshot === workspaceRef.current) {
+      return;
+    }
     startTransition(() => {
       setWorkspace(snapshot);
     });
@@ -780,14 +857,7 @@ export function McpRoute(props: McpRouteProps = {}) {
     setDeleteConfirmingServerId("");
     await waitForNextPaint();
     try {
-      const count = await startMcpServersImport(importMcpServersFromApps);
-      const snapshot = await fetchMcpWorkspace();
-      if (isMountedRef.current) {
-        commitWorkspace(snapshot);
-      } else {
-        cacheMcpWorkspace(snapshot);
-      }
-      await probeMcpTools(snapshot, shouldAutoRefreshMcpTools, { dedupeAutoRefresh: true });
+      const count = await scanImportMcpServers();
       notify({
         tone: "success",
         message: count > 0 ? t("mcp.import.added", { count }) : t("mcp.import.none"),
@@ -813,8 +883,7 @@ export function McpRoute(props: McpRouteProps = {}) {
     setIsRefreshing(true);
     await waitForNextPaint();
     try {
-      const snapshot = await fetchMcpWorkspace();
-      commitWorkspace(snapshot);
+      const snapshot = await alignMcpWorkspaceLocalState();
       await probeMcpTools(snapshot, shouldRefreshMcpToolsOnManualRefresh);
     } catch (error) {
       reportFailure(error, {
@@ -1002,6 +1071,7 @@ export function McpRoute(props: McpRouteProps = {}) {
 
   async function handleSave(formState: McpFormState) {
     const name = normalizeMcpServerName(formState.name);
+    const isNewServer = !activeEditingServer;
     const serverId = activeEditingServer?.id ?? buildUniqueMcpServerId(name, workspace?.servers ?? []);
     const serverRecord: McpServerRecord = {
       id: serverId,
@@ -1023,6 +1093,9 @@ export function McpRoute(props: McpRouteProps = {}) {
       setEditingServer(null);
       setDeleteConfirmingServerId("");
       notify({ tone: "success", message: t("mcp.saveSuccess", { name: serverRecord.name }) });
+      if (isNewServer) {
+        void probeMcpTools(snapshot, (server) => server.id === serverId && shouldAutoRefreshMcpTools(server));
+      }
     } catch (error) {
       reportFailure(error, {
         operation: "save_mcp_server",

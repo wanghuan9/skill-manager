@@ -1,6 +1,5 @@
 import { useDeferredValue, useMemo, useState } from "react";
 import { useTranslate } from "@/app/i18n";
-import { waitForNextPaint } from "@/app/utils/wait-for-next-paint";
 import { useFailureReporter } from "@/app/failure-feedback";
 import { openExternalLink } from "@/features/skills/api/skill-client";
 import { filterSkills, hasEnabledTool } from "@/features/skills/state/skill-selectors";
@@ -133,9 +132,15 @@ export function SkillListToolbar(props: SkillToolbarProps) {
     showGroupView,
     onShowGroupViewChange,
   } = props;
-  const { installedSkills, isLoading, isWorkspaceRefreshing, refreshWorkspace, updateAllSkills } = useSkillWorkspace();
+  const {
+    installedSkills,
+    isLoading,
+    isWorkspaceRefreshing,
+    isUpdatingAllSkills,
+    refreshWorkspace,
+    updateAllSkills,
+  } = useSkillWorkspace();
   const reportFailure = useFailureReporter();
-  const [isUpdatingAll, setIsUpdatingAll] = useState(false);
   const statusFilterCounts = useMemo(
     () => ({
       all: installedSkills.length,
@@ -166,7 +171,6 @@ export function SkillListToolbar(props: SkillToolbarProps) {
       return;
     }
 
-    await waitForNextPaint();
     try {
       await refreshWorkspace({ showRefreshing: true });
     } catch (error) {
@@ -178,12 +182,10 @@ export function SkillListToolbar(props: SkillToolbarProps) {
   }
 
   async function handleUpdateAllSkills() {
-    if (updatableSkillCount === 0 || isUpdatingAll) {
+    if (updatableSkillCount === 0 || isUpdatingAllSkills) {
       return;
     }
 
-    setIsUpdatingAll(true);
-    await waitForNextPaint();
     try {
       await updateAllSkills();
     } catch (error) {
@@ -191,8 +193,6 @@ export function SkillListToolbar(props: SkillToolbarProps) {
         operation: "update_all_skills",
         fallbackMessage: t("skills.error.updateAll"),
       });
-    } finally {
-      setIsUpdatingAll(false);
     }
   }
 
@@ -247,15 +247,15 @@ export function SkillListToolbar(props: SkillToolbarProps) {
         <span>{t("skills.refresh")}</span>
       </button>
       <button
-        className={`secondary-button secondary-button--compact skills-toolbar-button skills-toolbar-button--update-all${isUpdatingAll ? " is-loading" : ""}`}
+        className={`secondary-button secondary-button--compact skills-toolbar-button skills-toolbar-button--update-all${isUpdatingAllSkills ? " is-loading" : ""}`}
         type="button"
         onClick={() => void handleUpdateAllSkills()}
-        disabled={isLoading || isUpdatingAll || updatableSkillCount === 0}
+        disabled={isLoading || isUpdatingAllSkills || updatableSkillCount === 0}
       >
         <span aria-hidden="true" className="skills-toolbar-button__icon">
-          <UpdateAllIcon isSpinning={isUpdatingAll} />
+          <UpdateAllIcon isSpinning={isUpdatingAllSkills} />
         </span>
-        <span>{isUpdatingAll ? t("skills.updating") : updateAllButtonLabel}</span>
+        <span>{isUpdatingAllSkills ? t("skills.updating") : updateAllButtonLabel}</span>
       </button>
     </div>
   );
