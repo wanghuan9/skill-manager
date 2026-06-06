@@ -125,7 +125,14 @@ function SkillGroupMonogram({ label }: { label: string }) {
 
 export function SkillListToolbar(props: SkillToolbarProps) {
   const { t } = useTranslate();
-  const { query, statusFilter, onQueryChange, onStatusFilterChange, showGroupView, onShowGroupViewChange } = props;
+  const {
+    query,
+    statusFilter,
+    onQueryChange,
+    onStatusFilterChange,
+    showGroupView,
+    onShowGroupViewChange,
+  } = props;
   const { installedSkills, isLoading, isWorkspaceRefreshing, refreshWorkspace, updateAllSkills } = useSkillWorkspace();
   const reportFailure = useFailureReporter();
   const [isUpdatingAll, setIsUpdatingAll] = useState(false);

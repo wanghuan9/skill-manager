@@ -109,8 +109,8 @@ type SkillWorkspaceContextValue = {
   loadInitialMarketplaceSkills: (sourceSite: MarketplaceSourceSite) => Promise<void>;
   loadMoreMarketplaceSkills: (sourceSite: MarketplaceSourceSite) => Promise<void>;
   searchMarketplaceSkills: (query: string) => Promise<MarketplaceSkill[]>;
-  discoverRepoSkills: (repoUrl: string) => Promise<RepoSkillCandidate[]>;
-  installFromRepo: (repoUrl: string, selectedPaths: string[]) => Promise<void>;
+  discoverRepoSkills: (repoUrl: string, gitRef?: string) => Promise<RepoSkillCandidate[]>;
+  installFromRepo: (repoUrl: string, selectedPaths: string[], gitRef?: string) => Promise<void>;
   discoverLocalInstallSkills: (localPath: string) => Promise<LocalInstallSkillCandidate[]>;
   installFromLocalPath: (localPath: string, skillName?: string) => Promise<void>;
   installSelectedLocalSkills: (localPath: string, selectedPaths: string[]) => Promise<void>;
@@ -1014,12 +1014,12 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
     }
   }
 
-  async function handleDiscoverRepoSkills(repoUrl: string) {
-    return installSkillFromRepo({ repoUrl });
+  async function handleDiscoverRepoSkills(repoUrl: string, gitRef?: string) {
+    return installSkillFromRepo({ repoUrl, gitRef });
   }
 
-  async function handleInstallFromRepo(repoUrl: string, selectedPaths: string[]) {
-    const installed = await installSelectedRepoSkills({ repoUrl, selectedPaths });
+  async function handleInstallFromRepo(repoUrl: string, selectedPaths: string[], gitRef?: string) {
+    const installed = await installSelectedRepoSkills({ repoUrl, selectedPaths, gitRef });
     setInstalledSkills((current) => {
       const merged = [...current];
       for (const installedSkill of installed.reverse()) {

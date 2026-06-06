@@ -1464,13 +1464,27 @@ code {
 .select-field select,
 .repo-form input,
 .repo-form select {
+  display: block;
   width: 100%;
+  height: 44px;
+  min-height: 44px;
   border: 1px solid var(--line);
   border-radius: 10px;
-  padding: 10px 12px;
+  padding: 0 12px;
   background: var(--surface-strong);
   color: var(--heading);
   font-size: 0.88rem;
+  line-height: 1.2;
+}
+
+.repo-form select {
+  padding-right: 34px;
+  appearance: none;
+  -webkit-appearance: none;
+  background:
+    linear-gradient(45deg, transparent 50%, currentColor 50%) calc(100% - 18px) 50% / 6px 6px no-repeat,
+    linear-gradient(135deg, currentColor 50%, transparent 50%) calc(100% - 13px) 50% / 6px 6px no-repeat,
+    var(--surface-strong);
 }
 
 .search-field input:focus,
@@ -3565,14 +3579,33 @@ code {
   gap: 14px;
 }
 
+.repo-form__source-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 220px;
+  gap: 10px;
+  align-items: start;
+}
+
 .repo-form__field {
   display: grid;
   gap: 6px;
+  min-width: 0;
+}
+
+.repo-form__field--branch {
+  min-width: 200px;
+}
+
+.repo-form__source-row input,
+.repo-form__source-row select {
+  height: 40px;
+  min-height: 40px;
 }
 
 .repo-form__label {
-  font-size: 0.9rem;
+  font-size: 0.86rem;
   font-weight: 650;
+  line-height: 1.15;
   color: var(--heading);
 }
 
@@ -3646,16 +3679,17 @@ code {
 
 .repo-install__selection {
   display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
   gap: 12px;
   min-height: min(64vh, 720px);
+  max-height: calc(100vh - 170px);
   align-content: start;
 }
 
 .repo-install__list {
   display: grid;
   gap: 10px;
-  min-height: min(52vh, 560px);
-  max-height: min(58vh, 640px);
+  min-height: 0;
   overflow: auto;
   padding-right: 4px;
 }
@@ -3733,6 +3767,248 @@ code {
 .repo-install__actions {
   justify-content: flex-start;
   gap: 10px;
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.plugin-install-panel {
+  gap: 18px;
+}
+
+.plugin-install-form textarea {
+  min-height: 96px;
+  resize: vertical;
+}
+
+.plugin-install-preview {
+  display: grid;
+  gap: 12px;
+  min-height: 0;
+  max-height: none;
+  overflow: auto;
+  padding-right: 4px;
+  padding-top: 4px;
+}
+
+.repo-install__selection.plugin-install-preview {
+  grid-template-rows: auto auto auto;
+  gap: 10px;
+  min-height: 0;
+  max-height: none;
+  overflow: visible;
+  padding-right: 0;
+  padding-top: 0;
+}
+
+.plugin-install-preview__summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 10px 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--surface);
+}
+
+.repo-install__option .plugin-install-preview__summary {
+  width: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.plugin-install-preview__summary-main {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.plugin-install-preview__summary-side {
+  display: grid;
+  justify-items: end;
+  align-self: start;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.plugin-install-preview__item {
+  display: flex;
+  align-items: stretch;
+  align-items: start;
+}
+
+.plugin-install-preview__summary h3,
+.plugin-install-preview__summary p,
+.plugin-install-preview__summary span {
+  margin: 0;
+}
+
+.plugin-install-preview__summary h3 {
+  color: var(--heading);
+  font-size: 0.97rem;
+  line-height: 1.25;
+}
+
+.plugin-install-preview__summary span {
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.plugin-install-preview__summary-main > div:first-child {
+  display: grid;
+  gap: 6px;
+}
+
+.plugin-install-preview__summary-main > div:first-child span {
+  display: -webkit-box;
+  overflow: hidden;
+  line-height: 1.45;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.plugin-install-preview__components {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.plugin-install-preview__component-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 2px 8px;
+  border: 1px solid rgba(47, 120, 255, 0.14);
+  border-radius: 7px;
+  background: rgba(47, 120, 255, 0.07);
+  color: var(--accent);
+  font-size: 0.7rem;
+  font-weight: 500;
+  line-height: 1.2;
+}
+
+.plugin-install-preview__host-icons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+  align-items: flex-start;
+  max-width: 280px;
+}
+
+.plugin-install-preview__host-toggle {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-width: 36px;
+  min-height: 30px;
+  padding: 3px 5px;
+  border: 1px solid rgba(117, 128, 147, 0.16);
+  border-radius: 12px;
+  background: rgba(117, 128, 147, 0.06);
+  color: var(--muted);
+  cursor: pointer;
+  transition:
+    border-color 120ms ease,
+    background-color 120ms ease,
+    color 120ms ease,
+    box-shadow 120ms ease;
+}
+
+.plugin-install-preview__host-toggle span {
+  font-size: 0.76rem;
+  font-weight: 500;
+  line-height: 1;
+}
+
+.plugin-install-preview__host-toggle:hover {
+  border-color: rgba(47, 120, 255, 0.24);
+  background: rgba(47, 120, 255, 0.08);
+  color: var(--heading);
+}
+
+.plugin-install-preview__host-toggle:focus-visible {
+  outline: 2px solid rgba(47, 120, 255, 0.2);
+  outline-offset: 2px;
+}
+
+.plugin-install-preview__host-toggle.is-selected {
+  border-color: rgba(47, 120, 255, 0.26);
+  background: linear-gradient(180deg, rgba(47, 120, 255, 0.18), rgba(47, 120, 255, 0.11));
+  color: #1d4ed8;
+  box-shadow:
+    0 0 0 1px rgba(47, 120, 255, 0.1),
+    0 6px 14px rgba(47, 120, 255, 0.12);
+}
+
+.plugin-install-preview__host-toggle.is-selected::after {
+  content: "✓";
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  margin-left: 0;
+  border-radius: 999px;
+  background: #1d4ed8;
+  color: #ffffff;
+  font-size: 0.66rem;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.plugin-install-preview__host-toggle.is-selected .plugin-install-preview__host-icon {
+  border-color: rgba(29, 78, 216, 0.18);
+  background: rgba(255, 255, 255, 0.92);
+  color: #1d4ed8;
+}
+
+@media (max-width: 980px) {
+  .plugin-install-preview__summary {
+    grid-template-columns: 1fr;
+  }
+
+  .plugin-install-preview__summary-side {
+    justify-items: start;
+    width: 100%;
+  }
+
+  .plugin-install-preview__host-icons {
+    justify-content: flex-start;
+    max-width: 100%;
+  }
+}
+
+.plugin-install-preview__host-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: 1px solid rgba(117, 128, 147, 0.16);
+  border-radius: 7px;
+  background: rgba(117, 128, 147, 0.08);
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  line-height: 1;
+  overflow: hidden;
+}
+
+.plugin-install-preview__host-icon img {
+  width: 15px;
+  height: 15px;
+  object-fit: contain;
+  display: block;
 }
 
 .local-install-layout {
@@ -6055,6 +6331,14 @@ button.settings-form-item:disabled {
 }
 
 @media (max-width: 700px) {
+  .repo-form__source-row {
+    grid-template-columns: 1fr;
+  }
+
+  .repo-form__field--branch {
+    min-width: 0;
+  }
+
   .settings-tool-grid {
     grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
     padding-right: 14px;
@@ -6498,6 +6782,49 @@ button.settings-form-item:disabled {
   opacity: 0.78;
 }
 
+.plugins-page__plugin-icon {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  background: rgba(117, 128, 147, 0.08);
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 700;
+  line-height: 1;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.7) inset;
+}
+
+.plugins-page__plugin-type-mark {
+  position: absolute;
+  top: -4px;
+  left: -4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  border: 1px solid rgba(255, 255, 255, 0.84);
+  border-radius: 6px;
+  background: #eff5ff;
+  color: #3b82f6;
+  box-shadow:
+    0 2px 6px rgba(15, 23, 42, 0.1),
+    0 1px 0 rgba(255, 255, 255, 0.9) inset;
+}
+
+.plugins-page__plugin-type-mark svg {
+  width: 10px;
+  height: 10px;
+}
+
+.plugins-page__plugin-icon-label {
+  line-height: 1;
+}
+
 .plugins-page__status-filter {
   position: relative;
   display: inline-flex;
@@ -6705,6 +7032,42 @@ button.settings-form-item:disabled {
   font-weight: 750;
 }
 
+.plugins-page__component-icon svg {
+  width: 17px;
+  height: 17px;
+  display: block;
+}
+
+.plugins-page__component-icon--skill {
+  background: rgba(59, 130, 246, 0.08);
+  color: #475569;
+}
+
+.plugins-page__component-icon--mcp {
+  background: rgba(20, 184, 166, 0.08);
+  color: #475569;
+}
+
+.plugins-page__component-icon--subagent {
+  background: rgba(99, 102, 241, 0.08);
+  color: #6366f1;
+}
+
+.plugins-page__component-icon--command {
+  background: rgba(100, 116, 139, 0.08);
+  color: #64748b;
+}
+
+.plugins-page__component-icon--rule {
+  background: rgba(245, 158, 11, 0.1);
+  color: #b45309;
+}
+
+.plugins-page__component-icon--hook {
+  background: rgba(16, 185, 129, 0.08);
+  color: #047857;
+}
+
 .plugins-page__component-copy {
   display: grid;
   gap: 3px;
@@ -6744,7 +7107,21 @@ button.settings-form-item:disabled {
 }
 
 .plugins-page__component-more {
+  justify-self: start;
   margin: 0 0 0 8px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.plugins-page__component-more:hover {
+  color: var(--heading);
+}
+
+.plugins-page__component-more:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 70%, transparent);
+  outline-offset: 3px;
 }
 
 .plugins-page__preview-backdrop {
@@ -7161,6 +7538,7 @@ button.settings-form-item:disabled {
   display: flex;
   align-items: center;
   justify-content: flex-start;
+  gap: 10px;
   min-width: 0;
   padding: 0;
   border: 0;
@@ -7172,6 +7550,13 @@ button.settings-form-item:disabled {
 
 .tool-list-row__summary:focus-visible {
   outline: none;
+}
+
+.tool-list-row__leading {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
 }
 
 .tool-list-row__title-stack {

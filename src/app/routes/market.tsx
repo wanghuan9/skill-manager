@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { useTranslate } from "@/app/i18n";
 import { MarketplaceInstallPanel } from "@/features/install/components/MarketplaceInstallPanel";
 import { McpMarketplacePanel } from "@/features/install/components/McpMarketplacePanel";
+import { PluginInstallPanel } from "@/features/install/components/PluginInstallPanel";
 import { RepoInstallPanel } from "@/features/install/components/RepoInstallPanel";
 import { LocalSkillImportList } from "@/features/local-skills/components/LocalSkillImportList";
 import { useSkillWorkspace } from "@/features/skills/state/skill-workspace";
@@ -11,7 +12,7 @@ import { buildInstalledMarketplaceSkillIds } from "@/features/skills/utils/skill
 import { dedupeMarketplaceSkills } from "@/features/skills/utils/marketplace-skills";
 
 export type InstallTab = "market" | "git" | "local";
-export type InstallCategory = "skill" | "mcp";
+export type InstallCategory = "skill" | "mcp" | "plugin";
 
 export const installTabs: { key: InstallTab; labelKey: "install.tab.market" | "install.tab.git" | "install.tab.local" }[] = [
   { key: "market", labelKey: "install.tab.market" },
@@ -19,9 +20,10 @@ export const installTabs: { key: InstallTab; labelKey: "install.tab.market" | "i
   { key: "local", labelKey: "install.tab.local" },
 ];
 
-const installCategories: { key: InstallCategory; labelKey: "install.category.skill" | "install.category.mcp" }[] = [
+const installCategories: { key: InstallCategory; labelKey: "install.category.skill" | "install.category.mcp" | "install.category.plugin" }[] = [
   { key: "skill", labelKey: "install.category.skill" },
   { key: "mcp", labelKey: "install.category.mcp" },
+  { key: "plugin", labelKey: "install.category.plugin" },
 ];
 
 const sourceTabs: MarketplaceSourceSite[] = ["skills.sh", "skillsmp"];
@@ -286,11 +288,13 @@ export function MarketRoute(props: MarketRouteProps) {
             {activeInstallTab === "git" ? <RepoInstallPanel /> : null}
             {activeInstallTab === "local" ? <LocalSkillImportList /> : null}
           </>
-        ) : (
+        ) : activeInstallCategory === "mcp" ? (
           <McpMarketplacePanel
             searchQuery={mcpSearchQuery}
             onSearchQueryChange={setMcpSearchQuery}
           />
+        ) : (
+          <PluginInstallPanel />
         )}
       </section>
     </div>
@@ -347,28 +351,43 @@ function InstallCategoryIcon(props: { category: InstallCategory }) {
     );
   }
 
+  if (category === "mcp") {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path
+          d="M2.4 11.3 11.45 2.26a3.2 3.2 0 0 1 4.53 4.53l-6.84 6.83"
+          fill="none"
+          stroke="currentColor"
+          strokeLinecap="round"
+          strokeWidth="1.6"
+        />
+        <path
+          d="m9.24 13.53 6.74-6.74a3.2 3.2 0 0 1 4.52 0l.05.05a3.2 3.2 0 0 1 0 4.52l-8.19 8.19a1.07 1.07 0 0 0 0 1.51l1.68 1.68"
+          fill="none"
+          stroke="currentColor"
+          strokeLinecap="round"
+          strokeWidth="1.6"
+        />
+        <path
+          d="m13.71 4.53-6.69 6.69a3.2 3.2 0 0 0 4.53 4.53l6.69-6.7"
+          fill="none"
+          stroke="currentColor"
+          strokeLinecap="round"
+          strokeWidth="1.6"
+        />
+      </svg>
+    );
+  }
+
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true">
       <path
-        d="M2.4 11.3 11.45 2.26a3.2 3.2 0 0 1 4.53 4.53l-6.84 6.83"
+        d="M9 3v5m6-5v5M6.5 8.5h11v4.3a5.5 5.5 0 0 1-11 0V8.5ZM12 18.3V21"
         fill="none"
         stroke="currentColor"
+        strokeWidth="1.8"
         strokeLinecap="round"
-        strokeWidth="1.6"
-      />
-      <path
-        d="m9.24 13.53 6.74-6.74a3.2 3.2 0 0 1 4.52 0l.05.05a3.2 3.2 0 0 1 0 4.52l-8.19 8.19a1.07 1.07 0 0 0 0 1.51l1.68 1.68"
-        fill="none"
-        stroke="currentColor"
-        strokeLinecap="round"
-        strokeWidth="1.6"
-      />
-      <path
-        d="m13.71 4.53-6.69 6.69a3.2 3.2 0 0 0 4.53 4.53l6.69-6.7"
-        fill="none"
-        stroke="currentColor"
-        strokeLinecap="round"
-        strokeWidth="1.6"
+        strokeLinejoin="round"
       />
     </svg>
   );

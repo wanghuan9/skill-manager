@@ -20,6 +20,7 @@ type RowBadge = {
 type ToolListRowProps = {
   name: string;
   subtitle: string;
+  leading?: ReactNode;
   badges?: RowBadge[];
   expanded: boolean;
   onExpandedChange: (expanded: boolean) => void;
@@ -28,7 +29,7 @@ type ToolListRowProps = {
 };
 
 export function ToolListRow(props: ToolListRowProps) {
-  const { actions = [], badges = [], details, expanded, name, onExpandedChange, subtitle } = props;
+  const { actions = [], badges = [], details, expanded, leading, name, onExpandedChange, subtitle } = props;
 
   return (
     <article className={`tool-list-row${expanded ? " is-expanded" : ""}`}>
@@ -40,6 +41,7 @@ export function ToolListRow(props: ToolListRowProps) {
           aria-expanded={expanded}
           aria-label={`${expanded ? "收起" : "展开"} ${name}`}
         >
+          {leading ? <span className="tool-list-row__leading">{leading}</span> : null}
           <div className="tool-list-row__title-stack">
             <div className="tool-list-row__title-row">
               <strong>{name}</strong>

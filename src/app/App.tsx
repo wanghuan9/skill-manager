@@ -16,7 +16,6 @@ import {
 import { SettingsRoute } from "@/app/routes/settings";
 import { AboutRoute } from "@/app/routes/about";
 import { PluginsRoute } from "@/app/routes/plugins";
-import { CliRoute } from "@/app/routes/cli";
 import { AppI18nProvider, tx, useTranslate } from "@/app/i18n";
 import { NotificationProvider } from "@/app/notifications";
 import { useFailureReporter } from "@/app/failure-feedback";
@@ -42,9 +41,8 @@ import { isToolInstalledStatus } from "@/features/skills/utils/tool-status";
 
 type RouteKey =
   | "skills"
-  | "tools"
   | "plugins"
-  | "cli"
+  | "tools"
   | "install"
   | "settings"
   | "about";
@@ -63,19 +61,14 @@ const routes: RouteDefinition[] = [
     descriptionKey: "app.nav.skills.description",
   },
   {
-    key: "tools",
-    labelKey: "app.nav.tools.label",
-    descriptionKey: "app.nav.tools.description",
-  },
-  {
     key: "plugins",
     labelKey: "app.nav.plugins.label",
     descriptionKey: "app.nav.plugins.description",
   },
   {
-    key: "cli",
-    labelKey: "app.nav.cli.label",
-    descriptionKey: "app.nav.cli.description",
+    key: "tools",
+    labelKey: "app.nav.tools.label",
+    descriptionKey: "app.nav.tools.description",
   },
   {
     key: "install",
@@ -126,6 +119,21 @@ function NavRouteIcon(props: { route: RouteKey }) {
       <svg viewBox="0 0 24 24" aria-hidden="true">
         <path
           d="M12 4v10m0 0 4-4m-4 4-4-4M5 19h14"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.8"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+    );
+  }
+
+  if (route === "plugins") {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path
+          d="M9 3v5m6-5v5M6.5 8.5h11v4.3a5.5 5.5 0 0 1-11 0V8.5ZM12 18.3V21"
           fill="none"
           stroke="currentColor"
           strokeWidth="1.8"
@@ -219,9 +227,6 @@ function renderRoute(
   }
   if (route === "plugins") {
     return <PluginsRoute />;
-  }
-  if (route === "cli") {
-    return <CliRoute />;
   }
   if (route === "settings") {
     return <SettingsRoute />;
@@ -726,17 +731,6 @@ function AppContent() {
                 <div
                   className="install-header-toolbar-slot"
                   id="install-header-toolbar-slot"
-                />
-              </div>
-              <p>{activeDescription}</p>
-            </div>
-          ) : activeRoute === "cli" ? (
-            <div className="page-header--split">
-              <div className="page-header__row">
-                <h1>{tx(language, activeDefinition.labelKey)}</h1>
-                <div
-                  className="mcp-header-toolbar-slot"
-                  id="tool-list-header-toolbar-slot"
                 />
               </div>
               <p>{activeDescription}</p>

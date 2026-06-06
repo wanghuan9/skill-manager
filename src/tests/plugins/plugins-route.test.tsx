@@ -1,4 +1,4 @@
-import { screen, within } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, vi } from "vitest";
 import userEvent from "@testing-library/user-event";
 import { PluginsRoute } from "@/app/routes/plugins";
@@ -64,6 +64,30 @@ test("opens plugin git source links externally", async () => {
   openSpy.mockRestore();
 });
 
+test("prefers plugin source url over source label in details", async () => {
+  const plugins: PluginSummary[] = [
+    {
+      ...pluginFixtures[0],
+      hostTool: "cursor",
+      name: "raisely",
+      sourceType: "git",
+      sourceLabel: "raisely",
+      sourceUrl: "https://github.com/raisely/cursor-plugin.git",
+      rootPath: "/Users/demo/.cursor/plugins/local/raisely",
+    },
+  ];
+  vi.spyOn(skillClient, "fetchInstalledPlugins").mockResolvedValueOnce(plugins);
+
+  renderWithI18n(<PluginsRoute />);
+
+  await screen.findByRole("tab", { name: /Cursor/ });
+  await userEvent.click(screen.getByRole("tab", { name: /Cursor/ }));
+  await screen.findByText("raisely");
+  await userEvent.click(screen.getByRole("button", { name: /展开 raisely/ }));
+
+  expect(screen.getByText("https://github.com/raisely/cursor-plugin.git")).toBeInTheDocument();
+});
+
 test("renders component summaries as separate badges and keeps the plugin description as subtitle", async () => {
   renderWithI18n(<PluginsRoute />);
 
@@ -72,18 +96,21 @@ test("renders component summaries as separate badges and keeps the plugin descri
   await screen.findByText("Repo Scout");
   const repoScoutRow = screen.getByRole("button", { name: /展开 Repo Scout/ });
   const subtitle = repoScoutRow.querySelector(".tool-list-row__subtitle");
+  const pluginIcon = repoScoutRow.querySelector(".plugins-page__plugin-icon");
   const badgeTexts = Array.from(
     repoScoutRow.querySelectorAll(".status-badge"),
   ).map((node) => node.textContent?.trim());
 
+  expect(pluginIcon).toBeInTheDocument();
+  expect(pluginIcon).toHaveTextContent("R");
   expect(subtitle).toHaveTextContent("扫描仓库中的插件组件，并帮助追踪插件资产来源。");
   expect(badgeTexts[0]).toBe("已启用");
-  expect(badgeTexts[1]).toBe("7 agents");
-  expect(badgeTexts[2]).toBe("7 skill");
-  expect(badgeTexts[3]).toBe("1 mcp");
-  expect(badgeTexts[4]).toBe("1 rule");
-  expect(badgeTexts[5]).toBe("1 hook");
-  expect(badgeTexts[6]).toBe("1 command");
+  expect(badgeTexts[1]).toBe("7 skill");
+  expect(badgeTexts[2]).toBe("1 mcp");
+  expect(badgeTexts[3]).toBe("7 agents");
+  expect(badgeTexts[4]).toBe("1 command");
+  expect(badgeTexts[5]).toBe("1 rule");
+  expect(badgeTexts[6]).toBe("1 hook");
   expect(badgeTexts).toHaveLength(7);
 });
 
@@ -102,6 +129,47 @@ test("filters plugin list by enabled state", async () => {
   expect(screen.getByText("ecc")).toBeInTheDocument();
 });
 
+test("shows refresh loading animation in the plugin toolbar", async () => {
+  const deferredFetch: {
+    resolve?: (value: PluginSummary[]) => void;
+  } = {};
+  const fetchSpy = vi
+    .spyOn(skillClient, "fetchInstalledPlugins")
+    .mockResolvedValueOnce(pluginFixtures)
+    .mockImplementationOnce(
+      () =>
+        new Promise<PluginSummary[]>((resolve) => {
+          deferredFetch.resolve = resolve;
+        }),
+    );
+
+  renderWithI18n(<PluginsRoute />);
+
+  await screen.findByRole("tab", { name: /Claude Code/ });
+  const refreshButton = screen.getByRole("button", { name: "刷新" });
+
+  await userEvent.click(refreshButton);
+
+  const loadingButton = await screen.findByRole("button", { name: "刷新中..." });
+  expect(loadingButton).toBeDisabled();
+  expect(
+    loadingButton.querySelector(".skills-toolbar-button__svg.is-spinning"),
+  ).toBeInTheDocument();
+
+  if (!deferredFetch.resolve) {
+    throw new Error("missing plugin fetch resolver");
+  }
+  deferredFetch.resolve(pluginFixtures);
+
+  await waitFor(() => {
+    expect(
+      screen.getByRole("button", { name: "刷新" }),
+    ).toBeEnabled();
+  });
+
+  fetchSpy.mockRestore();
+});
+
 test("toggles plugin enabled state from the plugin list", async () => {
   renderWithI18n(<PluginsRoute />);
 
@@ -116,6 +184,50 @@ test("toggles plugin enabled state from the plugin list", async () => {
 
   expect(await screen.findByRole("button", { name: "关闭 ecc 插件" })).toBeInTheDocument();
   expect(screen.getAllByText("已启用").length).toBeGreaterThan(0);
+});
+
+test("opens a plugin folder from the plugin list", async () => {
+  const openPathSpy = vi.spyOn(skillClient, "openPathInFinder").mockResolvedValue(undefined);
+
+  renderWithI18n(<PluginsRoute />);
+
+  await screen.findByRole("tab", { name: /Claude Code/ });
+  expect(await screen.findByText("ecc")).toBeInTheDocument();
+
+  await userEvent.click(screen.getByRole("button", { name: "在访达中打开 ecc 插件目录" }));
+
+  expect(openPathSpy).toHaveBeenCalledWith({
+    path: "/Users/demo/.claude/plugins/cache/ecc/ecc/1.10.0",
+  });
+
+  openPathSpy.mockRestore();
+});
+
+test("deletes a plugin only after confirmation", async () => {
+  const deleteSpy = vi.spyOn(skillClient, "deletePlugin");
+
+  renderWithI18n(<PluginsRoute />);
+
+  await screen.findByRole("tab", { name: /Claude Code/ });
+  expect(await screen.findByText("ecc")).toBeInTheDocument();
+
+  await userEvent.click(screen.getByRole("button", { name: "删除 ecc 插件" }));
+
+  expect(deleteSpy).not.toHaveBeenCalled();
+  expect(screen.getByRole("button", { name: "确认删除 ecc 插件" })).toHaveTextContent("确认");
+
+  await userEvent.click(screen.getByRole("button", { name: "确认删除 ecc 插件" }));
+
+  await waitFor(() => {
+    expect(deleteSpy).toHaveBeenCalledWith({
+      pluginId: "ecc",
+      hostTool: "claude-code",
+      rootPath: "/Users/demo/.claude/plugins/cache/ecc/ecc/1.10.0",
+    });
+  });
+  expect(screen.queryByText("ecc")).not.toBeInTheDocument();
+
+  deleteSpy.mockRestore();
 });
 
 test("shows plugin toggle failures without inserting an empty list card", async () => {
@@ -153,13 +265,28 @@ test("switches plugin list by host tab and shows cross-host relation in details"
   expect(screen.getByText("main")).toBeInTheDocument();
   expect(screen.getByText("Revision")).toBeInTheDocument();
   expect(screen.getAllByText("4f2c1ab").length).toBeGreaterThan(0);
-  expect(screen.getByText("MCPs")).toBeInTheDocument();
+  expect(screen.getByText("MCP")).toBeInTheDocument();
   expect(screen.getByText("Skills")).toBeInTheDocument();
   expect(screen.getByText("Subagents")).toBeInTheDocument();
   expect(screen.getByText("Rules")).toBeInTheDocument();
   expect(screen.getByText("Hooks")).toBeInTheDocument();
   expect(screen.getByText("repo-scout-skill")).toBeInTheDocument();
   expect(screen.getByText("codebase-researcher")).toBeInTheDocument();
+  const detailPanel = screen.getByText("基本信息").closest(".plugins-page__detail-panel");
+  expect(detailPanel).not.toBeNull();
+  const sectionTitles = Array.from(
+    (detailPanel as HTMLElement).querySelectorAll(".plugins-page__component-section-header h3"),
+  ).map((heading) => heading.textContent?.trim());
+  expect(sectionTitles.slice(0, 3)).toEqual(["Skills", "MCP", "Subagents"]);
+  expect(
+    screen.getByRole("button", { name: /repo-scout-skill/ }).querySelector(".plugins-page__component-icon--skill svg"),
+  ).toBeInTheDocument();
+  expect(
+    screen.getByRole("button", { name: /mcp.json/ }).querySelector(".plugins-page__component-icon--mcp svg"),
+  ).toBeInTheDocument();
+  expect(
+    screen.getByRole("button", { name: /codebase-researcher/ }).querySelector(".plugins-page__component-icon--subagent svg"),
+  ).toBeInTheDocument();
   expect(screen.getAllByText("View 2 More").length).toBeGreaterThan(0);
   expect(screen.getByText("也安装在")).toBeInTheDocument();
   const relatedHostsField = screen.getByText("也安装在").closest("div");
@@ -168,6 +295,40 @@ test("switches plugin list by host tab and shows cross-host relation in details"
   expect(
     within(relatedHostsField as HTMLDivElement).getByText("Claude Code"),
   ).toBeInTheDocument();
+});
+
+test("expands and collapses hidden plugin components by section", async () => {
+  renderWithI18n(<PluginsRoute />);
+
+  await screen.findByRole("tab", { name: /Codex/ });
+  await userEvent.click(screen.getByRole("tab", { name: /Codex/ }));
+  await userEvent.click(
+    await screen.findByRole("button", { name: /展开 Repo Scout/ }),
+  );
+
+  const skillsSection = screen.getByRole("heading", {
+    name: "Skills",
+    level: 3,
+  }).closest("section");
+  expect(skillsSection).not.toBeNull();
+  expect(screen.queryByText("repo-release-notes")).not.toBeInTheDocument();
+
+  await userEvent.click(
+    within(skillsSection as HTMLElement).getByRole("button", {
+      name: "View 2 More",
+    }),
+  );
+
+  expect(screen.getByText("repo-release-notes")).toBeInTheDocument();
+  expect(screen.getByText("repo-owner-map")).toBeInTheDocument();
+
+  await userEvent.click(
+    within(skillsSection as HTMLElement).getByRole("button", {
+      name: "Show Less",
+    }),
+  );
+
+  expect(screen.queryByText("repo-release-notes")).not.toBeInTheDocument();
 });
 
 test("opens a plugin component preview from the component list", async () => {
@@ -191,6 +352,12 @@ test("opens a plugin component preview from the component list", async () => {
   await userEvent.click(screen.getByRole("button", { name: "编辑" }));
   expect(screen.getByRole("textbox")).toBeInTheDocument();
   expect(screen.getByDisplayValue(/本地开发预览内容/)).toBeInTheDocument();
+
+  fireEvent.keyDown(document, { key: "Escape", code: "Escape" });
+
+  await waitFor(() => {
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
 });
 
 test("keeps Cursor expansion scoped to the clicked install instance when plugin ids repeat", async () => {

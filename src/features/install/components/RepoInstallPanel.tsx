@@ -1,10 +1,11 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { flushSync } from "react-dom";
 import { useTranslate } from "@/app/i18n";
 import { useNotifications } from "@/app/notifications";
 import { useFailureReporter } from "@/app/failure-feedback";
 import { useSkillWorkspace } from "@/features/skills/state/skill-workspace";
-import type { RepoSkillCandidate } from "@/features/skills/state/skill-store";
+import { fetchGitRepoBranches } from "@/features/skills/api/skill-client";
+import type { GitBranchOption, RepoSkillCandidate } from "@/features/skills/state/skill-store";
 import { formatSkillDescription } from "@/features/skills/utils/skill-description";
 
 const DISCOVERING_MIN_DURATION_MS = 450;
@@ -51,12 +52,16 @@ export function RepoInstallPanel() {
   const { notify } = useNotifications();
   const reportFailure = useFailureReporter();
   const [repoInput, setRepoInput] = useState("");
+  const [branches, setBranches] = useState<GitBranchOption[]>([]);
+  const [selectedBranch, setSelectedBranch] = useState("");
   const [candidates, setCandidates] = useState<RepoSkillCandidate[]>([]);
   const [selectedPaths, setSelectedPaths] = useState<string[]>([]);
+  const [isLoadingBranches, setIsLoadingBranches] = useState(false);
   const [isDiscovering, setIsDiscovering] = useState(false);
   const [isInstalling, setIsInstalling] = useState(false);
   const normalizedRepoUrl = useMemo(() => normalizeRepoInput(repoInput), [repoInput]);
   const isValid = isValidRepoUrl(normalizedRepoUrl);
+  const selectedGitRef = selectedBranch.trim() || undefined;
   const installedSkillNames = useMemo(
     () => new Set(installedSkills.map((skill) => skill.name)),
     [installedSkills],
@@ -65,6 +70,50 @@ export function RepoInstallPanel() {
     () => candidates.some((candidate) => !installedSkillNames.has(candidate.name)),
     [candidates, installedSkillNames],
   );
+
+  useEffect(() => {
+    setBranches([]);
+    setSelectedBranch("");
+    setCandidates([]);
+    setSelectedPaths([]);
+    if (!isValid) {
+      setIsLoadingBranches(false);
+      return;
+    }
+
+    let active = true;
+    setIsLoadingBranches(true);
+    const timer = window.setTimeout(() => {
+      void fetchGitRepoBranches({ repoUrl: normalizedRepoUrl })
+        .then((nextBranches) => {
+          if (!active) {
+            return;
+          }
+          setBranches(nextBranches);
+          setSelectedBranch(
+            nextBranches.find((branch) => branch.isSelected)?.name
+              ?? nextBranches.find((branch) => branch.isDefault)?.name
+              ?? nextBranches[0]?.name
+              ?? "",
+          );
+        })
+        .catch(() => {
+          if (active) {
+            setBranches([]);
+          }
+        })
+        .finally(() => {
+          if (active) {
+            setIsLoadingBranches(false);
+          }
+        });
+    }, 350);
+
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+    };
+  }, [isValid, normalizedRepoUrl]);
 
   async function handleDiscover(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -81,7 +130,7 @@ export function RepoInstallPanel() {
 
     try {
       const [discovered] = await Promise.all([
-        discoverRepoSkills(normalizedRepoUrl),
+        discoverRepoSkills(normalizedRepoUrl, selectedGitRef),
         wait(DISCOVERING_MIN_DURATION_MS),
       ]);
       setCandidates(discovered);
@@ -105,7 +154,7 @@ export function RepoInstallPanel() {
 
     setIsInstalling(true);
     try {
-      await installFromRepo(normalizedRepoUrl, selectedPaths);
+      await installFromRepo(normalizedRepoUrl, selectedPaths, selectedGitRef);
       notify({ message: t("install.repo.success.selectedInstalled"), tone: "success" });
       setRepoInput("");
       setCandidates([]);
@@ -125,15 +174,37 @@ export function RepoInstallPanel() {
       {candidates.length === 0 ? (
         <form className="repo-form" onSubmit={(event) => void handleDiscover(event)}>
           <div className="repo-form__section">
-            <label className="repo-form__field">
-              <span className="repo-form__label">{t("install.repo.url")}</span>
-              <input
-                type="text"
-                placeholder="https://git.example.com/user/repo"
-                value={repoInput}
-                onChange={(event) => setRepoInput(event.target.value)}
-              />
-            </label>
+            <div className="repo-form__source-row">
+              <label className="repo-form__field">
+                <span className="repo-form__label">{t("install.repo.url")}</span>
+                <input
+                  type="text"
+                  placeholder="https://git.example.com/user/repo"
+                  value={repoInput}
+                  onChange={(event) => setRepoInput(event.target.value)}
+                />
+              </label>
+              {branches.length > 0 ? (
+                <label className="repo-form__field repo-form__field--branch">
+                  <span className="repo-form__label">{t("install.repo.gitBranch")}</span>
+                  <select
+                    value={selectedBranch}
+                    disabled={!isValid || isLoadingBranches}
+                    onChange={(event) => {
+                      setSelectedBranch(event.target.value);
+                      setCandidates([]);
+                      setSelectedPaths([]);
+                    }}
+                  >
+                    {branches.map((branch) => (
+                      <option key={branch.name} value={branch.name}>
+                        {branch.isDefault ? t("install.repo.defaultBranch", { branch: branch.name }) : branch.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ) : null}
+            </div>
             <div className="repo-form__hint-block">
               <p className="repo-form__hint-title">{t("install.repo.supported")}</p>
               <ul className="repo-form__hint-list">

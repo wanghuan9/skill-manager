@@ -593,7 +593,10 @@ export const pluginFixtures: PluginSummary[] = [
 
 export const pluginProbeFixture: PluginProbeResult = {
   tool: "codex",
+  compatibleHostTools: ["codex"],
   kind: "plugin-repo",
+  name: "repo-scout",
+  description: "帮助团队巡检仓库结构、风险和协作约定。",
   pluginRoot: "/Users/demo/workspace/repo-scout",
   manifestPath: "/Users/demo/workspace/repo-scout/.codex-plugin/plugin.json",
   marketplaceManifestPath: "",

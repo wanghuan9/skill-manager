@@ -32,13 +32,367 @@ test("renders install-source and repository install panels", async () => {
   expect(screen.getByText("通过安装源、Git 仓库或本地目录纳入新的 skill 和 MCP")).toBeInTheDocument();
   expect(screen.getByRole("tab", { name: "Skill" })).toHaveAttribute("aria-selected", "true");
   expect(screen.getByRole("tab", { name: "MCP" })).toBeInTheDocument();
+  expect(screen.getByRole("tab", { name: "Plugin" })).toBeInTheDocument();
   expect(screen.getByRole("tab", { name: "市场安装" })).toBeInTheDocument();
   expect(screen.getByRole("tab", { name: "skills.sh" })).toBeInTheDocument();
   expect(screen.getByRole("tab", { name: "skillsmp" })).toBeInTheDocument();
   expect(screen.queryByText("安装后默认应用到所有已安装工具")).not.toBeInTheDocument();
   await userEvent.click(screen.getByRole("tab", { name: "Git 安装" }));
   expect(screen.getByRole("textbox", { name: "Git 仓库地址" })).toBeInTheDocument();
+  expect(screen.queryByRole("combobox", { name: "Git 分支" })).not.toBeInTheDocument();
   expect(screen.getByRole("button", { name: "识别仓库技能" })).toBeInTheDocument();
+});
+
+test("discovers repo skills with the full branch from GitLab tree urls", async () => {
+  const sourceUrl =
+    "https://git.example.com/example-org/example-repo/-/tree/feature/FEATURE-123?ref_type=heads";
+  const branchSpy = vi.spyOn(skillClient, "fetchGitRepoBranches").mockResolvedValue([
+    { name: "main", isDefault: true, isSelected: false },
+    { name: "feature/FEATURE-123", isDefault: false, isSelected: true },
+  ]);
+  const discoverSpy = vi.spyOn(skillClient, "installSkillFromRepo").mockResolvedValue([]);
+
+  render(<App />);
+  await userEvent.click(screen.getByRole("button", { name: /安装/ }));
+  await userEvent.click(screen.getByRole("tab", { name: "Git 安装" }));
+  await userEvent.type(screen.getByRole("textbox", { name: "Git 仓库地址" }), sourceUrl);
+
+  await waitFor(() => {
+    expect(screen.getByRole("combobox", { name: "Git 分支" })).toHaveValue("feature/FEATURE-123");
+  });
+  await userEvent.click(screen.getByRole("button", { name: "识别仓库技能" }));
+
+  await waitFor(() => {
+    expect(discoverSpy).toHaveBeenCalledWith({
+      repoUrl: sourceUrl,
+      gitRef: "feature/FEATURE-123",
+    });
+  });
+
+  branchSpy.mockRestore();
+  discoverSpy.mockRestore();
+});
+
+test("probes plugin sources with Codex-style inputs and host selection", async () => {
+  const sourceUrl =
+    "https://git.example.com/example-org/example-repo/-/tree/master/example-plugin?ref_type=heads";
+  const probeSpy = vi.spyOn(skillClient, "probePluginSourceCandidates").mockResolvedValue([{
+    tool: "codex",
+    compatibleHostTools: ["codex", "claude-code"],
+    kind: "plugin-repo",
+    name: "example-plugin",
+    description: "基于 Skill 的模块化 Example Plugin 框架",
+    pluginRoot: "/tmp/example-repo/example-plugin",
+    manifestPath: "/tmp/example-repo/example-plugin/.codex-plugin/plugin.json",
+    marketplaceManifestPath: "",
+    components: [
+      {
+        id: "skills/workflow-code-generation",
+        name: "workflow-code-generation",
+        description: "",
+        assetType: "skill",
+        ownerPluginId: "",
+        packageItemId: "skills/workflow-code-generation",
+      },
+      {
+        id: "skills/workflow-code-review",
+        name: "workflow-code-review",
+        description: "",
+        assetType: "skill",
+        ownerPluginId: "",
+        packageItemId: "skills/workflow-code-review",
+      },
+      {
+        id: "agents/codebase-researcher.md",
+        name: "codebase-researcher.md",
+        description: "",
+        assetType: "subagent",
+        ownerPluginId: "",
+        packageItemId: "agents/codebase-researcher.md",
+      },
+      {
+        id: "commands/code-review.md",
+        name: "code-review.md",
+        description: "",
+        assetType: "command",
+        ownerPluginId: "",
+        packageItemId: "commands/code-review.md",
+      },
+      {
+        id: ".mcp.json/context7",
+        name: "context7",
+        description: "",
+        assetType: "mcp",
+        ownerPluginId: "",
+        packageItemId: ".mcp.json",
+      },
+    ],
+    sourceType: "git",
+    sourceUrl: "",
+    isGitRepo: true,
+    gitRoot: "/tmp/example-repo",
+    confidence: "high",
+    installStrategy: "codex-marketplace",
+    warnings: [],
+  }]);
+
+  render(<App />);
+  await userEvent.click(screen.getByRole("button", { name: /安装/ }));
+  await userEvent.click(screen.getByRole("tab", { name: "Plugin" }));
+
+  expect(screen.getByRole("textbox", { name: "Git 仓库地址" })).toBeInTheDocument();
+  expect(screen.queryByRole("combobox", { name: "Git 分支" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("textbox", { name: "稀疏路径" })).not.toBeInTheDocument();
+
+  await userEvent.type(
+    screen.getByRole("textbox", { name: "Git 仓库地址" }),
+    sourceUrl,
+  );
+  await waitFor(() => {
+    expect(screen.getByRole("combobox", { name: "Git 分支" })).toHaveValue("main");
+  });
+  await userEvent.selectOptions(screen.getByRole("combobox", { name: "Git 分支" }), "master");
+  await userEvent.click(screen.getByRole("button", { name: "识别插件" }));
+
+  await waitFor(() => {
+    expect(probeSpy).toHaveBeenCalledWith({
+      source: "https://git.example.com/example-org/example-repo",
+      gitRef: "master",
+      sparsePath: "example-plugin",
+    });
+  });
+  expect(await screen.findByText("发现 1 个插件，请选择要安装的插件")).toBeInTheDocument();
+  expect(screen.getByText("2 skill")).toBeInTheDocument();
+  expect(screen.getByText("1 mcp")).toBeInTheDocument();
+  expect(screen.getByText("1 agents")).toBeInTheDocument();
+  expect(screen.getByText("1 command")).toBeInTheDocument();
+  expect(screen.getByText("基于 Skill 的模块化 Example Plugin 框架")).toBeInTheDocument();
+  expect(screen.queryByText(/根目录:/)).not.toBeInTheDocument();
+  expect(screen.queryByText(/Manifest:/)).not.toBeInTheDocument();
+  expect(screen.queryByText("兼容宿主")).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "选择插件 example-plugin" })).toHaveClass("is-selected");
+  expect(screen.getByRole("button", { name: /选择 Codex 作为 example-plugin 安装宿主/ })).toHaveAttribute("aria-pressed", "false");
+  expect(screen.getByRole("button", { name: /选择 Claude Code 作为 example-plugin 安装宿主/ })).toHaveAttribute("aria-pressed", "false");
+  expect(screen.queryByRole("button", { name: /Cursor 作为 example-plugin 安装宿主/ })).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "安装到选中宿主" })).toBeDisabled();
+
+  probeSpy.mockRestore();
+});
+
+test("probes GitLab tree plugin sources with sparse paths", async () => {
+  const sourceUrl =
+    "https://git.example.com/example-org/example-repo/-/tree/master/plugins/example-plugin?ref_type=heads";
+  const branchSpy = vi.spyOn(skillClient, "fetchGitRepoBranches").mockResolvedValue([
+    { name: "master", isDefault: true, isSelected: true },
+  ]);
+  const probeSpy = vi.spyOn(skillClient, "probePluginSourceCandidates").mockResolvedValue([{
+    tool: "claude-code",
+    compatibleHostTools: ["claude-code"],
+    kind: "plugin-repo",
+    name: "example-plugin",
+    description: "面向工作流编排与项目初始化的插件集合",
+    pluginRoot: "/tmp/example-repo/plugins/example-plugin",
+    manifestPath: "/tmp/example-repo/plugins/example-plugin/.claude-plugin/plugin.json",
+    marketplaceManifestPath: "",
+    components: [],
+    sourceType: "git",
+    sourceUrl: "",
+    isGitRepo: true,
+    gitRoot: "/tmp/example-repo",
+    confidence: "high",
+    installStrategy: "claude-plugin-dir",
+    warnings: [],
+  }]);
+
+  render(<App />);
+  await userEvent.click(screen.getByRole("button", { name: /安装/ }));
+  await userEvent.click(screen.getByRole("tab", { name: "Plugin" }));
+  await userEvent.type(screen.getByRole("textbox", { name: "Git 仓库地址" }), sourceUrl);
+
+  await waitFor(() => {
+    expect(screen.getByRole("combobox", { name: "Git 分支" })).toHaveValue("master");
+  });
+  await userEvent.click(screen.getByRole("button", { name: "识别插件" }));
+
+  await waitFor(() => {
+    expect(probeSpy).toHaveBeenCalledWith({
+      source: "https://git.example.com/example-org/example-repo",
+      gitRef: "master",
+      sparsePath: "plugins/example-plugin",
+    });
+  });
+
+  branchSpy.mockRestore();
+  probeSpy.mockRestore();
+});
+
+test("renders plugin probe title from manifest name instead of cache directory name", async () => {
+  const probeSpy = vi.spyOn(skillClient, "probePluginSourceCandidates").mockResolvedValue([{
+    tool: "cursor",
+    compatibleHostTools: ["cursor"],
+    kind: "plugin-repo",
+    name: "raisely",
+    description: "Connect Cursor to Raisely.",
+    pluginRoot: "/tmp/plugin-https-github-com-raisely-cursor-plugin-git",
+    manifestPath: "/tmp/plugin-https-github-com-raisely-cursor-plugin-git/.cursor-plugin/plugin.json",
+    marketplaceManifestPath: "",
+    components: [],
+    sourceType: "git",
+    sourceUrl: "https://github.com/raisely/cursor-plugin.git",
+    isGitRepo: true,
+    gitRoot: "/tmp/plugin-https-github-com-raisely-cursor-plugin-git",
+    confidence: "high",
+    installStrategy: "cursor-registration",
+    warnings: [],
+  }]);
+
+  render(<App />);
+  await userEvent.click(screen.getByRole("button", { name: /安装/ }));
+  await userEvent.click(screen.getByRole("tab", { name: "Plugin" }));
+  await userEvent.type(
+    screen.getByRole("textbox", { name: "Git 仓库地址" }),
+    "https://github.com/raisely/cursor-plugin.git",
+  );
+  await waitFor(() => {
+    expect(screen.getByRole("combobox", { name: "Git 分支" })).toHaveValue("main");
+  });
+  await userEvent.click(screen.getByRole("button", { name: "识别插件" }));
+
+  expect(await screen.findByText("raisely")).toBeInTheDocument();
+  expect(screen.queryByText("plugin-https-github-com-raisely-cursor-plugin-git")).not.toBeInTheDocument();
+
+  probeSpy.mockRestore();
+});
+
+test("probes repository roots and lists every plugin candidate", async () => {
+  const sourceUrl = "https://git.example.com/example-org/example-repo";
+  const branchSpy = vi.spyOn(skillClient, "fetchGitRepoBranches").mockResolvedValue([
+    { name: "master", isDefault: true, isSelected: true },
+  ]);
+  const probeSpy = vi.spyOn(skillClient, "probePluginSourceCandidates").mockResolvedValue([
+    {
+      tool: "codex",
+      compatibleHostTools: ["codex", "claude-code", "cursor"],
+      kind: "plugin-repo",
+      name: "example-plugin",
+      description: "基于 Skill 的模块化 Example Plugin 框架",
+      pluginRoot: "/tmp/example-repo/example-plugin",
+      manifestPath: "/tmp/example-repo/example-plugin/.codex-plugin/plugin.json",
+      marketplaceManifestPath: "",
+      components: [
+        {
+          id: "skills/workflow-code-generation",
+          name: "workflow-code-generation",
+          description: "",
+          assetType: "skill",
+          ownerPluginId: "",
+          packageItemId: "skills/workflow-code-generation",
+        },
+      ],
+      sourceType: "git",
+      sourceUrl: "",
+      isGitRepo: true,
+      gitRoot: "/tmp/example-repo",
+      confidence: "high",
+      installStrategy: "codex-marketplace",
+      warnings: [],
+    },
+    {
+      tool: "claude-code",
+      compatibleHostTools: ["claude-code"],
+      kind: "plugin-repo",
+      name: "example-plugin",
+      description: "面向工作流编排与项目初始化的插件集合",
+      pluginRoot: "/tmp/example-repo/plugins/example-plugin",
+      manifestPath: "/tmp/example-repo/plugins/example-plugin/.claude-plugin/plugin.json",
+      marketplaceManifestPath: "",
+      components: [
+        {
+          id: "commands/init-project.md",
+          name: "init-project.md",
+          description: "",
+          assetType: "command",
+          ownerPluginId: "",
+          packageItemId: "commands/init-project.md",
+        },
+      ],
+      sourceType: "git",
+      sourceUrl: "",
+      isGitRepo: true,
+      gitRoot: "/tmp/example-repo",
+      confidence: "high",
+      installStrategy: "claude-plugin-dir",
+      warnings: [],
+    },
+  ]);
+  const installSpy = vi.spyOn(skillClient, "installSelectedPluginProbes").mockResolvedValue([]);
+
+  render(<App />);
+  await userEvent.click(screen.getByRole("button", { name: /安装/ }));
+  await userEvent.click(screen.getByRole("tab", { name: "Plugin" }));
+  await userEvent.type(screen.getByRole("textbox", { name: "Git 仓库地址" }), sourceUrl);
+
+  await waitFor(() => {
+    expect(screen.getByRole("combobox", { name: "Git 分支" })).toHaveValue("master");
+  });
+  await userEvent.click(screen.getByRole("button", { name: "识别插件" }));
+
+  await waitFor(() => {
+    expect(probeSpy).toHaveBeenCalledWith({
+      source: sourceUrl,
+      gitRef: "master",
+    });
+  });
+  expect(await screen.findByText("发现 2 个插件，请选择要安装的插件")).toBeInTheDocument();
+  expect(await screen.findByText("example-plugin")).toBeInTheDocument();
+  expect(screen.getByText("example-plugin")).toBeInTheDocument();
+  expect(screen.getByText("1 skill")).toBeInTheDocument();
+  expect(screen.getByText("1 command")).toBeInTheDocument();
+  expect(screen.queryByRole("textbox", { name: "Git 仓库地址" })).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "返回" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "安装到选中宿主" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "选择插件 example-plugin" })).not.toHaveClass("is-selected");
+  expect(screen.getByRole("button", { name: "选择插件 example-plugin" })).not.toHaveClass("is-selected");
+  expect(screen.getByRole("button", { name: /选择 Codex 作为 example-plugin 安装宿主/ })).toHaveAttribute("aria-pressed", "false");
+  expect(screen.getByRole("button", { name: /选择 Claude Code 作为 example-plugin 安装宿主/ })).toHaveAttribute("aria-pressed", "false");
+  expect(screen.getByRole("button", { name: /选择 Cursor 作为 example-plugin 安装宿主/ })).toHaveAttribute("aria-pressed", "false");
+  await userEvent.click(screen.getByRole("button", { name: /选择 Claude Code 作为 example-plugin 安装宿主/ }));
+  await waitFor(() => {
+    expect(screen.getByRole("button", { name: "选择插件 example-plugin" })).toHaveClass("is-selected");
+    expect(screen.getByRole("button", { name: /取消选择 Claude Code 作为 example-plugin 安装宿主/ })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: /选择 Claude Code 作为 example-plugin 安装宿主/ })).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByRole("button", { name: "安装到选中宿主" })).toBeEnabled();
+  });
+  await userEvent.click(screen.getByRole("button", { name: "安装到选中宿主" }));
+  await waitFor(() => {
+    expect(installSpy).toHaveBeenCalledWith({
+      probes: [expect.objectContaining({ pluginRoot: "/tmp/example-repo/plugins/example-plugin" })],
+      hostTools: ["claude-code"],
+    });
+  });
+
+  branchSpy.mockRestore();
+  probeSpy.mockRestore();
+  installSpy.mockRestore();
+});
+
+test("uses browser fixtures to list example-repo plugin candidates", async () => {
+  const sourceUrl = "https://git.example.com/example-org/example-repo";
+
+  render(<App />);
+  await userEvent.click(screen.getByRole("button", { name: /安装/ }));
+  await userEvent.click(screen.getByRole("tab", { name: "Plugin" }));
+  await userEvent.type(screen.getByRole("textbox", { name: "Git 仓库地址" }), sourceUrl);
+
+  await waitFor(() => {
+    expect(screen.getByRole("combobox", { name: "Git 分支" })).toBeInTheDocument();
+  });
+  await userEvent.click(screen.getByRole("button", { name: "识别插件" }));
+
+  expect(await screen.findByText("example-plugin")).toBeInTheDocument();
+  expect(await screen.findByText("example-plugin")).toBeInTheDocument();
+  expect(screen.getByText("1 command")).toBeInTheDocument();
+  expect(screen.queryByRole("textbox", { name: "Git 仓库地址" })).not.toBeInTheDocument();
 });
 
 test("shows MCP marketplace separately from skill-only install methods", async () => {
@@ -631,9 +985,14 @@ test("discovers repo skills and allows multi-select install", async () => {
 
   expect(screen.getByRole("button", { name: "检查中..." })).toBeDisabled();
   expect(await screen.findByText("发现 2 个技能，请选择要安装的技能")).toBeInTheDocument();
+  expect(screen.queryByRole("textbox", { name: "Git 仓库地址" })).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "返回" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "安装选中技能" })).toBeInTheDocument();
   expect(screen.getByText("service-observer")).toBeInTheDocument();
   expect(screen.getByText("release-scribe")).toBeInTheDocument();
+
+  await userEvent.click(screen.getByRole("button", { name: "返回" }));
+  expect(screen.getByRole("textbox", { name: "Git 仓库地址" })).toBeInTheDocument();
 });
 
 test("installs a local skill from a typed path", async () => {

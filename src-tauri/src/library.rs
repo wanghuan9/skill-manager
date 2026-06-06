@@ -56,6 +56,10 @@ fn install_market_skill_into_repo_dir(
     // 优先使用传入的 skill_path，其次使用从 source_url 解析的 relative_path
     let relative_path = skill_path
         .map(|path| PathBuf::from(path.trim_matches('/')))
+        .or_else(|| {
+            tree_relative_path_for_branch(&source_spec.tree_segments, source_spec.branch.as_deref())
+                .flatten()
+        })
         .or(source_spec.relative_path.clone());
 
     if let Some(path) = relative_path.as_ref() {
@@ -659,7 +663,11 @@ pub fn clone_repo_skill(repo_url: &str, skill_name: &str) -> Result<String, Stri
 
     // 解析仓库 URL，如果包含 /tree/ 路径，使用 sparse checkout
     let source_spec = parse_market_source_url(repo_url)?;
-    if let Some(relative_path) = source_spec.relative_path.as_ref() {
+    let source_relative_path =
+        tree_relative_path_for_branch(&source_spec.tree_segments, source_spec.branch.as_deref())
+            .flatten()
+            .or_else(|| source_spec.relative_path.clone());
+    if let Some(relative_path) = source_relative_path.as_ref() {
         let mut sparse_paths = vec![relative_path.clone()];
         let fallback_relative_path = PathBuf::from("skills").join(relative_path);
         if *relative_path != fallback_relative_path {
@@ -732,12 +740,23 @@ pub fn clone_repo_skill(repo_url: &str, skill_name: &str) -> Result<String, Stri
     }
 }
 
+#[allow(dead_code)]
 pub fn clone_repo_for_discovery(repo_url: &str, repo_key: &str) -> Result<PathBuf, String> {
     clone_repo_for_discovery_with_sparse_paths(repo_url, repo_key, &[])
 }
 
+#[allow(dead_code)]
 pub fn clone_repo_for_discovery_with_sparse_paths(
     repo_url: &str,
+    repo_key: &str,
+    sparse_paths: &[String],
+) -> Result<PathBuf, String> {
+    clone_repo_for_discovery_with_ref_and_sparse_paths(repo_url, None, repo_key, sparse_paths)
+}
+
+pub fn clone_repo_for_discovery_with_ref_and_sparse_paths(
+    repo_url: &str,
+    git_ref: Option<&str>,
     repo_key: &str,
     sparse_paths: &[String],
 ) -> Result<PathBuf, String> {
@@ -752,10 +771,10 @@ pub fn clone_repo_for_discovery_with_sparse_paths(
     fs::create_dir_all(parent_dir).map_err(|error| format!("创建仓库缓存目录失败: {error}"))?;
 
     let clone_result = if sparse_paths.is_empty() {
-        clone_repo_into(repo_url, &repo_dir)
+        clone_repo_with_optional_branch(repo_url, git_ref, &repo_dir)
     } else {
         let sparse_paths = sparse_paths.iter().map(PathBuf::from).collect::<Vec<_>>();
-        clone_repo_with_sparse_paths(repo_url, None, &repo_dir, &sparse_paths)
+        clone_repo_with_sparse_paths(repo_url, git_ref, &repo_dir, &sparse_paths)
     };
     if let Err(error) = clone_result {
         let _ = fs::remove_dir_all(&repo_dir);
@@ -764,8 +783,18 @@ pub fn clone_repo_for_discovery_with_sparse_paths(
     Ok(repo_dir)
 }
 
+#[allow(dead_code)]
 pub fn ensure_repo_skill_with_sparse_paths(
     repo_url: &str,
+    install_key: &str,
+    sparse_paths: &[String],
+) -> Result<String, String> {
+    ensure_repo_skill_with_ref_and_sparse_paths(repo_url, None, install_key, sparse_paths)
+}
+
+pub fn ensure_repo_skill_with_ref_and_sparse_paths(
+    repo_url: &str,
+    git_ref: Option<&str>,
     install_key: &str,
     sparse_paths: &[String],
 ) -> Result<String, String> {
@@ -796,10 +825,10 @@ pub fn ensure_repo_skill_with_sparse_paths(
         .map_err(|error| format!("创建 skill library 目录失败: {error}"))?;
 
     if sparse_paths.is_empty() {
-        clone_repo_with_optional_branch(repo_url, None, &skill_dir)?;
+        clone_repo_with_optional_branch(repo_url, git_ref, &skill_dir)?;
     } else {
         let path_bufs = sparse_paths.iter().map(PathBuf::from).collect::<Vec<_>>();
-        clone_repo_with_sparse_paths(repo_url, None, &skill_dir, &path_bufs)?;
+        clone_repo_with_sparse_paths(repo_url, git_ref, &skill_dir, &path_bufs)?;
     }
     // 忽略非必要文件
     ignore_unnecessary_files(&skill_dir)?;
@@ -841,29 +870,6 @@ pub fn sanitize_storage_name(name: &str) -> String {
     } else {
         trimmed
     }
-}
-
-fn clone_repo_into(source: &str, target_dir: &Path) -> Result<(), String> {
-    let mut command = Command::new("git");
-    command.args([
-        "clone",
-        "--depth",
-        GIT_CLONE_HISTORY_DEPTH,
-        "--single-branch",
-        "--no-tags",
-        source,
-        target_dir.to_string_lossy().as_ref(),
-    ]);
-    let output = output_with_timeout(command, GIT_NETWORK_TIMEOUT, "git clone")?;
-
-    if !output.status.success() {
-        return Err(format!(
-            "仓库克隆失败: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
-    }
-
-    Ok(())
 }
 
 fn clone_repo_with_optional_branch(
@@ -1269,29 +1275,83 @@ pub struct MarketSourceSpec {
     pub clone_url: String,
     pub branch: Option<String>,
     pub relative_path: Option<PathBuf>,
+    pub tree_segments: Vec<String>,
 }
 
 pub fn parse_market_source_url(source_url: &str) -> Result<MarketSourceSpec, String> {
     let trimmed = source_url.trim().trim_end_matches('/');
+    if let Ok(parsed) = url::Url::parse(trimmed) {
+        let segments = parsed
+            .path_segments()
+            .map(|items| items.filter(|item| !item.is_empty()).collect::<Vec<_>>())
+            .unwrap_or_default();
+        if segments.len() >= 2 {
+            let tree_start = if segments.get(2) == Some(&"tree") && segments.len() > 3 {
+                Some(2)
+            } else if segments.get(2) == Some(&"-")
+                && segments.get(3) == Some(&"tree")
+                && segments.len() > 4
+            {
+                Some(3)
+            } else {
+                None
+            };
+
+            if let Some(tree_index) = tree_start {
+                let tree_segments = segments
+                    .iter()
+                    .skip(tree_index + 1)
+                    .map(|segment| segment.to_string())
+                    .collect::<Vec<_>>();
+                let branch = tree_segments
+                    .first()
+                    .ok_or_else(|| format!("无法从来源地址解析分支信息: {source_url}"))?;
+                let relative_path = if tree_segments.len() <= 1 {
+                    None
+                } else {
+                    Some(tree_segments[1..].iter().collect::<PathBuf>())
+                };
+                let repo_name = segments[1].trim_end_matches(".git");
+                let clone_url = format!(
+                    "{}://{}/{}/{repo_name}.git",
+                    parsed.scheme(),
+                    parsed.host_str().unwrap_or_default(),
+                    segments[0]
+                );
+
+                return Ok(MarketSourceSpec {
+                    clone_url,
+                    branch: Some(branch.to_string()),
+                    relative_path,
+                    tree_segments,
+                });
+            }
+        }
+    }
+
     let marker = "/tree/";
     if let Some(tree_index) = trimmed.find(marker) {
         let repo_prefix = &trimmed[..tree_index];
         let tree_suffix = &trimmed[tree_index + marker.len()..];
-        let mut segments = tree_suffix.split('/').filter(|part| !part.is_empty());
-        let branch = segments
-            .next()
+        let tree_segments = tree_suffix
+            .split('/')
+            .filter(|part| !part.is_empty())
+            .map(ToOwned::to_owned)
+            .collect::<Vec<_>>();
+        let branch = tree_segments
+            .first()
             .ok_or_else(|| format!("无法从来源地址解析分支信息: {source_url}"))?;
-        let remainder = segments.collect::<Vec<_>>();
-        let relative_path = if remainder.is_empty() {
+        let relative_path = if tree_segments.len() <= 1 {
             None
         } else {
-            Some(remainder.iter().collect::<PathBuf>())
+            Some(tree_segments[1..].iter().collect::<PathBuf>())
         };
 
         return Ok(MarketSourceSpec {
             clone_url: format!("{repo_prefix}.git"),
             branch: Some(branch.to_string()),
             relative_path,
+            tree_segments,
         });
     }
 
@@ -1304,7 +1364,35 @@ pub fn parse_market_source_url(source_url: &str) -> Result<MarketSourceSpec, Str
         clone_url,
         branch: None,
         relative_path: None,
+        tree_segments: Vec::new(),
     })
+}
+
+pub fn tree_relative_path_for_branch(
+    tree_segments: &[String],
+    branch: Option<&str>,
+) -> Option<Option<PathBuf>> {
+    let branch_segments = branch?
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>();
+    if branch_segments.is_empty() || tree_segments.len() < branch_segments.len() {
+        return None;
+    }
+    if !branch_segments
+        .iter()
+        .zip(tree_segments.iter())
+        .all(|(branch_segment, tree_segment)| *branch_segment == tree_segment)
+    {
+        return None;
+    }
+
+    let remaining_segments = &tree_segments[branch_segments.len()..];
+    if remaining_segments.is_empty() {
+        Some(None)
+    } else {
+        Some(Some(remaining_segments.iter().collect::<PathBuf>()))
+    }
 }
 
 pub fn create_skill_symlink(
@@ -1819,9 +1907,9 @@ fn git_worktree_root(path: &Path) -> Option<PathBuf> {
 mod tests {
     use super::{
         clone_branch_for_resolved_path, create_skill_symlink, get_tool_skills_path,
-        migrate_legacy_skill_symlinks, reconcile_tool_skill_symlinks,
-        remove_reserved_workspace_entries, skill_dir_match_score, MarketSourceSpec,
-        ResolvedRemoteSkillPath,
+        migrate_legacy_skill_symlinks, parse_market_source_url, reconcile_tool_skill_symlinks,
+        remove_reserved_workspace_entries, skill_dir_match_score, tree_relative_path_for_branch,
+        MarketSourceSpec, ResolvedRemoteSkillPath,
     };
     use crate::models::SkillSummary;
     use crate::workspace::TEST_ENV_LOCK;
@@ -1849,6 +1937,7 @@ mod tests {
             clone_url: "https://github.com/aaaaqwq/claude-code-skills.git".into(),
             branch: Some("main".into()),
             relative_path: Some(PathBuf::from("multi-search-engine")),
+            tree_segments: Vec::new(),
         };
         let remote_skill_path = ResolvedRemoteSkillPath {
             path: PathBuf::from("skills/multi-search-engine"),
@@ -2183,5 +2272,44 @@ mod tests {
             }
         }
         let _ = fs::remove_dir_all(home_dir);
+    }
+
+    #[test]
+    fn parses_gitlab_tree_source_url_with_branch_and_sparse_path() {
+        let source_spec = parse_market_source_url(
+            "https://git.example.com/example-org/example-repo/-/tree/master/example-plugin?ref_type=heads",
+        )
+        .expect("parse GitLab tree URL");
+
+        assert_eq!(
+            source_spec.clone_url,
+            "https://git.example.com/example-org/example-repo.git"
+        );
+        assert_eq!(source_spec.branch.as_deref(), Some("master"));
+        assert_eq!(
+            source_spec
+                .relative_path
+                .as_ref()
+                .map(|path| path.to_string_lossy().to_string()),
+            Some("example-plugin".to_string())
+        );
+    }
+
+    #[test]
+    fn parses_gitlab_tree_source_url_with_slash_branch() {
+        let source_spec = parse_market_source_url(
+            "https://git.example.com/example-org/example-repo/-/tree/feature/FEATURE-123?ref_type=heads",
+        )
+        .expect("parse GitLab tree URL");
+
+        assert_eq!(
+            source_spec.clone_url,
+            "https://git.example.com/example-org/example-repo.git"
+        );
+        assert_eq!(source_spec.branch.as_deref(), Some("feature"));
+        assert_eq!(
+            tree_relative_path_for_branch(&source_spec.tree_segments, Some("feature/FEATURE-123")),
+            Some(None)
+        );
     }
 }

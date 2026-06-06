@@ -29,6 +29,7 @@ import type {
   FailureFeedbackInput,
   FeedbackIssueDraft,
   GitAccountSummary,
+  GitBranchOption,
   LocalSkillCandidate,
   LocalInstallSkillCandidate,
   MarketplaceSkill,
@@ -69,14 +70,28 @@ import {
   isToolEnabledStatus,
   localizeToolStatusLabel,
 } from "@/features/skills/utils/tool-status";
+import { formatSkillDescription } from "@/features/skills/utils/skill-description";
 
 type InstallFromRepoInput = {
   repoUrl: string;
+  gitRef?: string;
 };
 
 type ProbePluginRepoInput = {
   path: string;
   hintHostTool?: PluginHostTool;
+};
+
+type ProbePluginSourceInput = {
+  source: string;
+  gitRef?: string;
+  sparsePath?: string;
+  hintHostTool?: PluginHostTool;
+};
+
+type InstallSelectedPluginProbesInput = {
+  probes: PluginProbeResult[];
+  hostTools: PluginHostTool[];
 };
 
 type PluginComponentPreviewInput = {
@@ -92,9 +107,20 @@ type SetPluginEnabledInput = {
   enabled: boolean;
 };
 
+type DeletePluginInput = {
+  pluginId: string;
+  hostTool: PluginHostTool;
+  rootPath: string;
+};
+
 type InstallSelectedRepoSkillsInput = {
   repoUrl: string;
   selectedPaths: string[];
+  gitRef?: string;
+};
+
+type ListGitRepoBranchesInput = {
+  repoUrl: string;
 };
 
 type InstallLocalSkillInput = {
@@ -210,6 +236,83 @@ type LegacyPluginProbeResult = Partial<PluginProbeResult> & {
 type LegacyPluginComponentPreview = Partial<PluginComponentPreview>;
 
 type LegacyCliToolSummary = Partial<CliToolSummary>;
+
+function pluginSourceCandidateFixtures(input: ProbePluginSourceInput): LegacyPluginProbeResult[] {
+  const source = input.source.trim();
+  const sparsePath = input.sparsePath?.trim() ?? "";
+  const agenticEngineeringProbe: LegacyPluginProbeResult = {
+    tool: "codex",
+    compatibleHostTools: ["codex", "claude-code", "cursor"],
+    kind: "plugin-repo",
+    description: "基于 Skill 的模块化 Example Plugin 框架",
+    pluginRoot: "/tmp/example-repo/example-plugin",
+    manifestPath: "/tmp/example-repo/example-plugin/.codex-plugin/plugin.json",
+    marketplaceManifestPath: "",
+    components: [
+      {
+        id: "skills/workflow-code-generation",
+        name: "workflow-code-generation",
+        description: "",
+        assetType: "skill",
+        ownerPluginId: "",
+        packageItemId: "skills/workflow-code-generation",
+      },
+      {
+        id: "agents/codebase-researcher.md",
+        name: "codebase-researcher.md",
+        description: "",
+        assetType: "subagent",
+        ownerPluginId: "",
+        packageItemId: "agents/codebase-researcher.md",
+      },
+    ],
+    sourceType: "git",
+    sourceUrl: source,
+    isGitRepo: true,
+    gitRoot: "/tmp/example-repo",
+    confidence: "high",
+    installStrategy: "codex-marketplace",
+    warnings: [],
+  };
+  const workflowPluginProbe: LegacyPluginProbeResult = {
+    tool: "claude-code",
+    compatibleHostTools: ["claude-code"],
+    kind: "plugin-repo",
+    description: "面向工作流编排与项目初始化的插件集合",
+    pluginRoot: "/tmp/example-repo/plugins/example-plugin",
+    manifestPath: "/tmp/example-repo/plugins/example-plugin/.claude-plugin/plugin.json",
+    marketplaceManifestPath: "",
+    components: [
+      {
+        id: "commands/init-project.md",
+        name: "init-project.md",
+        description: "",
+        assetType: "command",
+        ownerPluginId: "",
+        packageItemId: "commands/init-project.md",
+      },
+    ],
+    sourceType: "git",
+    sourceUrl: source,
+    isGitRepo: true,
+    gitRoot: "/tmp/example-repo",
+    confidence: "high",
+    installStrategy: "claude-plugin-dir",
+    warnings: [],
+  };
+
+  if (!source.includes("example-repo")) {
+    return [pluginProbeFixture];
+  }
+  if (sparsePath === "example-plugin") {
+    return [agenticEngineeringProbe];
+  }
+  if (sparsePath === "plugins/example-plugin") {
+    return [workflowPluginProbe];
+  }
+
+  return [agenticEngineeringProbe, workflowPluginProbe];
+}
 
 export type McpImportSessionSnapshot = {
   isImporting: boolean;
@@ -516,12 +619,23 @@ function normalizePluginSummaryList(plugins: LegacyPluginSummary[]): PluginSumma
 }
 
 function normalizePluginProbeResult(probe: LegacyPluginProbeResult): PluginProbeResult {
+  const compatibleHostTools = Array.isArray(probe.compatibleHostTools)
+    ? probe.compatibleHostTools.filter(
+        (tool): tool is PluginHostTool =>
+          tool === "claude-code" || tool === "cursor" || tool === "codex",
+      )
+    : [];
+  const tool =
+    probe.tool === "claude-code" || probe.tool === "cursor" || probe.tool === "codex"
+      ? probe.tool
+      : "unknown";
+
   return {
-    tool:
-      probe.tool === "claude-code" || probe.tool === "cursor" || probe.tool === "codex"
-        ? probe.tool
-        : "unknown",
+    tool,
+    compatibleHostTools: compatibleHostTools.length > 0 ? compatibleHostTools : tool === "unknown" ? [] : [tool],
     kind: normalizePluginKind(probe.kind),
+    name: probe.name?.trim() || probe.pluginRoot?.split("/").filter(Boolean).at(-1) || "Plugin",
+    description: formatSkillDescription(probe.description ?? ""),
     pluginRoot: probe.pluginRoot ?? "",
     manifestPath: probe.manifestPath ?? "",
     marketplaceManifestPath: probe.marketplaceManifestPath ?? "",
@@ -638,6 +752,30 @@ export async function setPluginEnabled(input: SetPluginEnabledInput): Promise<Pl
   return normalizePluginSummary(plugin);
 }
 
+export async function deletePlugin(input: DeletePluginInput): Promise<void> {
+  if (shouldUseFixtureData()) {
+    const pluginIndex = pluginFixtures.findIndex((candidate) =>
+      candidate.id === input.pluginId
+      || (candidate.hostTool === input.hostTool && candidate.rootPath === input.rootPath)
+    );
+    if (pluginIndex < 0) {
+      throw new Error("Plugin fixture not found");
+    }
+
+    pluginFixtures.splice(pluginIndex, 1);
+    return undefined;
+  }
+
+  return invokeOrFallback(
+    "delete_plugin",
+    {
+      hostTool: input.hostTool,
+      rootPath: input.rootPath,
+    },
+    undefined,
+  );
+}
+
 export async function fetchCliTools(): Promise<CliToolSummary[]> {
   const cliTools = await invokeOrFallback<LegacyCliToolSummary[]>("list_cli_tools", {}, cliToolFixtures);
   return normalizeCliToolSummaryList(cliTools);
@@ -646,6 +784,62 @@ export async function fetchCliTools(): Promise<CliToolSummary[]> {
 export async function probePluginRepo(input: ProbePluginRepoInput): Promise<PluginProbeResult> {
   const probe = await invokeOrFallback<LegacyPluginProbeResult>("probe_plugin_repo", input, pluginProbeFixture);
   return normalizePluginProbeResult(probe);
+}
+
+export async function probePluginSource(input: ProbePluginSourceInput): Promise<PluginProbeResult> {
+  const probe = await invokeOrFallback<LegacyPluginProbeResult>("probe_plugin_source", input, pluginProbeFixture);
+  return normalizePluginProbeResult(probe);
+}
+
+export async function probePluginSourceCandidates(input: ProbePluginSourceInput): Promise<PluginProbeResult[]> {
+  if (shouldUseFixtureData()) {
+    return pluginSourceCandidateFixtures(input).map(normalizePluginProbeResult);
+  }
+
+  const probes = await invokeOrFallback<LegacyPluginProbeResult[]>(
+    "probe_plugin_source_candidates",
+    input,
+    pluginSourceCandidateFixtures(input),
+  );
+  return probes.map(normalizePluginProbeResult);
+}
+
+export async function installSelectedPluginProbes(
+  input: InstallSelectedPluginProbesInput,
+): Promise<PluginSummary[]> {
+  if (shouldUseFixtureData()) {
+    return input.probes.flatMap((probe) =>
+      input.hostTools
+        .filter((hostTool) => probe.compatibleHostTools.includes(hostTool))
+        .map((hostTool, index) =>
+          normalizePluginSummary({
+            ...pluginFixtures[0],
+            id: `${hostTool}:${probe.pluginRoot.split("/").filter(Boolean).pop() ?? "plugin"}`,
+            name: probe.pluginRoot.split("/").filter(Boolean).pop() ?? "Plugin",
+            hostTool,
+            relatedHostTools: probe.compatibleHostTools.filter((tool) => tool !== hostTool),
+            kind: "plugin-repo",
+            rootPath: probe.pluginRoot,
+            manifestPath: probe.manifestPath,
+            sourceType: probe.sourceType,
+            sourceLabel: "skilldock",
+            sourceUrl: probe.sourceUrl,
+            installedAt: `${Date.now() + index}`,
+            updatedAt: `${Date.now() + index}`,
+            installState: "installed",
+            enabledState: "enabled",
+            components: probe.components,
+          }),
+        )
+    );
+  }
+
+  const plugins = await invokeOrFallback<LegacyPluginSummary[]>(
+    "install_selected_plugin_probes",
+    input,
+    [],
+  );
+  return normalizePluginSummaryList(plugins);
 }
 
 export async function fetchPluginComponentPreview(
@@ -823,7 +1017,25 @@ export async function installSkillFromRepo(
 ): Promise<RepoSkillCandidate[]> {
   const fallback = repoSkillCandidateFixtures[input.repoUrl] ?? repoSkillCandidateFixtures.default;
 
-  return invokeOrFallback("discover_repo_skills", { repoUrl: input.repoUrl }, fallback);
+  return invokeOrFallback(
+    "discover_repo_skills",
+    { repoUrl: input.repoUrl, gitRef: input.gitRef },
+    fallback,
+  );
+}
+
+export async function fetchGitRepoBranches(
+  input: ListGitRepoBranchesInput,
+): Promise<GitBranchOption[]> {
+  return invokeOrFallback(
+    "list_git_repo_branches",
+    { repoUrl: input.repoUrl },
+    [
+      { name: "main", isDefault: true, isSelected: true },
+      { name: "master", isDefault: false, isSelected: false },
+      { name: "develop", isDefault: false, isSelected: false },
+    ],
+  );
 }
 
 export async function installSelectedRepoSkills(

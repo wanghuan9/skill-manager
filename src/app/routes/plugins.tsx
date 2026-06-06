@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
+  deletePlugin,
   fetchInstalledPlugins,
   fetchPluginComponentPreview,
   openExternalLink,
+  openPathInFinder,
   setPluginEnabled,
 } from "@/features/skills/api/skill-client";
 import {
@@ -16,6 +18,7 @@ import {
   useSingleExpandedRow,
 } from "@/features/skills/components/ToolListRows";
 import { getToolLogoUrl } from "@/features/skills/utils/tool-logo";
+import { getMonogramLabel } from "@/features/skills/utils/monogram";
 import type {
   PluginAssetType,
   PluginComponentPreview,
@@ -34,6 +37,10 @@ type ComponentSection = {
   title: string;
   summaryLabel: string;
 };
+type ExpandedComponentSections = Record<
+  string,
+  Partial<Record<PluginAssetType, boolean>>
+>;
 type PreviewState = {
   plugin: PluginSummary;
   component: PluginComponentSummary;
@@ -41,27 +48,26 @@ type PreviewState = {
   isLoading: boolean;
   errorMessage: string;
 };
-
 const pluginHostTabs: { key: PluginHostTool; label: string }[] = [
   { key: "claude-code", label: "Claude Code" },
   { key: "codex", label: "Codex" },
   { key: "cursor", label: "Cursor" },
 ];
 const componentSections: ComponentSection[] = [
-  { key: "mcp", title: "MCPs", summaryLabel: "mcp" },
   { key: "skill", title: "Skills", summaryLabel: "skill" },
+  { key: "mcp", title: "MCP", summaryLabel: "mcp" },
   { key: "subagent", title: "Subagents", summaryLabel: "agents" },
   { key: "command", title: "Commands", summaryLabel: "command" },
   { key: "rule", title: "Rules", summaryLabel: "rule" },
   { key: "hook", title: "Hooks", summaryLabel: "hook" },
 ];
 const primaryComponentSummaryTypes: PluginAssetType[] = [
-  "subagent",
   "skill",
   "mcp",
+  "subagent",
+  "command",
   "rule",
   "hook",
-  "command",
 ];
 const maxVisibleComponentsPerSection = 5;
 const pluginEnabledOrder: Record<PluginSummary["enabledState"], number> = {
@@ -116,6 +122,62 @@ function PluginPowerIcon({ isSpinning = false }: { isSpinning?: boolean }) {
         strokeLinecap="round"
       />
     </svg>
+  );
+}
+
+function DeleteIcon() {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+      <path
+        d="M4.75 5.75h10.5M7.25 5.75V4.5c0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1v1.25m-6.25 0 .45 8.25c.03.61.54 1.08 1.15 1.08h3.8c.61 0 1.12-.47 1.15-1.08l.45-8.25M8.5 8.75v4.25m3 0V8.75"
+        stroke="currentColor"
+        strokeWidth="1.7"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function OpenFolderIcon() {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+      <path
+        d="M3.25 6.25h5.05l1.3 1.45h7.15v5.85c0 .9-.73 1.62-1.62 1.62H4.87c-.89 0-1.62-.72-1.62-1.62V6.25Z"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M3.25 6.25V5.6c0-.9.73-1.62 1.62-1.62h3.08l1.25 1.3"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function PluginListIcon({ name }: { name: string }) {
+  return (
+    <span className="plugins-page__plugin-icon" aria-hidden="true">
+      <span className="plugins-page__plugin-type-mark">
+        <svg viewBox="0 0 12 12" fill="none">
+          <path
+            d="M4.25 1.5v3m3.5-3v3M3.25 4.5h5.5v2.25a2.75 2.75 0 0 1-5.5 0V4.5ZM6 9.5v1"
+            stroke="currentColor"
+            strokeWidth="1.15"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
+      </span>
+      <span className="plugins-page__plugin-icon-label">
+        {getMonogramLabel(name)}
+      </span>
+    </span>
   );
 }
 
@@ -204,12 +266,31 @@ function getPluginToggleButtonClassName(plugin: PluginSummary) {
   return `skill-card__icon-button plugins-page__toggle-icon-button ${stateClassName}`;
 }
 
-function getPluginSourceLabel(plugin: PluginSummary) {
-  if (plugin.sourceLabel.trim()) {
-    return plugin.sourceLabel.trim();
+function getPluginDeleteActionLabel(
+  plugin: PluginSummary,
+  isConfirming: boolean,
+  isDeleting: boolean,
+) {
+  if (isDeleting) {
+    return `正在删除 ${plugin.name} 插件`;
   }
+  if (isConfirming) {
+    return `确认删除 ${plugin.name} 插件`;
+  }
+
+  return `删除 ${plugin.name} 插件`;
+}
+
+function getPluginOpenActionLabel(plugin: PluginSummary) {
+  return `在访达中打开 ${plugin.name} 插件目录`;
+}
+
+function getPluginSourceLabel(plugin: PluginSummary) {
   if (plugin.sourceUrl.trim()) {
     return plugin.sourceUrl.trim();
+  }
+  if (plugin.sourceLabel.trim()) {
+    return plugin.sourceLabel.trim();
   }
   if (plugin.sourceType === "git") {
     return "Git 仓库";
@@ -268,23 +349,122 @@ function getComponentDescription(component: PluginComponentSummary) {
   return "Command 组件";
 }
 
-function getComponentIcon(component: PluginComponentSummary) {
-  if (component.assetType === "mcp") {
-    return "⌁";
+function ComponentIcon({ assetType }: { assetType: PluginAssetType }) {
+  if (assetType === "skill") {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path
+          d="M12 4.5 14 10l5.5 2-5.5 2L12 19.5l-2-5.5L4.5 12 10 10 12 4.5Z"
+          fill="currentColor"
+        />
+      </svg>
+    );
   }
-  if (component.assetType === "skill") {
-    return "▱";
+
+  if (assetType === "mcp") {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path
+          d="M2.4 11.3 11.45 2.26a3.2 3.2 0 0 1 4.53 4.53l-6.84 6.83"
+          fill="none"
+          stroke="currentColor"
+          strokeLinecap="round"
+          strokeWidth="1.6"
+        />
+        <path
+          d="m9.24 13.53 6.74-6.74a3.2 3.2 0 0 1 4.52 0l.05.05a3.2 3.2 0 0 1 0 4.52l-8.19 8.19a1.07 1.07 0 0 0 0 1.51l1.68 1.68"
+          fill="none"
+          stroke="currentColor"
+          strokeLinecap="round"
+          strokeWidth="1.6"
+        />
+        <path
+          d="m13.71 4.53-6.69 6.69a3.2 3.2 0 0 0 4.53 4.53l6.69-6.7"
+          fill="none"
+          stroke="currentColor"
+          strokeLinecap="round"
+          strokeWidth="1.6"
+        />
+      </svg>
+    );
   }
-  if (component.assetType === "subagent") {
-    return "⌘";
+
+  if (assetType === "subagent") {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path
+          d="M12 5.25a3 3 0 1 1 0 6a3 3 0 0 1 0-6ZM5.5 18.5a6.5 6.5 0 0 1 13 0"
+          fill="none"
+          stroke="currentColor"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          strokeWidth="1.8"
+        />
+        <path
+          d="M5.25 8.75h2.1m9.3 0h2.1M12 2.75v2.1"
+          fill="none"
+          stroke="currentColor"
+          strokeLinecap="round"
+          strokeWidth="1.8"
+        />
+      </svg>
+    );
   }
-  if (component.assetType === "rule") {
-    return "▤";
+
+  if (assetType === "rule") {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path
+          d="M7 4.5h8.25L18 7.25V19.5H7V4.5Z"
+          fill="none"
+          stroke="currentColor"
+          strokeLinejoin="round"
+          strokeWidth="1.7"
+        />
+        <path
+          d="M9.5 10.25h5M9.5 13.25h5M9.5 16.25h3.25"
+          fill="none"
+          stroke="currentColor"
+          strokeLinecap="round"
+          strokeWidth="1.7"
+        />
+      </svg>
+    );
   }
-  if (component.assetType === "hook") {
-    return "↳";
+
+  if (assetType === "hook") {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path
+          d="M8.25 5.5a3.25 3.25 0 0 1 6.5 0v7.25a4.75 4.75 0 1 1-9.5 0v-.5"
+          fill="none"
+          stroke="currentColor"
+          strokeLinecap="round"
+          strokeWidth="1.8"
+        />
+        <path
+          d="M14.75 9.25h3.5"
+          fill="none"
+          stroke="currentColor"
+          strokeLinecap="round"
+          strokeWidth="1.8"
+        />
+      </svg>
+    );
   }
-  return "›";
+
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path
+        d="m8.25 8.25 3.5 3.75-3.5 3.75M13.5 15.75h3.75"
+        fill="none"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="1.9"
+      />
+    </svg>
+  );
 }
 
 function getComponentsByType(
@@ -376,6 +556,12 @@ export function PluginsRoute() {
   const [pendingPluginIds, setPendingPluginIds] = useState<Set<string>>(
     () => new Set(),
   );
+  const [deletingPluginIds, setDeletingPluginIds] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const [deleteConfirmingPluginId, setDeleteConfirmingPluginId] = useState("");
+  const [expandedComponentSections, setExpandedComponentSections] =
+    useState<ExpandedComponentSections>({});
   const pendingPluginIdsRef = useRef(new Set<string>());
   const [toolbarContainer, setToolbarContainer] = useState<HTMLElement | null>(
     null,
@@ -445,6 +631,36 @@ export function PluginsRoute() {
     const timerId = window.setTimeout(() => setActionErrorMessage(""), 4500);
     return () => window.clearTimeout(timerId);
   }, [actionErrorMessage]);
+
+  useEffect(() => {
+    if (!previewState) {
+      return;
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setPreviewState(null);
+      }
+    }
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [previewState]);
+
+  useEffect(() => {
+    if (!deleteConfirmingPluginId) {
+      return;
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setDeleteConfirmingPluginId("");
+      }
+    }
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [deleteConfirmingPluginId]);
 
   useEffect(() => {
     if (plugins.length === 0) {
@@ -561,7 +777,7 @@ export function PluginsRoute() {
           <span aria-hidden="true" className="skills-toolbar-button__icon">
             <RefreshIcon isSpinning={isRefreshing} />
           </span>
-          <span>{isRefreshing ? "扫描中..." : "重新扫描"}</span>
+          <span>{isRefreshing ? "刷新中..." : "刷新"}</span>
         </button>
       </div>
     </section>
@@ -625,7 +841,11 @@ export function PluginsRoute() {
 
   async function handlePluginEnabledChange(plugin: PluginSummary) {
     const pluginKey = getPluginInstanceKey(plugin);
-    if (!canTogglePlugin(plugin) || pendingPluginIdsRef.current.has(pluginKey)) {
+    if (
+      !canTogglePlugin(plugin)
+      || pendingPluginIdsRef.current.has(pluginKey)
+      || deletingPluginIds.has(pluginKey)
+    ) {
       return;
     }
 
@@ -664,8 +884,76 @@ export function PluginsRoute() {
     }
   }
 
+  async function handlePluginOpen(plugin: PluginSummary) {
+    try {
+      await openPathInFinder({ path: plugin.rootPath });
+      setActionErrorMessage("");
+    } catch (error) {
+      console.warn("Failed to open plugin folder", error);
+      setActionErrorMessage("打开插件目录失败，请检查本地目录是否存在。");
+    }
+  }
+
+  async function handlePluginDelete(plugin: PluginSummary) {
+    const pluginKey = getPluginInstanceKey(plugin);
+    if (deletingPluginIds.has(pluginKey)) {
+      return;
+    }
+    if (deleteConfirmingPluginId !== pluginKey) {
+      setDeleteConfirmingPluginId(pluginKey);
+      setActionErrorMessage("");
+      return;
+    }
+
+    setDeletingPluginIds((current) => new Set(current).add(pluginKey));
+    try {
+      await deletePlugin({
+        pluginId: plugin.id,
+        hostTool: plugin.hostTool,
+        rootPath: plugin.rootPath,
+      });
+      setPlugins((current) =>
+        current.filter((candidate) => getPluginInstanceKey(candidate) !== pluginKey),
+      );
+      setPreviewState((current) =>
+        current && getPluginInstanceKey(current.plugin) === pluginKey ? null : current,
+      );
+      setExpandedComponentSections((current) => {
+        const next = { ...current };
+        delete next[pluginKey];
+        return next;
+      });
+      handleExpandedChange(pluginKey, false);
+      setActionErrorMessage("");
+    } catch (error) {
+      console.warn("Failed to delete plugin", error);
+      setActionErrorMessage("删除插件失败，请检查宿主配置和本地目录权限。");
+    } finally {
+      setDeleteConfirmingPluginId("");
+      setDeletingPluginIds((current) => {
+        const next = new Set(current);
+        next.delete(pluginKey);
+        return next;
+      });
+    }
+  }
+
+  function toggleComponentSection(plugin: PluginSummary, assetType: PluginAssetType) {
+    const pluginKey = getPluginInstanceKey(plugin);
+
+    setExpandedComponentSections((current) => ({
+      ...current,
+      [pluginKey]: {
+        ...current[pluginKey],
+        [assetType]: !current[pluginKey]?.[assetType],
+      },
+    }));
+  }
+
   function renderPluginDetails(plugin: PluginSummary) {
     const sourceValue = getPluginSourceValue(plugin);
+    const pluginKey = getPluginInstanceKey(plugin);
+    const expandedSections = expandedComponentSections[pluginKey] ?? {};
 
     return (
       <div className="plugins-page__detail-panel">
@@ -752,6 +1040,10 @@ export function PluginsRoute() {
 
             const visibleComponents = components.slice(0, maxVisibleComponentsPerSection);
             const hiddenCount = components.length - visibleComponents.length;
+            const isComponentSectionExpanded = expandedSections[section.key] ?? false;
+            const displayedComponents = isComponentSectionExpanded
+              ? components
+              : visibleComponents;
 
             return (
               <section
@@ -763,7 +1055,7 @@ export function PluginsRoute() {
                   <span>{components.length}</span>
                 </div>
                 <div className="plugins-page__component-list">
-                  {visibleComponents.map((component) => (
+                  {displayedComponents.map((component) => (
                     <button
                       key={component.id}
                       className="plugins-page__component-row"
@@ -771,10 +1063,10 @@ export function PluginsRoute() {
                       onClick={() => void openComponentPreview(plugin, component)}
                     >
                       <span
-                        className="plugins-page__component-icon"
+                        className={`plugins-page__component-icon plugins-page__component-icon--${component.assetType}`}
                         aria-hidden="true"
                       >
-                        {getComponentIcon(component)}
+                        <ComponentIcon assetType={component.assetType} />
                       </span>
                       <span className="plugins-page__component-copy">
                         <strong>{component.name}</strong>
@@ -787,9 +1079,14 @@ export function PluginsRoute() {
                   ))}
                 </div>
                 {hiddenCount > 0 ? (
-                  <p className="plugins-page__component-more">
-                    View {hiddenCount} More
-                  </p>
+                  <button
+                    className="plugins-page__component-more"
+                    type="button"
+                    aria-expanded={isComponentSectionExpanded}
+                    onClick={() => toggleComponentSection(plugin, section.key)}
+                  >
+                    {isComponentSectionExpanded ? "Show Less" : `View ${hiddenCount} More`}
+                  </button>
                 ) : null}
               </section>
             );
@@ -872,13 +1169,21 @@ export function PluginsRoute() {
             <p>
               {hostPlugins.length === 0
                 ? `当前仅展示 ${getHostLabel(activeHost)} 的插件安装实例。`
-                : "试试切换宿主、调整状态筛选，或重新扫描本地插件目录。"}
+                : "试试切换宿主、调整状态筛选，或刷新本地插件状态。"}
             </p>
           </div>
         ) : (
           filteredPlugins.map((plugin) => {
             const pluginKey = getPluginInstanceKey(plugin);
             const isPending = pendingPluginIds.has(pluginKey);
+            const isDeleting = deletingPluginIds.has(pluginKey);
+            const isDeleteConfirming = deleteConfirmingPluginId === pluginKey;
+            const deleteActionLabel = getPluginDeleteActionLabel(
+              plugin,
+              isDeleteConfirming,
+              isDeleting,
+            );
+            const openActionLabel = getPluginOpenActionLabel(plugin);
             const componentSummaryBadges = getPluginComponentSummaryLabels(plugin).map((label) => ({
               label,
               tone: "info" as const,
@@ -889,6 +1194,7 @@ export function PluginsRoute() {
                 key={pluginKey}
                 name={plugin.name}
                 subtitle={getPluginSubtitle(plugin)}
+                leading={<PluginListIcon name={plugin.name} />}
                 badges={[
                   {
                     label: getPluginEnabledBadge(plugin),
@@ -925,8 +1231,38 @@ export function PluginsRoute() {
                     ),
                     onClick: () => void handlePluginEnabledChange(plugin),
                     disabled:
-                      isPending || !canTogglePlugin(plugin),
+                      isPending || isDeleting || !canTogglePlugin(plugin),
                   },
+                  {
+                    key: "open-folder",
+                    label: openActionLabel,
+                    ariaLabel: openActionLabel,
+                    className: "skill-card__icon-button",
+                    icon: <OpenFolderIcon />,
+                    tooltip: openActionLabel,
+                    onClick: () => void handlePluginOpen(plugin),
+                    disabled: isDeleting || !plugin.rootPath.trim(),
+                  },
+                  isDeleteConfirming
+                    ? {
+                        key: "delete-confirm",
+                        label: isDeleting ? "删除中" : "确认",
+                        ariaLabel: deleteActionLabel,
+                        className: "skill-card__delete-confirm-button",
+                        tooltip: deleteActionLabel,
+                        onClick: () => void handlePluginDelete(plugin),
+                        disabled: isDeleting,
+                      }
+                    : {
+                        key: "delete",
+                        label: deleteActionLabel,
+                        ariaLabel: deleteActionLabel,
+                        className: "skill-card__icon-button skill-card__icon-button--delete plugins-page__delete-icon-button",
+                        icon: <DeleteIcon />,
+                        tooltip: deleteActionLabel,
+                        onClick: () => void handlePluginDelete(plugin),
+                        disabled: isDeleting || isPending,
+                      },
                 ]}
               />
             );

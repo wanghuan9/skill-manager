@@ -88,7 +88,10 @@ export type PluginSummary = {
 
 export type PluginProbeResult = {
   tool: PluginHostTool | "unknown";
+  compatibleHostTools: PluginHostTool[];
   kind: PluginProbeKind;
+  name: string;
+  description: string;
   pluginRoot: string;
   manifestPath: string;
   marketplaceManifestPath: string;
@@ -226,6 +229,12 @@ export type RepoSkillCandidate = {
   name: string;
   description: string;
   relativePath: string;
+};
+
+export type GitBranchOption = {
+  name: string;
+  isDefault: boolean;
+  isSelected: boolean;
 };
 
 export type LocalInstallSkillCandidate = {

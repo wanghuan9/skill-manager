@@ -18,18 +18,19 @@ use crate::git_state::{
     enrich_skill_with_local_git_state,
 };
 use crate::library::{
-    clone_repo_for_discovery, clone_repo_for_discovery_with_sparse_paths, clone_repo_skill,
-    create_skill_symlink, ensure_repo_skill_with_sparse_paths, get_tool_skills_path,
+    clone_repo_for_discovery_with_ref_and_sparse_paths, clone_repo_skill, create_skill_symlink,
+    ensure_repo_skill_with_ref_and_sparse_paths, get_tool_skills_path,
     install_market_skill_from_source, parse_market_source_url, reconcile_tool_skill_symlinks,
     remove_reserved_workspace_entries, remove_reserved_workspace_symlinks_from_all_tools,
     remove_skill_symlink, remove_skill_symlinks_from_all_tools, sanitize_storage_name,
-    skill_directory,
+    skill_directory, tree_relative_path_for_branch,
 };
 use crate::models::{
-    AppSettings, GitAccountSummary, GitChangeFile, LocalInstallSkillCandidate, LocalSkillCandidate,
-    MarketplaceSkill, PushBranchOption, PushPreviewSnapshot, PushTargetSnapshot,
-    RepoSkillCandidate, SkillFileBrowserSnapshot, SkillFileDocument, SkillFileEntry, SkillSummary,
-    ToolConfig, ToolSyncStatus, UpdatePreviewSnapshot, WorkspaceSnapshot,
+    AppSettings, GitAccountSummary, GitBranchOption, GitChangeFile, LocalInstallSkillCandidate,
+    LocalSkillCandidate, MarketplaceSkill, PushBranchOption, PushPreviewSnapshot,
+    PushTargetSnapshot, RepoSkillCandidate, SkillFileBrowserSnapshot, SkillFileDocument,
+    SkillFileEntry, SkillSummary, ToolConfig, ToolSyncStatus, UpdatePreviewSnapshot,
+    WorkspaceSnapshot,
 };
 use crate::state::{
     load_app_settings, load_installed_skills, normalize_skill_install_activation,
@@ -2520,6 +2521,16 @@ struct RepoInstallSpec {
     source_url: String,
     branch_hint: Option<String>,
     path_hint: Option<String>,
+    tree_segments: Vec<String>,
+}
+
+enum GitBranchProbeSource {
+    Local(PathBuf),
+    Remote {
+        clone_url: String,
+        selected_ref: Option<String>,
+        tree_segments: Vec<String>,
+    },
 }
 
 fn tool_name_to_id(tool_name: &str) -> Result<String, String> {
@@ -2614,6 +2625,44 @@ fn run_git_command_with_allowed_codes(
 
 fn run_git_command(skill_path: &str, args: &[&str]) -> Result<String, String> {
     run_git_command_with_allowed_codes(skill_path, args, &[0])
+}
+
+fn run_git_remote_command(args: &[&str]) -> Result<String, String> {
+    let mut child = Command::new(GIT_BINARY)
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| format!("执行 git 命令失败: {error}"))?;
+    let timeout = Duration::from_secs(GIT_COMMAND_TIMEOUT_SECS);
+    let started_at = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) if started_at.elapsed() >= timeout => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!(
+                    "git {} 超时，请检查网络或远端认证后重试。",
+                    args.join(" ")
+                ));
+            }
+            Ok(None) => thread::sleep(Duration::from_millis(50)),
+            Err(error) => return Err(format!("等待 git 命令失败: {error}")),
+        }
+    }
+
+    let output = child
+        .wait_with_output()
+        .map_err(|error| format!("读取 git 命令输出失败: {error}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let message = if stderr.is_empty() { stdout } else { stderr };
+        return Err(format!("git {} 失败: {}", args.join(" "), message));
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
 fn current_branch_name(skill_path: &str) -> Result<String, String> {
@@ -3405,28 +3454,36 @@ fn parse_repo_install_spec(repo_input: &str) -> Result<RepoInstallSpec, String> 
 
     let owner = segments[0];
     let repo_name = segments[1].trim_end_matches(".git");
-    let branch_hint = if segments.get(2) == Some(&"tree") && segments.len() > 3 {
-        Some(segments[3].to_string())
+    let tree_index = if segments.get(2) == Some(&"tree") && segments.len() > 3 {
+        Some(2)
     } else if segments.get(2) == Some(&"-")
         && segments.get(3) == Some(&"tree")
         && segments.len() > 4
     {
-        Some(segments[4].to_string())
+        Some(3)
     } else {
         None
     };
-    let path_hint = if segments.get(2) == Some(&"tree") && segments.len() > 4 {
-        Some(segments[4..].join("/"))
-    } else if segments.get(2) == Some(&"-")
-        && segments.get(3) == Some(&"tree")
-        && segments.len() > 5
-    {
-        Some(segments[5..].join("/"))
+    let tree_segments = tree_index
+        .map(|index| {
+            segments[index + 1..]
+                .iter()
+                .map(|segment| segment.to_string())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let branch_hint = tree_segments.first().cloned();
+    let path_hint = if tree_segments.len() > 1 {
+        Some(tree_segments[1..].join("/"))
     } else {
         None
     };
     let clone_url = format!("https://{host}/{owner}/{repo_name}.git");
-    let source_type = detect_repo_source_type(&normalized).to_string();
+    let source_type = if tree_index.is_some_and(|index| segments[index - 1] == "-") {
+        "gitlab".to_string()
+    } else {
+        detect_repo_source_type(&normalized).to_string()
+    };
     let repo_key = sanitize_storage_name(&format!("{host}-{owner}-{repo_name}"));
     let repository_url = format!("https://{host}/{owner}/{repo_name}");
 
@@ -3438,9 +3495,145 @@ fn parse_repo_install_spec(repo_input: &str) -> Result<RepoInstallSpec, String> 
         source_url: normalized,
         branch_hint,
         path_hint,
+        tree_segments,
     })
 }
 
+fn parse_git_branch_probe_source(repo_input: &str) -> Result<GitBranchProbeSource, String> {
+    let trimmed = repo_input.trim();
+    if trimmed.is_empty() {
+        return Err("仓库地址不能为空".into());
+    }
+
+    let source_path = PathBuf::from(trimmed);
+    if source_path.exists() {
+        return Ok(GitBranchProbeSource::Local(source_path));
+    }
+
+    let likely_ssh_url = trimmed.contains('@') && trimmed.contains(':') && !trimmed.contains("://");
+    if !likely_ssh_url {
+        if let Ok(spec) = parse_repo_install_spec(trimmed) {
+            return Ok(GitBranchProbeSource::Remote {
+                clone_url: spec.clone_url,
+                selected_ref: spec.branch_hint,
+                tree_segments: spec.tree_segments,
+            });
+        }
+    }
+
+    let source_spec = parse_market_source_url(trimmed)?;
+    Ok(GitBranchProbeSource::Remote {
+        clone_url: source_spec.clone_url,
+        selected_ref: source_spec.branch,
+        tree_segments: source_spec.tree_segments,
+    })
+}
+
+fn list_local_git_branches(repo_path: &Path) -> Result<Vec<GitBranchOption>, String> {
+    let path = repo_path.to_string_lossy().to_string();
+    let current_branch =
+        run_git_command(&path, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap_or_default();
+    let output = run_git_command(
+        &path,
+        &["for-each-ref", "--format=%(refname:short)", "refs/heads"],
+    )?;
+    let mut branches = BTreeSet::new();
+    for line in output.lines() {
+        let branch = line.trim();
+        if !branch.is_empty() {
+            branches.insert(branch.to_string());
+        }
+    }
+    if !current_branch.trim().is_empty() {
+        branches.insert(current_branch.clone());
+    }
+
+    Ok(branches
+        .into_iter()
+        .map(|name| GitBranchOption {
+            is_default: name == current_branch,
+            is_selected: name == current_branch,
+            name,
+        })
+        .collect())
+}
+
+fn remote_git_branch_refs(clone_url: &str) -> Result<(String, BTreeSet<String>), String> {
+    let output =
+        run_git_remote_command(&["ls-remote", "--symref", clone_url, "HEAD", "refs/heads/*"])?;
+    let mut default_branch = String::new();
+    let mut branches = BTreeSet::new();
+
+    for line in output.lines() {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix("ref: refs/heads/") {
+            let mut parts = rest.split_whitespace();
+            let branch = parts.next().unwrap_or_default();
+            let target = parts.next().unwrap_or_default();
+            if target == "HEAD" && !branch.is_empty() {
+                default_branch = branch.to_string();
+                branches.insert(branch.to_string());
+            }
+            continue;
+        }
+
+        let Some((_, ref_name)) = trimmed.split_once('\t') else {
+            continue;
+        };
+        let Some(branch) = ref_name.strip_prefix("refs/heads/") else {
+            continue;
+        };
+        if !branch.is_empty() {
+            branches.insert(branch.to_string());
+        }
+    }
+
+    if branches.is_empty() {
+        return Err("未识别到远端 Git 分支。".into());
+    }
+    if default_branch.is_empty() {
+        default_branch = branches.iter().next().cloned().unwrap_or_default();
+    }
+
+    Ok((default_branch, branches))
+}
+
+fn branch_from_tree_segments(
+    tree_segments: &[String],
+    branches: &BTreeSet<String>,
+) -> Option<String> {
+    for segment_count in (1..=tree_segments.len()).rev() {
+        let candidate = tree_segments[..segment_count].join("/");
+        if branches.contains(&candidate) {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+fn list_remote_git_branches(
+    clone_url: &str,
+    selected_ref: Option<&str>,
+    tree_segments: &[String],
+) -> Result<Vec<GitBranchOption>, String> {
+    let (default_branch, mut branches) = remote_git_branch_refs(clone_url)?;
+    let selected_from_tree = branch_from_tree_segments(tree_segments, &branches);
+    let selected_branch = selected_from_tree
+        .or_else(|| selected_ref.and_then(normalize_optional_git_ref))
+        .unwrap_or_else(|| default_branch.clone());
+    branches.insert(selected_branch.clone());
+
+    Ok(branches
+        .into_iter()
+        .map(|name| GitBranchOption {
+            is_default: name == default_branch,
+            is_selected: name == selected_branch,
+            name,
+        })
+        .collect())
+}
+
+#[cfg(test)]
 fn build_repo_skill_source_url(spec: &RepoInstallSpec, relative_path: &str) -> String {
     build_tree_source_url(
         &spec.repository_url,
@@ -3448,6 +3641,52 @@ fn build_repo_skill_source_url(spec: &RepoInstallSpec, relative_path: &str) -> S
         spec.branch_hint.as_deref(),
         relative_path,
     )
+}
+
+fn build_repo_skill_source_url_with_branch(
+    spec: &RepoInstallSpec,
+    branch: Option<&str>,
+    relative_path: &str,
+) -> String {
+    build_tree_source_url(
+        &spec.repository_url,
+        &spec.source_type,
+        branch,
+        relative_path,
+    )
+}
+
+fn selected_repo_branch(spec: &RepoInstallSpec, git_ref: Option<&str>) -> Option<String> {
+    if let Some(explicit_ref) = git_ref.and_then(normalize_optional_git_ref) {
+        return Some(explicit_ref);
+    }
+
+    if !spec.tree_segments.is_empty() {
+        if let Ok((_, branches)) = remote_git_branch_refs(&spec.clone_url) {
+            if let Some(branch) = branch_from_tree_segments(&spec.tree_segments, &branches) {
+                return Some(branch);
+            }
+        }
+    }
+
+    spec.branch_hint.clone()
+}
+
+fn selected_repo_path_hint(spec: &RepoInstallSpec, branch: Option<&str>) -> Option<String> {
+    if let Some(resolved_path) = tree_relative_path_for_branch(&spec.tree_segments, branch) {
+        return resolved_path.map(|path| path.to_string_lossy().to_string());
+    }
+
+    spec.path_hint.clone()
+}
+
+fn normalize_optional_git_ref(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
 }
 
 fn scan_repo_skill_candidates(
@@ -3989,23 +4228,28 @@ pub fn install_skill_from_repo(repo_url: &str) -> Result<SkillSummary, String> {
 }
 
 #[tauri::command]
-pub async fn discover_repo_skills(repo_url: String) -> Result<Vec<RepoSkillCandidate>, String> {
+pub async fn discover_repo_skills(
+    repo_url: String,
+    git_ref: Option<String>,
+) -> Result<Vec<RepoSkillCandidate>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let spec = parse_repo_install_spec(&repo_url)?;
-        let sparse_paths = spec
-            .path_hint
+        let selected_branch = selected_repo_branch(&spec, git_ref.as_deref());
+        let path_hint = selected_repo_path_hint(&spec, selected_branch.as_deref());
+        let sparse_paths = path_hint
             .as_ref()
             .map(|path| vec![path.clone()])
             .unwrap_or_default();
         let candidates = if sparse_paths.is_empty() {
-            discover_repo_skills_without_path_hint(&spec)?
+            discover_repo_skills_without_path_hint(&spec, selected_branch.as_deref())?
         } else {
-            let repo_root = clone_repo_for_discovery_with_sparse_paths(
+            let repo_root = clone_repo_for_discovery_with_ref_and_sparse_paths(
                 &spec.clone_url,
+                selected_branch.as_deref(),
                 &spec.repo_key,
                 &sparse_paths,
             )?;
-            let candidates = scan_repo_skill_candidates(&repo_root, spec.path_hint.as_deref());
+            let candidates = scan_repo_skill_candidates(&repo_root, path_hint.as_deref());
             cleanup_discovery_repo(&repo_root);
             candidates?
         };
@@ -4018,11 +4262,27 @@ pub async fn discover_repo_skills(repo_url: String) -> Result<Vec<RepoSkillCandi
     .map_err(|error| format!("后台识别仓库技能失败: {error}"))?
 }
 
+#[tauri::command]
+pub async fn list_git_repo_branches(repo_url: String) -> Result<Vec<GitBranchOption>, String> {
+    tauri::async_runtime::spawn_blocking(move || match parse_git_branch_probe_source(&repo_url)? {
+        GitBranchProbeSource::Local(repo_path) => list_local_git_branches(&repo_path),
+        GitBranchProbeSource::Remote {
+            clone_url,
+            selected_ref,
+            tree_segments,
+        } => list_remote_git_branches(&clone_url, selected_ref.as_deref(), &tree_segments),
+    })
+    .await
+    .map_err(|error| format!("后台识别仓库分支失败: {error}"))?
+}
+
 fn discover_repo_skills_without_path_hint(
     spec: &RepoInstallSpec,
+    git_ref: Option<&str>,
 ) -> Result<Vec<RepoSkillCandidate>, String> {
-    if let Ok(repo_root) = clone_repo_for_discovery_with_sparse_paths(
+    if let Ok(repo_root) = clone_repo_for_discovery_with_ref_and_sparse_paths(
         &spec.clone_url,
+        git_ref,
         &spec.repo_key,
         &["skills".to_string()],
     ) {
@@ -4033,7 +4293,12 @@ fn discover_repo_skills_without_path_hint(
         }
     }
 
-    let repo_root = clone_repo_for_discovery(&spec.clone_url, &spec.repo_key)?;
+    let repo_root = clone_repo_for_discovery_with_ref_and_sparse_paths(
+        &spec.clone_url,
+        git_ref,
+        &spec.repo_key,
+        &[],
+    )?;
     let candidates = scan_repo_skill_candidates(&repo_root, None);
     cleanup_discovery_repo(&repo_root);
     candidates
@@ -4047,6 +4312,7 @@ fn cleanup_discovery_repo(repo_root: &Path) {
 pub async fn install_selected_repo_skills(
     repo_url: String,
     selected_paths: Vec<String>,
+    git_ref: Option<String>,
 ) -> Result<Vec<SkillSummary>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         if selected_paths.is_empty() {
@@ -4054,6 +4320,7 @@ pub async fn install_selected_repo_skills(
         }
 
         let spec = parse_repo_install_spec(&repo_url)?;
+        let selected_branch = selected_repo_branch(&spec, git_ref.as_deref());
         let installed_at = now_timestamp_label();
         let mut installed_skills = load_installed_skills(&default_installed_skills());
         let mut installed_results = Vec::new();
@@ -4097,10 +4364,20 @@ pub async fn install_selected_repo_skills(
             }
 
             let local_path = if normalized_path.is_empty() {
-                clone_repo_skill(&spec.clone_url, &skill_name)?
+                ensure_repo_skill_with_ref_and_sparse_paths(
+                    &spec.clone_url,
+                    selected_branch.as_deref(),
+                    &skill_name,
+                    &[],
+                )?
             } else {
                 let sparse_paths = vec![normalized_path.clone()];
-                ensure_repo_skill_with_sparse_paths(&spec.clone_url, &skill_name, &sparse_paths)?;
+                ensure_repo_skill_with_ref_and_sparse_paths(
+                    &spec.clone_url,
+                    selected_branch.as_deref(),
+                    &skill_name,
+                    &sparse_paths,
+                )?;
                 // 不移动文件，直接返回子目录路径，保持 git 索引正确
                 let subdir = skill_dir.join(&normalized_path);
                 if !subdir.is_dir() || !subdir.join("SKILL.md").is_file() {
@@ -4118,7 +4395,11 @@ pub async fn install_selected_repo_skills(
                 name: skill_name,
                 source_label: source_label_for_type(&spec.source_type).into(),
                 source_type: spec.source_type.clone(),
-                source_url: build_repo_skill_source_url(&spec, selected_path),
+                source_url: build_repo_skill_source_url_with_branch(
+                    &spec,
+                    selected_branch.as_deref(),
+                    selected_path,
+                ),
                 description,
                 local_path,
                 branch: "main".into(),
@@ -5195,7 +5476,7 @@ mod tests {
         normalize_installed_skill_source_url, open_target_path_for_skill,
         parse_apple_languages_output, parse_repo_install_spec, parse_skills_sh_homepage_items,
         remove_trusted_project_paths, resolve_startup_installed_skills, save_marketplace_cache,
-        scan_local_install_skill_candidates, scan_repo_skill_candidates,
+        scan_local_install_skill_candidates, scan_repo_skill_candidates, selected_repo_path_hint,
         should_use_skills_sh_homepage_page, REFRESH_GIT_STATES_CONCURRENCY,
     };
     use crate::models::{MarketplaceSkill, SkillSummary, WorkspacePersistence};
@@ -6114,6 +6395,21 @@ mod tests {
         assert_eq!(
             build_repo_skill_source_url(&spec, "skills/planning-with-files-zh"),
             "https://github.com/OthmanAdi/planning-with-files/tree/master/skills/planning-with-files-zh"
+        );
+    }
+
+    #[test]
+    fn repo_install_spec_supports_gitlab_slash_branch_without_path_hint() {
+        let spec = parse_repo_install_spec(
+            "https://git.example.com/example-org/example-repo/-/tree/feature/FEATURE-123?ref_type=heads",
+        )
+        .expect("parse repo install spec");
+
+        assert_eq!(spec.source_type, "gitlab");
+        assert_eq!(spec.branch_hint.as_deref(), Some("feature"));
+        assert_eq!(
+            selected_repo_path_hint(&spec, Some("feature/FEATURE-123")),
+            None
         );
     }
 

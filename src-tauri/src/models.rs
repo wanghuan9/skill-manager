@@ -83,7 +83,13 @@ pub struct PluginSummary {
 #[serde(rename_all = "camelCase")]
 pub struct PluginProbeResult {
     pub tool: String,
+    #[serde(default)]
+    pub compatible_host_tools: Vec<String>,
     pub kind: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
     pub plugin_root: String,
     pub manifest_path: String,
     pub marketplace_manifest_path: String,
@@ -183,6 +189,14 @@ pub struct RepoSkillCandidate {
     pub name: String,
     pub description: String,
     pub relative_path: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitBranchOption {
+    pub name: String,
+    pub is_default: bool,
+    pub is_selected: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
