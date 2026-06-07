@@ -1,6 +1,8 @@
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, vi } from "vitest";
 import userEvent from "@testing-library/user-event";
+import { act } from "react";
+import { listen } from "@tauri-apps/api/event";
 import { PluginsRoute, resetPluginScanSessionForTests } from "@/app/routes/plugins";
 import * as skillClient from "@/features/skills/api/skill-client";
 import { pluginFixtures } from "@/features/skills/state/skill-fixtures";
@@ -13,7 +15,12 @@ vi.mock("@/features/skills/state/skill-workspace", () => ({
   useSkillWorkspace: vi.fn(),
 }));
 
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: vi.fn(() => Promise.resolve(() => undefined)),
+}));
+
 const mockedUseSkillWorkspace = vi.mocked(useSkillWorkspace);
+const mockedListen = vi.mocked(listen);
 
 beforeEach(() => {
   delete (window as Window & { __SKILLM_PLUGINS__?: unknown }).__SKILLM_PLUGINS__;
@@ -24,8 +31,17 @@ beforeEach(() => {
     language: "zh-CN",
     toolConfigs: [],
   } as unknown as ReturnType<typeof useSkillWorkspace>);
+  mockedListen.mockReset();
+  mockedListen.mockResolvedValue(() => undefined);
   vi.spyOn(skillClient, "fetchStartupInstalledPlugins").mockResolvedValue(pluginFixtures);
   vi.spyOn(skillClient, "fetchInstalledPlugins").mockResolvedValue(pluginFixtures);
+  vi.spyOn(skillClient, "refreshPluginStates").mockResolvedValue(pluginFixtures);
+  vi.spyOn(skillClient, "refreshLocalPluginState").mockImplementation(async (input) => {
+    const matchedPlugin = pluginFixtures.find((plugin) => (
+      plugin.hostTool === input.hostTool && plugin.rootPath === input.rootPath
+    ));
+    return matchedPlugin ?? pluginFixtures[0];
+  });
 });
 
 function setWorkspaceLanguage(language: "zh-CN" | "en") {
@@ -49,8 +65,8 @@ test("hydrates plugins from persisted cache before the refresh request resolves"
   const deferredFetch: {
     resolve?: (value: PluginSummary[]) => void;
   } = {};
-  const fetchSpy = vi
-    .spyOn(skillClient, "fetchInstalledPlugins")
+  const startupSpy = vi
+    .spyOn(skillClient, "fetchStartupInstalledPlugins")
     .mockImplementationOnce(
       () =>
         new Promise<PluginSummary[]>((resolve) => {
@@ -64,6 +80,7 @@ test("hydrates plugins from persisted cache before the refresh request resolves"
   expect(screen.getByRole("tab", { name: "全部 1" })).toBeInTheDocument();
   expect(screen.queryByText("正在加载插件...")).not.toBeInTheDocument();
   expect(screen.queryByText("当前筛选条件下没有匹配的插件。")).not.toBeInTheDocument();
+  expect(startupSpy).toHaveBeenCalledTimes(1);
 
   if (!deferredFetch.resolve) {
     fixtureSpy.mockRestore();
@@ -72,7 +89,108 @@ test("hydrates plugins from persisted cache before the refresh request resolves"
   deferredFetch.resolve(pluginFixtures);
 
   await screen.findByRole("tab", { name: /全部/ });
-  fetchSpy.mockRestore();
+  startupSpy.mockRestore();
+  fixtureSpy.mockRestore();
+});
+
+test("reconciles plugin config with a startup scan even when the plugin list is hydrated from cache", async () => {
+  const fixtureSpy = vi.spyOn(skillClient, "shouldUseFixtureData").mockReturnValue(false);
+  const cachedPlugins: PluginSummary[] = [
+    {
+      ...pluginFixtures[0],
+      enabledState: "disabled",
+      scopes: [
+        {
+          scopeId: "user",
+          scopeLabel: "用户级",
+          enabledState: "disabled",
+          location: "~/.codex/config.toml",
+        },
+      ],
+    },
+  ];
+  const startupPlugins: PluginSummary[] = [
+    {
+      ...pluginFixtures[0],
+      enabledState: "enabled",
+      scopes: [
+        {
+          scopeId: "user",
+          scopeLabel: "用户级",
+          enabledState: "enabled",
+          location: "~/.codex/config.toml",
+        },
+      ],
+    },
+  ];
+  window.localStorage.setItem("skilldock.pluginsCache", JSON.stringify(cachedPlugins));
+  const startupSpy = vi
+    .spyOn(skillClient, "fetchStartupInstalledPlugins")
+    .mockResolvedValueOnce(startupPlugins);
+  const scanSpy = vi.spyOn(skillClient, "fetchInstalledPlugins");
+
+  renderWithI18n(<PluginsRoute />);
+
+  expect(screen.getByText("Repo Scout")).toBeInTheDocument();
+  expect(screen.queryByText("正在加载插件...")).not.toBeInTheDocument();
+
+  await waitFor(() => {
+    expect(startupSpy).toHaveBeenCalledTimes(1);
+  });
+  await waitFor(() => {
+    expect(screen.getByText("已启用")).toBeInTheDocument();
+  });
+  expect(scanSpy).not.toHaveBeenCalled();
+  fixtureSpy.mockRestore();
+});
+
+test("reconciles plugin config again when returning to the plugin page window", async () => {
+  const fixtureSpy = vi.spyOn(skillClient, "shouldUseFixtureData").mockReturnValue(false);
+  const initialPlugin: PluginSummary = {
+    ...pluginFixtures[0],
+    enabledState: "disabled",
+    scopes: [
+      {
+        scopeId: "user",
+        scopeLabel: "用户级",
+        enabledState: "disabled",
+        location: "~/.codex/config.toml",
+      },
+    ],
+  };
+  const syncedPlugin: PluginSummary = {
+    ...pluginFixtures[0],
+    enabledState: "enabled",
+    scopes: [
+      {
+        scopeId: "user",
+        scopeLabel: "用户级",
+        enabledState: "enabled",
+        location: "~/.codex/config.toml",
+      },
+    ],
+  };
+  const startupSpy = vi
+    .spyOn(skillClient, "fetchStartupInstalledPlugins")
+    .mockResolvedValueOnce([initialPlugin])
+    .mockResolvedValueOnce([syncedPlugin]);
+  const localRefreshSpy = vi.spyOn(skillClient, "refreshLocalPluginState");
+
+  renderWithI18n(<PluginsRoute />);
+
+  await screen.findByText("未启用");
+
+  await act(async () => {
+    window.dispatchEvent(new Event("focus"));
+  });
+
+  await waitFor(() => {
+    expect(startupSpy).toHaveBeenCalledTimes(2);
+  });
+  await waitFor(() => {
+    expect(screen.getByText("已启用")).toBeInTheDocument();
+  });
+  expect(localRefreshSpy).not.toHaveBeenCalled();
   fixtureSpy.mockRestore();
 });
 
@@ -214,6 +332,7 @@ test("aggregates cross-host plugins by canonical plugin name instead of display 
       ...pluginFixtures[0],
       id: "codex:example-plugin",
       packageId: "example-plugin",
+      manifestName: "example-plugin",
       name: "Example Plugin",
       hostTool: "codex",
       sourceLabel: "example-plugin",
@@ -237,6 +356,7 @@ test("aggregates cross-host plugins by canonical plugin name instead of display 
       ...pluginFixtures[0],
       id: "claude-code:example-plugin",
       packageId: "example-plugin",
+      manifestName: "example-plugin",
       name: "example-plugin",
       hostTool: "claude-code",
       sourceLabel: "Example Plugin",
@@ -267,6 +387,109 @@ test("aggregates cross-host plugins by canonical plugin name instead of display 
   const row = screen.getByRole("button", { name: /展开 Example Plugin|展开 example-plugin/ }).closest(".tool-list-row");
   expect(row?.querySelector('[data-tooltip="Codex 已安装（已启用）"]')).toBeInTheDocument();
   expect(row?.querySelector('[data-tooltip="Claude Code 已安装（已启用）"]')).toBeInTheDocument();
+});
+
+test("aggregates plugins by manifest name when Codex display name differs from other hosts", async () => {
+  const plugins: PluginSummary[] = [
+    {
+      ...pluginFixtures[0],
+      id: "codex:shopify-plugin",
+      packageId: "shopify-ai-toolkit",
+      manifestName: "shopify-plugin",
+      name: "Shopify",
+      hostTool: "codex",
+      sourceLabel: "skilldock",
+      sourceUrl: "https://github.com/Shopify/Shopify-AI-Toolkit",
+      repoRootPath: "/Users/demo/.skilldock/plugins/shopify-ai-toolkit",
+      rootPath: "/Users/demo/.codex/plugins/cache/skilldock/shopify-plugin/1.4.1",
+      displayRootPath: "/Users/demo/.codex/marketplaces/skilldock/plugins/shopify-plugin",
+      manifestPath: "/Users/demo/.codex/marketplaces/skilldock/plugins/shopify-plugin/.codex-plugin/plugin.json",
+      installSource: "skilldock",
+      relatedHostTools: ["claude-code"],
+      enabledState: "enabled",
+      scopes: [],
+      components: [],
+    },
+    {
+      ...pluginFixtures[0],
+      id: "claude-code:shopify-plugin",
+      packageId: "shopify-ai-toolkit",
+      manifestName: "shopify-plugin",
+      name: "shopify-plugin",
+      hostTool: "claude-code",
+      sourceLabel: "Shopify",
+      sourceUrl: "https://github.com/Shopify/Shopify-AI-Toolkit.git",
+      repoRootPath: "/Users/demo/.skilldock/plugins/shopify-ai-toolkit",
+      rootPath: "/Users/demo/.claude/plugins/shopify-plugin",
+      displayRootPath: "/Users/demo/.claude/plugins/shopify-plugin",
+      manifestPath: "/Users/demo/.claude/plugins/shopify-plugin/.claude-plugin/plugin.json",
+      installSource: "skilldock",
+      relatedHostTools: ["codex"],
+      enabledState: "enabled",
+      scopes: [],
+      components: [],
+    },
+  ];
+  vi.spyOn(skillClient, "fetchStartupInstalledPlugins").mockResolvedValueOnce(plugins);
+
+  renderWithI18n(<PluginsRoute />);
+
+  const allTab = await screen.findByRole("tab", { name: "全部 1" });
+  expect(allTab).toHaveAttribute("aria-selected", "true");
+  expect(screen.getAllByText(/Shopify|shopify-plugin/)).toHaveLength(1);
+  const row = screen.getByRole("button", { name: /展开 Shopify|展开 shopify-plugin/ }).closest(".tool-list-row");
+  expect(row?.querySelector('[data-tooltip="Codex 已安装（已启用）"]')).toBeInTheDocument();
+  expect(row?.querySelector('[data-tooltip="Claude Code 已安装（已启用）"]')).toBeInTheDocument();
+});
+
+test("uses manifest name as the visible plugin title when hosts disagree on display name", async () => {
+  const plugins: PluginSummary[] = [
+    {
+      ...pluginFixtures[0],
+      id: "codex:shopify-plugin",
+      packageId: "shopify-ai-toolkit",
+      manifestName: "shopify-plugin",
+      name: "Shopify",
+      hostTool: "codex",
+      sourceLabel: "skilldock",
+      sourceUrl: "https://github.com/Shopify/Shopify-AI-Toolkit",
+      repoRootPath: "/Users/demo/.skilldock/plugins/shopify-ai-toolkit",
+      rootPath: "/Users/demo/.codex/plugins/cache/skilldock/shopify-plugin/1.4.1",
+      displayRootPath: "/Users/demo/.codex/marketplaces/skilldock/plugins/shopify-plugin",
+      manifestPath: "/Users/demo/.codex/marketplaces/skilldock/plugins/shopify-plugin/.codex-plugin/plugin.json",
+      installSource: "skilldock",
+      relatedHostTools: ["claude-code"],
+      enabledState: "enabled",
+      scopes: [],
+      components: [],
+    },
+    {
+      ...pluginFixtures[0],
+      id: "claude-code:shopify-plugin",
+      packageId: "shopify-ai-toolkit",
+      manifestName: "shopify-plugin",
+      name: "shopify-plugin",
+      hostTool: "claude-code",
+      sourceLabel: "Shopify",
+      sourceUrl: "https://github.com/Shopify/Shopify-AI-Toolkit.git",
+      repoRootPath: "/Users/demo/.skilldock/plugins/shopify-ai-toolkit",
+      rootPath: "/Users/demo/.claude/plugins/shopify-plugin",
+      displayRootPath: "/Users/demo/.claude/plugins/shopify-plugin",
+      manifestPath: "/Users/demo/.claude/plugins/shopify-plugin/.claude-plugin/plugin.json",
+      installSource: "skilldock",
+      relatedHostTools: ["codex"],
+      enabledState: "enabled",
+      scopes: [],
+      components: [],
+    },
+  ];
+  vi.spyOn(skillClient, "fetchStartupInstalledPlugins").mockResolvedValueOnce(plugins);
+
+  renderWithI18n(<PluginsRoute />);
+
+  await screen.findByRole("tab", { name: "全部 1" });
+  expect(screen.getByText("shopify-plugin")).toBeInTheDocument();
+  expect(screen.queryByText("Shopify")).not.toBeInTheDocument();
 });
 
 test("shows disabled plugin state with description-first source details", async () => {
@@ -850,6 +1073,41 @@ test("shows pending push status without an update action", async () => {
 
   expect(screen.getByText("待推送")).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "更新 Repo Scout 插件" })).not.toBeInTheDocument();
+});
+
+test("refreshes plugin states after plugin library changes", async () => {
+  vi.spyOn(skillClient, "shouldUseFixtureData").mockReturnValue(false);
+  const refreshedPlugin: PluginSummary = {
+    ...pluginFixtures[0],
+    rootPath: "/Users/demo/.skilldock/plugins/repo-scout/plugins/repo-scout",
+    repoRootPath: "/Users/demo/.skilldock/plugins/repo-scout",
+    installSource: "skilldock",
+    collabStatus: "pending-push",
+    updateAvailable: false,
+    statusText: "插件目录存在本地未提交改动。",
+  };
+  const refreshSpy = vi.spyOn(skillClient, "refreshLocalPluginState").mockResolvedValueOnce(refreshedPlugin);
+  let changeHandler: ((payload: { changedPaths: string[] }) => void) | null = null;
+  vi.spyOn(skillClient, "subscribePluginLibraryChanges").mockImplementation(async (handler) => {
+    changeHandler = handler;
+    return () => undefined;
+  });
+  vi.spyOn(skillClient, "fetchStartupInstalledPlugins").mockResolvedValueOnce([refreshedPlugin]);
+
+  renderWithI18n(<PluginsRoute />);
+
+  await screen.findByRole("tab", { name: /全部/ });
+  if (!changeHandler) {
+    throw new Error("plugin library change handler was not registered");
+  }
+  changeHandler({ changedPaths: ["/Users/demo/.skilldock/plugins/repo-scout/plugins/repo-scout/SKILL.md"] });
+
+  await waitFor(() => {
+    expect(refreshSpy).toHaveBeenCalledTimes(1);
+  });
+  await waitFor(() => {
+    expect(screen.getByText("待推送")).toBeInTheDocument();
+  });
 });
 
 test("shows diverged status without an update action", async () => {
@@ -1598,6 +1856,74 @@ test("shows install-host icons consistently for cross-host marketplace plugins",
   ).toHaveLength(3);
   expect(screen.queryByText("分支")).not.toBeInTheDocument();
   expect(screen.queryByText("git")).not.toBeInTheDocument();
+});
+
+test("renders plugin directory metadata below install method in plugin details", async () => {
+  const plugins: PluginSummary[] = [
+    {
+      ...pluginFixtures[1],
+      id: "claude-code:example-plugin",
+      packageId: "example-plugin",
+      name: "Example Plugin",
+      hostTool: "claude-code",
+      relatedHostTools: ["codex", "cursor"],
+      sourceType: "marketplace",
+      sourceLabel: "example-plugin",
+      sourceUrl: "https://git.example.com/example-org/example-repo.git",
+      sourceRef: "master",
+      repoRootPath: "/Users/demo/.claude/plugins/cache/example-org/example-plugin/0.1.0",
+      rootPath: "/Users/demo/.claude/plugins/cache/example-org/example-plugin/0.1.0",
+      manifestPath: "/Users/demo/.claude/plugins/cache/example-org/example-plugin/0.1.0/.claude-plugin/plugin.json",
+    },
+    {
+      ...pluginFixtures[1],
+      id: "codex:example-plugin",
+      packageId: "example-plugin",
+      name: "Example Plugin",
+      hostTool: "codex",
+      relatedHostTools: ["claude-code", "cursor"],
+      sourceType: "marketplace",
+      sourceLabel: "example-plugin",
+      sourceUrl: "https://git.example.com/example-org/example-repo.git",
+      sourceRef: "master",
+      repoRootPath: "/Users/demo/.codex/plugins/cache/example-org/example-plugin/0.1.0",
+      rootPath: "/Users/demo/.codex/plugins/cache/example-org/example-plugin/0.1.0",
+      manifestPath: "/Users/demo/.codex/plugins/cache/example-org/example-plugin/0.1.0/plugin.json",
+    },
+    {
+      ...pluginFixtures[1],
+      id: "cursor:example-plugin",
+      packageId: "example-plugin",
+      name: "Example Plugin",
+      hostTool: "cursor",
+      relatedHostTools: ["claude-code", "codex"],
+      sourceType: "marketplace",
+      sourceLabel: "example-plugin",
+      sourceUrl: "https://git.example.com/example-org/example-repo.git",
+      sourceRef: "master",
+      repoRootPath: "/Users/demo/.cursor/plugins/cache/example-org/example-plugin/0.1.0",
+      rootPath: "/Users/demo/.cursor/plugins/cache/example-org/example-plugin/0.1.0",
+      manifestPath: "/Users/demo/.cursor/plugins/cache/example-org/example-plugin/0.1.0/.cursor-plugin/plugin.json",
+    },
+  ];
+  vi.spyOn(skillClient, "fetchStartupInstalledPlugins").mockResolvedValueOnce(plugins);
+
+  renderWithI18n(<PluginsRoute />);
+
+  await screen.findByRole("tab", { name: /全部/ });
+  await userEvent.click(screen.getByRole("tab", { name: /Claude Code/ }));
+  await userEvent.click(screen.getByRole("button", { name: /展开 Example Plugin/ }));
+
+  const detailPanel = screen.getByText("基本信息").closest(".plugins-page__detail-panel");
+  expect(detailPanel).not.toBeNull();
+
+  const headings = Array.from(
+    (detailPanel as HTMLElement).querySelectorAll("dt"),
+  ).map((node) => node.textContent?.trim());
+
+  expect(headings.indexOf("安装方式")).toBeGreaterThanOrEqual(0);
+  expect(headings.indexOf("插件目录")).toBeGreaterThan(headings.indexOf("安装方式"));
+  expect(headings.indexOf("安装宿主")).toBeGreaterThan(headings.indexOf("安装方式"));
 });
 
 test("hides plugin directory and related-host metadata in all-tab merged details", async () => {

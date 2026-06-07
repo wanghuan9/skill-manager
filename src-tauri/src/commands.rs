@@ -39,6 +39,7 @@ use crate::state::{
 use crate::workspace::{self, APP_BRAND_NAME};
 
 const REFRESH_GIT_STATES_CONCURRENCY: usize = 5;
+const LOCAL_SKILL_TOOL_STATE_CONCURRENCY: usize = 2;
 const PACKAGE_ID_HASH_LEN: usize = 8;
 
 fn default_installed_skills() -> Vec<SkillSummary> {
@@ -1971,6 +1972,49 @@ fn installed_tool_sync_entries_from_configs(tool_configs: &[ToolConfig]) -> Vec<
         .collect()
 }
 
+fn inspect_skill_tool_status(skill: &SkillSummary, tool_name: &str) -> String {
+    let Ok(tool_id) = tool_name_to_id(tool_name) else {
+        return "未启用".into();
+    };
+    let Ok(tool_skills_path) = get_tool_skills_path(&tool_id) else {
+        return "未启用".into();
+    };
+
+    let symlink_path = PathBuf::from(tool_skills_path).join(&skill.name);
+    let Ok(metadata) = fs::symlink_metadata(&symlink_path) else {
+        return "未启用".into();
+    };
+    if !metadata.file_type().is_symlink() {
+        return "需要重同步".into();
+    }
+
+    let Ok(target_path) = fs::canonicalize(&symlink_path) else {
+        return "需要重同步".into();
+    };
+    let Ok(expected_path) = fs::canonicalize(&skill.local_path) else {
+        return "需要重同步".into();
+    };
+    if target_path != expected_path {
+        return "需要重同步".into();
+    }
+
+    "已同步".into()
+}
+
+fn installed_tool_sync_entries_for_skill(
+    skill: &SkillSummary,
+    tool_configs: &[ToolConfig],
+) -> Vec<ToolSyncStatus> {
+    tool_configs
+        .iter()
+        .filter(|tool| tool.status_label == "已安装" && tool.id != "intellij")
+        .map(|tool| ToolSyncStatus {
+            name: tool.name.clone(),
+            status_label: inspect_skill_tool_status(skill, &tool.name),
+        })
+        .collect()
+}
+
 fn normalize_skill_tools_with_entries(
     skill: &SkillSummary,
     installed_tool_entries: &[ToolSyncStatus],
@@ -2007,10 +2051,38 @@ fn normalize_skill_tools_with_entries(
     }
 }
 
+fn reconcile_skill_tools_with_entries(
+    skill: &SkillSummary,
+    installed_tool_entries: &[ToolSyncStatus],
+) -> SkillSummary {
+    let merged_tools = installed_tool_entries.to_vec();
+    let synced_tool_count = merged_tools
+        .iter()
+        .filter(|tool| {
+            matches!(
+                tool.status_label.as_str(),
+                "已同步" | "已启用" | "需要重同步"
+            )
+        })
+        .count();
+
+    SkillSummary {
+        synced_tool_count,
+        tools: merged_tools,
+        ..skill.clone()
+    }
+}
+
 fn normalize_skill_tools(skill: &SkillSummary) -> SkillSummary {
     let tool_configs = build_tool_configs();
     let installed_tool_entries = installed_tool_sync_entries_from_configs(&tool_configs);
     normalize_skill_tools_with_entries(skill, &installed_tool_entries)
+}
+
+fn normalize_skill_tools_from_local_state(skill: &SkillSummary) -> SkillSummary {
+    let tool_configs = build_tool_configs();
+    let installed_tool_entries = installed_tool_sync_entries_for_skill(skill, &tool_configs);
+    reconcile_skill_tools_with_entries(skill, &installed_tool_entries)
 }
 
 fn normalize_git_remote_repository_url(remote_url: &str) -> Option<String> {
@@ -2213,7 +2285,6 @@ fn enable_skill_for_all_installed_tools(
 
 fn resolve_startup_installed_skills() -> Vec<SkillSummary> {
     let tool_configs = build_tool_configs();
-    let installed_tool_entries = installed_tool_sync_entries_from_configs(&tool_configs);
     let installed_skills = load_installed_skills(&default_installed_skills());
     let normalized_skills = installed_skills
         .iter()
@@ -2231,11 +2302,18 @@ fn resolve_startup_installed_skills() -> Vec<SkillSummary> {
         let _ = save_installed_skills(&normalized_skills);
     }
 
-    normalized_skills
-        .iter()
-        .map(|skill| normalize_skill_tools_with_entries(&skill, &installed_tool_entries))
-        .map(|skill| enrich_skill_with_cached_update_state(&skill))
-        .collect()
+    map_in_parallel_preserving_order(
+        &normalized_skills,
+        LOCAL_SKILL_TOOL_STATE_CONCURRENCY,
+        |skill| {
+            let installed_tool_entries =
+                installed_tool_sync_entries_for_skill(skill, &tool_configs);
+            reconcile_skill_tools_with_entries(skill, &installed_tool_entries)
+        },
+    )
+    .into_iter()
+    .map(|skill| enrich_skill_with_cached_update_state(&skill))
+    .collect()
 }
 
 fn resolve_installed_skills() -> Vec<SkillSummary> {
@@ -2851,9 +2929,9 @@ fn collect_working_tree_changes(skill_path: &str) -> Result<Vec<GitChangeFile>, 
 
 fn refresh_and_persist_skill(skill_name: &str) -> Result<SkillSummary, String> {
     let (mut installed_skills, skill_index) = find_skill_by_name(skill_name)?;
-    let refreshed_skill = enrich_skill_with_git_state(&normalize_installed_skill_source_url(
-        &installed_skills[skill_index],
-    ));
+    let normalized_skill = normalize_installed_skill_source_url(&installed_skills[skill_index]);
+    let normalized_skill = normalize_skill_tools_from_local_state(&normalized_skill);
+    let refreshed_skill = enrich_skill_with_git_state(&normalized_skill);
     installed_skills[skill_index] = refreshed_skill.clone();
     save_installed_skills(&installed_skills)?;
     Ok(refreshed_skill)
@@ -2861,9 +2939,9 @@ fn refresh_and_persist_skill(skill_name: &str) -> Result<SkillSummary, String> {
 
 fn refresh_and_persist_local_git_skill(skill_name: &str) -> Result<SkillSummary, String> {
     let (mut installed_skills, skill_index) = find_skill_by_name(skill_name)?;
-    let refreshed_skill = enrich_skill_with_local_git_state(&normalize_installed_skill_source_url(
-        &installed_skills[skill_index],
-    ));
+    let normalized_skill = normalize_installed_skill_source_url(&installed_skills[skill_index]);
+    let normalized_skill = normalize_skill_tools_from_local_state(&normalized_skill);
+    let refreshed_skill = enrich_skill_with_local_git_state(&normalized_skill);
     installed_skills[skill_index] = refreshed_skill.clone();
     save_installed_skills(&installed_skills)?;
     Ok(refreshed_skill)
@@ -2871,7 +2949,7 @@ fn refresh_and_persist_local_git_skill(skill_name: &str) -> Result<SkillSummary,
 
 fn refresh_installed_skill_git_state(skill: &SkillSummary) -> SkillSummary {
     let normalized_skill = normalize_installed_skill_source_url(skill);
-    let normalized_skill = normalize_skill_tools(&normalized_skill);
+    let normalized_skill = normalize_skill_tools_from_local_state(&normalized_skill);
     enrich_skill_with_git_state(&normalized_skill)
 }
 
@@ -4036,7 +4114,21 @@ pub async fn list_startup_installed_skills() -> Vec<SkillSummary> {
     }
     tauri::async_runtime::spawn_blocking(|| {
         let _ = remove_reserved_workspace_symlinks_from_all_tools();
-        resolve_startup_installed_skills()
+        let skills = resolve_startup_installed_skills();
+        if sync_trace_enabled() {
+            for skill in &skills {
+                let tool_statuses = skill
+                    .tools
+                    .iter()
+                    .map(|tool| format!("{}={}", tool.name, tool.status_label))
+                    .collect::<Vec<_>>();
+                eprintln!(
+                    "[sync-trace] startup skill {} tools {:?}",
+                    skill.name, tool_statuses
+                );
+            }
+        }
+        skills
     })
     .await
     .unwrap_or_default()
@@ -4243,6 +4335,19 @@ pub async fn refresh_git_states() -> Vec<SkillSummary> {
     tauri::async_runtime::spawn_blocking(|| {
         let skills = load_installed_skills(&default_installed_skills());
         let refreshed_skills = refresh_installed_skill_git_states(&skills);
+        if sync_trace_enabled() {
+            for skill in &refreshed_skills {
+                let tool_statuses = skill
+                    .tools
+                    .iter()
+                    .map(|tool| format!("{}={}", tool.name, tool.status_label))
+                    .collect::<Vec<_>>();
+                eprintln!(
+                    "[sync-trace] refreshed git skill {} tools {:?}",
+                    skill.name, tool_statuses
+                );
+            }
+        }
         let _ = save_installed_skills(&refreshed_skills);
         refreshed_skills
     })
@@ -5653,11 +5758,12 @@ mod tests {
         cleanup_local_skill_install_on_error, collect_local_skill_dirs,
         collect_skills_manager_cached_items, collect_skillsmp_items, copy_local_skill_dir,
         detect_preferred_app_language_from_system, import_local_skill, insert_trusted_project_path,
-        install_selected_local_skill_dirs, intellij_trusted_locations_for_project,
-        load_marketplace_cache_page, map_in_parallel_preserving_order,
-        map_skillsmp_items_to_marketplace, normalize_installed_skill_source_url,
-        normalize_skill_tools, open_target_path_for_skill, parse_apple_languages_output,
-        parse_repo_install_spec, parse_skills_sh_homepage_items, remove_trusted_project_paths,
+        inspect_skill_tool_status, install_selected_local_skill_dirs,
+        intellij_trusted_locations_for_project, load_marketplace_cache_page,
+        map_in_parallel_preserving_order, map_skillsmp_items_to_marketplace,
+        normalize_installed_skill_source_url, normalize_skill_tools, open_target_path_for_skill,
+        parse_apple_languages_output, parse_repo_install_spec, parse_skills_sh_homepage_items,
+        refresh_installed_skill_git_state, remove_trusted_project_paths,
         resolve_skill_install_name, resolve_startup_installed_skills, run_git_command,
         save_marketplace_cache, scan_local_install_skill_candidates, scan_repo_skill_candidates,
         selected_repo_path_hint, should_use_skills_sh_homepage_page, update_skill_repo,
@@ -7096,6 +7202,124 @@ mod tests {
             rewritten.installed_skills[0].source_url,
             "https://github.com/larksuite/cli/tree/main/skills/lark-doc"
         );
+
+        let _ = fs::remove_dir_all(temp_home);
+    }
+
+    #[test]
+    fn inspect_skill_tool_status_marks_missing_symlink_as_disabled() {
+        let _guard = TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let original_home = env::var_os("HOME");
+        let temp_home = temp_test_dir("inspect-missing-symlink-home");
+        let skill_path = temp_home.join(".skilldock/skills/demo-skill");
+        fs::create_dir_all(&skill_path).expect("create skill path");
+        fs::write(skill_path.join("SKILL.md"), "# demo").expect("write skill file");
+        let skill = SkillSummary {
+            name: "demo-skill".into(),
+            source_label: "本地".into(),
+            source_type: "local".into(),
+            source_url: String::new(),
+            description: String::new(),
+            local_path: skill_path.to_string_lossy().to_string(),
+            branch: String::new(),
+            collab_status: "clean".into(),
+            status_text: String::new(),
+            remote_updated_at: String::new(),
+            local_updated_at: String::new(),
+            last_synced_at: String::new(),
+            last_checked_at: String::new(),
+            synced_tool_count: 0,
+            last_editor: String::new(),
+            commit_label: String::new(),
+            git_linked: false,
+            lifecycle_source: "direct".into(),
+            owner_plugin_id: String::new(),
+            owner_plugin_name: String::new(),
+            tools: vec![],
+        };
+
+        unsafe {
+            env::set_var("HOME", &temp_home);
+        }
+
+        let status = inspect_skill_tool_status(&skill, "Claude Code");
+
+        restore_env_var("HOME", original_home);
+
+        assert_eq!(status, "未启用");
+
+        let _ = fs::remove_dir_all(temp_home);
+    }
+
+    #[test]
+    fn refresh_installed_skill_git_state_recomputes_missing_symlink_status() {
+        let _guard = TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let original_home = env::var_os("HOME");
+        let temp_home = temp_test_dir("refresh-missing-symlink-home");
+        let repo_path = temp_home.join(".skilldock/skills/demo-skill");
+        fs::create_dir_all(&repo_path).expect("create repo path");
+        fs::write(repo_path.join("SKILL.md"), "# demo").expect("write skill file");
+        fs::create_dir_all(temp_home.join(".claude")).expect("create claude dir");
+        fs::write(temp_home.join(".claude.json"), "{}").expect("write claude config");
+        let original_path = prepend_fake_executable_to_path(&temp_home, "claude");
+
+        run_git_test(
+            &temp_home,
+            &["init", "--quiet", repo_path.to_str().expect("repo path")],
+        );
+        run_git_test(&repo_path, &["checkout", "-b", "main"]);
+        run_git_test(&repo_path, &["config", "user.name", "SkillDock Test"]);
+        run_git_test(
+            &repo_path,
+            &["config", "user.email", "skilldock@example.com"],
+        );
+        run_git_test(&repo_path, &["add", "."]);
+        run_git_test(&repo_path, &["commit", "-m", "init"]);
+
+        unsafe {
+            env::set_var("HOME", &temp_home);
+        }
+
+        let skill = SkillSummary {
+            name: "demo-skill".into(),
+            source_label: "本地".into(),
+            source_type: "local".into(),
+            source_url: String::new(),
+            description: String::new(),
+            local_path: repo_path.to_string_lossy().to_string(),
+            branch: "main".into(),
+            collab_status: "clean".into(),
+            status_text: String::new(),
+            remote_updated_at: String::new(),
+            local_updated_at: String::new(),
+            last_synced_at: String::new(),
+            last_checked_at: String::new(),
+            synced_tool_count: 1,
+            last_editor: String::new(),
+            commit_label: String::new(),
+            git_linked: true,
+            lifecycle_source: "direct".into(),
+            owner_plugin_id: String::new(),
+            owner_plugin_name: String::new(),
+            tools: vec![crate::models::ToolSyncStatus {
+                name: "Claude Code".into(),
+                status_label: "已同步".into(),
+            }],
+        };
+
+        let refreshed = refresh_installed_skill_git_state(&skill);
+
+        restore_env_var("HOME", original_home);
+        restore_env_var("PATH", original_path);
+
+        assert!(refreshed
+            .tools
+            .iter()
+            .any(|tool| { tool.name == "Claude Code" && tool.status_label == "未启用" }));
 
         let _ = fs::remove_dir_all(temp_home);
     }

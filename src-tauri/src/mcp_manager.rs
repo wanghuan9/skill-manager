@@ -23,6 +23,7 @@ use crate::workspace::{
 const MCP_STATE_FILE_NAME: &str = "mcp-servers.json";
 const MCP_PROTOCOL_VERSION: &str = "2024-11-05";
 const MCP_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(12);
+const MCP_LOCAL_APP_CONFIG_READ_CONCURRENCY: usize = 2;
 const CANVA_REMOTE_MCP_URL: &str = "https://mcp.canva.com/mcp";
 const MEM0_REMOTE_MCP_URL: &str = "https://mcp.mem0.ai/mcp/";
 const APP_CLAUDE_CODE: &str = "claude-code";
@@ -703,9 +704,14 @@ fn refresh_mcp_server_tools_blocking(server_id: &str) -> Result<McpWorkspaceSnap
 fn build_mcp_workspace_snapshot() -> Result<McpWorkspaceSnapshot, String> {
     let records = load_mcp_records()?;
     let apps = target_apps()?;
+    let actual_enabled_servers_by_app = actual_enabled_servers_by_app(&apps);
     let mut servers = Vec::with_capacity(records.len());
     for record in records {
-        servers.push(to_server_summary(&record, &apps)?);
+        servers.push(to_server_summary(
+            &record,
+            &apps,
+            &actual_enabled_servers_by_app,
+        )?);
     }
 
     Ok(McpWorkspaceSnapshot {
@@ -715,15 +721,69 @@ fn build_mcp_workspace_snapshot() -> Result<McpWorkspaceSnapshot, String> {
     })
 }
 
+fn actual_enabled_servers_by_app(apps: &[McpTargetApp]) -> BTreeMap<String, BTreeSet<String>> {
+    let Ok(specs) = target_app_specs() else {
+        return BTreeMap::new();
+    };
+    let app_names = apps
+        .iter()
+        .map(|app| (app.id.as_str(), app.name.as_str()))
+        .collect::<BTreeMap<_, _>>();
+    let filtered_specs = specs
+        .into_iter()
+        .filter(|spec| app_names.contains_key(spec.id))
+        .collect::<Vec<_>>();
+
+    let app_server_states = filtered_specs
+        .chunks(MCP_LOCAL_APP_CONFIG_READ_CONCURRENCY.max(1))
+        .flat_map(|chunk| {
+            std::thread::scope(|scope| {
+                let handles = chunk
+                    .iter()
+                    .map(|spec| {
+                        scope.spawn(move || {
+                            let result = read_servers_from_app(spec).map(|servers| {
+                                servers
+                                    .into_iter()
+                                    .map(|(server_id, _)| server_id)
+                                    .collect::<BTreeSet<_>>()
+                            });
+                            (spec.id.to_string(), spec.name.to_string(), result)
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                handles
+                    .into_iter()
+                    .map(|handle| {
+                        handle
+                            .join()
+                            .expect("mcp local app config read worker should finish")
+                    })
+                    .collect::<Vec<_>>()
+            })
+        })
+        .collect::<Vec<_>>();
+
+    let mut actual = BTreeMap::new();
+    for (app_id, app_name, result) in app_server_states {
+        match result {
+            Ok(server_ids) => {
+                actual.insert(app_id, server_ids);
+            }
+            Err(error) => {
+                log::warn!("读取 {} MCP 配置失败: {}", app_name, error);
+            }
+        }
+    }
+
+    actual
+}
+
 fn to_server_summary(
     record: &McpServerRecord,
     apps: &[McpTargetApp],
+    actual_enabled_servers_by_app: &BTreeMap<String, BTreeSet<String>>,
 ) -> Result<McpServerSummary, String> {
-    let enabled_app_ids = record
-        .enabled_app_ids
-        .iter()
-        .cloned()
-        .collect::<BTreeSet<_>>();
     let app_statuses = apps
         .iter()
         .map(|app| McpAppStatus {
@@ -731,9 +791,12 @@ fn to_server_summary(
             app_name: app.name.clone(),
             config_path: app.config_path.clone(),
             status_label: app.status_label.clone(),
-            is_enabled: enabled_app_ids.contains(&app.id),
+            is_enabled: actual_enabled_servers_by_app
+                .get(&app.id)
+                .is_some_and(|server_ids| server_ids.contains(&record.id)),
         })
         .collect::<Vec<_>>();
+    let enabled_app_count = app_statuses.iter().filter(|app| app.is_enabled).count();
     let server_type = mcp_server_type(&record.server);
     let display_server = mcp_server_for_display(&record.server);
     let server_json = serde_json::to_string_pretty(&display_server)
@@ -747,7 +810,7 @@ fn to_server_summary(
         description: stored_mcp_description(record),
         source_url: record.source_url.trim().to_string(),
         server_json,
-        enabled_app_count: record.enabled_app_ids.len(),
+        enabled_app_count,
         apps: app_statuses,
         tools: normalized_mcp_tools(record),
         tools_discovered_at: record.tools_discovered_at.trim().to_string(),
@@ -1425,6 +1488,13 @@ fn read_codex_mcp_servers(path: &Path) -> Result<Vec<(String, Value)>, String> {
     if let Some(table) = doc.get("mcp_servers").and_then(|item| item.as_table()) {
         for (id, item) in table.iter() {
             if let Some(server_table) = item.as_table() {
+                if server_table
+                    .get("enabled")
+                    .and_then(|value| value.as_bool())
+                    == Some(false)
+                {
+                    continue;
+                }
                 servers.push((id.to_string(), codex_table_to_json(server_table)));
             }
         }
@@ -1437,6 +1507,13 @@ fn read_codex_mcp_servers(path: &Path) -> Result<Vec<(String, Value)>, String> {
     {
         for (id, item) in table.iter() {
             if let Some(server_table) = item.as_table() {
+                if server_table
+                    .get("enabled")
+                    .and_then(|value| value.as_bool())
+                    == Some(false)
+                {
+                    continue;
+                }
                 servers.push((id.to_string(), codex_table_to_json(server_table)));
             }
         }
@@ -5633,6 +5710,102 @@ A comprehensive GitLab MCP server for AI clients. Manage projects, merge request
             persisted_records[0].imported_from_app_ids,
             vec![APP_CODEX.to_string()]
         );
+
+        cleanup();
+    }
+
+    #[test]
+    fn workspace_snapshot_reads_enabled_state_from_actual_app_config() {
+        use crate::workspace::TEST_ENV_LOCK;
+
+        let _guard = TEST_ENV_LOCK
+            .lock()
+            .expect("test env lock should not be poisoned");
+        let temp_home = env::temp_dir().join(format!(
+            "skilldock-mcp-snapshot-config-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|duration| duration.as_nanos())
+                .unwrap_or_default()
+        ));
+        fs::create_dir_all(temp_home.join(".codex")).expect("create temp codex dir");
+        let original_home = env::var_os("HOME");
+        env::set_var("HOME", &temp_home);
+
+        let cleanup = || {
+            if let Some(home) = original_home.as_ref() {
+                env::set_var("HOME", home);
+            } else {
+                env::remove_var("HOME");
+            }
+            let _ = fs::remove_dir_all(&temp_home);
+        };
+
+        let server_id = "filesystem";
+        let codex_config_path = temp_home.join(".codex/config.toml");
+        fs::write(
+            &codex_config_path,
+            r#"[mcp_servers.filesystem]
+type = "stdio"
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-filesystem"]
+enabled = false
+"#,
+        )
+        .expect("write codex config");
+
+        let records = vec![McpServerRecord {
+            id: server_id.to_string(),
+            name: server_id.to_string(),
+            server: json!({
+                "type": "stdio",
+                "command": "npx",
+                "args": ["-y", "@modelcontextprotocol/server-filesystem"]
+            }),
+            description: String::new(),
+            source_url: String::new(),
+            enabled_app_ids: vec![APP_CODEX.to_string()],
+            imported_from_app_ids: vec![APP_CODEX.to_string()],
+            tools: Vec::new(),
+            tools_discovered_at: String::new(),
+            tools_discovery_error: String::new(),
+            installed_at: "2026/5/15 12:00:00".to_string(),
+            updated_at: "2026/5/15 12:00:00".to_string(),
+            lifecycle_source: "direct".to_string(),
+            owner_plugin_id: String::new(),
+            owner_plugin_name: String::new(),
+        }];
+
+        if let Err(error) = save_mcp_records(&records) {
+            cleanup();
+            panic!("save initial records failed: {error}");
+        }
+
+        let snapshot = match build_mcp_workspace_snapshot() {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                cleanup();
+                panic!("build mcp workspace snapshot failed: {error}");
+            }
+        };
+
+        let server = match snapshot
+            .servers
+            .iter()
+            .find(|server| server.id == server_id)
+        {
+            Some(server) => server,
+            None => {
+                cleanup();
+                panic!("missing server in snapshot");
+            }
+        };
+        assert_eq!(server.enabled_app_count, 0);
+        assert!(server
+            .apps
+            .iter()
+            .any(|app| app.app_id == APP_CODEX && !app.is_enabled));
 
         cleanup();
     }

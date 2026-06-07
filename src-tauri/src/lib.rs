@@ -5,6 +5,7 @@ mod library;
 mod mcp_manager;
 mod models;
 mod plugin_manager;
+mod plugin_watcher;
 mod skill_watcher;
 mod state;
 mod workspace;
@@ -28,6 +29,9 @@ pub fn run() {
             let _ = library::remove_reserved_workspace_symlinks_from_all_tools();
             if let Err(error) = skill_watcher::start_skill_library_watcher(app.handle().clone()) {
                 log::warn!("Failed to start skill library watcher: {error}");
+            }
+            if let Err(error) = plugin_watcher::start_plugin_library_watcher(app.handle().clone()) {
+                log::warn!("Failed to start plugin library watcher: {error}");
             }
             Ok(())
         })
@@ -79,6 +83,7 @@ pub fn run() {
             plugin_manager::list_startup_installed_plugins,
             plugin_manager::list_installed_plugins,
             plugin_manager::refresh_plugin_states,
+            plugin_manager::refresh_local_plugin_state,
             plugin_manager::list_cli_tools,
             plugin_manager::probe_plugin_repo,
             plugin_manager::probe_plugin_source,

@@ -620,6 +620,7 @@ function normalizePluginSummary(plugin: LegacyPluginSummary): PluginSummary {
   return {
     id: plugin.id ?? "",
     packageId: plugin.packageId ?? "",
+    manifestName: plugin.manifestName ?? "",
     name: plugin.name ?? "",
     description: plugin.description ?? "",
     hostTool: normalizePluginHostTool(plugin.hostTool),
@@ -690,6 +691,7 @@ function normalizePluginProbeResult(probe: LegacyPluginProbeResult): PluginProbe
     tool,
     compatibleHostTools: compatibleHostTools.length > 0 ? compatibleHostTools : tool === "unknown" ? [] : [tool],
     kind: normalizePluginKind(probe.kind),
+    manifestName: probe.manifestName?.trim() || "",
     name: probe.name?.trim() || probe.pluginRoot?.split("/").filter(Boolean).at(-1) || "Plugin",
     description: formatSkillDescription(probe.description ?? ""),
     pluginRoot: probe.pluginRoot ?? "",
@@ -1028,6 +1030,38 @@ export async function subscribeSkillLibraryChanges(
   return listen<SkillLibraryChangeEvent>("skill-library-changed", (event) => {
     handler(event.payload);
   });
+}
+
+type PluginLibraryChangeEvent = {
+  changedPaths: string[];
+};
+
+export async function subscribePluginLibraryChanges(
+  handler: (payload: PluginLibraryChangeEvent) => void,
+): Promise<UnlistenFn> {
+  if (shouldUseFixtureData()) {
+    return () => undefined;
+  }
+
+  return listen<PluginLibraryChangeEvent>("plugin-library-changed", (event) => {
+    handler(event.payload);
+  });
+}
+
+export async function refreshLocalPluginState(input: {
+  hostTool: PluginHostTool;
+  rootPath: string;
+}): Promise<PluginSummary> {
+  const fallbackSource =
+    pluginFixtures.find((plugin) =>
+      plugin.hostTool === input.hostTool && plugin.rootPath === input.rootPath,
+    ) ?? pluginFixtures[0];
+  const updatedPlugin = await invokeOrFallback<LegacyPluginSummary>(
+    "refresh_local_plugin_state",
+    input,
+    fallbackSource,
+  );
+  return normalizePluginSummary(updatedPlugin);
 }
 
 export async function fetchMarketplaceSkills(): Promise<MarketplaceSkill[]> {

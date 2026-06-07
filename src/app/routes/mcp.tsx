@@ -54,6 +54,7 @@ const MCP_MISSING_ENV_PATTERN = /缺少环境变量\s+([A-Z0-9_]+)/i;
 const MCP_CONFIG_PARAM_FIELDS = ["env", "headers"];
 const MCP_SUMMARY_APP_ICON_LIMIT = 7;
 const MCP_AUTO_PROBE_COOLDOWN_MS = 5_000;
+const MCP_LOCAL_ALIGN_COOLDOWN_MS = 2_000;
 
 const mcpAutoProbeAttemptedAtBySignature = new Map<string, number>();
 const mcpAutoProbeInFlightSignatures = new Set<string>();
@@ -605,6 +606,7 @@ export function McpRoute(props: McpRouteProps = {}) {
   const importActionLockedRef = useRef(false);
   const refreshActionLockedRef = useRef(false);
   const localAlignInFlightRef = useRef<Promise<McpWorkspaceSnapshot | null> | null>(null);
+  const lastLocalAlignAtRef = useRef(0);
   const probingToolServerIdsRef = useRef(new Set<string>());
   const autoProbedToolSignaturesRef = useRef(new Set<string>());
   const workspaceRef = useRef(workspace);
@@ -719,10 +721,14 @@ export function McpRoute(props: McpRouteProps = {}) {
     if (localAlignInFlightRef.current) {
       return localAlignInFlightRef.current;
     }
+    if (Date.now() - lastLocalAlignAtRef.current < MCP_LOCAL_ALIGN_COOLDOWN_MS) {
+      return Promise.resolve(workspaceRef.current);
+    }
 
     const alignPromise = (async () => {
       try {
         const snapshot = await fetchMcpWorkspace();
+        lastLocalAlignAtRef.current = Date.now();
         if (isMountedRef.current) {
           commitWorkspace(snapshot);
         } else {

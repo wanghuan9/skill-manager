@@ -6,6 +6,7 @@ import * as skillClient from "@/features/skills/api/skill-client";
 import { marketplaceSkillFixtures, mcpMarketplaceServerFixtures } from "@/features/skills/state/skill-fixtures";
 import type { MarketplaceSkill, McpMarketplaceServer, PluginSummary } from "@/features/skills/state/skill-store";
 import { getCachedMcpWorkspace } from "@/features/skills/utils/mcp-workspace-cache";
+import { getCachedPlugins } from "@/features/skills/utils/plugin-cache";
 
 function resetMcpMarketplaceRuntimeCache() {
   delete (window as Window & { __SKILLM_MCP_MARKETPLACE_CACHE__?: unknown }).__SKILLM_MCP_MARKETPLACE_CACHE__;
@@ -84,6 +85,7 @@ test("probes plugin sources with Codex-style inputs and host selection", async (
     tool: "codex",
     compatibleHostTools: ["codex", "claude-code"],
     kind: "plugin-repo",
+    manifestName: "example-plugin",
     name: "example-plugin",
     description: "基于 Skill 的模块化 Example Plugin 框架",
     pluginRoot: "/tmp/example-repo/example-plugin",
@@ -192,6 +194,7 @@ test("marks already installed plugin hosts and still allows installing remaining
     tool: "codex",
     compatibleHostTools: ["codex", "claude-code", "cursor"],
     kind: "plugin-repo",
+    manifestName: "example-plugin",
     name: "example-plugin",
     description: "基于 Skill 的模块化 Example Plugin 框架",
     pluginRoot: "/tmp/example-repo/example-plugin",
@@ -212,6 +215,7 @@ test("marks already installed plugin hosts and still allows installing remaining
     {
       id: "codex:example-plugin",
       packageId: "example-plugin",
+      manifestName: "example-plugin",
       name: "example-plugin",
       description: "",
       hostTool: "codex",
@@ -417,6 +421,10 @@ test("disables plugin install when every compatible host already has the plugin"
   expect(installedCard).toHaveAttribute("aria-disabled", "true");
   expect(installedCard).toHaveClass("is-disabled");
   expect(within(installedCard).getByText("已安装")).toBeInTheDocument();
+  expect(within(installedCard).getByRole("heading", { name: "example-plugin" })).toHaveClass(
+    "repo-install__option-title-text",
+    "is-disabled",
+  );
   expect(screen.getByRole("button", { name: "example-plugin 已安装到 Codex" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "example-plugin 已安装到 Claude Code" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "安装到选中宿主" })).toBeDisabled();
@@ -474,6 +482,151 @@ test("probes GitLab tree plugin sources with sparse paths", async () => {
 
   branchSpy.mockRestore();
   probeSpy.mockRestore();
+});
+
+test("treats manifest name as the stable identity when plugin display names differ", async () => {
+  const sourceUrl = "https://github.com/Shopify/Shopify-AI-Toolkit";
+  const branchSpy = vi.spyOn(skillClient, "fetchGitRepoBranches").mockResolvedValue([
+    { name: "main", isDefault: true, isSelected: true },
+  ]);
+  const probeSpy = vi.spyOn(skillClient, "probePluginSourceCandidates").mockResolvedValue([{
+    tool: "codex",
+    compatibleHostTools: ["codex", "claude-code", "cursor"],
+    kind: "plugin-repo",
+    manifestName: "shopify-plugin",
+    name: "Shopify",
+    description: "Search Shopify docs, validate GraphQL & Liquid, build Shopify apps faster.",
+    pluginRoot: "/tmp/shopify-ai-toolkit",
+    repoRoot: "/tmp/shopify-ai-toolkit",
+    pluginRelativePath: "",
+    manifestPath: "/tmp/shopify-ai-toolkit/.codex-plugin/plugin.json",
+    marketplaceManifestPath: "",
+    components: [],
+    sourceType: "git",
+    sourceUrl,
+    isGitRepo: true,
+    gitRoot: "/tmp/shopify-ai-toolkit",
+    confidence: "high",
+    installStrategy: "codex-marketplace",
+    warnings: [],
+  }]);
+  vi.spyOn(skillClient, "fetchInstalledPlugins").mockResolvedValue([{
+    id: "codex:shopify-plugin",
+    packageId: "shopify-ai-toolkit",
+    manifestName: "shopify-plugin",
+    name: "Shopify",
+    description: "Search Shopify docs, validate GraphQL & Liquid, build Shopify apps faster.",
+    hostTool: "codex",
+    relatedHostTools: [],
+    kind: "plugin-repo",
+    rootPath: "/Users/demo/.codex/plugins/cache/skilldock/shopify-plugin/1.4.1",
+    displayRootPath: "/Users/demo/.codex/marketplaces/skilldock/plugins/shopify-plugin",
+    repoRootPath: "/Users/demo/.skilldock/plugins/shopify-ai-toolkit",
+    pluginRelativePath: "",
+    manifestPath: "/Users/demo/.codex/marketplaces/skilldock/plugins/shopify-plugin/.codex-plugin/plugin.json",
+    sourceType: "git",
+    sourceLabel: "skilldock",
+    sourceUrl,
+    sourceRef: "",
+    sourceRevision: "abc123",
+    currentVersion: "1.4.1",
+    currentBranch: "main",
+    currentCommit: "abc123",
+    collabStatus: "clean",
+    statusText: "",
+    isGitRepo: true,
+    updateMode: "auto",
+    updateStrategy: "git",
+    updateAvailable: false,
+    baselineHash: "",
+    localModified: false,
+    installedAt: "",
+    updatedAt: "",
+    remoteUpdatedAt: "",
+    localUpdatedAt: "",
+    lastEditor: "",
+    lastScannedAt: "",
+    status: "ready",
+    installState: "installed",
+    installSource: "skilldock",
+    enabledState: "enabled",
+    scopes: [],
+    components: [],
+  }]);
+
+  render(<App />);
+  await userEvent.click(screen.getByRole("button", { name: /安装/ }));
+  await userEvent.click(screen.getByRole("tab", { name: "Plugin" }));
+  await userEvent.type(screen.getByRole("textbox", { name: "Git 仓库地址" }), sourceUrl);
+
+  await waitFor(() => {
+    expect(screen.getByRole("combobox", { name: "Git 分支" })).toHaveValue("main");
+  });
+  await userEvent.click(screen.getByRole("button", { name: "识别插件" }));
+
+  const codexButton = await screen.findByRole("button", { name: /Shopify 已安装到 Codex/ });
+  expect(codexButton).toHaveAttribute("aria-disabled", "true");
+
+  branchSpy.mockRestore();
+  probeSpy.mockRestore();
+});
+
+test("clears plugin probes and stops blocking on workspace refresh after install", async () => {
+  const sourceUrl = "https://github.com/Shopify/Shopify-AI-Toolkit";
+  const branchSpy = vi.spyOn(skillClient, "fetchGitRepoBranches").mockResolvedValue([
+    { name: "main", isDefault: true, isSelected: true },
+  ]);
+  const probeSpy = vi.spyOn(skillClient, "probePluginSourceCandidates").mockResolvedValue([{
+    tool: "codex",
+    compatibleHostTools: ["codex"],
+    kind: "plugin-repo",
+    manifestName: "shopify-plugin",
+    name: "Shopify",
+    description: "Search Shopify docs, validate GraphQL & Liquid, build Shopify apps faster.",
+    pluginRoot: "/tmp/shopify-ai-toolkit",
+    repoRoot: "/tmp/shopify-ai-toolkit",
+    pluginRelativePath: "",
+    manifestPath: "/tmp/shopify-ai-toolkit/.codex-plugin/plugin.json",
+    marketplaceManifestPath: "",
+    components: [],
+    sourceType: "git",
+    sourceUrl,
+    isGitRepo: true,
+    gitRoot: "/tmp/shopify-ai-toolkit",
+    confidence: "high",
+    installStrategy: "codex-marketplace",
+    warnings: [],
+  }]);
+  const installSpy = vi.spyOn(skillClient, "installSelectedPluginProbes").mockResolvedValue([]);
+  const refreshSpy = vi.spyOn(skillClient, "refreshPluginStates").mockResolvedValue([]);
+  const workspaceRefreshSpy = vi
+    .spyOn(skillClient, "fetchToolConfigs")
+    .mockImplementation(() => new Promise(() => {}));
+
+  render(<App />);
+  await userEvent.click(screen.getByRole("button", { name: /安装/ }));
+  await userEvent.click(screen.getByRole("tab", { name: "Plugin" }));
+  await userEvent.type(screen.getByRole("textbox", { name: "Git 仓库地址" }), sourceUrl);
+  await waitFor(() => {
+    expect(screen.getByRole("combobox", { name: "Git 分支" })).toHaveValue("main");
+  });
+  await userEvent.click(screen.getByRole("button", { name: "识别插件" }));
+  await screen.findByText("Shopify");
+
+  await userEvent.click(screen.getByRole("button", { name: "安装到选中宿主" }));
+
+  await waitFor(() => {
+    expect(installSpy).toHaveBeenCalled();
+    expect(refreshSpy).toHaveBeenCalled();
+  });
+  expect(screen.getByRole("button", { name: "识别插件" })).toBeEnabled();
+  expect(screen.queryByRole("button", { name: "选择插件 Shopify" })).not.toBeInTheDocument();
+
+  branchSpy.mockRestore();
+  probeSpy.mockRestore();
+  installSpy.mockRestore();
+  refreshSpy.mockRestore();
+  workspaceRefreshSpy.mockRestore();
 });
 
 test("renders plugin probe title from manifest name instead of cache directory name", async () => {
@@ -746,6 +899,217 @@ test("keeps the plugin install result page open after installing selected hosts"
 
   branchSpy.mockRestore();
   probeSpy.mockRestore();
+  fetchInstalledPluginsSpy.mockRestore();
+  installSpy.mockRestore();
+});
+
+test("updates the shared plugin cache right after plugin install completes", async () => {
+  const sourceUrl = "https://git.example.com/example-org/example-repo";
+  const installedPlugin: PluginSummary = {
+    id: "codex:example-plugin",
+    packageId: "example-plugin",
+    name: "example-plugin",
+    description: "",
+    hostTool: "codex",
+    relatedHostTools: [],
+    kind: "plugin-repo",
+    rootPath: "/Users/demo/.codex/plugins/example-plugin",
+    displayRootPath: "/Users/demo/.codex/plugins/example-plugin",
+    repoRootPath: "/Users/demo/.codex/plugins/example-plugin",
+    pluginRelativePath: "example-plugin",
+    manifestPath: "/Users/demo/.codex/plugins/example-plugin/plugin.json",
+    sourceType: "git",
+    sourceLabel: "skilldock",
+    sourceUrl,
+    sourceRef: "master",
+    sourceRevision: "abc123",
+    currentVersion: "1.0.0",
+    currentBranch: "master",
+    currentCommit: "abc123",
+    collabStatus: "clean",
+    statusText: "",
+    isGitRepo: true,
+    updateMode: "auto",
+    updateStrategy: "git",
+    updateAvailable: false,
+    baselineHash: "",
+    localModified: false,
+    installedAt: "1",
+    updatedAt: "1",
+    remoteUpdatedAt: "",
+    localUpdatedAt: "",
+    lastEditor: "",
+    lastScannedAt: "1",
+    status: "ready",
+    installState: "installed",
+    installSource: "skilldock",
+    enabledState: "enabled",
+    scopes: [],
+    components: [],
+  };
+  const branchSpy = vi.spyOn(skillClient, "fetchGitRepoBranches").mockResolvedValue([
+    { name: "master", isDefault: true, isSelected: true },
+  ]);
+  const probeSpy = vi.spyOn(skillClient, "probePluginSourceCandidates").mockResolvedValue([
+    {
+      tool: "codex",
+      compatibleHostTools: ["codex"],
+      kind: "plugin-repo",
+      name: "example-plugin",
+      description: "基于 Skill 的模块化 Example Plugin 框架",
+      pluginRoot: "/tmp/example-repo/example-plugin",
+      repoRoot: "/tmp/example-repo",
+      pluginRelativePath: "example-plugin",
+      manifestPath: "/tmp/example-repo/example-plugin/.codex-plugin/plugin.json",
+      marketplaceManifestPath: "",
+      components: [],
+      sourceType: "git",
+      sourceUrl,
+      isGitRepo: true,
+      gitRoot: "/tmp/example-repo",
+      confidence: "high",
+      installStrategy: "codex-marketplace",
+      warnings: [],
+    },
+  ]);
+  const fixtureSpy = vi.spyOn(skillClient, "shouldUseFixtureData").mockReturnValue(false);
+  const fetchInstalledPluginsSpy = vi.spyOn(skillClient, "fetchInstalledPlugins").mockResolvedValue([]);
+  const refreshPluginStatesSpy = vi.spyOn(skillClient, "refreshPluginStates").mockResolvedValue([installedPlugin]);
+  const installSpy = vi.spyOn(skillClient, "installSelectedPluginProbes").mockResolvedValue([]);
+
+  render(<App />);
+  await userEvent.click(screen.getByRole("button", { name: /安装/ }));
+  await userEvent.click(screen.getByRole("tab", { name: "Plugin" }));
+  await userEvent.type(screen.getByRole("textbox", { name: "Git 仓库地址" }), sourceUrl);
+  await waitFor(() => {
+    expect(screen.getByRole("combobox", { name: "Git 分支" })).toHaveValue("master");
+  });
+  await userEvent.click(screen.getByRole("button", { name: "识别插件" }));
+  await screen.findByRole("button", { name: "选择插件 example-plugin" });
+
+  expect(getCachedPlugins()).toBeNull();
+
+  await userEvent.click(screen.getByRole("button", { name: "安装到选中宿主" }));
+
+  await waitFor(() => {
+    expect(refreshPluginStatesSpy).toHaveBeenCalledTimes(1);
+    expect(getCachedPlugins()).toEqual([installedPlugin]);
+  });
+
+  branchSpy.mockRestore();
+  probeSpy.mockRestore();
+  fixtureSpy.mockRestore();
+  fetchInstalledPluginsSpy.mockRestore();
+  refreshPluginStatesSpy.mockRestore();
+  installSpy.mockRestore();
+});
+
+test("shows newly installed plugin before the follow-up plugin refresh resolves", async () => {
+  const sourceUrl = "https://github.com/raisely/cursor-plugin.git";
+  const installedPlugin: PluginSummary = {
+    id: "cursor:raisely",
+    packageId: "raisely",
+    manifestName: "raisely",
+    name: "Raisely",
+    description: "Connect Cursor to Raisely.",
+    hostTool: "cursor",
+    relatedHostTools: [],
+    kind: "plugin-repo",
+    rootPath: "/Users/demo/.cursor/plugins/local/raisely",
+    displayRootPath: "/Users/demo/.cursor/plugins/local/raisely",
+    repoRootPath: "/Users/demo/.skilldock/plugins/raisely",
+    pluginRelativePath: "",
+    manifestPath: "/Users/demo/.cursor/plugins/local/raisely/.cursor-plugin/plugin.json",
+    sourceType: "git",
+    sourceLabel: "skilldock",
+    sourceUrl,
+    sourceRef: "main",
+    sourceRevision: "abc123",
+    currentVersion: "1.0.0",
+    currentBranch: "main",
+    currentCommit: "abc123",
+    collabStatus: "clean",
+    statusText: "",
+    isGitRepo: true,
+    updateMode: "auto",
+    updateStrategy: "hash",
+    updateAvailable: false,
+    baselineHash: "",
+    localModified: false,
+    installedAt: "1",
+    updatedAt: "1",
+    remoteUpdatedAt: "",
+    localUpdatedAt: "",
+    lastEditor: "",
+    lastScannedAt: "1",
+    status: "ready",
+    installState: "installed",
+    installSource: "skilldock",
+    enabledState: "enabled",
+    scopes: [],
+    components: [],
+  };
+  const deferredRefresh: { resolve?: (plugins: PluginSummary[]) => void } = {};
+  const branchSpy = vi.spyOn(skillClient, "fetchGitRepoBranches").mockResolvedValue([
+    { name: "main", isDefault: true, isSelected: true },
+  ]);
+  const probeSpy = vi.spyOn(skillClient, "probePluginSourceCandidates").mockResolvedValue([
+    {
+      tool: "cursor",
+      compatibleHostTools: ["cursor"],
+      kind: "plugin-repo",
+      manifestName: "raisely",
+      name: "Raisely",
+      description: "Connect Cursor to Raisely.",
+      pluginRoot: "/tmp/raisely",
+      repoRoot: "/tmp/raisely",
+      pluginRelativePath: "",
+      manifestPath: "/tmp/raisely/.cursor-plugin/plugin.json",
+      marketplaceManifestPath: "",
+      components: [],
+      sourceType: "git",
+      sourceUrl,
+      isGitRepo: true,
+      gitRoot: "/tmp/raisely",
+      confidence: "high",
+      installStrategy: "cursor-registration",
+      warnings: [],
+    },
+  ]);
+  const fixtureSpy = vi.spyOn(skillClient, "shouldUseFixtureData").mockReturnValue(false);
+  const fetchInstalledPluginsSpy = vi.spyOn(skillClient, "fetchInstalledPlugins");
+  fetchInstalledPluginsSpy
+    .mockResolvedValueOnce([])
+    .mockImplementationOnce(
+      () =>
+        new Promise<PluginSummary[]>((resolve) => {
+          deferredRefresh.resolve = resolve;
+        }),
+    );
+  const installSpy = vi.spyOn(skillClient, "installSelectedPluginProbes").mockResolvedValue([installedPlugin]);
+
+  render(<App />);
+  await userEvent.click(screen.getByRole("button", { name: /安装/ }));
+  await userEvent.click(screen.getByRole("tab", { name: "Plugin" }));
+  await userEvent.type(screen.getByRole("textbox", { name: "Git 仓库地址" }), sourceUrl);
+  await waitFor(() => {
+    expect(screen.getByRole("combobox", { name: "Git 分支" })).toHaveValue("main");
+  });
+  await userEvent.click(screen.getByRole("button", { name: "识别插件" }));
+  await screen.findByRole("button", { name: "选择插件 Raisely" });
+
+  await userEvent.click(screen.getByRole("button", { name: "安装到选中宿主" }));
+  await userEvent.click(screen.getByRole("button", { name: /插件/ }));
+
+  await waitFor(() => {
+    expect(screen.getByText("Raisely")).toBeInTheDocument();
+    expect(getCachedPlugins()).toEqual([installedPlugin]);
+  });
+  deferredRefresh.resolve?.([installedPlugin]);
+
+  branchSpy.mockRestore();
+  probeSpy.mockRestore();
+  fixtureSpy.mockRestore();
   fetchInstalledPluginsSpy.mockRestore();
   installSpy.mockRestore();
 });

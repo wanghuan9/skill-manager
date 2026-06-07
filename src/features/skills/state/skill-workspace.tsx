@@ -83,6 +83,7 @@ const MARKETPLACE_SOURCE_SITES: MarketplaceSourceSite[] = ["skills.sh", "skillsm
 const STARTUP_LOAD_DELAY_MS = 0;
 const AUTO_GIT_STATE_REFRESH_INTERVAL_MS = 10 * 60 * 1000;
 const AUTO_GIT_STATE_REFRESH_COOLDOWN_MS = 60 * 1000;
+const LOCAL_WORKSPACE_ALIGN_COOLDOWN_MS = 2_000;
 const SKILL_LIBRARY_CHANGE_DEBOUNCE_MS = 500;
 const STARTUP_CACHED_REMOTE_COLLAB_STATUSES = new Set<SkillSummary["collabStatus"]>([
   "update-available",
@@ -456,6 +457,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
   });
   const gitStateRefreshInFlightRef = useRef<Promise<void> | null>(null);
   const lastGitStateRefreshAtRef = useRef(0);
+  const lastLocalWorkspaceAlignAtRef = useRef(0);
   const [isWorkspaceRefreshing, setIsWorkspaceRefreshing] = useState(false);
   const [isUpdatingAllSkills, setIsUpdatingAllSkills] = useState(false);
   const updateAllSkillsInFlightRef = useRef<Promise<void> | null>(null);
@@ -619,6 +621,9 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
     if (localWorkspaceAlignInFlightRef.current) {
       return localWorkspaceAlignInFlightRef.current;
     }
+    if (Date.now() - lastLocalWorkspaceAlignAtRef.current < LOCAL_WORKSPACE_ALIGN_COOLDOWN_MS) {
+      return Promise.resolve();
+    }
 
     const alignPromise = (async () => {
       try {
@@ -627,6 +632,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
           return;
         }
 
+        lastLocalWorkspaceAlignAtRef.current = Date.now();
         startupWatchedSkillNamesRef.current = new Set(
           workspace.skills.map((skill) => skill.name),
         );

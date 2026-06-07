@@ -3734,6 +3734,10 @@ code {
   gap: 12px;
 }
 
+.repo-install__option-title-text.is-disabled {
+  color: var(--muted);
+}
+
 .repo-install__option-main {
   display: grid;
   gap: 5px;
@@ -4007,6 +4011,13 @@ code {
   pointer-events: none;
 }
 
+.plugin-install-preview__host-check.is-installed {
+  background: linear-gradient(180deg, #60a5fa 0%, #3b82f6 100%);
+  box-shadow:
+    0 3px 8px rgba(59, 130, 246, 0.22),
+    0 1px 0 rgba(255, 255, 255, 0.42) inset;
+}
+
 .plugin-install-preview__host-check svg {
   width: 10px;
   height: 10px;
@@ -4028,31 +4039,29 @@ code {
 }
 
 .plugin-install-preview__host-toggle.is-installed {
-  border-color: rgba(148, 163, 184, 0.22);
-  background: linear-gradient(180deg, rgba(148, 163, 184, 0.14), rgba(148, 163, 184, 0.08));
-  color: rgba(100, 116, 139, 0.96);
+  border-color: rgba(59, 130, 246, 0.18);
+  background: linear-gradient(180deg, rgba(239, 246, 255, 0.96), rgba(248, 250, 252, 0.92));
+  color: #475569;
   cursor: not-allowed;
-  opacity: 0.94;
-  box-shadow: none;
+  opacity: 1;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.92),
+    0 1px 2px rgba(15, 23, 42, 0.04);
 }
 
 .plugin-install-preview__host-toggle.is-installed:hover,
 .plugin-install-preview__host-toggle.is-installed:focus-visible {
-  border-color: rgba(148, 163, 184, 0.26);
-  background: linear-gradient(180deg, rgba(148, 163, 184, 0.16), rgba(148, 163, 184, 0.1));
-  color: rgba(100, 116, 139, 0.96);
+  border-color: rgba(59, 130, 246, 0.24);
+  background: linear-gradient(180deg, rgba(239, 246, 255, 1), rgba(241, 245, 249, 0.96));
+  color: #334155;
 }
 
 .plugin-install-preview__host-toggle.is-installed .plugin-install-preview__host-icon {
-  opacity: 0.52;
-  filter: grayscale(1);
-}
-
-.plugin-install-preview__host-toggle.is-installed .plugin-install-preview__host-check {
-  background: linear-gradient(180deg, #cbd5e1 0%, #94a3b8 100%);
-  box-shadow:
-    0 2px 6px rgba(100, 116, 139, 0.18),
-    0 1px 0 rgba(255, 255, 255, 0.4) inset;
+  border-color: rgba(59, 130, 246, 0.16);
+  background: rgba(255, 255, 255, 0.96);
+  color: inherit;
+  opacity: 1;
+  filter: none;
 }
 
 .plugin-install-preview__host-toggle.is-unavailable {
@@ -4072,8 +4081,8 @@ code {
 }
 
 .plugin-install-preview__host-toggle.is-unavailable .plugin-install-preview__host-icon {
-  opacity: 0.36;
-  filter: grayscale(1);
+  opacity: 0.5;
+  filter: saturate(0.15);
 }
 
 @media (max-width: 980px) {
@@ -4107,6 +4116,12 @@ code {
   font-weight: 700;
   line-height: 1;
   overflow: visible;
+  transition:
+    border-color 120ms ease,
+    background-color 120ms ease,
+    box-shadow 120ms ease,
+    filter 120ms ease,
+    opacity 120ms ease;
 }
 
 .plugin-install-preview__host-icon img {

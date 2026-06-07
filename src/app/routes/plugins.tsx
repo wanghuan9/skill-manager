@@ -12,9 +12,11 @@ import {
   openExternalLink,
   openPluginInEditor,
   openPathInFinder,
+  refreshLocalPluginState,
   savePluginComponentPreview,
   setPluginEnabled,
   shouldUseFixtureData,
+  subscribePluginLibraryChanges,
   updatePlugin,
 } from "@/features/skills/api/skill-client";
 import {
@@ -100,6 +102,14 @@ const primaryComponentSummaryTypes: PluginAssetType[] = [
 const FALLBACK_OPEN_TOOL_ID = "finder";
 const maxVisibleComponentsPerSection = 5;
 const maxVisibleHostCoverageEntries = 5;
+const PLUGIN_LIBRARY_CHANGE_DEBOUNCE_MS = 500;
+const AUTO_PLUGIN_STATE_REFRESH_INTERVAL_MS = 10 * 60 * 1000;
+const AUTO_PLUGIN_STATE_REFRESH_COOLDOWN_MS = 60 * 1000;
+const STARTUP_PLUGIN_LOCAL_REFRESH_DELAY_MS = 20_000;
+const STARTUP_PLUGIN_LOCAL_REFRESH_BATCH_SIZE = 1;
+const STARTUP_PLUGIN_SYNC_COOLDOWN_MS = 1_500;
+const PLUGIN_LOCAL_ALIGN_COOLDOWN_MS = 2_000;
+const PLUGIN_HEAVY_REFRESH_AFTER_STARTUP_SYNC_DELAY_MS = 800;
 const pluginEnabledOrder: Record<PluginSummary["enabledState"], number> = {
   enabled: 0,
   disabled: 1,
@@ -370,11 +380,23 @@ function getPluginInstanceKey(plugin: PluginSummary) {
   return `${plugin.hostTool}::${instancePath}::${plugin.id}`;
 }
 
+function getPluginDisplayName(plugin: PluginSummary) {
+  const manifestName = plugin.manifestName?.trim() ?? "";
+  if (manifestName) {
+    return manifestName;
+  }
+  return plugin.name.trim() || plugin.id;
+}
+
 function normalizePluginAggregateIdentity(value: string) {
   return value.trim().toLowerCase().replace(/\.git$/, "");
 }
 
 function getPluginCanonicalName(plugin: PluginSummary) {
+  const manifestName = normalizePluginAggregateIdentity(plugin.manifestName || "");
+  if (manifestName) {
+    return manifestName;
+  }
   const prefix = `${plugin.hostTool}:`;
   if (plugin.id.startsWith(prefix)) {
     return normalizePluginAggregateIdentity(plugin.id.slice(prefix.length));
@@ -577,7 +599,7 @@ function comparePlugins(left: PluginSummary, right: PluginSummary) {
   return (
     pluginEnabledOrder[left.enabledState] -
       pluginEnabledOrder[right.enabledState] ||
-    left.name.localeCompare(right.name, "zh-CN", {
+    getPluginDisplayName(left).localeCompare(getPluginDisplayName(right), "zh-CN", {
       sensitivity: "base",
       numeric: true,
     }) ||
@@ -715,7 +737,7 @@ function renderPluginHostCoverageBadge(
   const hiddenCount = Math.max(hostCoverageEntries.length - visibleEntries.length, 0);
 
   return (
-    <span className="plugins-page__enabled-badge-hosts" aria-label={t("plugins.installedHostsFor", { name: plugin.name })}>
+    <span className="plugins-page__enabled-badge-hosts" aria-label={t("plugins.installedHostsFor", { name: getPluginDisplayName(plugin) })}>
       {renderPluginHostCoverageList(visibleEntries, t)}
       {hiddenCount > 0 ? (
         <span className="plugins-page__host-coverage-more">{`+${hiddenCount}`}</span>
@@ -750,18 +772,19 @@ function getPluginToggleActionLabel(
   isPending: boolean,
   t: ReturnType<typeof useTranslate>["t"],
 ) {
+  const pluginName = getPluginDisplayName(plugin);
   if (!canTogglePlugin(plugin)) {
-    return t("plugins.action.toggle.unsupported", { name: plugin.name });
+    return t("plugins.action.toggle.unsupported", { name: pluginName });
   }
   if (isPending) {
     return plugin.enabledState === "enabled"
-      ? t("plugins.action.toggle.disabling", { name: plugin.name })
-      : t("plugins.action.toggle.enabling", { name: plugin.name });
+      ? t("plugins.action.toggle.disabling", { name: pluginName })
+      : t("plugins.action.toggle.enabling", { name: pluginName });
   }
 
   return plugin.enabledState === "enabled"
-    ? t("plugins.action.toggle.disable", { name: plugin.name })
-    : t("plugins.action.toggle.enable", { name: plugin.name });
+    ? t("plugins.action.toggle.disable", { name: pluginName })
+    : t("plugins.action.toggle.enable", { name: pluginName });
 }
 
 function getPluginToggleButtonClassName(plugin: PluginSummary) {
@@ -781,21 +804,22 @@ function getPluginDeleteActionLabel(
   isDeleting: boolean,
   t: ReturnType<typeof useTranslate>["t"],
 ) {
+  const pluginName = getPluginDisplayName(plugin);
   if (isDeleting) {
-    return t("plugins.action.delete.deleting", { name: plugin.name });
+    return t("plugins.action.delete.deleting", { name: pluginName });
   }
   if (isConfirming) {
-    return t("plugins.action.delete.confirmAria", { name: plugin.name });
+    return t("plugins.action.delete.confirmAria", { name: pluginName });
   }
 
-  return t("plugins.action.delete.default", { name: plugin.name });
+  return t("plugins.action.delete.default", { name: pluginName });
 }
 
 function getPluginOpenActionLabel(
   plugin: PluginSummary,
   t: ReturnType<typeof useTranslate>["t"],
 ) {
-  return t("plugins.action.open", { name: plugin.name });
+  return t("plugins.action.open", { name: getPluginDisplayName(plugin) });
 }
 
 function getPluginUpdateActionLabel(
@@ -803,9 +827,10 @@ function getPluginUpdateActionLabel(
   isPending: boolean,
   t: ReturnType<typeof useTranslate>["t"],
 ) {
+  const pluginName = getPluginDisplayName(plugin);
   return isPending
-    ? t("plugins.action.update.updating", { name: plugin.name })
-    : t("plugins.action.update.default", { name: plugin.name });
+    ? t("plugins.action.update.updating", { name: pluginName })
+    : t("plugins.action.update.default", { name: pluginName });
 }
 
 function getPluginSourceLabel(plugin: PluginSummary) {
@@ -1229,6 +1254,14 @@ export function PluginsRoute() {
     useState<ExpandedComponentSections>({});
   const pendingPluginIdsRef = useRef(new Set<string>());
   const localAlignInFlightRef = useRef<Promise<PluginSummary[]> | null>(null);
+  const pluginRefreshDebounceTimerRef = useRef<number | null>(null);
+  const pluginLocalRefreshInFlightRef = useRef(new Map<string, Promise<void>>());
+  const startupPluginRefreshTimerRef = useRef<number | null>(null);
+  const deferredHeavyRefreshTimerRef = useRef<number | null>(null);
+  const lastPluginAutoRefreshAtRef = useRef(0);
+  const startupPluginSyncInFlightRef = useRef<Promise<void> | null>(null);
+  const lastStartupPluginSyncAtRef = useRef(0);
+  const lastPluginLocalAlignAtRef = useRef(0);
   const pluginsRef = useRef(plugins);
   const [toolbarContainer, setToolbarContainer] = useState<HTMLElement | null>(
     null,
@@ -1257,12 +1290,83 @@ export function PluginsRoute() {
     setPlugins(nextPlugins);
   }
 
+  async function refreshPluginLocalStateInBackground(
+    plugin: PluginSummary,
+    isActive: () => boolean,
+  ) {
+    const refreshKey = getPluginInstanceKey(plugin);
+    const existingRefresh = pluginLocalRefreshInFlightRef.current.get(refreshKey);
+    if (existingRefresh) {
+      await existingRefresh;
+      return;
+    }
+
+    const refreshPromise = (async () => {
+      try {
+        const refreshedPlugin = await refreshLocalPluginState({
+          hostTool: plugin.hostTool,
+          rootPath: plugin.rootPath,
+        });
+        if (!isActive()) {
+          return;
+        }
+        setPlugins((current) => current.map((candidate) => (
+          getPluginInstanceKey(candidate) === refreshKey ? refreshedPlugin : candidate
+        )));
+      } catch (error) {
+        console.warn("Failed to refresh plugin local state", error);
+      } finally {
+        pluginLocalRefreshInFlightRef.current.delete(refreshKey);
+      }
+    })();
+
+    pluginLocalRefreshInFlightRef.current.set(refreshKey, refreshPromise);
+    await refreshPromise;
+  }
+
+  async function refreshPluginStatesInBackground(
+    isActive: () => boolean,
+    options?: { minimumIntervalMs?: number; batchSize?: number },
+  ) {
+    const now = Date.now();
+    const minimumIntervalMs = options?.minimumIntervalMs ?? 0;
+    if (minimumIntervalMs > 0 && now - lastPluginAutoRefreshAtRef.current < minimumIntervalMs) {
+      return;
+    }
+
+    const refreshTargets = pluginsRef.current.filter((plugin) => (
+      plugin.installSource === "skilldock"
+      && plugin.updateMode === "auto"
+      && plugin.isGitRepo
+    ));
+    if (refreshTargets.length === 0) {
+      return;
+    }
+
+    lastPluginAutoRefreshAtRef.current = now;
+    const batchSize = options?.batchSize ?? STARTUP_PLUGIN_LOCAL_REFRESH_BATCH_SIZE;
+    const targets = refreshTargets.slice(0, batchSize);
+    for (const plugin of targets) {
+      if (!isActive()) {
+        return;
+      }
+      await refreshPluginLocalStateInBackground(plugin, isActive);
+    }
+  }
+
   async function alignPluginsLocalState() {
     if (localAlignInFlightRef.current) {
       return localAlignInFlightRef.current;
     }
+    if (Date.now() - lastPluginLocalAlignAtRef.current < PLUGIN_LOCAL_ALIGN_COOLDOWN_MS) {
+      return Promise.resolve(pluginsRef.current);
+    }
 
     const alignPromise = fetchInstalledPlugins()
+      .then((nextPlugins) => {
+        lastPluginLocalAlignAtRef.current = Date.now();
+        return nextPlugins;
+      })
       .finally(() => {
         if (localAlignInFlightRef.current === alignPromise) {
           localAlignInFlightRef.current = null;
@@ -1271,6 +1375,46 @@ export function PluginsRoute() {
 
     localAlignInFlightRef.current = alignPromise;
     return alignPromise;
+  }
+
+  async function syncPluginsStartupState(
+    isActive: () => boolean,
+    options?: { minimumIntervalMs?: number },
+  ) {
+    const minimumIntervalMs = options?.minimumIntervalMs ?? 0;
+    const now = Date.now();
+    if (
+      minimumIntervalMs > 0
+      && now - lastStartupPluginSyncAtRef.current < minimumIntervalMs
+    ) {
+      return;
+    }
+
+    const existingSync = startupPluginSyncInFlightRef.current;
+    if (existingSync) {
+      return existingSync;
+    }
+
+    lastStartupPluginSyncAtRef.current = now;
+    const syncPromise = fetchStartupInstalledPlugins()
+      .then((nextPlugins) => {
+        if (!isActive()) {
+          return;
+        }
+        commitPlugins(nextPlugins);
+        setErrorMessage("");
+      })
+      .catch((error) => {
+        console.warn("Failed to align installed plugins from startup scan", error);
+      })
+      .finally(() => {
+        if (startupPluginSyncInFlightRef.current === syncPromise) {
+          startupPluginSyncInFlightRef.current = null;
+        }
+      });
+
+    startupPluginSyncInFlightRef.current = syncPromise;
+    return syncPromise;
   }
 
   async function loadPlugins(options?: { silent?: boolean }) {
@@ -1326,6 +1470,11 @@ export function PluginsRoute() {
       if (cachedPlugins && !shouldIgnore) {
         setPlugins(cachedPlugins);
         setIsLoading(false);
+      }
+
+      if (cachedPlugins) {
+        await syncPluginsStartupState(() => !shouldIgnore);
+        return;
       }
 
       if (getPluginScanSessionSnapshot().isScanning) {
@@ -1389,6 +1538,167 @@ export function PluginsRoute() {
       setErrorMessage("");
     }
   }), []);
+
+  useEffect(() => {
+    if (shouldUseFixtureData()) {
+      return;
+    }
+
+    let active = true;
+    const refreshPluginStatesIfNeeded = () => {
+      void refreshPluginStatesInBackground(
+        () => active,
+        {
+          minimumIntervalMs: AUTO_PLUGIN_STATE_REFRESH_COOLDOWN_MS,
+          batchSize: STARTUP_PLUGIN_LOCAL_REFRESH_BATCH_SIZE,
+        },
+      );
+    };
+    const syncPluginStartupStateIfNeeded = () => {
+      void syncPluginsStartupState(
+        () => active,
+        { minimumIntervalMs: STARTUP_PLUGIN_SYNC_COOLDOWN_MS },
+      );
+    };
+    const handleVisibilityChange = () => {
+      if (document.visibilityState !== "visible") {
+        return;
+      }
+      syncPluginStartupStateIfNeeded();
+      if (deferredHeavyRefreshTimerRef.current !== null) {
+        window.clearTimeout(deferredHeavyRefreshTimerRef.current);
+      }
+      deferredHeavyRefreshTimerRef.current = window.setTimeout(() => {
+        deferredHeavyRefreshTimerRef.current = null;
+        refreshPluginStatesIfNeeded();
+      }, PLUGIN_HEAVY_REFRESH_AFTER_STARTUP_SYNC_DELAY_MS);
+    };
+    const intervalId = window.setInterval(
+      refreshPluginStatesIfNeeded,
+      AUTO_PLUGIN_STATE_REFRESH_INTERVAL_MS,
+    );
+    const handleFocus = () => {
+      syncPluginStartupStateIfNeeded();
+      if (deferredHeavyRefreshTimerRef.current !== null) {
+        window.clearTimeout(deferredHeavyRefreshTimerRef.current);
+      }
+      deferredHeavyRefreshTimerRef.current = window.setTimeout(() => {
+        deferredHeavyRefreshTimerRef.current = null;
+        refreshPluginStatesIfNeeded();
+      }, PLUGIN_HEAVY_REFRESH_AFTER_STARTUP_SYNC_DELAY_MS);
+    };
+    window.addEventListener("focus", handleFocus);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    return () => {
+      active = false;
+      window.clearInterval(intervalId);
+      if (deferredHeavyRefreshTimerRef.current !== null) {
+        window.clearTimeout(deferredHeavyRefreshTimerRef.current);
+        deferredHeavyRefreshTimerRef.current = null;
+      }
+      window.removeEventListener("focus", handleFocus);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (shouldUseFixtureData()) {
+      return;
+    }
+
+    if (startupPluginRefreshTimerRef.current !== null) {
+      window.clearTimeout(startupPluginRefreshTimerRef.current);
+      startupPluginRefreshTimerRef.current = null;
+    }
+
+    const pluginsNeedingDeferredRefresh = plugins.filter((plugin) => (
+      plugin.installSource === "skilldock"
+      && plugin.updateMode === "auto"
+      && plugin.isGitRepo
+    ));
+    if (pluginsNeedingDeferredRefresh.length === 0) {
+      return;
+    }
+
+    startupPluginRefreshTimerRef.current = window.setTimeout(() => {
+      startupPluginRefreshTimerRef.current = null;
+      void refreshPluginStatesInBackground(
+        () => true,
+        { batchSize: STARTUP_PLUGIN_LOCAL_REFRESH_BATCH_SIZE },
+      );
+    }, STARTUP_PLUGIN_LOCAL_REFRESH_DELAY_MS);
+
+    return () => {
+      if (startupPluginRefreshTimerRef.current !== null) {
+        window.clearTimeout(startupPluginRefreshTimerRef.current);
+        startupPluginRefreshTimerRef.current = null;
+      }
+    };
+  }, [plugins]);
+
+  useEffect(() => {
+    if (shouldUseFixtureData()) {
+      return;
+    }
+
+    let active = true;
+    let unlisten: (() => void) | null = null;
+
+    void subscribePluginLibraryChanges(({ changedPaths }) => {
+      if (!active) {
+        return;
+      }
+
+      if (pluginRefreshDebounceTimerRef.current !== null) {
+        window.clearTimeout(pluginRefreshDebounceTimerRef.current);
+      }
+
+      pluginRefreshDebounceTimerRef.current = window.setTimeout(() => {
+        pluginRefreshDebounceTimerRef.current = null;
+        const changedPluginTargets = pluginsRef.current.filter((plugin) => {
+          if (plugin.installSource !== "skilldock") {
+            return false;
+          }
+
+          const packageRoot = plugin.repoRootPath?.trim() || plugin.rootPath?.trim();
+          if (!packageRoot) {
+            return false;
+          }
+
+          return changedPaths.some((changedPath) => changedPath.startsWith(packageRoot));
+        });
+
+        for (const plugin of changedPluginTargets) {
+          void refreshPluginLocalStateInBackground(plugin, () => active);
+        }
+      }, PLUGIN_LIBRARY_CHANGE_DEBOUNCE_MS);
+    }).then((cleanup) => {
+      if (!active) {
+        cleanup();
+        return;
+      }
+      unlisten = cleanup;
+    }).catch((error) => {
+      console.error("Failed to subscribe to plugin library changes:", error);
+    });
+
+    return () => {
+      active = false;
+      if (unlisten) {
+        unlisten();
+      }
+      if (pluginRefreshDebounceTimerRef.current !== null) {
+        window.clearTimeout(pluginRefreshDebounceTimerRef.current);
+        pluginRefreshDebounceTimerRef.current = null;
+      }
+      if (startupPluginRefreshTimerRef.current !== null) {
+        window.clearTimeout(startupPluginRefreshTimerRef.current);
+        startupPluginRefreshTimerRef.current = null;
+      }
+      pluginLocalRefreshInFlightRef.current.clear();
+    };
+  }, [t]);
 
   useEffect(() => {
     setToolbarContainer(document.getElementById("plugins-header-toolbar-slot"));
@@ -1489,6 +1799,7 @@ export function PluginsRoute() {
     }
 
     const searchContent = [
+      getPluginDisplayName(plugin),
       plugin.name,
       plugin.hostTool,
       plugin.sourceType,
@@ -1943,6 +2254,41 @@ export function PluginsRoute() {
               <dd>{getPluginDescription(plugin, t)}</dd>
             </div>
           </dl>
+          <dl className="detail-grid detail-grid--source plugins-page__source-grid">
+            <div>
+              <dt>{t("plugins.details.installMethod")}</dt>
+              <dd>{getPluginInstallSourceLabel(plugin, t)}</dd>
+            </div>
+            <div>
+              <dt>{t("plugins.details.sourceType")}</dt>
+              <dd>{getPluginSourceTypeLabel(plugin, t)}</dd>
+            </div>
+            <div>
+              <dt>{t("plugins.details.source")}</dt>
+              <dd className="detail-grid__source-value" title={sourceValue}>
+                {isHttpUrl(sourceValue) ? (
+                  <a
+                    className="detail-grid__source-link detail-grid__single-line"
+                    data-tooltip={sourceValue}
+                    href={sourceValue}
+                    onClick={(event) => {
+                      event.preventDefault();
+                      void openExternalLink(sourceValue);
+                    }}
+                  >
+                    {sourceValue}
+                  </a>
+                ) : (
+                  <span className="detail-grid__single-line" data-tooltip={sourceValue}>
+                    {sourceValue}
+                  </span>
+                )}
+                {shouldShowPluginGitBadge(plugin, sourceValue) ? (
+                  <span className="detail-git-badge is-linked">git</span>
+                ) : null}
+              </dd>
+            </div>
+          </dl>
           {shouldShowPluginMetadataGrid ? (
             <dl className="tool-list-row__detail-grid plugins-page__metadata-grid">
               {shouldShowPluginBranch(plugin) ? (
@@ -1984,41 +2330,6 @@ export function PluginsRoute() {
               ) : null}
             </dl>
           ) : null}
-          <dl className="detail-grid detail-grid--source plugins-page__source-grid">
-            <div>
-              <dt>{t("plugins.details.installMethod")}</dt>
-              <dd>{getPluginInstallSourceLabel(plugin, t)}</dd>
-            </div>
-            <div>
-              <dt>{t("plugins.details.sourceType")}</dt>
-              <dd>{getPluginSourceTypeLabel(plugin, t)}</dd>
-            </div>
-            <div>
-              <dt>{t("plugins.details.source")}</dt>
-              <dd className="detail-grid__source-value" title={sourceValue}>
-                {isHttpUrl(sourceValue) ? (
-                  <a
-                    className="detail-grid__source-link detail-grid__single-line"
-                    data-tooltip={sourceValue}
-                    href={sourceValue}
-                    onClick={(event) => {
-                      event.preventDefault();
-                      void openExternalLink(sourceValue);
-                    }}
-                  >
-                    {sourceValue}
-                  </a>
-                ) : (
-                  <span className="detail-grid__single-line" data-tooltip={sourceValue}>
-                    {sourceValue}
-                  </span>
-                )}
-                {shouldShowPluginGitBadge(plugin, sourceValue) ? (
-                  <span className="detail-git-badge is-linked">git</span>
-                ) : null}
-              </dd>
-            </div>
-          </dl>
           <dl className="detail-grid detail-grid--single">
             {showRemoteUpdateInfo ? (
               <>
@@ -2198,6 +2509,7 @@ export function PluginsRoute() {
         ) : (
           filteredPlugins.map((plugin) => {
             const pluginKey = getPluginInstanceKey(plugin);
+            const pluginDisplayName = getPluginDisplayName(plugin);
             const isPending = pendingPluginIds.has(pluginKey);
             const isDeleting = deletingPluginIds.has(pluginKey);
             const isDeleteConfirming = deleteConfirmingPluginId === pluginKey;
@@ -2223,9 +2535,9 @@ export function PluginsRoute() {
               <ToolListRow
                 key={pluginKey}
                 rowId={pluginKey}
-                name={plugin.name}
+                name={pluginDisplayName}
                 subtitle={getPluginSubtitle(plugin, t)}
-                leading={<PluginListIcon name={plugin.name} />}
+                leading={<PluginListIcon name={pluginDisplayName} />}
                 badges={[
                   {
                     key: "enabled-state",
@@ -2315,9 +2627,9 @@ export function PluginsRoute() {
                     ? {
                         key: "delete-confirm",
                         label: t("plugins.action.delete.confirm"),
-                        ariaLabel: t("plugins.action.delete.confirmAria", { name: plugin.name }),
+                        ariaLabel: t("plugins.action.delete.confirmAria", { name: pluginDisplayName }),
                         className: "skill-card__delete-confirm-button",
-                        tooltip: t("plugins.action.delete.confirmAria", { name: plugin.name }),
+                        tooltip: t("plugins.action.delete.confirmAria", { name: pluginDisplayName }),
                         onClick: () => void handlePluginDelete(plugin),
                         disabled: isDeleting,
                       }
@@ -2356,7 +2668,7 @@ export function PluginsRoute() {
                   {previewState.component.name}
                 </h3>
                 <p>
-                  {previewState.plugin.name} ·{" "}
+                  {getPluginDisplayName(previewState.plugin)} ·{" "}
                   {selectedPreviewPath}
                 </p>
               </div>
@@ -2401,7 +2713,7 @@ export function PluginsRoute() {
                   style={{ paddingLeft: "16px" }}
                 >
                   <span aria-hidden="true">⌄</span>
-                  <span>{previewState.plugin.name}</span>
+                  <span>{getPluginDisplayName(previewState.plugin)}</span>
                 </div>
                 <button
                   className="skill-file-dialog__tree-item skill-file-dialog__tree-item--file is-selected"
@@ -2466,7 +2778,7 @@ export function PluginsRoute() {
             <div className="skill-file-dialog__header">
               <div className="skill-file-dialog__title">
                 <h3 id="plugin-update-confirm-title">更新将覆盖本地修改</h3>
-                <p>{updateConfirmingPlugin.name}</p>
+                <p>{getPluginDisplayName(updateConfirmingPlugin)}</p>
               </div>
               <button
                 className="skill-file-dialog__close"

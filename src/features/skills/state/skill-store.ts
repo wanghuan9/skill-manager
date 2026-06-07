@@ -61,6 +61,7 @@ export type PluginScopeSummary = {
 export type PluginSummary = {
   id: string;
   packageId: string;
+  manifestName?: string;
   name: string;
   description: string;
   hostTool: PluginHostTool;
@@ -105,6 +106,7 @@ export type PluginProbeResult = {
   tool: PluginHostTool | "unknown";
   compatibleHostTools: PluginHostTool[];
   kind: PluginProbeKind;
+  manifestName?: string;
   name: string;
   description: string;
   pluginRoot: string;

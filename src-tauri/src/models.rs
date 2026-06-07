@@ -47,6 +47,8 @@ pub struct PluginSummary {
     pub id: String,
     #[serde(default)]
     pub package_id: String,
+    #[serde(default)]
+    pub manifest_name: String,
     pub name: String,
     #[serde(default)]
     pub description: String,
@@ -112,6 +114,8 @@ pub struct PluginProbeResult {
     #[serde(default)]
     pub compatible_host_tools: Vec<String>,
     pub kind: String,
+    #[serde(default)]
+    pub manifest_name: String,
     #[serde(default)]
     pub name: String,
     #[serde(default)]

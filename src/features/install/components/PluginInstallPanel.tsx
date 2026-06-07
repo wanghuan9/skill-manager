@@ -8,8 +8,11 @@ import {
   fetchGitRepoBranches,
   installSelectedPluginProbes,
   probePluginSourceCandidates,
+  refreshPluginStates,
+  shouldUseFixtureData,
 } from "@/features/skills/api/skill-client";
 import { useSkillWorkspace } from "@/features/skills/state/skill-workspace";
+import { cachePlugins } from "@/features/skills/utils/plugin-cache";
 import { formatSkillDescription } from "@/features/skills/utils/skill-description";
 import { getToolLogoUrl } from "@/features/skills/utils/tool-logo";
 import { isToolInstalledStatus } from "@/features/skills/utils/tool-status";
@@ -82,7 +85,12 @@ function PluginHostIcon({
         <span aria-hidden="true">{label.slice(0, 1).toUpperCase()}</span>
       )}
       {isSelected || isInstalled ? (
-        <span className="plugin-install-preview__host-check" aria-hidden="true">
+        <span
+          className={`plugin-install-preview__host-check${
+            isInstalled ? " is-installed" : ""
+          }`}
+          aria-hidden="true"
+        >
           <svg viewBox="0 0 12 12" focusable="false">
             <path d="M3 6.2 5.1 8.3 9 3.8" />
           </svg>
@@ -237,9 +245,46 @@ function normalizePluginAggregateIdentity(value: string | undefined) {
     .replace(/\/+$/u, "");
 }
 
+function getPluginInstallInstanceKey(plugin: PluginSummary) {
+  const instancePath = plugin.displayRootPath?.trim() || plugin.rootPath.trim() || plugin.id;
+  return `${plugin.hostTool}::${instancePath}::${plugin.id}`;
+}
+
+function mergeInstalledPlugins(
+  currentPlugins: PluginSummary[],
+  nextPlugins: PluginSummary[],
+) {
+  const mergedPlugins = [...currentPlugins];
+  const pluginIndexByKey = new Map(
+    currentPlugins.map((plugin, index) => [getPluginInstallInstanceKey(plugin), index]),
+  );
+
+  for (const plugin of nextPlugins) {
+    const instanceKey = getPluginInstallInstanceKey(plugin);
+    const existingIndex = pluginIndexByKey.get(instanceKey);
+    if (existingIndex === undefined) {
+      pluginIndexByKey.set(instanceKey, mergedPlugins.length);
+      mergedPlugins.push(plugin);
+      continue;
+    }
+
+    mergedPlugins[existingIndex] = plugin;
+  }
+
+  return mergedPlugins;
+}
+
 function normalizePluginAggregateName(value: string | undefined) {
   const normalized = normalizePluginAggregateIdentity(value);
   return normalized.replace(/\s+/gu, "-");
+}
+
+function probeCanonicalName(probe: PluginProbeResult) {
+  return normalizePluginAggregateName(probe.manifestName || probe.name);
+}
+
+function installedPluginCanonicalName(plugin: PluginSummary) {
+  return normalizePluginAggregateName(plugin.manifestName || plugin.name || plugin.id);
 }
 
 function relativePluginPath(probe: PluginProbeResult) {
@@ -259,7 +304,7 @@ function relativePluginPath(probe: PluginProbeResult) {
 
 function buildProbeAggregateKeys(probe: PluginProbeResult) {
   const keys = new Set<string>();
-  const canonicalName = normalizePluginAggregateName(probe.name);
+  const canonicalName = probeCanonicalName(probe);
   const sourceIdentity = normalizePluginAggregateIdentity(probe.sourceUrl);
   const repoIdentity = normalizePluginAggregateIdentity(probe.repoRoot || probe.gitRoot);
   const relativePath = normalizePluginAggregateIdentity(relativePluginPath(probe));
@@ -282,7 +327,7 @@ function buildProbeAggregateKeys(probe: PluginProbeResult) {
 
 function buildInstalledPluginAggregateKeys(plugin: PluginSummary) {
   const keys = new Set<string>();
-  const canonicalName = normalizePluginAggregateName(plugin.name);
+  const canonicalName = installedPluginCanonicalName(plugin);
   const sourceIdentity = normalizePluginAggregateIdentity(plugin.sourceUrl);
   const packageIdentity = normalizePluginAggregateIdentity(plugin.packageId);
   const repoIdentity = normalizePluginAggregateIdentity(plugin.repoRootPath);
@@ -325,6 +370,12 @@ function hasStrongIdentityMatch(probe: PluginProbeResult, plugin: PluginSummary)
   const pluginSourceIdentity = normalizePluginAggregateIdentity(plugin.sourceUrl);
   if (probeSourceIdentity && pluginSourceIdentity) {
     return probeSourceIdentity === pluginSourceIdentity;
+  }
+
+  const probeManifestName = normalizePluginAggregateIdentity(probe.manifestName);
+  const pluginManifestName = normalizePluginAggregateIdentity(plugin.manifestName);
+  if (probeManifestName && pluginManifestName) {
+    return probeManifestName === pluginManifestName;
   }
 
   const probeRelativePath = normalizePluginAggregateIdentity(relativePluginPath(probe));
@@ -593,19 +644,31 @@ export function PluginInstallPanel() {
 
     setIsInstalling(true);
     try {
-      await Promise.all(
+      const newlyInstalledPlugins = (
+        await Promise.all(
         selectedProbeInstallTargets
           .filter((target) => target.hostTools.length > 0)
           .map((target) => installSelectedPluginProbes({
             probes: [target.probe],
             hostTools: target.hostTools,
           })),
-      );
+        )
+      ).flat();
       notify({ message: t("install.plugin.success.selectedInstalled"), tone: "success" });
+      setProbes([]);
       setSelectedPluginRoots([]);
       setSelectedHostsByPluginRoot({});
-      setInstalledPlugins(await fetchInstalledPlugins());
-      await refreshWorkspace({ showRefreshing: false });
+      const mergedInstalledPlugins = mergeInstalledPlugins(installedPlugins, newlyInstalledPlugins);
+      if (!shouldUseFixtureData()) {
+        cachePlugins(mergedInstalledPlugins);
+      }
+      setInstalledPlugins(mergedInstalledPlugins);
+      const nextInstalledPlugins = await fetchInstalledPlugins();
+      if (!shouldUseFixtureData()) {
+        cachePlugins(nextInstalledPlugins);
+      }
+      setInstalledPlugins(nextInstalledPlugins);
+      void refreshWorkspace({ showRefreshing: false });
     } catch (error) {
       reportFailure(error, {
         operation: "install_selected_plugin_probes",
@@ -775,7 +838,9 @@ export function PluginInstallPanel() {
                   <div className="plugin-install-preview__summary">
                     <div className="plugin-install-preview__summary-main">
                       <div>
-                        <h3>{probeTitle(probe)}</h3>
+                        <h3 className={fullyInstalled ? "repo-install__option-title-text is-disabled" : "repo-install__option-title-text"}>
+                          {probeTitle(probe)}
+                        </h3>
                         <span>{probeSubtitle(probe)}</span>
                       </div>
                       {componentLabels.length > 0 ? (
@@ -789,7 +854,9 @@ export function PluginInstallPanel() {
                     {hostTools.length > 0 ? (
                       <div className="plugin-install-preview__summary-side">
                         {fullyInstalled ? (
-                          <span className="install-card__badge">{t("install.repo.badgeInstalled")}</span>
+                          <span className="repo-install__option-badge">
+                            {t("install.repo.badgeInstalled")}
+                          </span>
                         ) : null}
                         <div className="plugin-install-preview__host-icons" aria-label={`${probeTitle(probe)} 安装宿主`}>
                           {hostTools.map((hostTool) => {
