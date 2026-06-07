@@ -39,6 +39,7 @@ use crate::state::{
 use crate::workspace::{self, APP_BRAND_NAME};
 
 const REFRESH_GIT_STATES_CONCURRENCY: usize = 5;
+const PACKAGE_ID_HASH_LEN: usize = 8;
 
 fn default_installed_skills() -> Vec<SkillSummary> {
     Vec::new()
@@ -2524,6 +2525,18 @@ struct RepoInstallSpec {
     tree_segments: Vec<String>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ManagedPackageIdentity {
+    source: String,
+    relative_path: String,
+}
+
+#[derive(Clone, Debug)]
+struct RepoNameParts {
+    owner: String,
+    repo: String,
+}
+
 enum GitBranchProbeSource {
     Local(PathBuf),
     Remote {
@@ -3412,11 +3425,30 @@ fn update_skill_repo(skill: &SkillSummary) -> Result<(), String> {
     }
 
     let current_branch = current_branch_name(&skill.local_path)?;
+    if current_branch == "HEAD" {
+        return Err("当前仓库处于 detached HEAD，无法自动更新。".into());
+    }
+
     run_git_command(&skill.local_path, &["fetch", ORIGIN_REMOTE, "--quiet"])?;
-    run_git_command(
-        &skill.local_path,
-        &["pull", "--ff-only", ORIGIN_REMOTE, &current_branch],
-    )?;
+    let remote_branch = resolve_remote_branch_name(&skill.local_path, &current_branch)?;
+    let (commits_to_pull, local_commits) =
+        branch_divergence_counts(&skill.local_path, &remote_branch)?;
+    if commits_to_pull == 0 {
+        return Ok(());
+    }
+
+    if local_commits == 0 {
+        run_git_command(&skill.local_path, &["merge", "--ff-only", &remote_branch])?;
+        return Ok(());
+    }
+
+    if let Err(error) = run_git_command(&skill.local_path, &["rebase", &remote_branch]) {
+        let _ = run_git_command_with_allowed_codes(&skill.local_path, &["rebase", "--abort"], &[0]);
+        return Err(format!(
+            "远端和本地提交已分叉，自动 rebase 失败，已恢复到更新前状态。请打开仓库手动处理冲突后重试。{error}"
+        ));
+    }
+
     Ok(())
 }
 
@@ -3654,6 +3686,140 @@ fn build_repo_skill_source_url_with_branch(
         branch,
         relative_path,
     )
+}
+
+fn managed_package_identity(source: &str, relative_path: &str) -> ManagedPackageIdentity {
+    let parsed = parse_market_source_url(source).ok();
+    ManagedPackageIdentity {
+        source: normalize_package_source(
+            parsed
+                .as_ref()
+                .map(|spec| spec.clone_url.as_str())
+                .unwrap_or(source),
+        ),
+        relative_path: parsed
+            .as_ref()
+            .and_then(|spec| spec.relative_path.as_ref())
+            .map(|path| normalize_package_relative_path(path.to_string_lossy().as_ref()))
+            .unwrap_or_else(|| normalize_package_relative_path(relative_path)),
+    }
+}
+
+fn normalize_package_source(source: &str) -> String {
+    source
+        .trim()
+        .trim_end_matches('/')
+        .trim_end_matches(".git")
+        .to_ascii_lowercase()
+}
+
+fn normalize_package_relative_path(relative_path: &str) -> String {
+    relative_path.trim_matches('/').to_ascii_lowercase()
+}
+
+fn skill_package_identity(skill: &SkillSummary) -> ManagedPackageIdentity {
+    managed_package_identity(&skill.source_url, "")
+}
+
+fn resolve_skill_install_name(
+    base_name: &str,
+    source: &str,
+    relative_path: &str,
+    installed_skills: &[SkillSummary],
+) -> Result<String, String> {
+    let identity = managed_package_identity(source, relative_path);
+    if let Some(existing_skill) = installed_skills
+        .iter()
+        .find(|skill| skill_package_identity(skill) == identity)
+    {
+        return Ok(existing_skill.name.clone());
+    }
+
+    let base_name = sanitize_storage_name(base_name);
+    let candidates = package_name_candidates(&base_name, source, relative_path);
+    for candidate in candidates {
+        let skill_dir =
+            skill_directory(&candidate).map_err(|error| format!("无法确定 skill 目录: {error}"))?;
+        let name_used = installed_skills.iter().any(|skill| skill.name == candidate);
+        if !name_used && !skill_dir.exists() {
+            return Ok(candidate);
+        }
+    }
+
+    let mut index = 2;
+    loop {
+        let candidate = format!("{base_name}-{index}");
+        let skill_dir =
+            skill_directory(&candidate).map_err(|error| format!("无法确定 skill 目录: {error}"))?;
+        let name_used = installed_skills.iter().any(|skill| skill.name == candidate);
+        if !name_used && !skill_dir.exists() {
+            return Ok(candidate);
+        }
+        index += 1;
+    }
+}
+
+fn package_name_candidates(base_name: &str, source: &str, relative_path: &str) -> Vec<String> {
+    let repo_parts = repo_name_parts(source);
+    let mut candidates = Vec::new();
+    push_unique_candidate(&mut candidates, sanitize_storage_name(base_name));
+    if let Some(parts) = repo_parts.as_ref() {
+        push_unique_candidate(
+            &mut candidates,
+            sanitize_storage_name(&format!("{base_name}-{}", parts.repo)),
+        );
+        if !parts.owner.is_empty() {
+            push_unique_candidate(
+                &mut candidates,
+                sanitize_storage_name(&format!("{base_name}-{}-{}", parts.owner, parts.repo)),
+            );
+        }
+    }
+    push_unique_candidate(
+        &mut candidates,
+        sanitize_storage_name(&format!(
+            "{base_name}-{}",
+            short_package_hash(&format!(
+                "{}__{}",
+                normalize_package_source(source),
+                normalize_package_relative_path(relative_path)
+            ))
+        )),
+    );
+    candidates
+}
+
+fn push_unique_candidate(candidates: &mut Vec<String>, candidate: String) {
+    if !candidate.is_empty() && !candidates.iter().any(|value| value == &candidate) {
+        candidates.push(candidate);
+    }
+}
+
+fn repo_name_parts(source: &str) -> Option<RepoNameParts> {
+    let parsed = url::Url::parse(source.trim()).ok()?;
+    let segments = parsed
+        .path_segments()
+        .map(|items| items.filter(|item| !item.is_empty()).collect::<Vec<_>>())
+        .unwrap_or_default();
+    if segments.len() < 2 {
+        return None;
+    }
+    Some(RepoNameParts {
+        owner: sanitize_storage_name(segments[0]),
+        repo: sanitize_storage_name(segments[1].trim_end_matches(".git")),
+    })
+}
+
+fn short_package_hash(value: &str) -> String {
+    let mut hash = 0xcbf29ce484222325_u64;
+    for byte in value.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    format!("{hash:016x}")
+        .chars()
+        .take(PACKAGE_ID_HASH_LEN)
+        .collect()
 }
 
 fn selected_repo_branch(spec: &RepoInstallSpec, git_ref: Option<&str>) -> Option<String> {
@@ -4219,6 +4385,7 @@ pub fn install_skill_from_repo(repo_url: &str) -> Result<SkillSummary, String> {
     };
 
     let installed_skill = enrich_skill_with_git_state(&normalize_skill_tools(&installed_skill));
+    let installed_skill = apply_skill_install_activation(installed_skill, &installed_skills)?;
     persist_skill_timestamps(&installed_skill);
     installed_skills.retain(|skill| skill.name != installed_skill.name);
     installed_skills.insert(0, installed_skill.clone());
@@ -4315,123 +4482,138 @@ pub async fn install_selected_repo_skills(
     git_ref: Option<String>,
 ) -> Result<Vec<SkillSummary>, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        if selected_paths.is_empty() {
-            return Err("请至少选择一个技能再安装。".into());
-        }
-
-        let spec = parse_repo_install_spec(&repo_url)?;
-        let selected_branch = selected_repo_branch(&spec, git_ref.as_deref());
-        let installed_at = now_timestamp_label();
-        let mut installed_skills = load_installed_skills(&default_installed_skills());
-        let mut installed_results = Vec::new();
-
-        for selected_path in &selected_paths {
-            let normalized_path = selected_path.trim_matches('/').to_string();
-            let skill_name = Path::new(&normalized_path)
-                .file_name()
-                .and_then(|value| value.to_str())
-                .filter(|value| !value.trim().is_empty())
-                .unwrap_or_else(|| {
-                    spec.source_url
-                        .trim_end_matches('/')
-                        .split('/')
-                        .last()
-                        .unwrap_or("custom-skill")
-                })
-                .to_string();
-            if is_reserved_workspace_name(&skill_name) {
-                return Err(format!(
-                    "仓库路径 `{selected_path}` 指向内部容器目录，请选择具体的 skill 目录。"
-                ));
-            }
-            if let Some(existing_skill) = installed_skills
-                .iter()
-                .find(|skill| skill.name == skill_name)
-            {
-                installed_results.push(existing_skill.clone());
-                continue;
-            }
-
-            let skill_dir = skill_directory(&skill_name)
-                .map_err(|error| format!("无法确定 skill 目录: {error}"))?;
-            if skill_dir.exists() {
-                std::fs::remove_dir_all(&skill_dir)
-                    .map_err(|error| format!("清理旧 skill 目录失败: {error}"))?;
-            }
-            if let Some(parent) = skill_dir.parent() {
-                std::fs::create_dir_all(parent)
-                    .map_err(|error| format!("创建 skill 目录失败: {error}"))?;
-            }
-
-            let local_path = if normalized_path.is_empty() {
-                ensure_repo_skill_with_ref_and_sparse_paths(
-                    &spec.clone_url,
-                    selected_branch.as_deref(),
-                    &skill_name,
-                    &[],
-                )?
-            } else {
-                let sparse_paths = vec![normalized_path.clone()];
-                ensure_repo_skill_with_ref_and_sparse_paths(
-                    &spec.clone_url,
-                    selected_branch.as_deref(),
-                    &skill_name,
-                    &sparse_paths,
-                )?;
-                // 不移动文件，直接返回子目录路径，保持 git 索引正确
-                let subdir = skill_dir.join(&normalized_path);
-                if !subdir.is_dir() || !subdir.join("SKILL.md").is_file() {
-                    return Err(format!("未找到待安装技能路径: {selected_path}"));
-                }
-                subdir.to_string_lossy().to_string()
-            };
-            let skill_file = Path::new(&local_path).join("SKILL.md");
-            let description = if skill_file.is_file() {
-                read_skill_description(&skill_file)
-            } else {
-                "从仓库导入的 skill，后续可继续同步和检查更新。".into()
-            };
-            let installed_skill = SkillSummary {
-                name: skill_name,
-                source_label: source_label_for_type(&spec.source_type).into(),
-                source_type: spec.source_type.clone(),
-                source_url: build_repo_skill_source_url_with_branch(
-                    &spec,
-                    selected_branch.as_deref(),
-                    selected_path,
-                ),
-                description,
-                local_path,
-                branch: "main".into(),
-                collab_status: "clean".into(),
-                status_text: "仓库技能已导入，可继续同步到目标工具。".into(),
-                remote_updated_at: "刚刚".into(),
-                local_updated_at: installed_at.clone(),
-                last_synced_at: installed_at.clone(),
-                last_checked_at: "刚刚".into(),
-                synced_tool_count: 0,
-                last_editor: "".into(),
-                commit_label: "initial".into(),
-                git_linked: true,
-                lifecycle_source: String::new(),
-                owner_plugin_id: String::new(),
-                owner_plugin_name: String::new(),
-                tools: vec![],
-            };
-            let enriched = enrich_newly_installed_skill_with_git_state(&normalize_skill_tools(
-                &installed_skill,
-            ));
-            persist_skill_timestamps(&enriched);
-            installed_skills.retain(|skill| skill.name != enriched.name);
-            installed_skills.insert(0, enriched.clone());
-            installed_results.push(enriched);
-        }
-
-        save_installed_skills(&installed_skills)?;
-        Ok(installed_results)
+        install_selected_repo_skills_blocking(repo_url, selected_paths, git_ref)
     })
     .await
     .map_err(|error| format!("后台安装仓库技能失败: {error}"))?
+}
+
+fn install_selected_repo_skills_blocking(
+    repo_url: String,
+    selected_paths: Vec<String>,
+    git_ref: Option<String>,
+) -> Result<Vec<SkillSummary>, String> {
+    if selected_paths.is_empty() {
+        return Err("请至少选择一个技能再安装。".into());
+    }
+
+    let spec = parse_repo_install_spec(&repo_url)?;
+    let selected_branch = selected_repo_branch(&spec, git_ref.as_deref());
+    let installed_at = now_timestamp_label();
+    let mut installed_skills = load_installed_skills(&default_installed_skills());
+    let mut installed_results = Vec::new();
+
+    for selected_path in &selected_paths {
+        let normalized_path = selected_path.trim_matches('/').to_string();
+        let skill_name = Path::new(&normalized_path)
+            .file_name()
+            .and_then(|value| value.to_str())
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| {
+                spec.source_url
+                    .trim_end_matches('/')
+                    .split('/')
+                    .last()
+                    .unwrap_or("custom-skill")
+            })
+            .to_string();
+        if is_reserved_workspace_name(&skill_name) {
+            return Err(format!(
+                "仓库路径 `{selected_path}` 指向内部容器目录，请选择具体的 skill 目录。"
+            ));
+        }
+        let source_url = build_repo_skill_source_url_with_branch(
+            &spec,
+            selected_branch.as_deref(),
+            selected_path,
+        );
+        let install_name = resolve_skill_install_name(
+            &skill_name,
+            &source_url,
+            &normalized_path,
+            &installed_skills,
+        )?;
+        if let Some(existing_skill) = installed_skills
+            .iter()
+            .find(|skill| skill.name == install_name)
+        {
+            installed_results.push(existing_skill.clone());
+            continue;
+        }
+
+        let skill_dir = skill_directory(&install_name)
+            .map_err(|error| format!("无法确定 skill 目录: {error}"))?;
+        if skill_dir.exists() {
+            std::fs::remove_dir_all(&skill_dir)
+                .map_err(|error| format!("清理旧 skill 目录失败: {error}"))?;
+        }
+        if let Some(parent) = skill_dir.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|error| format!("创建 skill 目录失败: {error}"))?;
+        }
+
+        let local_path = if normalized_path.is_empty() {
+            ensure_repo_skill_with_ref_and_sparse_paths(
+                &spec.clone_url,
+                selected_branch.as_deref(),
+                &install_name,
+                &[],
+            )?
+        } else {
+            let sparse_paths = vec![normalized_path.clone()];
+            ensure_repo_skill_with_ref_and_sparse_paths(
+                &spec.clone_url,
+                selected_branch.as_deref(),
+                &install_name,
+                &sparse_paths,
+            )?;
+            // 不移动文件，直接返回子目录路径，保持 git 索引正确
+            let subdir = skill_dir.join(&normalized_path);
+            if !subdir.is_dir() || !subdir.join("SKILL.md").is_file() {
+                return Err(format!("未找到待安装技能路径: {selected_path}"));
+            }
+            subdir.to_string_lossy().to_string()
+        };
+        let skill_file = Path::new(&local_path).join("SKILL.md");
+        let description = if skill_file.is_file() {
+            read_skill_description(&skill_file)
+        } else {
+            "从仓库导入的 skill，后续可继续同步和检查更新。".into()
+        };
+        let installed_skill = SkillSummary {
+            name: install_name,
+            source_label: source_label_for_type(&spec.source_type).into(),
+            source_type: spec.source_type.clone(),
+            source_url,
+            description,
+            local_path,
+            branch: "main".into(),
+            collab_status: "clean".into(),
+            status_text: "仓库技能已导入，可继续同步到目标工具。".into(),
+            remote_updated_at: "刚刚".into(),
+            local_updated_at: installed_at.clone(),
+            last_synced_at: installed_at.clone(),
+            last_checked_at: "刚刚".into(),
+            synced_tool_count: 0,
+            last_editor: "".into(),
+            commit_label: "initial".into(),
+            git_linked: true,
+            lifecycle_source: String::new(),
+            owner_plugin_id: String::new(),
+            owner_plugin_name: String::new(),
+            tools: vec![],
+        };
+        let enriched =
+            enrich_newly_installed_skill_with_git_state(&normalize_skill_tools(&installed_skill));
+        let enriched = apply_skill_install_activation(enriched, &installed_skills)?;
+        persist_skill_timestamps(&enriched);
+        installed_skills.retain(|skill| skill.name != enriched.name);
+        installed_skills.insert(0, enriched.clone());
+        installed_results.push(enriched);
+    }
+
+    save_installed_skills(&installed_skills)?;
+    Ok(installed_results)
 }
 
 #[tauri::command]
@@ -5467,17 +5649,19 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        build_local_candidates, build_repo_skill_source_url, cleanup_local_skill_install_on_error,
-        collect_local_skill_dirs, collect_skills_manager_cached_items, collect_skillsmp_items,
-        copy_local_skill_dir, detect_preferred_app_language_from_system, import_local_skill,
-        insert_trusted_project_path, install_selected_local_skill_dirs,
-        intellij_trusted_locations_for_project, load_marketplace_cache_page,
-        map_in_parallel_preserving_order, map_skillsmp_items_to_marketplace,
-        normalize_installed_skill_source_url, open_target_path_for_skill,
-        parse_apple_languages_output, parse_repo_install_spec, parse_skills_sh_homepage_items,
-        remove_trusted_project_paths, resolve_startup_installed_skills, save_marketplace_cache,
-        scan_local_install_skill_candidates, scan_repo_skill_candidates, selected_repo_path_hint,
-        should_use_skills_sh_homepage_page, REFRESH_GIT_STATES_CONCURRENCY,
+        apply_skill_install_activation, build_local_candidates, build_repo_skill_source_url,
+        cleanup_local_skill_install_on_error, collect_local_skill_dirs,
+        collect_skills_manager_cached_items, collect_skillsmp_items, copy_local_skill_dir,
+        detect_preferred_app_language_from_system, import_local_skill, insert_trusted_project_path,
+        install_selected_local_skill_dirs, intellij_trusted_locations_for_project,
+        load_marketplace_cache_page, map_in_parallel_preserving_order,
+        map_skillsmp_items_to_marketplace, normalize_installed_skill_source_url,
+        normalize_skill_tools, open_target_path_for_skill, parse_apple_languages_output,
+        parse_repo_install_spec, parse_skills_sh_homepage_items, remove_trusted_project_paths,
+        resolve_skill_install_name, resolve_startup_installed_skills, run_git_command,
+        save_marketplace_cache, scan_local_install_skill_candidates, scan_repo_skill_candidates,
+        selected_repo_path_hint, should_use_skills_sh_homepage_page, update_skill_repo,
+        REFRESH_GIT_STATES_CONCURRENCY,
     };
     use crate::models::{MarketplaceSkill, SkillSummary, WorkspacePersistence};
     use crate::workspace::TEST_ENV_LOCK;
@@ -5553,6 +5737,187 @@ mod tests {
                 env::remove_var(name);
             }
         }
+    }
+
+    fn installed_skill_fixture(name: &str, source_url: &str, local_path: &str) -> SkillSummary {
+        SkillSummary {
+            name: name.to_string(),
+            source_label: "GitHub".to_string(),
+            source_type: "github".to_string(),
+            source_url: source_url.to_string(),
+            description: String::new(),
+            local_path: local_path.to_string(),
+            branch: "main".to_string(),
+            collab_status: "clean".to_string(),
+            status_text: String::new(),
+            remote_updated_at: String::new(),
+            local_updated_at: String::new(),
+            last_synced_at: String::new(),
+            last_checked_at: String::new(),
+            synced_tool_count: 0,
+            last_editor: String::new(),
+            commit_label: String::new(),
+            git_linked: true,
+            lifecycle_source: String::new(),
+            owner_plugin_id: String::new(),
+            owner_plugin_name: String::new(),
+            tools: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn skill_install_name_reuses_same_repo_and_path_across_branches() {
+        let _guard = TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let temp_dir = temp_test_dir("skill-install-name-reuse");
+        let home_dir = temp_dir.join("home");
+        let previous_home = env::var_os("HOME");
+        // SAFETY: this test holds ENV_LOCK and restores HOME before returning.
+        unsafe {
+            env::set_var("HOME", &home_dir);
+        }
+        let installed = vec![installed_skill_fixture(
+            "coding-tutor",
+            "https://github.com/everyinc/compound-engineering-plugin/tree/main/plugins/coding-tutor",
+            "",
+        )];
+
+        let resolved = resolve_skill_install_name(
+            "coding-tutor",
+            "https://github.com/everyinc/compound-engineering-plugin/tree/feature-x/plugins/coding-tutor",
+            "plugins/coding-tutor",
+            &installed,
+        )
+        .expect("resolve install name");
+
+        restore_env_var("HOME", previous_home);
+        assert_eq!(resolved, "coding-tutor");
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn skill_install_name_disambiguates_different_repo_with_same_name() {
+        let _guard = TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let temp_dir = temp_test_dir("skill-install-name-conflict");
+        let home_dir = temp_dir.join("home");
+        let previous_home = env::var_os("HOME");
+        // SAFETY: this test holds ENV_LOCK and restores HOME before returning.
+        unsafe {
+            env::set_var("HOME", &home_dir);
+        }
+        let existing_dir = home_dir.join(".skilldock/skills/coding-tutor");
+        fs::create_dir_all(&existing_dir).expect("create existing skill dir");
+        let installed = vec![installed_skill_fixture(
+            "coding-tutor",
+            "https://github.com/everyinc/compound-engineering-plugin/tree/main/plugins/coding-tutor",
+            existing_dir.to_string_lossy().as_ref(),
+        )];
+
+        let resolved = resolve_skill_install_name(
+            "coding-tutor",
+            "https://github.com/example/other-plugin/tree/main/plugins/coding-tutor",
+            "plugins/coding-tutor",
+            &installed,
+        )
+        .expect("resolve install name");
+
+        restore_env_var("HOME", previous_home);
+        assert_eq!(resolved, "coding-tutor-other-plugin");
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn update_skill_repo_rebases_diverged_clean_repo() {
+        let temp_dir = temp_test_dir("update-skill-rebase-diverged");
+        let remote_dir = temp_dir.join("remote.git");
+        let seed_dir = temp_dir.join("seed");
+        let local_dir = temp_dir.join("local");
+        let skill_path = local_dir.join("skills/release-scribe");
+        run_git_test(
+            &temp_dir,
+            &["init", "--bare", remote_dir.to_str().expect("remote path")],
+        );
+        run_git_test(
+            &temp_dir,
+            &["clone", remote_dir.to_str().expect("remote path"), "seed"],
+        );
+        run_git_test(&seed_dir, &["checkout", "-b", "master"]);
+        run_git_test(&seed_dir, &["config", "user.name", "SkillDock Test"]);
+        run_git_test(
+            &seed_dir,
+            &["config", "user.email", "skilldock@example.com"],
+        );
+        fs::create_dir_all(seed_dir.join("skills/release-scribe")).expect("create skill path");
+        fs::write(
+            seed_dir.join("skills/release-scribe/SKILL.md"),
+            "# release-scribe\n",
+        )
+        .expect("write initial skill");
+        run_git_test(&seed_dir, &["add", "."]);
+        run_git_test(&seed_dir, &["commit", "-m", "initial skill"]);
+        run_git_test(&seed_dir, &["push", "-u", "origin", "master"]);
+        run_git_test(
+            &temp_dir,
+            &[
+                "clone",
+                remote_dir.to_str().expect("remote path"),
+                local_dir.to_str().expect("local path"),
+            ],
+        );
+        run_git_test(&local_dir, &["config", "user.name", "SkillDock Test"]);
+        run_git_test(
+            &local_dir,
+            &["config", "user.email", "skilldock@example.com"],
+        );
+
+        fs::write(
+            seed_dir.join("skills/release-scribe/REMOTE.md"),
+            "# remote change\n",
+        )
+        .expect("write remote change");
+        run_git_test(&seed_dir, &["add", "."]);
+        run_git_test(&seed_dir, &["commit", "-m", "remote change"]);
+        run_git_test(&seed_dir, &["push", "origin", "master"]);
+
+        fs::write(skill_path.join("LOCAL.md"), "# local change\n").expect("write local change");
+        run_git_test(&local_dir, &["add", "."]);
+        run_git_test(&local_dir, &["commit", "-m", "local change"]);
+
+        let skill = installed_skill_fixture(
+            "release-scribe",
+            "https://github.com/example/release-scribe/tree/master/skills/release-scribe",
+            skill_path.to_string_lossy().as_ref(),
+        );
+        update_skill_repo(&skill).expect("update diverged skill repo");
+
+        assert!(skill_path.join("LOCAL.md").is_file());
+        assert!(skill_path.join("REMOTE.md").is_file());
+        assert_eq!(
+            run_git_command(
+                skill_path.to_string_lossy().as_ref(),
+                &["status", "--porcelain"]
+            )
+            .expect("read status"),
+            ""
+        );
+        assert_eq!(
+            run_git_command(
+                skill_path.to_string_lossy().as_ref(),
+                &[
+                    "rev-list",
+                    "--left-right",
+                    "--count",
+                    "origin/master...HEAD"
+                ],
+            )
+            .expect("read divergence"),
+            "0\t1"
+        );
+
+        let _ = fs::remove_dir_all(temp_dir);
     }
 
     #[test]
@@ -6411,6 +6776,91 @@ mod tests {
             selected_repo_path_hint(&spec, Some("feature/FEATURE-123")),
             None
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn selected_repo_install_applies_default_activation() {
+        let _guard = TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let temp_dir = temp_test_dir("selected-repo-install-default-sync");
+        let home_dir = temp_dir.join("home");
+        let repo_path = temp_dir.join("repo");
+        let skill_path = repo_path.join("skills/service-observer");
+        let codex_skill_link = home_dir.join(".codex/skills/service-observer");
+        fs::create_dir_all(&skill_path).expect("create skill dir");
+        fs::write(
+            skill_path.join("SKILL.md"),
+            "---\nname: service-observer\ndescription: 巡检服务稳定性\n---",
+        )
+        .expect("write skill file");
+        run_git_test(&temp_dir, &["init", "--quiet", repo_path.to_str().unwrap()]);
+        run_git_test(&repo_path, &["checkout", "-b", "main"]);
+        run_git_test(&repo_path, &["config", "user.name", "SkillDock Test"]);
+        run_git_test(
+            &repo_path,
+            &["config", "user.email", "skilldock@example.com"],
+        );
+        run_git_test(&repo_path, &["add", "."]);
+        run_git_test(&repo_path, &["commit", "-m", "init"]);
+
+        let managed_skill_dir = home_dir.join(".skilldock/skills/service-observer");
+        let managed_skill_path = managed_skill_dir.join("skills/service-observer");
+        fs::create_dir_all(&managed_skill_path).expect("create managed skill path");
+        fs::write(managed_skill_path.join("SKILL.md"), "# service-observer")
+            .expect("write managed skill file");
+        fs::create_dir_all(home_dir.join(".codex")).expect("create codex config dir");
+        let original_home = env::var_os("HOME");
+        let original_path = prepend_fake_executable_to_path(&temp_dir, "codex");
+        // SAFETY: this test holds ENV_LOCK and restores HOME before returning.
+        unsafe {
+            env::set_var("HOME", &home_dir);
+        }
+
+        let installed_skill = SkillSummary {
+            name: "service-observer".into(),
+            source_label: "GitHub".into(),
+            source_type: "github".into(),
+            source_url:
+                "https://github.com/example/service-observer/tree/main/skills/service-observer"
+                    .into(),
+            description: String::new(),
+            local_path: managed_skill_path.to_string_lossy().to_string(),
+            branch: "main".into(),
+            collab_status: "clean".into(),
+            status_text: "仓库技能已导入，可继续同步到目标工具。".into(),
+            remote_updated_at: "刚刚".into(),
+            local_updated_at: "刚刚".into(),
+            last_synced_at: "刚刚".into(),
+            last_checked_at: "刚刚".into(),
+            synced_tool_count: 0,
+            last_editor: String::new(),
+            commit_label: "initial".into(),
+            git_linked: true,
+            lifecycle_source: String::new(),
+            owner_plugin_id: String::new(),
+            owner_plugin_name: String::new(),
+            tools: vec![],
+        };
+        let installed =
+            apply_skill_install_activation(normalize_skill_tools(&installed_skill), &[])
+                .expect("apply default activation");
+
+        restore_env_var("HOME", original_home);
+        restore_env_var("PATH", original_path);
+
+        assert_eq!(installed.name, "service-observer");
+        assert_eq!(
+            fs::read_link(&codex_skill_link).expect("read codex symlink"),
+            managed_skill_path
+        );
+        assert!(installed
+            .tools
+            .iter()
+            .any(|tool| { tool.name == "Codex" && tool.status_label == "已启用" }));
+
+        let _ = fs::remove_dir_all(temp_dir);
     }
 
     #[test]

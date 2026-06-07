@@ -135,11 +135,12 @@ export function CliRoute() {
       {filteredCliTools.map((cliTool) => (
         <ToolListRow
           key={cliTool.id}
+          rowId={cliTool.id}
           name={cliTool.name}
           subtitle={`${cliTool.description || cliTool.command}${cliTool.bundledSkills.length > 0 ? ` · 绑定 ${cliTool.bundledSkills.length} 个 skills` : ""}`}
           badges={[{ label: cliTool.statusLabel || "已识别", tone: "neutral" }]}
           expanded={expandedId === cliTool.id}
-          onExpandedChange={(expanded) => handleExpandedChange(cliTool.id, expanded)}
+          onExpandedChange={(expanded, summaryElement) => handleExpandedChange(cliTool.id, expanded, summaryElement)}
           details={(
             <div className="tool-list-row__detail-grid">
               <div>

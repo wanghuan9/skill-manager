@@ -15,8 +15,10 @@ export type PluginInstallStrategy =
   | "unsupported";
 export type PluginSourceType = "git" | "local" | "marketplace";
 export type PluginUpdateMode = "auto" | "unsupported";
+export type PluginUpdateStrategy = "git" | "hash" | "none";
 export type PluginStatus = "ready" | "update-available" | "invalid" | "unsupported" | "scan-error";
 export type PluginInstallState = "installed" | "broken" | "detected";
+export type PluginInstallSource = "host" | "skilldock";
 export type PluginEnabledState = "enabled" | "disabled" | "unknown";
 export type PluginScopeId = "user" | "project" | "local-project";
 export type PluginAssetType =
@@ -58,12 +60,16 @@ export type PluginScopeSummary = {
 
 export type PluginSummary = {
   id: string;
+  packageId: string;
   name: string;
   description: string;
   hostTool: PluginHostTool;
   relatedHostTools?: PluginHostTool[];
   kind: PluginKind;
   rootPath: string;
+  displayRootPath?: string;
+  repoRootPath: string;
+  pluginRelativePath: string;
   manifestPath: string;
   sourceType: PluginSourceType;
   sourceLabel: string;
@@ -73,14 +79,23 @@ export type PluginSummary = {
   currentVersion: string;
   currentBranch: string;
   currentCommit: string;
+  collabStatus: SkillCollabStatus;
+  statusText: string;
   isGitRepo: boolean;
   updateMode: PluginUpdateMode;
+  updateStrategy: PluginUpdateStrategy;
   updateAvailable: boolean;
+  baselineHash: string;
+  localModified: boolean;
   installedAt: string;
   updatedAt: string;
+  remoteUpdatedAt: string;
+  localUpdatedAt: string;
+  lastEditor: string;
   lastScannedAt: string;
   status: PluginStatus;
   installState: PluginInstallState;
+  installSource: PluginInstallSource;
   enabledState: PluginEnabledState;
   scopes: PluginScopeSummary[];
   components: PluginComponentSummary[];
@@ -93,6 +108,8 @@ export type PluginProbeResult = {
   name: string;
   description: string;
   pluginRoot: string;
+  repoRoot?: string;
+  pluginRelativePath?: string;
   manifestPath: string;
   marketplaceManifestPath: string;
   components: PluginComponentSummary[];

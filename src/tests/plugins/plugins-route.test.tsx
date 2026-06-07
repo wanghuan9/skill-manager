@@ -4,7 +4,8 @@ import userEvent from "@testing-library/user-event";
 import { PluginsRoute, resetPluginScanSessionForTests } from "@/app/routes/plugins";
 import * as skillClient from "@/features/skills/api/skill-client";
 import { pluginFixtures } from "@/features/skills/state/skill-fixtures";
-import type { PluginSummary } from "@/features/skills/state/skill-store";
+import type { PluginHostTool, PluginSummary } from "@/features/skills/state/skill-store";
+import { formatSkillUpdatedAt } from "@/features/skills/utils/skill-time";
 import { useSkillWorkspace } from "@/features/skills/state/skill-workspace";
 import { renderWithI18n } from "@/tests/helpers/render-with-i18n";
 
@@ -16,28 +17,286 @@ const mockedUseSkillWorkspace = vi.mocked(useSkillWorkspace);
 
 beforeEach(() => {
   delete (window as Window & { __SKILLM_PLUGINS__?: unknown }).__SKILLM_PLUGINS__;
+  window.localStorage.clear();
   resetPluginScanSessionForTests();
   mockedUseSkillWorkspace.mockReturnValue({
+    defaultOpenToolId: "finder",
     language: "zh-CN",
-  } as ReturnType<typeof useSkillWorkspace>);
+    toolConfigs: [],
+  } as unknown as ReturnType<typeof useSkillWorkspace>);
+  vi.spyOn(skillClient, "fetchStartupInstalledPlugins").mockResolvedValue(pluginFixtures);
+  vi.spyOn(skillClient, "fetchInstalledPlugins").mockResolvedValue(pluginFixtures);
+});
+
+function setWorkspaceLanguage(language: "zh-CN" | "en") {
+  mockedUseSkillWorkspace.mockReturnValue({
+    defaultOpenToolId: "finder",
+    language,
+    toolConfigs: [],
+  } as unknown as ReturnType<typeof useSkillWorkspace>);
+}
+
+test("hydrates plugins from persisted cache before the refresh request resolves", async () => {
+  const fixtureSpy = vi.spyOn(skillClient, "shouldUseFixtureData").mockReturnValue(false);
+  const cachedPlugins: PluginSummary[] = [
+    {
+      ...pluginFixtures[0],
+      statusText: "来自启动缓存。",
+    },
+  ];
+  window.localStorage.setItem("skilldock.pluginsCache", JSON.stringify(cachedPlugins));
+
+  const deferredFetch: {
+    resolve?: (value: PluginSummary[]) => void;
+  } = {};
+  const fetchSpy = vi
+    .spyOn(skillClient, "fetchInstalledPlugins")
+    .mockImplementationOnce(
+      () =>
+        new Promise<PluginSummary[]>((resolve) => {
+          deferredFetch.resolve = resolve;
+        }),
+    );
+
+  renderWithI18n(<PluginsRoute />);
+
+  expect(screen.getByText("Repo Scout")).toBeInTheDocument();
+  expect(screen.getByRole("tab", { name: "全部 1" })).toBeInTheDocument();
+  expect(screen.queryByText("正在加载插件...")).not.toBeInTheDocument();
+  expect(screen.queryByText("当前筛选条件下没有匹配的插件。")).not.toBeInTheDocument();
+
+  if (!deferredFetch.resolve) {
+    fixtureSpy.mockRestore();
+    throw new Error("missing plugin fetch resolver");
+  }
+  deferredFetch.resolve(pluginFixtures);
+
+  await screen.findByRole("tab", { name: /全部/ });
+  fetchSpy.mockRestore();
+  fixtureSpy.mockRestore();
+});
+
+test("persists the loaded plugin list for the next open", async () => {
+  const fixtureSpy = vi.spyOn(skillClient, "shouldUseFixtureData").mockReturnValue(false);
+  vi.spyOn(skillClient, "fetchStartupInstalledPlugins").mockResolvedValueOnce(pluginFixtures);
+
+  renderWithI18n(<PluginsRoute />);
+
+  await screen.findByRole("tab", { name: /全部/ });
+
+  const cachedPayload = JSON.parse(
+    window.localStorage.getItem("skilldock.pluginsCache") ?? "null",
+  );
+  expect(Array.isArray(cachedPayload)).toBe(true);
+  expect(cachedPayload[0]?.id).toBe(pluginFixtures[0]?.id);
+  fixtureSpy.mockRestore();
+});
+
+test("triggers one automatic scan import on the first empty open", async () => {
+  const fixtureSpy = vi.spyOn(skillClient, "shouldUseFixtureData").mockReturnValue(false);
+  const startupSpy = vi
+    .spyOn(skillClient, "fetchStartupInstalledPlugins")
+    .mockResolvedValueOnce([]);
+  const scanSpy = vi
+    .spyOn(skillClient, "fetchInstalledPlugins")
+    .mockResolvedValue(pluginFixtures);
+
+  renderWithI18n(<PluginsRoute />);
+
+  await screen.findByRole("tab", { name: /全部/ });
+
+  expect(startupSpy).toHaveBeenCalledTimes(1);
+  await waitFor(() => {
+    expect(scanSpy).toHaveBeenCalledTimes(1);
+  });
+  expect(window.localStorage.getItem("skilldock.plugins.firstEmptyAutoScanCompleted")).toBe("true");
+  fixtureSpy.mockRestore();
+});
+
+test("does not trigger automatic scan import again after the first empty open", async () => {
+  const fixtureSpy = vi.spyOn(skillClient, "shouldUseFixtureData").mockReturnValue(false);
+  window.localStorage.setItem("skilldock.plugins.firstEmptyAutoScanCompleted", "true");
+  const startupSpy = vi
+    .spyOn(skillClient, "fetchStartupInstalledPlugins")
+    .mockResolvedValueOnce([]);
+  const scanSpy = vi
+    .spyOn(skillClient, "fetchInstalledPlugins")
+    .mockResolvedValue(pluginFixtures);
+
+  renderWithI18n(<PluginsRoute />);
+
+  await screen.findByRole("tab", { name: /全部/ });
+
+  expect(startupSpy).toHaveBeenCalledTimes(1);
+  expect(scanSpy).not.toHaveBeenCalled();
+  fixtureSpy.mockRestore();
+});
+
+test("defaults to the all tab and shows deduplicated plugin packages", async () => {
+  const fixtureSpy = vi.spyOn(skillClient, "shouldUseFixtureData").mockReturnValue(false);
+  const plugins: PluginSummary[] = [
+    pluginFixtures[0],
+    {
+      ...pluginFixtures[0],
+      hostTool: "claude-code",
+      relatedHostTools: ["codex"],
+      rootPath: "/Users/demo/.claude/plugins/cache/repo-scout/1.0.0",
+      manifestPath: "/Users/demo/.claude/plugins/cache/repo-scout/1.0.0/.claude-plugin/plugin.json",
+      installSource: "host",
+      enabledState: "disabled",
+      scopes: [
+        {
+          scopeId: "user",
+          scopeLabel: "用户级",
+          enabledState: "disabled",
+          location: "~/.claude/settings.json",
+        },
+      ],
+    },
+    pluginFixtures[1],
+  ];
+  vi.spyOn(skillClient, "fetchStartupInstalledPlugins").mockResolvedValueOnce(plugins);
+
+  renderWithI18n(<PluginsRoute />);
+
+  const allTab = await screen.findByRole("tab", { name: "全部 2" });
+  expect(allTab).toHaveAttribute("aria-selected", "true");
+  expect(screen.getByRole("tab", { name: "Claude Code 2" })).toBeInTheDocument();
+  expect(screen.getByRole("tab", { name: "Codex 1" })).toBeInTheDocument();
+  expect(await screen.findByText("Repo Scout")).toBeInTheDocument();
+  expect(screen.getByText("ecc")).toBeInTheDocument();
+  expect(screen.getAllByText("Repo Scout")).toHaveLength(1);
+  const repoScoutRow = screen.getByRole("button", { name: /展开 Repo Scout/ }).closest(".tool-list-row");
+  expect(repoScoutRow?.querySelectorAll(".plugins-page__host-coverage-item")).toHaveLength(2);
+  expect(repoScoutRow?.querySelector('[data-tooltip="Codex 已安装（已启用）"]')).toBeInTheDocument();
+  expect(repoScoutRow?.querySelector('[data-tooltip="Claude Code 已安装（未启用）"]')).toBeInTheDocument();
+  fixtureSpy.mockRestore();
+});
+
+test("aggregates the same plugin in all tab even when host package ids differ", async () => {
+  const plugins: PluginSummary[] = [
+    pluginFixtures[0],
+    {
+      ...pluginFixtures[0],
+      id: "claude-code:repo-scout",
+      packageId: "claude-repo-scout",
+      hostTool: "claude-code",
+      relatedHostTools: ["codex"],
+      rootPath: "/Users/demo/.claude/plugins/cache/repo-scout/1.0.0",
+      manifestPath: "/Users/demo/.claude/plugins/cache/repo-scout/1.0.0/.claude-plugin/plugin.json",
+      installSource: "host",
+      enabledState: "disabled",
+      scopes: [
+        {
+          scopeId: "user",
+          scopeLabel: "用户级",
+          enabledState: "disabled",
+          location: "~/.claude/settings.json",
+        },
+      ],
+    },
+  ];
+  vi.spyOn(skillClient, "fetchStartupInstalledPlugins").mockResolvedValueOnce(plugins);
+
+  renderWithI18n(<PluginsRoute />);
+
+  const allTab = await screen.findByRole("tab", { name: "全部 1" });
+  expect(allTab).toHaveAttribute("aria-selected", "true");
+  expect(screen.getAllByText("Repo Scout")).toHaveLength(1);
+  const repoScoutRow = screen.getByRole("button", { name: /展开 Repo Scout/ }).closest(".tool-list-row");
+  expect(repoScoutRow?.querySelector('[data-tooltip="Codex 已安装（已启用）"]')).toBeInTheDocument();
+  expect(repoScoutRow?.querySelector('[data-tooltip="Claude Code 已安装（未启用）"]')).toBeInTheDocument();
+});
+
+test("aggregates cross-host plugins by canonical plugin name instead of display name", async () => {
+  const plugins: PluginSummary[] = [
+    {
+      ...pluginFixtures[0],
+      id: "codex:example-plugin",
+      packageId: "example-plugin",
+      name: "Example Plugin",
+      hostTool: "codex",
+      sourceLabel: "example-plugin",
+      sourceUrl: "https://github.com/example-org/example-plugin",
+      repoRootPath: "/Users/demo/.codex/plugins/cache/example-org/example-plugin/0.1.0",
+      rootPath: "/Users/demo/.codex/plugins/cache/example-org/example-plugin/0.1.0",
+      manifestPath: "/Users/demo/.codex/plugins/cache/example-org/example-plugin/0.1.0/plugin.json",
+      installSource: "host",
+      relatedHostTools: ["claude-code"],
+      enabledState: "enabled",
+      scopes: [
+        {
+          scopeId: "project",
+          scopeLabel: "工作区",
+          enabledState: "enabled",
+          location: "/Users/demo/project/.codex/config.toml",
+        },
+      ],
+    },
+    {
+      ...pluginFixtures[0],
+      id: "claude-code:example-plugin",
+      packageId: "example-plugin",
+      name: "example-plugin",
+      hostTool: "claude-code",
+      sourceLabel: "Example Plugin",
+      sourceUrl: "https://github.com/example-org/example-plugin.git",
+      repoRootPath: "/Users/demo/.claude/plugins/cache/example-org/example-plugin/0.1.0",
+      relatedHostTools: ["codex"],
+      rootPath: "/Users/demo/.claude/plugins/cache/example-org/example-plugin/0.1.0",
+      manifestPath: "/Users/demo/.claude/plugins/cache/example-org/example-plugin/0.1.0/.claude-plugin/plugin.json",
+      installSource: "host",
+      enabledState: "enabled",
+      scopes: [
+        {
+          scopeId: "user",
+          scopeLabel: "用户级",
+          enabledState: "enabled",
+          location: "~/.claude/settings.json",
+        },
+      ],
+    },
+  ];
+  vi.spyOn(skillClient, "fetchStartupInstalledPlugins").mockResolvedValueOnce(plugins);
+
+  renderWithI18n(<PluginsRoute />);
+
+  const allTab = await screen.findByRole("tab", { name: "全部 1" });
+  expect(allTab).toHaveAttribute("aria-selected", "true");
+  expect(screen.getAllByText(/Example Plugin|example-plugin/)).toHaveLength(1);
+  const row = screen.getByRole("button", { name: /展开 Example Plugin|展开 example-plugin/ }).closest(".tool-list-row");
+  expect(row?.querySelector('[data-tooltip="Codex 已安装（已启用）"]')).toBeInTheDocument();
+  expect(row?.querySelector('[data-tooltip="Claude Code 已安装（已启用）"]')).toBeInTheDocument();
 });
 
 test("shows disabled plugin state with description-first source details", async () => {
   renderWithI18n(<PluginsRoute />);
 
-  await screen.findByRole("tab", { name: /Claude Code/ });
+  await screen.findByRole("tab", { name: /全部/ });
+  await userEvent.click(screen.getByRole("tab", { name: /Claude Code/ }));
   expect(await screen.findByText("ecc")).toBeInTheDocument();
   expect(screen.getAllByText("未启用").length).toBeGreaterThan(0);
+  const eccRow = screen.getByRole("button", { name: /展开 ecc/ }).closest(".tool-list-row");
+  expect(eccRow?.querySelectorAll(".plugins-page__host-coverage-item")).toHaveLength(0);
 
   await userEvent.click(screen.getByRole("button", { name: /展开 ecc/ }));
   expect(screen.getByText("基本信息")).toBeInTheDocument();
   expect(screen.getByText("简介")).toBeInTheDocument();
+  expect(screen.getByText("本地更新时间")).toBeInTheDocument();
+  expect(screen.queryByText(/远端更新时间/)).not.toBeInTheDocument();
+  expect(screen.queryByText(/更新人/)).not.toBeInTheDocument();
+  expect(screen.queryByText("未获取")).not.toBeInTheDocument();
   expect(screen.getAllByText("Claude Code 官方插件，用于管理和运行扩展命令。").length)
     .toBeGreaterThanOrEqual(2);
+  expect(screen.getByText("安装方式")).toBeInTheDocument();
+  expect(screen.getByText("宿主安装")).toBeInTheDocument();
   expect(screen.getByText("来源类型")).toBeInTheDocument();
-  expect(screen.getByText("Git 仓库")).toBeInTheDocument();
+  expect(screen.getByText("Marketplace")).toBeInTheDocument();
   expect(screen.getByText("来源")).toBeInTheDocument();
-  expect(screen.getByText("目录")).toBeInTheDocument();
+  expect(screen.getByText("插件目录")).toBeInTheDocument();
+  expect(screen.queryByText("分支")).not.toBeInTheDocument();
+  expect(screen.queryByText("git")).not.toBeInTheDocument();
+  expect(screen.queryByText("仓库")).not.toBeInTheDocument();
   expect(screen.queryByText("Git 地址")).not.toBeInTheDocument();
   expect(screen.queryByText("宿主")).not.toBeInTheDocument();
   expect(screen.queryByText("安装状态")).not.toBeInTheDocument();
@@ -46,12 +305,129 @@ test("shows disabled plugin state with description-first source details", async 
   expect(screen.queryByText("用户级")).not.toBeInTheDocument();
 });
 
+test("hides remote update metadata for local plugins to match skill details", async () => {
+  const localPlugin: PluginSummary = {
+    ...pluginFixtures[0],
+    id: "codex:local-plugin",
+    name: "Local Plugin",
+    hostTool: "codex",
+    sourceType: "local",
+    sourceLabel: "本地",
+    sourceUrl: "",
+    rootPath: "/Users/demo/.codex/plugins/local-plugin",
+    repoRootPath: "/Users/demo/.codex/plugins/local-plugin",
+    manifestPath: "/Users/demo/.codex/plugins/local-plugin/plugin.json",
+    isGitRepo: false,
+    remoteUpdatedAt: "1778488200000",
+    localUpdatedAt: "1778488200000",
+    lastEditor: "Local Maintainer",
+  };
+  vi.spyOn(skillClient, "fetchStartupInstalledPlugins").mockResolvedValueOnce([localPlugin]);
+
+  renderWithI18n(<PluginsRoute />);
+
+  await screen.findByRole("tab", { name: "全部 1" });
+  await userEvent.click(screen.getByRole("button", { name: /展开 Local Plugin/ }));
+
+  expect(screen.getByText("本地更新时间")).toBeInTheDocument();
+  expect(screen.queryByText("远端更新时间")).not.toBeInTheDocument();
+  expect(screen.queryByText("更新人")).not.toBeInTheDocument();
+});
+
+test("falls back to current timestamps instead of showing not fetched in plugin meta summary", async () => {
+  const pluginWithoutTimes: PluginSummary = {
+    ...pluginFixtures[1],
+    id: "claude-code:compound-engineering-plugin",
+    name: "Compound Engineering Plugin",
+    remoteUpdatedAt: "",
+    localUpdatedAt: "",
+    lastEditor: "Szymon Kocot",
+  };
+  vi.spyOn(skillClient, "fetchStartupInstalledPlugins").mockResolvedValueOnce([pluginWithoutTimes]);
+
+  renderWithI18n(<PluginsRoute />);
+
+  await screen.findByRole("tab", { name: "全部 1" });
+  await userEvent.click(screen.getByRole("button", { name: /展开 Compound Engineering Plugin/ }));
+
+  expect(screen.queryByText("未获取")).not.toBeInTheDocument();
+  expect(screen.getByText("本地更新时间")).toBeInTheDocument();
+  expect(screen.queryByText(/远端更新时间/)).not.toBeInTheDocument();
+});
+
+test("falls back to stable updatedAt for plugin local update time instead of current time", async () => {
+  const pluginWithoutLocalUpdatedAt: PluginSummary = {
+    ...pluginFixtures[0],
+    id: "codex:stable-local-updated-at",
+    name: "Stable Local Updated At",
+    sourceType: "marketplace",
+    isGitRepo: false,
+    updatedAt: "1778488200000",
+    localUpdatedAt: "",
+    remoteUpdatedAt: "",
+    lastEditor: "",
+  };
+  vi.spyOn(skillClient, "fetchStartupInstalledPlugins").mockResolvedValueOnce([pluginWithoutLocalUpdatedAt]);
+
+  renderWithI18n(<PluginsRoute />);
+
+  await screen.findByRole("tab", { name: "全部 1" });
+  await userEvent.click(screen.getByRole("button", { name: /展开 Stable Local Updated At/ }));
+
+  expect(screen.getByText(formatSkillUpdatedAt(pluginWithoutLocalUpdatedAt.updatedAt))).toBeInTheDocument();
+  expect(screen.queryByText("未获取")).not.toBeInTheDocument();
+});
+
 test("keeps plugin scan import action in the toolbar", async () => {
   renderWithI18n(<PluginsRoute />);
 
-  await screen.findByRole("tab", { name: /Claude Code/ });
+  await screen.findByRole("tab", { name: /全部/ });
 
+  expect(screen.getByRole("button", { name: "刷新" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "扫描导入" })).toBeInTheDocument();
+});
+
+test("refreshes the plugin list from the toolbar", async () => {
+  const deferredFetch: {
+    resolve?: (value: PluginSummary[]) => void;
+  } = {};
+  const fetchSpy = vi
+    .spyOn(skillClient, "fetchStartupInstalledPlugins")
+    .mockResolvedValueOnce(pluginFixtures)
+    .mockImplementationOnce(
+      () =>
+        new Promise<PluginSummary[]>((resolve) => {
+          deferredFetch.resolve = resolve;
+        }),
+    );
+
+  renderWithI18n(<PluginsRoute />);
+
+  try {
+    await screen.findByRole("tab", { name: /全部/ });
+    const refreshButton = screen.getByRole("button", { name: "刷新" });
+
+    await userEvent.click(refreshButton);
+
+    await waitFor(() => {
+      expect(refreshButton).toBeDisabled();
+      expect(
+        refreshButton.querySelector(".skills-toolbar-button__svg.is-spinning"),
+      ).toBeInTheDocument();
+    });
+
+    if (!deferredFetch.resolve) {
+      throw new Error("missing plugin fetch resolver");
+    }
+    deferredFetch.resolve(pluginFixtures);
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "刷新" })).toBeEnabled();
+    });
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+  } finally {
+    fetchSpy.mockRestore();
+  }
 });
 
 test("opens plugin git source links externally", async () => {
@@ -59,7 +435,8 @@ test("opens plugin git source links externally", async () => {
 
   renderWithI18n(<PluginsRoute />);
 
-  await screen.findByRole("tab", { name: /Claude Code/ });
+  await screen.findByRole("tab", { name: /全部/ });
+  await userEvent.click(screen.getByRole("tab", { name: /Claude Code/ }));
   await userEvent.click(screen.getByRole("button", { name: /展开 ecc/ }));
   await userEvent.click(
     screen.getByRole("link", { name: "https://github.com/example/ecc" }),
@@ -74,6 +451,66 @@ test("opens plugin git source links externally", async () => {
   openSpy.mockRestore();
 });
 
+test("builds plugin source link with branch and plugin subdirectory", async () => {
+  const plugin: PluginSummary = {
+    ...pluginFixtures[0],
+    id: "claude-code:coding-tutor",
+    packageId: "coding-tutor",
+    name: "Coding Tutor",
+    hostTool: "claude-code",
+    relatedHostTools: [],
+    rootPath: "/Users/demo/.skilldock/plugins/coding-tutor/plugins/coding-tutor",
+    repoRootPath: "/Users/demo/.skilldock/plugins/coding-tutor",
+    pluginRelativePath: "plugins/coding-tutor",
+    manifestPath:
+      "/Users/demo/.skilldock/plugins/coding-tutor/plugins/coding-tutor/.claude-plugin/plugin.json",
+    sourceType: "git",
+    sourceLabel: "SkillDock",
+    sourceUrl: "https://github.com/everyinc/compound-engineering-plugin",
+    sourceRef: "main",
+    sourceRevision: "6f9ab03a031c054a8046659926251",
+    currentVersion: "1.0.0",
+    currentBranch: "main",
+    currentCommit: "6f9ab03a031c054a8046659926251",
+    collabStatus: "clean",
+    statusText: "SkillDock 安装的插件。",
+    isGitRepo: true,
+    updateMode: "auto",
+    updateAvailable: false,
+    installedAt: "",
+    updatedAt: "",
+    lastScannedAt: "",
+    status: "ready",
+    installState: "installed",
+    installSource: "skilldock",
+    enabledState: "enabled",
+    scopes: [
+      {
+        scopeId: "user",
+        scopeLabel: "用户级",
+        enabledState: "enabled",
+        location: "~/.claude/settings.json",
+      },
+    ],
+    components: pluginFixtures[0].components,
+  };
+  vi.spyOn(skillClient, "fetchStartupInstalledPlugins").mockResolvedValueOnce([plugin]);
+
+  renderWithI18n(<PluginsRoute />);
+
+  await screen.findByRole("tab", { name: /全部/ });
+  await userEvent.click(screen.getByRole("tab", { name: /Claude Code/ }));
+  await screen.findByText("Coding Tutor");
+  await userEvent.click(screen.getByRole("button", { name: /展开 Coding Tutor/ }));
+
+  expect(
+    screen.getByRole("link", {
+      name: "https://github.com/everyinc/compound-engineering-plugin/tree/main/plugins/coding-tutor",
+    }),
+  ).toBeInTheDocument();
+  expect(screen.queryByText("当前分支")).not.toBeInTheDocument();
+});
+
 test("prefers plugin source url over source label in details", async () => {
   const plugins: PluginSummary[] = [
     {
@@ -86,52 +523,476 @@ test("prefers plugin source url over source label in details", async () => {
       rootPath: "/Users/demo/.cursor/plugins/local/raisely",
     },
   ];
-  vi.spyOn(skillClient, "fetchInstalledPlugins").mockResolvedValueOnce(plugins);
+  vi.spyOn(skillClient, "fetchStartupInstalledPlugins").mockResolvedValueOnce(plugins);
 
   renderWithI18n(<PluginsRoute />);
 
-  await screen.findByRole("tab", { name: /Cursor/ });
+  await screen.findByRole("tab", { name: /全部/ });
   await userEvent.click(screen.getByRole("tab", { name: /Cursor/ }));
   await screen.findByText("raisely");
   await userEvent.click(screen.getByRole("button", { name: /展开 raisely/ }));
 
   expect(screen.getByText("https://github.com/raisely/cursor-plugin.git")).toBeInTheDocument();
+  expect(screen.getByText("git")).toBeInTheDocument();
+  expect(
+    screen.getByRole("link", { name: "https://github.com/raisely/cursor-plugin.git" }),
+  ).toHaveClass("detail-grid__single-line");
+});
+
+test("shows SkillDock install source with real source and plugin directory only", async () => {
+  renderWithI18n(<PluginsRoute />);
+
+  await screen.findByRole("tab", { name: /全部/ });
+  await userEvent.click(screen.getByRole("tab", { name: /Codex/ }));
+  await screen.findByText("Repo Scout");
+  await userEvent.click(screen.getByRole("button", { name: /展开 Repo Scout/ }));
+
+  expect(screen.getByText("SkillDock 安装")).toBeInTheDocument();
+  expect(screen.getByText("https://github.com/example/repo-scout")).toBeInTheDocument();
+  expect(screen.getByText("插件目录")).toBeInTheDocument();
+  expect(screen.getByText("/Users/demo/workspace/repo-scout")).toBeInTheDocument();
+  expect(screen.queryByText("仓库")).not.toBeInTheDocument();
+  expect(screen.queryByText("Git 状态")).not.toBeInTheDocument();
+});
+
+test("shows SkillDock install source with original repository for Codex plugins", async () => {
+  const plugins: PluginSummary[] = [
+    {
+      ...pluginFixtures[0],
+      id: "codex:coding-tutor",
+      packageId: "coding-tutor",
+      name: "Coding Tutor",
+      description:
+        "Personalized coding tutorials that use your actual codebase for examples with spaced repetition quizzes",
+      hostTool: "codex",
+      relatedHostTools: [],
+      rootPath: "/Users/demo/.skilldock/plugins/coding-tutor/plugins/coding-tutor",
+      repoRootPath: "/Users/demo/.skilldock/plugins/coding-tutor",
+      pluginRelativePath: "plugins/coding-tutor",
+      manifestPath:
+        "/Users/demo/.skilldock/plugins/coding-tutor/plugins/coding-tutor/.codex-plugin/plugin.json",
+      sourceType: "git",
+      sourceLabel: "skilldock",
+      sourceUrl: "https://github.com/everyinc/compound-engineering-plugin",
+      sourceRef: "",
+      sourceRevision: "6f9ab03a031c054a8046659926251",
+      currentVersion: "1.0.0",
+      currentBranch: "main",
+      currentCommit: "6f9ab03a031c054a8046659926251",
+      collabStatus: "clean",
+      statusText: "SkillDock 安装的插件。",
+      isGitRepo: true,
+      updateMode: "auto",
+      updateAvailable: false,
+      installedAt: "",
+      updatedAt: "",
+      lastScannedAt: "",
+      status: "ready",
+      installState: "installed",
+      installSource: "skilldock",
+      enabledState: "enabled",
+      scopes: [
+        {
+          scopeId: "user",
+          scopeLabel: "用户级",
+          enabledState: "enabled",
+          location: "~/.codex/config.toml",
+        },
+      ],
+      components: pluginFixtures[0].components,
+    },
+  ];
+  vi.spyOn(skillClient, "fetchStartupInstalledPlugins").mockResolvedValueOnce(plugins);
+
+  renderWithI18n(<PluginsRoute />);
+
+  await screen.findByRole("tab", { name: /全部/ });
+  await userEvent.click(screen.getByRole("tab", { name: /Codex/ }));
+  await screen.findByText("Coding Tutor");
+  await userEvent.click(screen.getByRole("button", { name: /展开 Coding Tutor/ }));
+
+  expect(screen.getByText("SkillDock 安装")).toBeInTheDocument();
+  expect(screen.getByText("Git 仓库")).toBeInTheDocument();
+  expect(
+    screen.getByText(
+      "https://github.com/everyinc/compound-engineering-plugin/tree/main/plugins/coding-tutor",
+    ),
+  ).toBeInTheDocument();
+  expect(screen.queryByText("/Users/wanghuan/.codex/marketplaces/skilldock")).not.toBeInTheDocument();
+});
+
+test("prefers Git repository source type when source url is a git address", async () => {
+  const plugins: PluginSummary[] = [
+    {
+      ...pluginFixtures[0],
+      id: "codex:example-plugin",
+      packageId: "example-plugin",
+      name: "Example Plugin",
+      hostTool: "codex",
+      sourceType: "local",
+      sourceLabel: "example-plugin",
+      sourceUrl: "https://git.example.com/example-org/example-repo",
+      installSource: "host",
+    },
+  ];
+  vi.spyOn(skillClient, "fetchStartupInstalledPlugins").mockResolvedValueOnce(plugins);
+
+  renderWithI18n(<PluginsRoute />);
+
+  await screen.findByRole("tab", { name: /全部/ });
+  await userEvent.click(screen.getByRole("tab", { name: /Codex/ }));
+  await screen.findByText("Example Plugin");
+  await userEvent.click(screen.getByRole("button", { name: /展开 Example Plugin/ }));
+
+  expect(screen.getByText("来源类型")).toBeInTheDocument();
+  expect(screen.getByText("Git 仓库")).toBeInTheDocument();
+  expect(screen.getByText("https://git.example.com/example-org/example-repo")).toBeInTheDocument();
+});
+
+test("shows SkillDock source metadata for Claude plugin installs", async () => {
+  const plugins: PluginSummary[] = [
+    {
+      ...pluginFixtures[0],
+      id: "claude-code:coding-tutor",
+      packageId: "coding-tutor",
+      name: "Coding Tutor",
+      description:
+        "Personalized coding tutorials that use your actual codebase for examples with spaced repetition quizzes",
+      hostTool: "claude-code",
+      relatedHostTools: [],
+      rootPath: "/Users/demo/.skilldock/plugins/coding-tutor/plugins/coding-tutor",
+      repoRootPath: "/Users/demo/.skilldock/plugins/coding-tutor",
+      pluginRelativePath: "plugins/coding-tutor",
+      manifestPath:
+        "/Users/demo/.skilldock/plugins/coding-tutor/plugins/coding-tutor/.claude-plugin/plugin.json",
+      sourceType: "git",
+      sourceLabel: "SkillDock",
+      sourceUrl: "https://github.com/everyinc/compound-engineering-plugin",
+      sourceRef: "",
+      sourceRevision: "6f9ab03a031c054a8046659926251",
+      currentVersion: "1.0.0",
+      currentBranch: "main",
+      currentCommit: "6f9ab03a031c054a8046659926251",
+      collabStatus: "clean",
+      statusText: "SkillDock 安装的插件。",
+      isGitRepo: true,
+      updateMode: "auto",
+      updateAvailable: false,
+      installedAt: "",
+      updatedAt: "",
+      lastScannedAt: "",
+      status: "ready",
+      installState: "installed",
+      installSource: "skilldock",
+      enabledState: "enabled",
+      scopes: [
+        {
+          scopeId: "user",
+          scopeLabel: "用户级",
+          enabledState: "enabled",
+          location: "~/.claude/settings.json",
+        },
+      ],
+      components: pluginFixtures[0].components,
+    },
+  ];
+  vi.spyOn(skillClient, "fetchStartupInstalledPlugins").mockResolvedValueOnce(plugins);
+
+  renderWithI18n(<PluginsRoute />);
+
+  await screen.findByRole("tab", { name: /全部/ });
+  await userEvent.click(screen.getByRole("tab", { name: /Claude Code/ }));
+  await screen.findByText("Coding Tutor");
+  await userEvent.click(screen.getByRole("button", { name: /展开 Coding Tutor/ }));
+
+  expect(screen.getByText("SkillDock 安装")).toBeInTheDocument();
+  expect(screen.getByText("Git 仓库")).toBeInTheDocument();
+  expect(
+    screen.getByText(
+      "https://github.com/everyinc/compound-engineering-plugin/tree/main/plugins/coding-tutor",
+    ),
+  ).toBeInTheDocument();
+});
+
+test("keeps long plugin names visible when summary badges are present", async () => {
+  const longNamePlugin: PluginSummary = {
+    ...pluginFixtures[0],
+    id: "everything-claude-code",
+    packageId: "everything-claude-code",
+    name: "everything-claude-code",
+    description: "Battle-tested Claude Code plugin for engineering teams",
+    hostTool: "claude-code",
+    relatedHostTools: [],
+    enabledState: "disabled",
+    collabStatus: "clean",
+    updateAvailable: false,
+    components: [
+      ...Array.from({ length: 183 }, (_, index) => ({
+        id: `skills/everything-${index + 1}`,
+        name: `Everything Skill ${index + 1}`,
+        description: `Skill ${index + 1}`,
+        assetType: "skill" as const,
+        ownerPluginId: "everything-claude-code",
+        packageItemId: `skills/everything-${index + 1}`,
+      })),
+      ...Array.from({ length: 6 }, (_, index) => ({
+        id: `mcp/everything-${index + 1}`,
+        name: `Everything MCP ${index + 1}`,
+        description: `MCP ${index + 1}`,
+        assetType: "mcp" as const,
+        ownerPluginId: "everything-claude-code",
+        packageItemId: `mcp/everything-${index + 1}`,
+      })),
+    ],
+  };
+  vi.spyOn(skillClient, "fetchStartupInstalledPlugins").mockResolvedValueOnce([longNamePlugin]);
+
+  renderWithI18n(<PluginsRoute />);
+
+  const rowButton = await screen.findByRole("button", {
+    name: /展开 everything-claude-code/,
+  });
+
+  expect(within(rowButton).getByText("everything-claude-code")).toBeInTheDocument();
+  expect(within(rowButton).getByText("Battle-tested Claude Code plugin for engineering teams")).toBeInTheDocument();
+  expect(within(rowButton).getByText("未启用")).toBeInTheDocument();
+  expect(within(rowButton).getByText("183 skill")).toBeInTheDocument();
+  expect(within(rowButton).getByText("6 mcp")).toBeInTheDocument();
+});
+
+test("shows plugin update status and updates from the list action", async () => {
+  const updateSpy = vi.spyOn(skillClient, "updatePlugin").mockResolvedValue({
+    ...pluginFixtures[0],
+    collabStatus: "clean",
+    updateAvailable: false,
+    statusText: "插件目录已是最新。",
+  });
+
+  renderWithI18n(<PluginsRoute />);
+
+  await screen.findByRole("tab", { name: /全部/ });
+  await userEvent.click(screen.getByRole("tab", { name: /Codex/ }));
+  await screen.findByText("Repo Scout");
+
+  expect(screen.getByText("可更新")).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "更新 Repo Scout 插件" }));
+
+  expect(updateSpy).toHaveBeenCalledWith({
+    pluginId: "repo-scout",
+    hostTool: "codex",
+    rootPath: "/Users/demo/workspace/repo-scout",
+  });
+  await waitFor(() => {
+    expect(screen.queryByText("可更新")).not.toBeInTheDocument();
+  });
+
+  updateSpy.mockRestore();
+});
+
+test("prompts before updating a hash-based plugin with local modifications", async () => {
+  const updateSpy = vi.spyOn(skillClient, "updatePlugin").mockResolvedValue({
+    ...pluginFixtures[0],
+    updateStrategy: "hash",
+    localModified: false,
+    collabStatus: "clean",
+    updateAvailable: false,
+    statusText: "插件目录已是最新。",
+  });
+  vi.spyOn(skillClient, "fetchStartupInstalledPlugins").mockResolvedValueOnce([
+    {
+      ...pluginFixtures[0],
+      updateStrategy: "hash",
+      localModified: true,
+      collabStatus: "update-available",
+      updateAvailable: true,
+    },
+  ]);
+
+  renderWithI18n(<PluginsRoute />);
+
+  await screen.findByRole("tab", { name: /全部/ });
+  await userEvent.click(screen.getByRole("tab", { name: /Codex/ }));
+  await screen.findByText("Repo Scout");
+  await userEvent.click(screen.getByRole("button", { name: "更新 Repo Scout 插件" }));
+
+  expect(screen.getByRole("dialog")).toBeInTheDocument();
+  expect(screen.getByText("更新将覆盖本地修改")).toBeInTheDocument();
+  expect(updateSpy).not.toHaveBeenCalled();
+
+  await userEvent.click(screen.getByRole("button", { name: "继续更新" }));
+
+  await waitFor(() => {
+    expect(updateSpy).toHaveBeenCalledWith({
+      pluginId: "repo-scout",
+      hostTool: "codex",
+      rootPath: "/Users/demo/workspace/repo-scout",
+    });
+  });
+
+  updateSpy.mockRestore();
+});
+
+test("shows pending push status without an update action", async () => {
+  const plugins: PluginSummary[] = [
+    {
+      ...pluginFixtures[0],
+      collabStatus: "pending-push",
+      updateAvailable: false,
+      statusText: "插件目录存在本地未提交改动。",
+    },
+  ];
+  vi.spyOn(skillClient, "fetchStartupInstalledPlugins").mockResolvedValueOnce(plugins);
+
+  renderWithI18n(<PluginsRoute />);
+
+  await screen.findByRole("tab", { name: /Codex/ });
+  await userEvent.click(screen.getByRole("tab", { name: /Codex/ }));
+
+  expect(screen.getByText("待推送")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "更新 Repo Scout 插件" })).not.toBeInTheDocument();
+});
+
+test("shows diverged status without an update action", async () => {
+  const plugins: PluginSummary[] = [
+    {
+      ...pluginFixtures[0],
+      collabStatus: "diverged",
+      updateAvailable: false,
+      statusText: "本地与远端均有变化，建议先处理本地改动，再同步插件目录。",
+    },
+  ];
+  vi.spyOn(skillClient, "fetchStartupInstalledPlugins").mockResolvedValueOnce(plugins);
+
+  renderWithI18n(<PluginsRoute />);
+
+  await screen.findByRole("tab", { name: /Codex/ });
+  await userEvent.click(screen.getByRole("tab", { name: /Codex/ }));
+
+  expect(screen.getByText("需处理")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "更新 Repo Scout 插件" })).not.toBeInTheDocument();
+});
+
+test("hides the git badge when plugin source is not a git address", async () => {
+  const plugins: PluginSummary[] = [
+    {
+      ...pluginFixtures[0],
+      hostTool: "cursor",
+      name: "local-plugin",
+      sourceType: "local",
+      sourceLabel: "local-plugin",
+      sourceUrl: "",
+      rootPath: "/Users/demo/.cursor/plugins/local/local-plugin",
+    },
+  ];
+  vi.spyOn(skillClient, "fetchStartupInstalledPlugins").mockResolvedValueOnce(plugins);
+
+  renderWithI18n(<PluginsRoute />);
+
+  await screen.findByRole("tab", { name: /全部/ });
+  await userEvent.click(screen.getByRole("tab", { name: /Cursor/ }));
+  await screen.findByText("local-plugin");
+  await userEvent.click(screen.getByRole("button", { name: /展开 local-plugin/ }));
+
+  expect(screen.getByText("local-plugin")).toBeInTheDocument();
+  expect(screen.queryByText("git")).not.toBeInTheDocument();
 });
 
 test("renders component summaries as separate badges and keeps the plugin description as subtitle", async () => {
   renderWithI18n(<PluginsRoute />);
 
-  await screen.findByRole("tab", { name: /Codex/ });
-  await userEvent.click(screen.getByRole("tab", { name: /Codex/ }));
+  await screen.findByRole("tab", { name: /全部/ });
   await screen.findByText("Repo Scout");
   const repoScoutRow = screen.getByRole("button", { name: /展开 Repo Scout/ });
   const subtitle = repoScoutRow.querySelector(".tool-list-row__subtitle");
-  const pluginIcon = repoScoutRow.querySelector(".plugins-page__plugin-icon");
+  const toolListRow = repoScoutRow.closest(".tool-list-row");
+  const pluginIcon = toolListRow?.querySelector(".plugins-page__plugin-icon");
   const badgeTexts = Array.from(
     repoScoutRow.querySelectorAll(".status-badge"),
-  ).map((node) => node.textContent?.trim());
+  ).map((node) => node.textContent?.trim()).filter(Boolean);
+  const hostCoverageItems = toolListRow?.querySelectorAll(".plugins-page__host-coverage-item");
 
   expect(pluginIcon).toBeInTheDocument();
   expect(pluginIcon).toHaveTextContent("R");
   expect(subtitle).toHaveTextContent("扫描仓库中的插件组件，并帮助追踪插件资产来源。");
-  expect(badgeTexts[0]).toBe("已启用");
-  expect(badgeTexts[1]).toBe("7 skill");
-  expect(badgeTexts[2]).toBe("1 mcp");
-  expect(badgeTexts[3]).toBe("7 agents");
-  expect(badgeTexts[4]).toBe("1 command");
-  expect(badgeTexts[5]).toBe("1 rule");
-  expect(badgeTexts[6]).toBe("1 hook");
-  expect(badgeTexts).toHaveLength(7);
+  expect(badgeTexts).toEqual([
+    "已启用",
+    "7 skill",
+    "1 mcp",
+    "7 agents",
+    "1 command",
+    "1 rule",
+    "1 hook",
+  ]);
+  expect(hostCoverageItems).toHaveLength(1);
+});
+
+test("shows host icons in the trailing host badge and collapses the rest into +N", async () => {
+  const hostTools: PluginHostTool[] = [
+    "codex",
+    "claude-code",
+    "cursor",
+    "windsurf" as PluginHostTool,
+    "gemini-cli" as PluginHostTool,
+    "cline" as PluginHostTool,
+    "roo-code" as PluginHostTool,
+    "augment" as PluginHostTool,
+  ];
+  const multiHostPlugins: PluginSummary[] = hostTools.map((hostTool, index) => ({
+    ...pluginFixtures[0],
+    id: `${hostTool}:multi-host-plugin`,
+    packageId: "multi-host-plugin",
+    name: "Multi Host Plugin",
+    hostTool,
+    sourceLabel: "multi-host-plugin",
+    sourceUrl: "https://github.com/example/multi-host-plugin",
+    repoRootPath: `/Users/demo/plugins/cache/multi-host-plugin/${hostTool}`,
+    relatedHostTools: hostTools.filter((candidate) => candidate !== hostTool),
+    rootPath: `/Users/demo/workspace/${hostTool}/multi-host-plugin`,
+    manifestPath: `/Users/demo/workspace/${hostTool}/multi-host-plugin/plugin.json`,
+  }));
+  vi.spyOn(skillClient, "fetchStartupInstalledPlugins").mockResolvedValueOnce(multiHostPlugins);
+
+  renderWithI18n(<PluginsRoute />);
+
+  await screen.findByRole("tab", { name: /全部/ });
+  const rowButton = await screen.findByRole("button", {
+    name: /展开 Multi Host Plugin/,
+  });
+  const statusBadges = rowButton.querySelectorAll(".status-badge");
+  const hostCoverageBadge = statusBadges[statusBadges.length - 1];
+
+  expect(hostCoverageBadge?.querySelectorAll(".plugins-page__host-coverage-item")).toHaveLength(5);
+  expect(within(hostCoverageBadge as HTMLElement).getByText("+3")).toBeInTheDocument();
+});
+
+test("keeps the plugin chevron in the header's rightmost column", async () => {
+  renderWithI18n(<PluginsRoute />);
+
+  await screen.findByRole("tab", { name: /全部/ });
+  await userEvent.click(screen.getByRole("tab", { name: /Codex/ }));
+  await screen.findByText("Repo Scout");
+
+  const rowButton = screen.getByRole("button", { name: /展开 Repo Scout/ });
+  const header = rowButton.closest(".tool-list-row")?.querySelector(".tool-list-row__header");
+  const chevron = header?.querySelector(".tool-list-row__chevron");
+
+  expect(header).toBeInTheDocument();
+  expect(chevron).toBeInTheDocument();
+  expect(header?.lastElementChild).toBe(chevron);
 });
 
 test("filters plugin list by enabled state", async () => {
   renderWithI18n(<PluginsRoute />);
 
-  await screen.findByRole("tab", { name: /Claude Code/ });
+  await screen.findByRole("tab", { name: /全部/ });
+  await userEvent.click(screen.getByRole("tab", { name: /Claude Code/ }));
   expect(await screen.findByText("ecc")).toBeInTheDocument();
 
+  const filterSelect = screen.getByRole("combobox", { name: "筛选插件状态" });
+  expect(within(filterSelect).queryByRole("option", { name: /异常/ })).not.toBeInTheDocument();
+
   await userEvent.selectOptions(
-    screen.getByRole("combobox", { name: "筛选插件状态" }),
+    filterSelect,
     "disabled",
   );
 
@@ -144,7 +1005,7 @@ test("shows refresh loading animation in the plugin toolbar", async () => {
     resolve?: (value: PluginSummary[]) => void;
   } = {};
   const fetchSpy = vi
-    .spyOn(skillClient, "fetchInstalledPlugins")
+    .spyOn(skillClient, "fetchStartupInstalledPlugins")
     .mockResolvedValueOnce(pluginFixtures)
     .mockImplementationOnce(
       () =>
@@ -156,7 +1017,7 @@ test("shows refresh loading animation in the plugin toolbar", async () => {
   renderWithI18n(<PluginsRoute />);
 
   try {
-    await screen.findByRole("tab", { name: /Claude Code/ });
+    await screen.findByRole("tab", { name: /全部/ });
     const refreshButton = screen.getByRole("button", { name: "扫描导入" });
 
     await userEvent.click(refreshButton);
@@ -187,7 +1048,7 @@ test("keeps plugin scan import animation after remounting the route", async () =
     resolve?: (value: PluginSummary[]) => void;
   } = {};
   const fetchSpy = vi
-    .spyOn(skillClient, "fetchInstalledPlugins")
+    .spyOn(skillClient, "fetchStartupInstalledPlugins")
     .mockResolvedValueOnce(pluginFixtures)
     .mockImplementationOnce(
       () =>
@@ -199,7 +1060,7 @@ test("keeps plugin scan import animation after remounting the route", async () =
   const { unmount } = renderWithI18n(<PluginsRoute />);
 
   try {
-    await screen.findByRole("tab", { name: /Claude Code/ });
+    await screen.findByRole("tab", { name: /全部/ });
     await userEvent.click(screen.getByRole("button", { name: "扫描导入" }));
 
     expect(await screen.findByRole("button", { name: "扫描中..." })).toBeDisabled();
@@ -230,7 +1091,8 @@ test("keeps plugin scan import animation after remounting the route", async () =
 test("toggles plugin enabled state from the plugin list", async () => {
   renderWithI18n(<PluginsRoute />);
 
-  await screen.findByRole("tab", { name: /Claude Code/ });
+  await screen.findByRole("tab", { name: /全部/ });
+  await userEvent.click(screen.getByRole("tab", { name: /Claude Code/ }));
   expect(await screen.findByText("ecc")).toBeInTheDocument();
   expect(screen.getAllByText("未启用").length).toBeGreaterThan(0);
 
@@ -243,21 +1105,180 @@ test("toggles plugin enabled state from the plugin list", async () => {
   expect(screen.getAllByText("已启用").length).toBeGreaterThan(0);
 });
 
-test("opens a plugin folder from the plugin list", async () => {
-  const openPathSpy = vi.spyOn(skillClient, "openPathInFinder").mockResolvedValue(undefined);
+test("toggles every installed host from the all-tab plugin row", async () => {
+  const setPluginEnabledSpy = vi.spyOn(skillClient, "setPluginEnabled")
+    .mockImplementation(async (input) => ({
+      ...plugins.find((candidate) => candidate.hostTool === input.hostTool)!,
+      enabledState: input.enabled ? "enabled" : "disabled",
+      scopes: plugins.find((candidate) => candidate.hostTool === input.hostTool)!.scopes.map((scope) => ({
+        ...scope,
+        enabledState: input.enabled ? "enabled" : "disabled",
+      })),
+    }));
+  const plugins: PluginSummary[] = [
+    pluginFixtures[0],
+    {
+      ...pluginFixtures[0],
+      id: "claude-code:repo-scout",
+      hostTool: "claude-code",
+      relatedHostTools: ["codex"],
+      rootPath: "/Users/demo/.claude/plugins/cache/repo-scout/1.0.0",
+      manifestPath: "/Users/demo/.claude/plugins/cache/repo-scout/1.0.0/.claude-plugin/plugin.json",
+      installSource: "host",
+      enabledState: "disabled",
+      scopes: [
+        {
+          scopeId: "user",
+          scopeLabel: "用户级",
+          enabledState: "disabled",
+          location: "~/.claude/settings.json",
+        },
+      ],
+    },
+  ];
+  vi.spyOn(skillClient, "fetchStartupInstalledPlugins").mockResolvedValueOnce(plugins);
 
   renderWithI18n(<PluginsRoute />);
 
-  await screen.findByRole("tab", { name: /Claude Code/ });
-  expect(await screen.findByText("ecc")).toBeInTheDocument();
+  await screen.findByRole("tab", { name: "全部 1" });
+  await userEvent.click(screen.getByRole("button", { name: "关闭 Repo Scout 插件" }));
 
-  await userEvent.click(screen.getByRole("button", { name: "在访达中打开 ecc 插件目录" }));
-
-  expect(openPathSpy).toHaveBeenCalledWith({
-    path: "/Users/demo/.claude/plugins/cache/ecc/ecc/1.10.0",
+  await waitFor(() => {
+    expect(setPluginEnabledSpy).toHaveBeenCalledTimes(2);
+  });
+  expect(setPluginEnabledSpy).toHaveBeenNthCalledWith(1, {
+    pluginId: pluginFixtures[0].id,
+    hostTool: "codex",
+    rootPath: pluginFixtures[0].rootPath,
+    enabled: false,
+  });
+  expect(setPluginEnabledSpy).toHaveBeenNthCalledWith(2, {
+    pluginId: "claude-code:repo-scout",
+    hostTool: "claude-code",
+    rootPath: "/Users/demo/.claude/plugins/cache/repo-scout/1.0.0",
+    enabled: false,
   });
 
-  openPathSpy.mockRestore();
+  setPluginEnabledSpy.mockRestore();
+});
+
+test("opens a plugin folder from the plugin list", async () => {
+  const openPluginSpy = vi.spyOn(skillClient, "openPluginInEditor").mockResolvedValue(undefined);
+
+  renderWithI18n(<PluginsRoute />);
+
+  await screen.findByRole("tab", { name: /全部/ });
+  await userEvent.click(screen.getByRole("tab", { name: /Claude Code/ }));
+  expect(await screen.findByText("ecc")).toBeInTheDocument();
+
+  await userEvent.click(screen.getByRole("button", { name: "打开 ecc 插件" }));
+
+  expect(openPluginSpy).toHaveBeenCalledWith({
+    rootPath: "/Users/demo/.claude/plugins/cache/ecc/ecc/1.10.0",
+    editorId: "finder",
+  });
+
+  openPluginSpy.mockRestore();
+});
+
+test("opens the managed plugin repository root with the default tool", async () => {
+  const openPluginSpy = vi.spyOn(skillClient, "openPluginInEditor").mockResolvedValue(undefined);
+  const plugins: PluginSummary[] = [
+    {
+      ...pluginFixtures[0],
+      id: "cursor:coding-tutor",
+      packageId: "coding-tutor",
+      name: "Coding Tutor",
+      hostTool: "cursor",
+      rootPath: "/Users/demo/.skilldock/plugins/coding-tutor/plugins/coding-tutor",
+      displayRootPath: "/Users/demo/.cursor/plugins/local/coding-tutor",
+      repoRootPath: "/Users/demo/.skilldock/plugins/coding-tutor",
+      pluginRelativePath: "plugins/coding-tutor",
+      sourceType: "git",
+      sourceUrl: "https://github.com/everyinc/compound-engineering-plugin",
+      installSource: "skilldock",
+    },
+  ];
+  vi.spyOn(skillClient, "fetchStartupInstalledPlugins").mockResolvedValueOnce(plugins);
+
+  renderWithI18n(<PluginsRoute />);
+
+  await screen.findByRole("tab", { name: /全部/ });
+  await userEvent.click(screen.getByRole("tab", { name: /Cursor/ }));
+  expect(await screen.findByText("Coding Tutor")).toBeInTheDocument();
+
+  await userEvent.click(screen.getByRole("button", { name: "打开 Coding Tutor 插件" }));
+
+  expect(openPluginSpy).toHaveBeenCalledWith({
+    rootPath: "/Users/demo/.skilldock/plugins/coding-tutor",
+    editorId: "finder",
+  });
+
+  openPluginSpy.mockRestore();
+});
+
+test("opens a plugin folder from the detail directory row", async () => {
+  const openFinderSpy = vi.spyOn(skillClient, "openPathInFinder").mockResolvedValue(undefined);
+  const openPluginSpy = vi.spyOn(skillClient, "openPluginInEditor").mockResolvedValue(undefined);
+
+  renderWithI18n(<PluginsRoute />);
+
+  await screen.findByRole("tab", { name: /全部/ });
+  await userEvent.click(screen.getByRole("tab", { name: /Claude Code/ }));
+  expect(await screen.findByText("ecc")).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: /展开 ecc/ }));
+  await userEvent.click(screen.getAllByRole("button", { name: "打开 ecc 插件" }).at(-1)!);
+
+  expect(openFinderSpy).toHaveBeenCalledWith({
+    path: "/Users/demo/.claude/plugins/cache/ecc/ecc/1.10.0",
+  });
+  expect(openPluginSpy).not.toHaveBeenCalled();
+
+  openFinderSpy.mockRestore();
+  openPluginSpy.mockRestore();
+});
+
+test("shows and opens the original plugin directory instead of the symlink target", async () => {
+  const openFinderSpy = vi.spyOn(skillClient, "openPathInFinder").mockResolvedValue(undefined);
+  const plugins: PluginSummary[] = [
+    {
+      ...pluginFixtures[0],
+      id: "codex:skilldock-plugin",
+      packageId: "skilldock-plugin",
+      name: "SkillDock Plugin",
+      hostTool: "codex",
+      rootPath: "/Users/demo/.codex/plugins/cache/skilldock-plugin/1.0.0",
+      displayRootPath: "/Users/demo/.codex/marketplaces/skilldock/plugins/skilldock-plugin",
+      repoRootPath: "/Users/demo/.skilldock/plugins/skilldock-plugin",
+      manifestPath: "/Users/demo/.codex/plugins/cache/skilldock-plugin/1.0.0/plugin.json",
+      sourceType: "git",
+      sourceUrl: "https://github.com/example/skilldock-plugin",
+      installSource: "skilldock",
+    },
+  ];
+  vi.spyOn(skillClient, "fetchStartupInstalledPlugins").mockResolvedValueOnce(plugins);
+
+  renderWithI18n(<PluginsRoute />);
+
+  await screen.findByRole("tab", { name: /全部/ });
+  await userEvent.click(screen.getByRole("tab", { name: /Codex/ }));
+  expect(await screen.findByText("SkillDock Plugin")).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: /展开 SkillDock Plugin/ }));
+
+  expect(
+    screen.getByText("/Users/demo/.codex/marketplaces/skilldock/plugins/skilldock-plugin"),
+  ).toBeInTheDocument();
+  expect(
+    screen.queryByText("/Users/demo/.skilldock/plugins/skilldock-plugin"),
+  ).not.toBeInTheDocument();
+
+  await userEvent.click(screen.getAllByRole("button", { name: "打开 SkillDock Plugin 插件" }).at(-1)!);
+
+  expect(openFinderSpy).toHaveBeenCalledWith({
+    path: "/Users/demo/.codex/marketplaces/skilldock/plugins/skilldock-plugin",
+  });
+
+  openFinderSpy.mockRestore();
 });
 
 test("deletes a plugin only after confirmation", async () => {
@@ -287,7 +1308,89 @@ test("deletes a plugin only after confirmation", async () => {
   deleteSpy.mockRestore();
 });
 
-test("shows plugin toggle failures without inserting an empty list card", async () => {
+test("keeps the delete confirmation button label stable while deleting", async () => {
+  const deferredDelete: {
+    resolve?: () => void;
+  } = {};
+  const deleteSpy = vi
+    .spyOn(skillClient, "deletePlugin")
+    .mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          deferredDelete.resolve = resolve;
+        }),
+    );
+
+  renderWithI18n(<PluginsRoute />);
+
+  await screen.findByRole("tab", { name: /Claude Code/ });
+  expect(await screen.findByText("ecc")).toBeInTheDocument();
+
+  await userEvent.click(screen.getByRole("button", { name: "删除 ecc 插件" }));
+  await userEvent.click(screen.getByRole("button", { name: "确认删除 ecc 插件" }));
+
+  const confirmButton = screen.getByRole("button", { name: "确认删除 ecc 插件" });
+  expect(confirmButton).toHaveTextContent("确认");
+  expect(confirmButton).not.toHaveTextContent("删除中");
+
+  deferredDelete.resolve?.();
+  await waitFor(() => {
+    expect(screen.queryByText("ecc")).not.toBeInTheDocument();
+  });
+
+  deleteSpy.mockRestore();
+});
+
+test("deletes every installed host from the all-tab plugin row", async () => {
+  const deleteSpy = vi.spyOn(skillClient, "deletePlugin").mockResolvedValue(undefined);
+  const plugins: PluginSummary[] = [
+    pluginFixtures[0],
+    {
+      ...pluginFixtures[0],
+      id: "claude-code:repo-scout",
+      hostTool: "claude-code",
+      relatedHostTools: ["codex"],
+      rootPath: "/Users/demo/.claude/plugins/cache/repo-scout/1.0.0",
+      manifestPath: "/Users/demo/.claude/plugins/cache/repo-scout/1.0.0/.claude-plugin/plugin.json",
+      installSource: "host",
+      enabledState: "disabled",
+      scopes: [
+        {
+          scopeId: "user",
+          scopeLabel: "用户级",
+          enabledState: "disabled",
+          location: "~/.claude/settings.json",
+        },
+      ],
+    },
+  ];
+  vi.spyOn(skillClient, "fetchStartupInstalledPlugins").mockResolvedValueOnce(plugins);
+
+  renderWithI18n(<PluginsRoute />);
+
+  await screen.findByRole("tab", { name: "全部 1" });
+  await userEvent.click(screen.getByRole("button", { name: "删除 Repo Scout 插件" }));
+  await userEvent.click(screen.getByRole("button", { name: "确认删除 Repo Scout 插件" }));
+
+  await waitFor(() => {
+    expect(deleteSpy).toHaveBeenCalledTimes(2);
+  });
+  expect(deleteSpy).toHaveBeenNthCalledWith(1, {
+    pluginId: "repo-scout",
+    hostTool: "codex",
+    rootPath: "/Users/demo/workspace/repo-scout",
+  });
+  expect(deleteSpy).toHaveBeenNthCalledWith(2, {
+    pluginId: "claude-code:repo-scout",
+    hostTool: "claude-code",
+    rootPath: "/Users/demo/.claude/plugins/cache/repo-scout/1.0.0",
+  });
+  expect(screen.queryByText("Repo Scout")).not.toBeInTheDocument();
+
+  deleteSpy.mockRestore();
+});
+
+test("shows plugin toggle failures in the global notification stack", async () => {
   const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
   const toggleSpy = vi
     .spyOn(skillClient, "setPluginEnabled")
@@ -295,10 +1398,11 @@ test("shows plugin toggle failures without inserting an empty list card", async 
 
   renderWithI18n(<PluginsRoute />);
 
-  await screen.findByRole("tab", { name: /Claude Code/ });
+  await screen.findByRole("tab", { name: /全部/ });
+  await userEvent.click(screen.getByRole("tab", { name: /Claude Code/ }));
   await userEvent.click(screen.getByRole("button", { name: "开启 ecc 插件" }));
 
-  expect(await screen.findByText("开启插件失败，请检查宿主配置。")).toHaveClass("plugins-page__inline-error");
+  expect(await screen.findByRole("alert")).toHaveTextContent("开启插件失败，请检查宿主配置。");
   expect(screen.getByText("ecc")).toBeInTheDocument();
   expect(screen.getAllByText("未启用").length).toBeGreaterThan(0);
   expect(screen.queryByText("当前筛选条件下没有匹配的插件。")).not.toBeInTheDocument();
@@ -307,21 +1411,58 @@ test("shows plugin toggle failures without inserting an empty list card", async 
   warnSpy.mockRestore();
 });
 
-test("switches plugin list by host tab and shows cross-host relation in details", async () => {
+test("shows plugin delete failures in the global notification stack", async () => {
+  const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  const deleteSpy = vi
+    .spyOn(skillClient, "deletePlugin")
+    .mockRejectedValueOnce(new Error("permission denied"));
+
   renderWithI18n(<PluginsRoute />);
 
-  await screen.findByRole("tab", { name: /Codex/ });
+  await screen.findByRole("tab", { name: /Claude Code/ });
+  expect(await screen.findByText("ecc")).toBeInTheDocument();
+
+  await userEvent.click(screen.getByRole("button", { name: "删除 ecc 插件" }));
+  await userEvent.click(screen.getByRole("button", { name: "确认删除 ecc 插件" }));
+
+  expect(await screen.findByRole("alert")).toHaveTextContent("删除插件失败，请检查宿主配置和本地目录权限。");
+  expect(screen.getByText("ecc")).toBeInTheDocument();
+
+  deleteSpy.mockRestore();
+  warnSpy.mockRestore();
+});
+
+test("switches plugin list by host tab and shows cross-host relation in details", async () => {
+  const plugins: PluginSummary[] = [
+    pluginFixtures[0],
+    {
+      ...pluginFixtures[0],
+      id: "claude-code:repo-scout",
+      hostTool: "claude-code",
+      relatedHostTools: ["codex"],
+      rootPath: "/Users/demo/.claude/plugins/cache/repo-scout/1.0.0",
+      repoRootPath: "/Users/demo/.claude/plugins/cache/repo-scout/1.0.0",
+      manifestPath: "/Users/demo/.claude/plugins/cache/repo-scout/1.0.0/.claude-plugin/plugin.json",
+      installSource: "host",
+      enabledState: "disabled",
+    },
+  ];
+  vi.spyOn(skillClient, "fetchStartupInstalledPlugins").mockResolvedValueOnce(plugins);
+
+  renderWithI18n(<PluginsRoute />);
+
+  await screen.findByRole("tab", { name: /全部/ });
   await userEvent.click(screen.getByRole("tab", { name: /Codex/ }));
   expect(await screen.findByText("Repo Scout")).toBeInTheDocument();
   expect(screen.queryByText("ecc")).not.toBeInTheDocument();
+  const repoScoutRow = screen.getByRole("button", { name: /展开 Repo Scout/ }).closest(".tool-list-row");
+  expect(repoScoutRow?.querySelectorAll(".plugins-page__host-coverage-item")).toHaveLength(0);
 
   await userEvent.click(
     screen.getByRole("button", { name: /展开 Repo Scout/ }),
   );
   expect(screen.getByText("分支")).toBeInTheDocument();
   expect(screen.getByText("main")).toBeInTheDocument();
-  expect(screen.getByText("Revision")).toBeInTheDocument();
-  expect(screen.getAllByText("4f2c1ab").length).toBeGreaterThan(0);
   expect(screen.getByText("MCP")).toBeInTheDocument();
   expect(screen.getByText("Skills")).toBeInTheDocument();
   expect(screen.getByText("Subagents")).toBeInTheDocument();
@@ -344,20 +1485,151 @@ test("switches plugin list by host tab and shows cross-host relation in details"
   expect(
     screen.getByRole("button", { name: /codebase-researcher/ }).querySelector(".plugins-page__component-icon--subagent svg"),
   ).toBeInTheDocument();
-  expect(screen.getAllByText("View 2 More").length).toBeGreaterThan(0);
-  expect(screen.getByText("也安装在")).toBeInTheDocument();
-  const relatedHostsField = screen.getByText("也安装在").closest("div");
+  expect(screen.getAllByText("查看剩余 2 项").length).toBeGreaterThan(0);
+  expect(screen.getByText("安装宿主")).toBeInTheDocument();
+  const relatedHostsField = screen.getByText("安装宿主").closest("div");
 
   expect(relatedHostsField).not.toBeNull();
   expect(
-    within(relatedHostsField as HTMLDivElement).getByText("Claude Code"),
-  ).toBeInTheDocument();
+    (relatedHostsField as HTMLDivElement).querySelectorAll(".plugins-page__host-coverage-item"),
+  ).toHaveLength(2);
+  expect(
+    (relatedHostsField as HTMLDivElement).textContent,
+  ).not.toContain("Claude Code");
+});
+
+test("shows all installed host icons in all-tab merged plugin row", async () => {
+  const plugins: PluginSummary[] = [
+    pluginFixtures[0],
+    {
+      ...pluginFixtures[0],
+      id: "claude-code:repo-scout",
+      hostTool: "claude-code",
+      relatedHostTools: ["codex", "cursor"],
+      rootPath: "/Users/demo/.claude/plugins/cache/repo-scout/1.0.0",
+      manifestPath: "/Users/demo/.claude/plugins/cache/repo-scout/1.0.0/.claude-plugin/plugin.json",
+      installSource: "host",
+      enabledState: "disabled",
+    },
+    {
+      ...pluginFixtures[0],
+      id: "cursor:repo-scout",
+      hostTool: "cursor",
+      relatedHostTools: ["codex", "claude-code"],
+      rootPath: "/Users/demo/.cursor/plugins/cache/repo-scout/1.0.0",
+      manifestPath: "/Users/demo/.cursor/plugins/cache/repo-scout/1.0.0/.cursor-plugin/plugin.json",
+      installSource: "host",
+      enabledState: "enabled",
+    },
+  ];
+  vi.spyOn(skillClient, "fetchStartupInstalledPlugins").mockResolvedValueOnce(plugins);
+
+  renderWithI18n(<PluginsRoute />);
+
+  await screen.findByRole("tab", { name: "全部 1" });
+  const row = screen.getByRole("button", { name: /展开 Repo Scout/ }).closest(".tool-list-row");
+
+  expect(
+    row?.querySelectorAll(".plugins-page__host-coverage-item"),
+  ).toHaveLength(3);
+});
+
+test("shows install-host icons consistently for cross-host marketplace plugins", async () => {
+  const plugins: PluginSummary[] = [
+    {
+      ...pluginFixtures[1],
+      id: "claude-code:example-plugin",
+      packageId: "example-plugin",
+      name: "Example Plugin",
+      hostTool: "claude-code",
+      relatedHostTools: ["codex", "cursor"],
+      sourceType: "marketplace",
+      sourceLabel: "example-plugin",
+      sourceUrl: "https://git.example.com/example-org/example-repo.git",
+      sourceRef: "master",
+      repoRootPath: "/Users/demo/.claude/plugins/cache/example-org/example-plugin/0.1.0",
+      rootPath: "/Users/demo/.claude/plugins/cache/example-org/example-plugin/0.1.0",
+      manifestPath: "/Users/demo/.claude/plugins/cache/example-org/example-plugin/0.1.0/.claude-plugin/plugin.json",
+    },
+    {
+      ...pluginFixtures[1],
+      id: "codex:example-plugin",
+      packageId: "example-plugin",
+      name: "Example Plugin",
+      hostTool: "codex",
+      relatedHostTools: ["claude-code", "cursor"],
+      sourceType: "marketplace",
+      sourceLabel: "example-plugin",
+      sourceUrl: "https://git.example.com/example-org/example-repo.git",
+      sourceRef: "master",
+      repoRootPath: "/Users/demo/.codex/plugins/cache/example-org/example-plugin/0.1.0",
+      rootPath: "/Users/demo/.codex/plugins/cache/example-org/example-plugin/0.1.0",
+      manifestPath: "/Users/demo/.codex/plugins/cache/example-org/example-plugin/0.1.0/plugin.json",
+    },
+    {
+      ...pluginFixtures[1],
+      id: "cursor:example-plugin",
+      packageId: "example-plugin",
+      name: "Example Plugin",
+      hostTool: "cursor",
+      relatedHostTools: ["claude-code", "codex"],
+      sourceType: "marketplace",
+      sourceLabel: "example-plugin",
+      sourceUrl: "https://git.example.com/example-org/example-repo.git",
+      sourceRef: "master",
+      repoRootPath: "/Users/demo/.cursor/plugins/cache/example-org/example-plugin/0.1.0",
+      rootPath: "/Users/demo/.cursor/plugins/cache/example-org/example-plugin/0.1.0",
+      manifestPath: "/Users/demo/.cursor/plugins/cache/example-org/example-plugin/0.1.0/.cursor-plugin/plugin.json",
+    },
+  ];
+  vi.spyOn(skillClient, "fetchStartupInstalledPlugins").mockResolvedValueOnce(plugins);
+
+  renderWithI18n(<PluginsRoute />);
+
+  await screen.findByRole("tab", { name: /全部/ });
+  await userEvent.click(screen.getByRole("tab", { name: /Claude Code/ }));
+  await userEvent.click(screen.getByRole("button", { name: /展开 Example Plugin/ }));
+
+  const installHostsField = screen.getByText("安装宿主").closest("div");
+
+  expect(installHostsField).not.toBeNull();
+  expect(
+    (installHostsField as HTMLDivElement).querySelectorAll(".plugins-page__host-coverage-item"),
+  ).toHaveLength(3);
+  expect(screen.queryByText("分支")).not.toBeInTheDocument();
+  expect(screen.queryByText("git")).not.toBeInTheDocument();
+});
+
+test("hides plugin directory and related-host metadata in all-tab merged details", async () => {
+  const plugins: PluginSummary[] = [
+    pluginFixtures[0],
+    {
+      ...pluginFixtures[0],
+      id: "claude-code:repo-scout",
+      hostTool: "claude-code",
+      relatedHostTools: ["codex", "cursor"],
+      rootPath: "/Users/demo/.claude/plugins/cache/repo-scout/1.0.0",
+      repoRootPath: "/Users/demo/.claude/plugins/cache/repo-scout/1.0.0",
+      manifestPath: "/Users/demo/.claude/plugins/cache/repo-scout/1.0.0/.claude-plugin/plugin.json",
+      installSource: "host",
+      enabledState: "disabled",
+    },
+  ];
+  vi.spyOn(skillClient, "fetchStartupInstalledPlugins").mockResolvedValueOnce(plugins);
+
+  renderWithI18n(<PluginsRoute />);
+
+  await screen.findByRole("tab", { name: "全部 1" });
+  await userEvent.click(screen.getByRole("button", { name: /展开 Repo Scout/ }));
+
+  expect(screen.queryByText("插件目录")).not.toBeInTheDocument();
+  expect(screen.queryByText("安装宿主")).not.toBeInTheDocument();
 });
 
 test("expands and collapses hidden plugin components by section", async () => {
   renderWithI18n(<PluginsRoute />);
 
-  await screen.findByRole("tab", { name: /Codex/ });
+  await screen.findByRole("tab", { name: /全部/ });
   await userEvent.click(screen.getByRole("tab", { name: /Codex/ }));
   await userEvent.click(
     await screen.findByRole("button", { name: /展开 Repo Scout/ }),
@@ -372,7 +1644,7 @@ test("expands and collapses hidden plugin components by section", async () => {
 
   await userEvent.click(
     within(skillsSection as HTMLElement).getByRole("button", {
-      name: "View 2 More",
+      name: "查看剩余 2 项",
     }),
   );
 
@@ -381,17 +1653,38 @@ test("expands and collapses hidden plugin components by section", async () => {
 
   await userEvent.click(
     within(skillsSection as HTMLElement).getByRole("button", {
-      name: "Show Less",
+      name: "收起",
     }),
   );
 
   expect(screen.queryByText("repo-release-notes")).not.toBeInTheDocument();
 });
 
+test("renders plugin chrome in English when workspace language is en", async () => {
+  setWorkspaceLanguage("en");
+
+  renderWithI18n(<PluginsRoute />);
+
+  await screen.findByRole("tab", { name: "All 2" });
+  expect(screen.getByRole("button", { name: "Refresh" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Scan Import" })).toBeInTheDocument();
+  expect(
+    screen.getByPlaceholderText("Search plugin names, hosts, or components..."),
+  ).toBeInTheDocument();
+
+  await userEvent.click(screen.getByRole("tab", { name: /Claude Code/ }));
+  await userEvent.click(screen.getByRole("button", { name: /Expand ecc/ }));
+
+  expect(screen.getByText("Basic Info")).toBeInTheDocument();
+  expect(screen.getByText("Description")).toBeInTheDocument();
+  expect(screen.getByText("Install Method")).toBeInTheDocument();
+  expect(screen.getByText("Host Install")).toBeInTheDocument();
+});
+
 test("opens a plugin component preview from the component list", async () => {
   renderWithI18n(<PluginsRoute />);
 
-  await screen.findByRole("tab", { name: /Codex/ });
+  await screen.findByRole("tab", { name: /全部/ });
   await userEvent.click(screen.getByRole("tab", { name: /Codex/ }));
   await userEvent.click(
     await screen.findByRole("button", { name: /展开 Repo Scout/ }),
@@ -417,9 +1710,49 @@ test("opens a plugin component preview from the component list", async () => {
   });
 });
 
+test("saves edited plugin component preview content", async () => {
+  const saveSpy = vi.spyOn(skillClient, "savePluginComponentPreview").mockResolvedValue({
+    path: "skills/repo-scout-skill/SKILL.md",
+    title: "repo-scout-skill",
+    assetType: "skill",
+    content: "# repo-scout-skill\n\n已保存内容。",
+  });
+
+  renderWithI18n(<PluginsRoute />);
+
+  await screen.findByRole("tab", { name: /全部/ });
+  await userEvent.click(screen.getByRole("tab", { name: /Codex/ }));
+  await userEvent.click(
+    await screen.findByRole("button", { name: /展开 Repo Scout/ }),
+  );
+  await userEvent.click(
+    screen.getByRole("button", { name: /repo-scout-skill/ }),
+  );
+  await screen.findByRole("dialog");
+  await userEvent.click(screen.getByRole("button", { name: "编辑" }));
+
+  const textbox = screen.getByRole("textbox");
+  await userEvent.clear(textbox);
+  await userEvent.type(textbox, "# repo-scout-skill{enter}{enter}已保存内容。");
+  await userEvent.click(screen.getByRole("button", { name: "保存" }));
+
+  await waitFor(() => {
+    expect(saveSpy).toHaveBeenCalledWith({
+      pluginRoot: pluginFixtures[0].rootPath,
+      componentId: "skills/repo-scout-skill",
+      assetType: "skill",
+      content: "# repo-scout-skill\n\n已保存内容。",
+    });
+  });
+  await waitFor(() => {
+    expect(screen.getByRole("textbox")).toHaveValue("# repo-scout-skill\n\n已保存内容。");
+  });
+});
+
 test("keeps Cursor expansion scoped to the clicked install instance when plugin ids repeat", async () => {
+  const fixtureSpy = vi.spyOn(skillClient, "shouldUseFixtureData").mockReturnValue(false);
   const fetchSpy = vi
-    .spyOn(skillClient, "fetchInstalledPlugins")
+    .spyOn(skillClient, "fetchStartupInstalledPlugins")
     .mockResolvedValueOnce([
       buildCursorPlugin("Chrome", "/Users/demo/.cursor/plugins/cache/chrome/1"),
       buildCursorPlugin(
@@ -431,7 +1764,8 @@ test("keeps Cursor expansion scoped to the clicked install instance when plugin 
 
   renderWithI18n(<PluginsRoute />);
 
-  await screen.findByRole("tab", { name: "Cursor 3" });
+  await screen.findByRole("tab", { name: "全部 1" });
+  await userEvent.click(screen.getByRole("tab", { name: "Cursor 3" }));
   await userEvent.click(await screen.findByRole("button", { name: "展开 Chrome" }));
 
   expect(screen.getByRole("button", { name: "收起 Chrome" })).toBeInTheDocument();
@@ -441,6 +1775,7 @@ test("keeps Cursor expansion scoped to the clicked install instance when plugin 
   expect(screen.getByText("基本信息")).toBeInTheDocument();
 
   fetchSpy.mockRestore();
+  fixtureSpy.mockRestore();
 });
 
 function buildCursorPlugin(name: string, rootPath: string): PluginSummary {

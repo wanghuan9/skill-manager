@@ -1,6 +1,7 @@
 import { startTransition, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import type { MouseEvent as ReactMouseEvent } from "react";
 import { createPortal } from "react-dom";
+import { alignExpandedRowIntoView } from "@/app/utils/align-expanded-row";
 import { useTranslate, type TranslationKey } from "@/app/i18n";
 import { useNotifications } from "@/app/notifications";
 import { BusinessError } from "@/app/errors";
@@ -35,7 +36,9 @@ import {
   getCachedMcpWorkspace,
   subscribeMcpWorkspaceChange,
 } from "@/features/skills/utils/mcp-workspace-cache";
+import { buildInstalledToolCards } from "@/features/skills/utils/open-tools";
 import { isToolInstalledStatus } from "@/features/skills/utils/tool-status";
+import { useSkillWorkspace } from "@/features/skills/state/skill-workspace";
 
 type McpFormState = {
   id: string;
@@ -490,15 +493,6 @@ type McpToolLogoProps = {
   appName: string;
 };
 
-function compareAppsByDisplayOrder(left: { appId: string; appName: string }, right: { appId: string; appName: string }) {
-  const rankDelta = getToolDisplayRank(left.appName) - getToolDisplayRank(right.appName);
-  if (rankDelta !== 0) {
-    return rankDelta;
-  }
-
-  return left.appName.localeCompare(right.appName);
-}
-
 function McpToolLogo({ appId, appName }: McpToolLogoProps) {
   const [logoLoadFailed, setLogoLoadFailed] = useState(false);
   const logoUrl = getToolLogoUrl(appId);
@@ -527,7 +521,7 @@ function McpToolLogo({ appId, appName }: McpToolLogoProps) {
 function McpEnabledAppSummary({ apps }: { apps: McpAppStatus[] }) {
   const { t } = useTranslate();
   const [showEnabledApps, setShowEnabledApps] = useState(false);
-  const enabledApps = apps.filter((app) => app.isEnabled).sort(compareAppsByDisplayOrder);
+  const enabledApps = apps.filter((app) => app.isEnabled);
   const visibleApps = enabledApps.slice(0, MCP_SUMMARY_APP_ICON_LIMIT);
   const hiddenAppCount = Math.max(enabledApps.length - visibleApps.length, 0);
   const summaryLabel = enabledApps.length > 0
@@ -587,6 +581,7 @@ type McpRouteProps = {
 
 export function McpRoute(props: McpRouteProps = {}) {
   const { t } = useTranslate();
+  const { toolConfigs } = useSkillWorkspace();
   const { notify } = useNotifications();
   const reportFailure = useFailureReporter();
   const [workspace, setWorkspace] = useState<McpWorkspaceSnapshot | null>(null);
@@ -1124,8 +1119,12 @@ export function McpRoute(props: McpRouteProps = {}) {
     setEditingServer(null);
   }
 
-  function toggleServerExpanded(serverId: string) {
+  async function toggleServerExpanded(serverId: string, cardElement?: HTMLElement | null) {
+    const shouldExpand = expandedServerId !== serverId;
     setExpandedServerId((current) => (current === serverId ? "" : serverId));
+    if (shouldExpand) {
+      await alignExpandedRowIntoView(cardElement ?? null);
+    }
   }
 
   function toggleToolSectionCollapsed(serverId: string) {
@@ -1136,7 +1135,18 @@ export function McpRoute(props: McpRouteProps = {}) {
   }
 
   const apps = workspace?.apps ?? [];
-  const installedApps = apps.filter(isMcpAppReady);
+  const installedAppDisplayOrder = useMemo(
+    () => buildInstalledToolCards(toolConfigs)
+      .filter((tool) => tool.supportsMcp && tool.mcpConfigPathRecognized)
+      .map((tool) => tool.id),
+    [toolConfigs],
+  );
+  const installedApps = useMemo(
+    () => installedAppDisplayOrder
+      .map((appId) => apps.find((app) => app.id === appId))
+      .filter((app): app is McpTargetApp => app !== undefined && isMcpAppReady(app)),
+    [apps, installedAppDisplayOrder],
+  );
   const installedAppIdSet = useMemo(
     () => new Set(installedApps.map((app) => app.id)),
     [installedApps],
@@ -1218,10 +1228,13 @@ export function McpRoute(props: McpRouteProps = {}) {
         {filteredServers.map((server) => {
           const isExpanded = expandedServerId === server.id;
           const isToolSectionCollapsed = collapsedToolSectionIds[server.id] ?? false;
-          const visibleApps = server.apps
-            .filter((app) => isMcpAppSupported(app))
-            .filter((app) => installedAppIdSet.has(app.appId))
-            .sort(compareAppsByDisplayOrder);
+          const visibleApps = installedAppDisplayOrder
+            .map((appId) => server.apps.find((app) => app.appId === appId))
+            .filter((app): app is McpAppStatus => (
+              app !== undefined
+              && installedAppIdSet.has(app.appId)
+              && isMcpAppSupported(app)
+            ));
           const enabledVisibleAppCount = visibleApps.filter((app) => app.isEnabled).length;
           const disabledVisibleAppCount = visibleApps.length - enabledVisibleAppCount;
           const appBulkAction = pendingAppKey === `${server.id}:apps:enable`
@@ -1245,17 +1258,28 @@ export function McpRoute(props: McpRouteProps = {}) {
           const requiredConfigTooltip = formatRequiredMcpConfigTooltip(requiredConfigParamNames, t);
 
           return (
-            <article key={server.id} className={`mcp-server-card${isExpanded ? " is-expanded" : ""}`}>
+            <article
+              key={server.id}
+              className={`mcp-server-card${isExpanded ? " is-expanded" : ""}`}
+            >
               <div className="mcp-server-card__header">
                 <div
                   className="mcp-server-card__summary-button"
                   role="button"
                   tabIndex={0}
-                  onClick={() => toggleServerExpanded(server.id)}
+                  onClick={(event) => {
+                    void toggleServerExpanded(
+                      server.id,
+                      event.currentTarget.closest(".mcp-server-card") as HTMLElement | null,
+                    );
+                  }}
                   onKeyDown={(event) => {
                     if (event.key === "Enter" || event.key === " ") {
                       event.preventDefault();
-                      toggleServerExpanded(server.id);
+                      void toggleServerExpanded(
+                        server.id,
+                        event.currentTarget.closest(".mcp-server-card") as HTMLElement | null,
+                      );
                     }
                   }}
                   aria-expanded={isExpanded}
@@ -1417,7 +1441,7 @@ export function McpRoute(props: McpRouteProps = {}) {
                         </div>
                       ) : null}
                     </div>
-                    <div className="mcp-server-card__apps">
+                    <div className="tool-pill-grid">
                       {visibleApps.map((app) => {
                         const isUpdating = pendingAppKey === `${server.id}:${app.appId}`;
                         const appTooltipLabel = app.isEnabled ? t("mcp.card.appEnabledTooltip") : t("mcp.card.appDisabledTooltip");
@@ -1425,7 +1449,7 @@ export function McpRoute(props: McpRouteProps = {}) {
                         return (
                           <button
                             key={app.appId}
-                            className={`tool-pill mcp-app-toggle${app.isEnabled ? " is-enabled" : ""}`}
+                            className={`tool-pill${app.isEnabled ? " is-enabled" : ""}`}
                             type="button"
                             onClick={() => void handleToggle(server, app.appId, !app.isEnabled)}
                             disabled={isUpdating || appBulkAction !== null}

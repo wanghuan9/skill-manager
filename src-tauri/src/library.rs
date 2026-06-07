@@ -1834,6 +1834,8 @@ fn ignore_unnecessary_files(skill_dir: &Path) -> Result<(), String> {
         ".vscode",
         ".idea",
         "*.log",
+        ".skilldock-package.json",
+        ".skilldock/",
     ];
 
     let Some(repo_root) = git_worktree_root(skill_dir) else {
@@ -1907,9 +1909,10 @@ fn git_worktree_root(path: &Path) -> Option<PathBuf> {
 mod tests {
     use super::{
         clone_branch_for_resolved_path, create_skill_symlink, get_tool_skills_path,
-        migrate_legacy_skill_symlinks, parse_market_source_url, reconcile_tool_skill_symlinks,
-        remove_reserved_workspace_entries, skill_dir_match_score, tree_relative_path_for_branch,
-        MarketSourceSpec, ResolvedRemoteSkillPath,
+        ignore_unnecessary_files, migrate_legacy_skill_symlinks, parse_market_source_url,
+        reconcile_tool_skill_symlinks, remove_reserved_workspace_entries, run_git_in_dir,
+        run_git_output, skill_dir_match_score, tree_relative_path_for_branch, MarketSourceSpec,
+        ResolvedRemoteSkillPath,
     };
     use crate::models::SkillSummary;
     use crate::workspace::TEST_ENV_LOCK;
@@ -2272,6 +2275,39 @@ mod tests {
             }
         }
         let _ = fs::remove_dir_all(home_dir);
+    }
+
+    #[test]
+    fn ignore_unnecessary_files_excludes_skilldock_plugin_metadata() {
+        let _guard = TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let temp_dir = temp_test_dir("ignore-skilldock-plugin-metadata");
+        let repo_dir = temp_dir.join("plugin-repo");
+        fs::create_dir_all(&repo_dir).expect("create repo dir");
+
+        run_git_in_dir(&temp_dir, &["init", repo_dir.to_string_lossy().as_ref()])
+            .expect("init git repo");
+
+        fs::write(repo_dir.join(".skilldock-package.json"), "{}")
+            .expect("write package identity metadata");
+        fs::create_dir_all(repo_dir.join(".skilldock")).expect("create .skilldock dir");
+        fs::write(repo_dir.join(".skilldock/plugin-source.json"), "{}")
+            .expect("write plugin source metadata");
+
+        ignore_unnecessary_files(&repo_dir).expect("ignore unnecessary files");
+
+        let exclude_path = repo_dir.join(".git/info/exclude");
+        let exclude_content = fs::read_to_string(&exclude_path).expect("read exclude file");
+        assert!(exclude_content.contains(".skilldock-package.json"));
+        assert!(exclude_content.contains(".skilldock/"));
+
+        let status_stdout = run_git_output(&repo_dir, &["status", "--short", "--ignored"])
+            .expect("collect git status");
+        assert!(status_stdout.contains("!! .skilldock-package.json"));
+        assert!(status_stdout.contains("!! .skilldock/"));
+
+        let _ = fs::remove_dir_all(temp_dir);
     }
 
     #[test]

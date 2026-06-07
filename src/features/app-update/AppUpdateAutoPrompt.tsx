@@ -12,11 +12,14 @@ import {
 import { resolveAppUpdateReleaseNoteEntries } from "@/features/app-update/release-notes";
 
 const AUTO_UPDATE_CHECK_DELAY_MS = 2000;
+const AUTO_UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
 let autoUpdatePromptState: "idle" | "scheduled" | "running" | "done" = "idle";
+let autoUpdatePromptedVersion = "";
 
 export function resetAutoUpdatePromptStateForTests() {
   autoUpdatePromptState = "idle";
+  autoUpdatePromptedVersion = "";
 }
 
 export function AppUpdateAutoPrompt() {
@@ -34,11 +37,17 @@ export function AppUpdateAutoPrompt() {
     }
 
     autoUpdatePromptState = "scheduled";
-    const timerId = window.setTimeout(() => {
+    const runAutoCheck = () => {
       autoUpdatePromptState = "running";
       void checkForAppUpdate()
         .then((nextUpdate) => {
-          if (nextUpdate.available && nextUpdate.install) {
+          if (
+            nextUpdate.available
+            && nextUpdate.install
+            && nextUpdate.version
+            && nextUpdate.version !== autoUpdatePromptedVersion
+          ) {
+            autoUpdatePromptedVersion = nextUpdate.version;
             setUpdate(nextUpdate);
           }
         })
@@ -48,15 +57,23 @@ export function AppUpdateAutoPrompt() {
         .finally(() => {
           autoUpdatePromptState = "done";
         });
-    }, AUTO_UPDATE_CHECK_DELAY_MS);
+    };
+    const timerId = window.setTimeout(runAutoCheck, AUTO_UPDATE_CHECK_DELAY_MS);
+    const intervalId = window.setInterval(() => {
+      if (autoUpdatePromptState === "running" || isInstalling) {
+        return;
+      }
+      runAutoCheck();
+    }, AUTO_UPDATE_CHECK_INTERVAL_MS);
 
     return () => {
       window.clearTimeout(timerId);
+      window.clearInterval(intervalId);
       if (autoUpdatePromptState === "scheduled") {
         autoUpdatePromptState = "idle";
       }
     };
-  }, []);
+  }, [isInstalling]);
 
   const releaseNoteEntries = useMemo(() => resolveAppUpdateReleaseNoteEntries(update), [update]);
 

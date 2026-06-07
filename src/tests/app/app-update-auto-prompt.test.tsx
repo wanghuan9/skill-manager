@@ -158,3 +158,55 @@ test("fails silently when automatic update check cannot reach the updater endpoi
   view.unmount();
   warnSpy.mockRestore();
 });
+
+test("checks again on a later interval and only prompts once per version", async () => {
+  vi.useFakeTimers();
+  const install = vi.fn().mockResolvedValue(undefined);
+  vi.mocked(checkForAppUpdate)
+    .mockResolvedValueOnce({
+      available: false,
+      currentVersion: "0.1.6",
+      releaseNotesHistory: [],
+    })
+    .mockResolvedValueOnce({
+      available: true,
+      currentVersion: "0.1.6",
+      version: "0.1.7",
+      body: "## 修复\n\n- 修复定时检查更新未触发的问题。",
+      install,
+    })
+    .mockResolvedValueOnce({
+      available: true,
+      currentVersion: "0.1.6",
+      version: "0.1.7",
+      body: "## 修复\n\n- 修复定时检查更新未触发的问题。",
+      install,
+    });
+
+  const view = render(
+    <NotificationProvider>
+      <AppUpdateAutoPrompt />
+    </NotificationProvider>,
+  );
+
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(2000);
+  });
+
+  expect(screen.queryByRole("button", { name: "Update" })).not.toBeInTheDocument();
+
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(6 * 60 * 60 * 1000);
+  });
+
+  expect(screen.getByRole("button", { name: "Update" })).toBeInTheDocument();
+
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(6 * 60 * 60 * 1000);
+  });
+
+  expect(vi.mocked(checkForAppUpdate)).toHaveBeenCalledTimes(3);
+  expect(screen.getAllByRole("button", { name: "Update" })).toHaveLength(1);
+
+  view.unmount();
+});

@@ -1,52 +1,78 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { alignExpandedRowIntoView } from "@/app/utils/align-expanded-row";
 
 type RowAction = {
   key: string;
   label: string;
-  onClick: () => void;
+  onClick?: () => void;
   disabled?: boolean;
   ariaLabel?: string;
   className?: string;
   icon?: ReactNode;
   tooltip?: string;
+  content?: ReactNode;
 };
 
 type RowBadge = {
-  label: string;
+  key?: string;
+  label: ReactNode;
   tone?: "neutral" | "positive" | "info" | "warning";
 };
 
 type ToolListRowProps = {
+  rowId?: string;
   name: string;
   subtitle: string;
   leading?: ReactNode;
+  meta?: ReactNode;
   badges?: RowBadge[];
   expanded: boolean;
-  onExpandedChange: (expanded: boolean) => void;
+  onExpandedChange: (expanded: boolean, summaryElement?: HTMLButtonElement | null) => void;
   details: ReactNode;
   actions?: RowAction[];
+  expandLabel?: string;
+  collapseLabel?: string;
 };
 
 export function ToolListRow(props: ToolListRowProps) {
-  const { actions = [], badges = [], details, expanded, leading, name, onExpandedChange, subtitle } = props;
+  const {
+    actions = [],
+    badges = [],
+    details,
+    expanded,
+    leading,
+    meta,
+    name,
+    rowId,
+    onExpandedChange,
+    subtitle,
+    expandLabel = "展开",
+    collapseLabel = "收起",
+  } = props;
 
   return (
-    <article className={`tool-list-row${expanded ? " is-expanded" : ""}`}>
+    <article
+      className={`tool-list-row${expanded ? " is-expanded" : ""}`}
+      data-tool-list-row-id={rowId}
+    >
       <div className="tool-list-row__header">
         <button
           className="tool-list-row__summary"
           type="button"
-          onClick={() => onExpandedChange(!expanded)}
+          onClick={(event) => onExpandedChange(!expanded, event.currentTarget)}
           aria-expanded={expanded}
-          aria-label={`${expanded ? "收起" : "展开"} ${name}`}
+          aria-label={`${expanded ? collapseLabel : expandLabel} ${name}`}
         >
           {leading ? <span className="tool-list-row__leading">{leading}</span> : null}
           <div className="tool-list-row__title-stack">
             <div className="tool-list-row__title-row">
               <strong>{name}</strong>
-              {badges.map((badge) => (
-                <span key={`${badge.tone ?? "neutral"}:${badge.label}`} className={`status-badge tone-${badge.tone ?? "neutral"}`}>
+              {badges.map((badge, badgeIndex) => (
+                <span
+                  key={badge.key ?? `${badge.tone ?? "neutral"}:${typeof badge.label === "string" ? badge.label : badgeIndex}`}
+                  className={`status-badge tone-${badge.tone ?? "neutral"}`}
+                >
                   {badge.label}
                 </span>
               ))}
@@ -54,9 +80,21 @@ export function ToolListRow(props: ToolListRowProps) {
             <p className="tool-list-row__subtitle">{subtitle}</p>
           </div>
         </button>
+        {meta ? <div className="tool-list-row__meta">{meta}</div> : null}
         {actions.length > 0 ? (
           <div className="tool-list-row__actions">
             {actions.map((action) => {
+              if (action.content) {
+                return (
+                  <span
+                    key={action.key}
+                    className={action.className}
+                  >
+                    {action.content}
+                  </span>
+                );
+              }
+
               const isIconAction = Boolean(action.icon);
 
               return (
@@ -214,8 +252,20 @@ export function ToolListPageShell(props: ToolListPageShellProps) {
 export function useSingleExpandedRow() {
   const [expandedId, setExpandedId] = useState("");
 
-  function handleExpandedChange(id: string, expanded: boolean) {
+  async function handleExpandedChange(
+    id: string,
+    expanded: boolean,
+    summaryElement?: HTMLButtonElement | null,
+  ) {
+    const previousExpandedId = expandedId;
     setExpandedId(expanded ? id : "");
+
+    const isSwitchingExpandedRow = expanded && previousExpandedId !== "" && previousExpandedId !== id;
+    if (!isSwitchingExpandedRow || !summaryElement) {
+      return;
+    }
+    const rowElement = summaryElement.closest(".tool-list-row");
+    await alignExpandedRowIntoView(rowElement instanceof HTMLElement ? rowElement : null);
   }
 
   return {

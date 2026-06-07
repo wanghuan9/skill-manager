@@ -3,6 +3,9 @@ import {
   useLayoutEffect,
   useRef,
   useState,
+  Component,
+  type ErrorInfo,
+  type ReactNode,
   type CSSProperties,
 } from "react";
 import { SkillsRoute } from "@/app/routes/skills";
@@ -54,7 +57,63 @@ type RouteDefinition = {
   descriptionKey: Parameters<typeof tx>[1];
 };
 
+type RouteErrorBoundaryProps = {
+  children: ReactNode;
+  route: RouteKey;
+};
+
+type RouteErrorBoundaryState = {
+  error: Error | null;
+};
+
 const ROUTE_LOCAL_ALIGN_COOLDOWN_MS = 10_000;
+
+class RouteErrorBoundary extends Component<
+  RouteErrorBoundaryProps,
+  RouteErrorBoundaryState
+> {
+  state: RouteErrorBoundaryState = {
+    error: null,
+  };
+
+  static getDerivedStateFromError(error: Error): RouteErrorBoundaryState {
+    return { error };
+  }
+
+  componentDidCatch(error: Error, errorInfo: ErrorInfo) {
+    console.error("Route render failed", {
+      route: this.props.route,
+      error,
+      errorInfo,
+    });
+  }
+
+  componentDidUpdate(prevProps: RouteErrorBoundaryProps) {
+    if (prevProps.route !== this.props.route && this.state.error) {
+      this.setState({ error: null });
+    }
+  }
+
+  render() {
+    if (this.state.error) {
+      return (
+        <div className="panel-card empty-state">
+          <h3>页面加载失败</h3>
+          <p>{this.state.error.message || "发生未知错误"}</p>
+          <button
+            className="secondary-button"
+            type="button"
+            onClick={() => this.setState({ error: null })}
+          >
+            重试
+          </button>
+        </div>
+      );
+    }
+
+    return this.props.children;
+  }
+}
 
 const routes: RouteDefinition[] = [
   {
@@ -794,21 +853,23 @@ function AppContent() {
         </header>
         <div className="page-header-divider" aria-hidden="true" />
         <section className="page-content">
-          {renderRoute(
-            activeRoute,
-            skillQuery,
-            skillStatusFilter,
-            showGroupView,
-            activeInstallCategory,
-            activeInstallTab,
-            setActiveInstallCategory,
-            setActiveInstallTab,
-            () => handleOpenSkillInstall("git"),
-            () => handleOpenSkillInstall("local"),
-            () => handleOpenSkillInstall("market"),
-            handleOpenMcpInstall,
-            activeSkillsSection,
-          )}
+          <RouteErrorBoundary route={activeRoute}>
+            {renderRoute(
+              activeRoute,
+              skillQuery,
+              skillStatusFilter,
+              showGroupView,
+              activeInstallCategory,
+              activeInstallTab,
+              setActiveInstallCategory,
+              setActiveInstallTab,
+              () => handleOpenSkillInstall("git"),
+              () => handleOpenSkillInstall("local"),
+              () => handleOpenSkillInstall("market"),
+              handleOpenMcpInstall,
+              activeSkillsSection,
+            )}
+          </RouteErrorBoundary>
         </section>
       </main>
     </div>

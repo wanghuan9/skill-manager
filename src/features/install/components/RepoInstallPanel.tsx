@@ -156,8 +156,6 @@ export function RepoInstallPanel() {
     try {
       await installFromRepo(normalizedRepoUrl, selectedPaths, selectedGitRef);
       notify({ message: t("install.repo.success.selectedInstalled"), tone: "success" });
-      setRepoInput("");
-      setCandidates([]);
       setSelectedPaths([]);
     } catch (error) {
       reportFailure(error, {

@@ -1,6 +1,10 @@
 const TRAILING_EMOTICON_PATTERN = /(?:\s+[;；:：][-^~']?[\)）]+)+$/u;
 
-export function formatSkillLastEditor(value: string) {
+export function formatSkillLastEditor(value: string | null | undefined) {
+  if (typeof value !== "string") {
+    return "";
+  }
+
   const trimmed = value.trim();
   if (trimmed.length === 0) {
     return "";

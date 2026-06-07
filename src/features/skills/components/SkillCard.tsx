@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { MouseEvent as ReactMouseEvent } from "react";
+import { alignExpandedRowIntoView } from "@/app/utils/align-expanded-row";
 import { useTranslate } from "@/app/i18n";
 import { useNotifications } from "@/app/notifications";
 import { useFailureReporter } from "@/app/failure-feedback";
@@ -21,7 +22,7 @@ import { getMonogramLabel } from "@/features/skills/utils/monogram";
 type SkillCardProps = {
   skill: SkillSummary;
   expanded?: boolean;
-  onExpandedChange?: (expanded: boolean) => void;
+  onExpandedChange?: (expanded: boolean, rowElement?: HTMLElement | null) => void;
 };
 
 const SUMMARY_DESCRIPTION_LIMIT = 76;
@@ -168,6 +169,7 @@ export function SkillCard({ skill, expanded: expandedProp, onExpandedChange }: S
   const [isDeleting, setIsDeleting] = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
   const [showEnabledTools, setShowEnabledTools] = useState(false);
+  const cardRef = useRef<HTMLElement | null>(null);
   const deleteActionRef = useRef<HTMLButtonElement | null>(null);
   const skillTools = mergeSkillToolsWithInstalledTools(skill.tools, toolConfigs);
   const sourceLabel = formatSkillSourceLabel(skill.sourceLabel, {
@@ -186,11 +188,11 @@ export function SkillCard({ skill, expanded: expandedProp, onExpandedChange }: S
     ? t("skill.card.enabledTools", { tools: enabledTools.map((tool) => tool.name).join("、") })
     : t("skill.card.enabledToolsNone");
   const showDetailAction = skill.collabStatus === "update-available";
-  const showRemoteUpdateInfo = skill.sourceType !== "local";
   const displaySourceLabel =
     sourceLabel === "本地" || sourceLabel === "Local"
       ? t("skills.source.local")
       : sourceLabel;
+  const showRemoteMetadata = skill.gitLinked && skill.sourceType !== "local";
   const expanded = expandedProp ?? expandedState;
 
   useEffect(() => {
@@ -292,11 +294,15 @@ export function SkillCard({ skill, expanded: expandedProp, onExpandedChange }: S
     setShowEnabledTools((value) => !value);
   }
 
-  function handleExpandedChange(nextExpanded: boolean) {
+  async function handleExpandedChange(nextExpanded: boolean) {
+    const shouldAlignExpandedCard = nextExpanded && !expanded;
     if (expandedProp === undefined) {
       setExpandedState(nextExpanded);
     }
-    onExpandedChange?.(nextExpanded);
+    onExpandedChange?.(nextExpanded, cardRef.current);
+    if (shouldAlignExpandedCard) {
+      await alignExpandedRowIntoView(cardRef.current);
+    }
   }
 
   const updateTooltipLabel = isUpdating ? t("skill.card.tooltip.updating") : t("skill.card.tooltip.update");
@@ -304,7 +310,10 @@ export function SkillCard({ skill, expanded: expandedProp, onExpandedChange }: S
 
   return (
     <>
-      <article className={`skill-card skill-card--list${expanded ? " is-expanded" : ""}`}>
+      <article
+        ref={cardRef}
+        className={`skill-card skill-card--list${expanded ? " is-expanded" : ""}`}
+      >
         <div className="skill-card__header">
           <div
             className="skill-card__summary-button"
@@ -438,7 +447,8 @@ export function SkillCard({ skill, expanded: expandedProp, onExpandedChange }: S
                   <dd className="detail-grid__source-value">
                     {isHttpUrl(skill.sourceUrl) ? (
                       <a
-                        className="detail-grid__source-link"
+                        className="detail-grid__source-link detail-grid__single-line"
+                        data-tooltip={skill.sourceUrl}
                         href={skill.sourceUrl}
                         onClick={(event) => {
                           event.preventDefault();
@@ -448,14 +458,18 @@ export function SkillCard({ skill, expanded: expandedProp, onExpandedChange }: S
                         {skill.sourceUrl}
                       </a>
                     ) : (
-                      <span>{skill.sourceUrl}</span>
+                      <span className="detail-grid__single-line" data-tooltip={skill.sourceUrl}>
+                        {skill.sourceUrl}
+                      </span>
                     )}
                     <span className={`detail-git-badge${skill.gitLinked ? " is-linked" : " is-unlinked"}`}>
                       git
                     </span>
                   </dd>
                 </div>
-                {showRemoteUpdateInfo ? (
+              </dl>
+              <dl className="tool-list-row__detail-grid">
+                {showRemoteMetadata ? (
                   <>
                     <div>
                       <dt>{t("skill.card.remoteUpdatedAt")}</dt>

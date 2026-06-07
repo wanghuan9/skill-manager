@@ -45,6 +45,8 @@ pub struct PluginScopeSummary {
 #[serde(rename_all = "camelCase")]
 pub struct PluginSummary {
     pub id: String,
+    #[serde(default)]
+    pub package_id: String,
     pub name: String,
     #[serde(default)]
     pub description: String,
@@ -53,6 +55,12 @@ pub struct PluginSummary {
     pub related_host_tools: Vec<String>,
     pub kind: String,
     pub root_path: String,
+    #[serde(default)]
+    pub display_root_path: String,
+    #[serde(default)]
+    pub repo_root_path: String,
+    #[serde(default)]
+    pub plugin_relative_path: String,
     pub manifest_path: String,
     pub source_type: String,
     #[serde(default)]
@@ -65,14 +73,32 @@ pub struct PluginSummary {
     pub current_version: String,
     pub current_branch: String,
     pub current_commit: String,
+    #[serde(default)]
+    pub collab_status: String,
+    #[serde(default)]
+    pub status_text: String,
     pub is_git_repo: bool,
     pub update_mode: String,
+    #[serde(default)]
+    pub update_strategy: String,
     pub update_available: bool,
+    #[serde(default)]
+    pub baseline_hash: String,
+    #[serde(default)]
+    pub local_modified: bool,
     pub installed_at: String,
     pub updated_at: String,
+    #[serde(default)]
+    pub remote_updated_at: String,
+    #[serde(default)]
+    pub local_updated_at: String,
+    #[serde(default)]
+    pub last_editor: String,
     pub last_scanned_at: String,
     pub status: String,
     pub install_state: String,
+    #[serde(default)]
+    pub install_source: String,
     pub enabled_state: String,
     pub scopes: Vec<PluginScopeSummary>,
     pub components: Vec<PluginComponentSummary>,
@@ -91,6 +117,10 @@ pub struct PluginProbeResult {
     #[serde(default)]
     pub description: String,
     pub plugin_root: String,
+    #[serde(default)]
+    pub repo_root: String,
+    #[serde(default)]
+    pub plugin_relative_path: String,
     pub manifest_path: String,
     pub marketplace_manifest_path: String,
     pub components: Vec<PluginComponentSummary>,

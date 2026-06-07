@@ -1,13 +1,21 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { useTranslate } from "@/app/i18n";
+import { useNotifications } from "@/app/notifications";
+import { formatSkillLastEditor } from "@/features/skills/utils/skill-editor";
+import { formatSkillUpdatedAt } from "@/features/skills/utils/skill-time";
 import {
   deletePlugin,
   fetchInstalledPlugins,
+  fetchStartupInstalledPlugins,
   fetchPluginComponentPreview,
   openExternalLink,
+  openPluginInEditor,
   openPathInFinder,
+  savePluginComponentPreview,
   setPluginEnabled,
   shouldUseFixtureData,
+  updatePlugin,
 } from "@/features/skills/api/skill-client";
 import {
   SkillFileContentSurface,
@@ -18,8 +26,10 @@ import {
   ToolListRow,
   useSingleExpandedRow,
 } from "@/features/skills/components/ToolListRows";
+import { buildOpenToolOptions } from "@/features/skills/utils/open-tools";
 import { getToolLogoUrl } from "@/features/skills/utils/tool-logo";
 import { getMonogramLabel } from "@/features/skills/utils/monogram";
+import { useSkillWorkspace } from "@/features/skills/state/skill-workspace";
 import {
   cachePlugins,
   getCachedPlugins,
@@ -33,7 +43,8 @@ import type {
   PluginSummary,
 } from "@/features/skills/state/skill-store";
 
-type PluginFilter = "all" | "enabled" | "disabled" | "error";
+type PluginFilter = "all" | "enabled" | "disabled";
+type PluginTabKey = "all" | PluginHostTool;
 type PluginFilterOption = {
   value: PluginFilter;
   label: string;
@@ -59,7 +70,13 @@ type PluginScanSession = {
   plugins: PluginSummary[] | null;
 };
 type PluginScanSessionListener = (session: PluginScanSession) => void;
-const pluginHostTabs: { key: PluginHostTool; label: string }[] = [
+type PluginHostCoverageEntry = {
+  hostTool: PluginHostTool;
+  enabledState: PluginSummary["enabledState"];
+  hasError: boolean;
+};
+const pluginTabs: { key: PluginTabKey; label: string }[] = [
+  { key: "all", label: "All" },
   { key: "claude-code", label: "Claude Code" },
   { key: "codex", label: "Codex" },
   { key: "cursor", label: "Cursor" },
@@ -80,27 +97,46 @@ const primaryComponentSummaryTypes: PluginAssetType[] = [
   "rule",
   "hook",
 ];
+const FALLBACK_OPEN_TOOL_ID = "finder";
 const maxVisibleComponentsPerSection = 5;
+const maxVisibleHostCoverageEntries = 5;
 const pluginEnabledOrder: Record<PluginSummary["enabledState"], number> = {
   enabled: 0,
   disabled: 1,
   unknown: 2,
 };
-const pluginFilterOptions: PluginFilterOption[] = [
-  { value: "all", label: "全部" },
-  { value: "enabled", label: "已启用" },
-  { value: "disabled", label: "未启用" },
-  { value: "error", label: "异常" },
-];
 let pluginScanSession: PluginScanSession = {
   isScanning: false,
   plugins: null,
 };
 let activePluginScanPromise: Promise<PluginSummary[]> | null = null;
 const pluginScanSessionListeners = new Set<PluginScanSessionListener>();
+const FIRST_EMPTY_PLUGINS_AUTO_SCAN_KEY = "skilldock.plugins.firstEmptyAutoScanCompleted";
 
 function getPluginScanSessionSnapshot() {
   return { ...pluginScanSession };
+}
+
+function hasCompletedFirstEmptyPluginsAutoScan() {
+  if (
+    typeof window === "undefined" ||
+    typeof window.localStorage?.getItem !== "function"
+  ) {
+    return false;
+  }
+
+  return window.localStorage.getItem(FIRST_EMPTY_PLUGINS_AUTO_SCAN_KEY) === "true";
+}
+
+function markFirstEmptyPluginsAutoScanCompleted() {
+  if (
+    typeof window === "undefined" ||
+    typeof window.localStorage?.setItem !== "function"
+  ) {
+    return;
+  }
+
+  window.localStorage.setItem(FIRST_EMPTY_PLUGINS_AUTO_SCAN_KEY, "true");
 }
 
 function setPluginScanSession(nextSession: PluginScanSession) {
@@ -120,6 +156,39 @@ function subscribePluginScanSessionChange(listener: PluginScanSessionListener) {
 }
 
 function startPluginScanImport() {
+  if (activePluginScanPromise) {
+    return activePluginScanPromise;
+  }
+
+  setPluginScanSession({
+    isScanning: true,
+    plugins: null,
+  });
+  activePluginScanPromise = fetchInstalledPlugins()
+    .then((plugins) => {
+      if (!shouldUseFixtureData()) {
+        cachePlugins(plugins);
+      }
+      setPluginScanSession({
+        isScanning: false,
+        plugins,
+      });
+      return plugins;
+    })
+    .catch((error) => {
+      setPluginScanSession({
+        isScanning: false,
+        plugins: null,
+      });
+      throw error;
+    })
+    .finally(() => {
+      activePluginScanPromise = null;
+    });
+  return activePluginScanPromise;
+}
+
+function startPluginStateRefreshImport() {
   if (activePluginScanPromise) {
     return activePluginScanPromise;
   }
@@ -172,6 +241,34 @@ function RefreshIcon({ isSpinning = false }: { isSpinning?: boolean }) {
       <path d="M3.7 3.9v3.7h3.7" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
       <path d="M3.8 10.9a6.2 6.2 0 0 0 10.7 3.6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
       <path d="M16.3 16.1v-3.7h-3.7" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function ImportIcon({ isSpinning = false }: { isSpinning?: boolean }) {
+  return (
+    <svg className={isSpinning ? "skills-toolbar-button__svg is-spinning" : "skills-toolbar-button__svg"} viewBox="0 0 20 20" fill="none" aria-hidden="true">
+      <path
+        d="M4.25 10.25A5.75 5.75 0 0 1 14.1 6.2"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M15.75 9.75A5.75 5.75 0 0 1 5.9 13.8"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M13.9 3.75v2.8h-2.8M6.1 16.25v-2.8h2.8"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
     </svg>
   );
 }
@@ -265,12 +362,163 @@ function PluginListIcon({ name }: { name: string }) {
 }
 
 function getHostLabel(hostTool: PluginHostTool) {
-  return pluginHostTabs.find((tab) => tab.key === hostTool)?.label ?? hostTool;
+  return pluginTabs.find((tab) => tab.key === hostTool)?.label ?? hostTool;
 }
 
 function getPluginInstanceKey(plugin: PluginSummary) {
   const instancePath = plugin.rootPath || plugin.manifestPath || plugin.id;
   return `${plugin.hostTool}::${instancePath}::${plugin.id}`;
+}
+
+function normalizePluginAggregateIdentity(value: string) {
+  return value.trim().toLowerCase().replace(/\.git$/, "");
+}
+
+function getPluginCanonicalName(plugin: PluginSummary) {
+  const prefix = `${plugin.hostTool}:`;
+  if (plugin.id.startsWith(prefix)) {
+    return normalizePluginAggregateIdentity(plugin.id.slice(prefix.length));
+  }
+  return normalizePluginAggregateIdentity(plugin.id);
+}
+
+function buildPluginAggregateKey(plugin: PluginSummary) {
+  const canonicalName = getPluginCanonicalName(plugin);
+  const sourceIdentity = normalizePluginAggregateIdentity(plugin.sourceUrl);
+  const packageIdentity = normalizePluginAggregateIdentity(plugin.packageId);
+  const repoIdentity = normalizePluginAggregateIdentity(plugin.repoRootPath);
+  const sourceLabelIdentity = normalizePluginAggregateIdentity(plugin.sourceLabel);
+
+  if (sourceIdentity && canonicalName) {
+    return `source:${sourceIdentity}:name:${canonicalName}`;
+  }
+  if (packageIdentity && canonicalName) {
+    return `package:${packageIdentity}:name:${canonicalName}`;
+  }
+  if (repoIdentity && canonicalName) {
+    return `repo:${repoIdentity}:name:${canonicalName}`;
+  }
+  if (sourceLabelIdentity && canonicalName) {
+    return `label:${sourceLabelIdentity}:name:${canonicalName}`;
+  }
+  if (canonicalName) {
+    return `name:${canonicalName}`;
+  }
+
+  return `fallback:${normalizePluginAggregateIdentity(plugin.name)}:${plugin.hostTool}`;
+}
+
+function buildPluginPackageMap(plugins: PluginSummary[]) {
+  const packageMap = new Map<string, PluginSummary[]>();
+
+  for (const plugin of plugins) {
+    const packageKey = buildPluginAggregateKey(plugin);
+    const installedGroup = packageMap.get(packageKey) ?? [];
+    installedGroup.push(plugin);
+    packageMap.set(packageKey, installedGroup);
+  }
+
+  return packageMap;
+}
+
+function buildAllTabPlugins(plugins: PluginSummary[]): PluginSummary[] {
+  const packageMap = buildPluginPackageMap(plugins);
+
+  return [...packageMap.values()].map((installedGroup) => {
+    const sortedGroup = [...installedGroup].sort(comparePlugins);
+    const primaryPlugin = sortedGroup[0];
+    if (!primaryPlugin) {
+      throw new Error("plugin package group should not be empty");
+    }
+
+    const relatedHostTools = sortedGroup
+      .map((plugin) => plugin.hostTool)
+      .filter((hostTool, index, hostTools) => hostTools.indexOf(hostTool) === index);
+    const hasEnabledInstallation = sortedGroup.some((plugin) => plugin.enabledState === "enabled");
+    const hasDisabledInstallation = sortedGroup.some((plugin) => plugin.enabledState === "disabled");
+    const hasUnknownInstallation = sortedGroup.some((plugin) => plugin.enabledState === "unknown");
+    const hasBrokenInstallation = sortedGroup.some(
+      (plugin) => plugin.installState === "broken" || plugin.status === "scan-error",
+    );
+    const updateAvailable = sortedGroup.some((plugin) => plugin.updateAvailable);
+
+    let enabledState: PluginSummary["enabledState"] = "unknown";
+    if (hasEnabledInstallation) {
+      enabledState = "enabled";
+    } else if (hasDisabledInstallation) {
+      enabledState = "disabled";
+    } else if (hasUnknownInstallation) {
+      enabledState = "unknown";
+    }
+
+    let installState: PluginSummary["installState"] = primaryPlugin.installState;
+    if (hasBrokenInstallation) {
+      installState = "broken";
+    } else if (sortedGroup.every((plugin) => plugin.installState === "detected")) {
+      installState = "detected";
+    }
+
+    const mergedComponents = sortedGroup.flatMap((plugin) => plugin.components);
+    const uniqueComponents = mergedComponents.filter((component, index) => {
+      const componentKey = `${component.assetType}:${component.packageItemId || component.id}`;
+      return mergedComponents.findIndex((candidate) => (
+        `${candidate.assetType}:${candidate.packageItemId || candidate.id}` === componentKey
+      )) === index;
+    });
+    const mergedScopes = sortedGroup.flatMap((plugin) => plugin.scopes);
+    const uniqueScopes = mergedScopes.filter((scope, index) => {
+      const scopeKey = `${scope.scopeId}:${scope.location}`;
+      return mergedScopes.findIndex((candidate) => (
+        `${candidate.scopeId}:${candidate.location}` === scopeKey
+      )) === index;
+    });
+    const installSource = sortedGroup.some((plugin) => plugin.installSource === "skilldock")
+      ? "skilldock"
+      : primaryPlugin.installSource;
+    const collabStatus: PluginSummary["collabStatus"] = sortedGroup.some((plugin) => plugin.collabStatus === "pending-push")
+      ? "pending-push"
+      : sortedGroup.some((plugin) => plugin.collabStatus === "update-available")
+        ? "update-available"
+        : sortedGroup.some((plugin) => plugin.collabStatus === "diverged")
+          ? "diverged"
+          : "clean";
+    const statusText = updateAvailable
+      ? "Shared plugin package has updates available."
+      : hasBrokenInstallation
+        ? "Some host installations are in an error state."
+        : primaryPlugin.statusText;
+
+    return {
+      ...primaryPlugin,
+      relatedHostTools,
+      components: uniqueComponents,
+      scopes: uniqueScopes,
+      enabledState,
+      installState,
+      installSource,
+      collabStatus,
+      updateAvailable,
+      statusText,
+    };
+  });
+}
+
+function listPluginActionTargets(
+  plugin: PluginSummary,
+  allPlugins: PluginSummary[],
+  includeAllHosts: boolean,
+) {
+  if (!includeAllHosts) {
+    return allPlugins.filter((candidate) => (
+      candidate.hostTool === plugin.hostTool
+      && getPluginInstanceKey(candidate) === getPluginInstanceKey(plugin)
+    ));
+  }
+
+  const aggregateKey = buildPluginAggregateKey(plugin);
+  return allPlugins.filter((candidate) => (
+    buildPluginAggregateKey(candidate) === aggregateKey
+  ));
 }
 
 function PluginHostLogo({ hostTool, label }: { hostTool: PluginHostTool; label: string }) {
@@ -298,6 +546,33 @@ function PluginHostLogo({ hostTool, label }: { hostTool: PluginHostTool; label: 
   );
 }
 
+function PluginHostCoverageIcon({
+  hostTool,
+  label,
+}: {
+  hostTool: PluginHostTool;
+  label: string;
+}) {
+  const [logoLoadFailed, setLogoLoadFailed] = useState(false);
+  const logoUrl = getToolLogoUrl(hostTool);
+  const fallbackLabel = label.slice(0, 1).toUpperCase();
+
+  return (
+    <span className="plugins-page__host-coverage-icon" aria-hidden="true">
+      {logoUrl && !logoLoadFailed ? (
+        <img
+          src={logoUrl}
+          alt=""
+          loading="lazy"
+          onError={() => setLogoLoadFailed(true)}
+        />
+      ) : (
+        <span>{fallbackLabel}</span>
+      )}
+    </span>
+  );
+}
+
 function comparePlugins(left: PluginSummary, right: PluginSummary) {
   return (
     pluginEnabledOrder[left.enabledState] -
@@ -313,29 +588,180 @@ function comparePlugins(left: PluginSummary, right: PluginSummary) {
   );
 }
 
-function getPluginEnabledBadge(plugin: PluginSummary) {
+function getPluginEnabledBadge(
+  plugin: PluginSummary,
+  t: ReturnType<typeof useTranslate>["t"],
+) {
   if (plugin.enabledState === "enabled") {
-    return "已启用";
+    return t("plugins.status.enabled");
   }
   if (plugin.enabledState === "disabled") {
-    return "未启用";
+    return t("plugins.status.disabled");
   }
-  return "状态未知";
+  return t("plugins.status.unknown");
+}
+
+function getPluginHostCoverageEntries(plugins: PluginSummary[]) {
+  return [...plugins]
+    .sort((left, right) => pluginTabs
+      .filter((tab) => tab.key !== "all")
+      .findIndex((tab) => tab.key === left.hostTool)
+      - pluginTabs
+        .filter((tab) => tab.key !== "all")
+        .findIndex((tab) => tab.key === right.hostTool))
+    .map((plugin) => ({
+      hostTool: plugin.hostTool,
+      enabledState: plugin.enabledState,
+      hasError: plugin.installState === "broken" || plugin.status === "scan-error",
+    }))
+    .filter((entry, index, entries) => entries.findIndex((candidate) => (
+      candidate.hostTool === entry.hostTool
+    )) === index);
+}
+
+function getPluginHostCoverageEntriesForSummary(
+  plugin: PluginSummary,
+  allPlugins: PluginSummary[],
+  includeRelatedHostTools = false,
+) {
+  const relatedPlugins = allPlugins.filter((candidate) => (
+    buildPluginAggregateKey(candidate) === buildPluginAggregateKey(plugin)
+    && getPluginInstanceKey(candidate) !== getPluginInstanceKey(plugin)
+  ));
+  const entries = getPluginHostCoverageEntries([plugin, ...relatedPlugins]);
+  const coveredHostTools = new Set(entries.map((entry) => entry.hostTool));
+
+  if (includeRelatedHostTools) {
+    for (const hostTool of plugin.relatedHostTools ?? []) {
+      if (!coveredHostTools.has(hostTool)) {
+        entries.push({
+          hostTool,
+          enabledState: "unknown",
+          hasError: false,
+        });
+      }
+    }
+  }
+
+  return entries.sort((left, right) => pluginTabs
+    .filter((tab) => tab.key !== "all")
+    .findIndex((tab) => tab.key === left.hostTool)
+    - pluginTabs
+      .filter((tab) => tab.key !== "all")
+      .findIndex((tab) => tab.key === right.hostTool));
+}
+
+function renderPluginHostCoverageList(
+  hostCoverageEntries: PluginHostCoverageEntry[],
+  t: ReturnType<typeof useTranslate>["t"],
+) {
+  if (hostCoverageEntries.length === 0) {
+    return null;
+  }
+
+  return (
+    <span className="plugins-page__enabled-badge-hosts" aria-label={t("plugins.installedHosts")}>
+      {hostCoverageEntries.map((entry) => (
+        <span
+          key={entry.hostTool}
+          className={`plugins-page__host-coverage-item is-${entry.enabledState}${entry.hasError ? " has-error" : ""}`}
+          data-tooltip={getPluginHostCoverageTooltip(entry, t)}
+        >
+          <PluginHostCoverageIcon
+            hostTool={entry.hostTool}
+            label={getHostLabel(entry.hostTool)}
+          />
+        </span>
+      ))}
+    </span>
+  );
+}
+
+function getPluginHostCoverageTooltip(
+  entry: PluginHostCoverageEntry,
+  t: ReturnType<typeof useTranslate>["t"],
+) {
+  const hostLabel = getHostLabel(entry.hostTool);
+  if (entry.hasError) {
+    return t("plugins.hostCoverage.error", { host: hostLabel });
+  }
+  if (entry.enabledState === "enabled") {
+    return t("plugins.hostCoverage.enabled", { host: hostLabel });
+  }
+  if (entry.enabledState === "disabled") {
+    return t("plugins.hostCoverage.disabled", { host: hostLabel });
+  }
+
+  return t("plugins.hostCoverage.unknown", { host: hostLabel });
+}
+
+function renderPluginEnabledBadge(
+  plugin: PluginSummary,
+  t: ReturnType<typeof useTranslate>["t"],
+) {
+  return getPluginEnabledBadge(plugin, t);
+}
+
+function renderPluginHostCoverageBadge(
+  plugin: PluginSummary,
+  hostCoverageEntries: PluginHostCoverageEntry[],
+  t: ReturnType<typeof useTranslate>["t"],
+) {
+  if (hostCoverageEntries.length === 0) {
+    return null;
+  }
+
+  const visibleEntries = hostCoverageEntries.slice(0, maxVisibleHostCoverageEntries);
+  const hiddenCount = Math.max(hostCoverageEntries.length - visibleEntries.length, 0);
+
+  return (
+    <span className="plugins-page__enabled-badge-hosts" aria-label={t("plugins.installedHostsFor", { name: plugin.name })}>
+      {renderPluginHostCoverageList(visibleEntries, t)}
+      {hiddenCount > 0 ? (
+        <span className="plugins-page__host-coverage-more">{`+${hiddenCount}`}</span>
+      ) : null}
+    </span>
+  );
+}
+
+function getPluginCollabBadge(
+  plugin: PluginSummary,
+  t: ReturnType<typeof useTranslate>["t"],
+) {
+  if (plugin.collabStatus === "update-available") {
+    return { label: t("plugins.collab.updateAvailable"), tone: "positive" as const };
+  }
+  if (plugin.collabStatus === "pending-push") {
+    return { label: t("plugins.collab.pendingPush"), tone: "info" as const };
+  }
+  if (plugin.collabStatus === "diverged") {
+    return { label: t("plugins.collab.diverged"), tone: "warning" as const };
+  }
+
+  return null;
 }
 
 function canTogglePlugin(plugin: PluginSummary) {
   return plugin.hostTool === "codex" || plugin.hostTool === "claude-code";
 }
 
-function getPluginToggleActionLabel(plugin: PluginSummary, isPending: boolean) {
+function getPluginToggleActionLabel(
+  plugin: PluginSummary,
+  isPending: boolean,
+  t: ReturnType<typeof useTranslate>["t"],
+) {
   if (!canTogglePlugin(plugin)) {
-    return `${plugin.name} 暂不支持在 SkillDock 内切换`;
+    return t("plugins.action.toggle.unsupported", { name: plugin.name });
   }
   if (isPending) {
-    return plugin.enabledState === "enabled" ? `正在关闭 ${plugin.name} 插件` : `正在开启 ${plugin.name} 插件`;
+    return plugin.enabledState === "enabled"
+      ? t("plugins.action.toggle.disabling", { name: plugin.name })
+      : t("plugins.action.toggle.enabling", { name: plugin.name });
   }
 
-  return plugin.enabledState === "enabled" ? `关闭 ${plugin.name} 插件` : `开启 ${plugin.name} 插件`;
+  return plugin.enabledState === "enabled"
+    ? t("plugins.action.toggle.disable", { name: plugin.name })
+    : t("plugins.action.toggle.enable", { name: plugin.name });
 }
 
 function getPluginToggleButtonClassName(plugin: PluginSummary) {
@@ -353,19 +779,33 @@ function getPluginDeleteActionLabel(
   plugin: PluginSummary,
   isConfirming: boolean,
   isDeleting: boolean,
+  t: ReturnType<typeof useTranslate>["t"],
 ) {
   if (isDeleting) {
-    return `正在删除 ${plugin.name} 插件`;
+    return t("plugins.action.delete.deleting", { name: plugin.name });
   }
   if (isConfirming) {
-    return `确认删除 ${plugin.name} 插件`;
+    return t("plugins.action.delete.confirmAria", { name: plugin.name });
   }
 
-  return `删除 ${plugin.name} 插件`;
+  return t("plugins.action.delete.default", { name: plugin.name });
 }
 
-function getPluginOpenActionLabel(plugin: PluginSummary) {
-  return `在访达中打开 ${plugin.name} 插件目录`;
+function getPluginOpenActionLabel(
+  plugin: PluginSummary,
+  t: ReturnType<typeof useTranslate>["t"],
+) {
+  return t("plugins.action.open", { name: plugin.name });
+}
+
+function getPluginUpdateActionLabel(
+  plugin: PluginSummary,
+  isPending: boolean,
+  t: ReturnType<typeof useTranslate>["t"],
+) {
+  return isPending
+    ? t("plugins.action.update.updating", { name: plugin.name })
+    : t("plugins.action.update.default", { name: plugin.name });
 }
 
 function getPluginSourceLabel(plugin: PluginSummary) {
@@ -376,19 +816,101 @@ function getPluginSourceLabel(plugin: PluginSummary) {
     return plugin.sourceLabel.trim();
   }
   if (plugin.sourceType === "git") {
-    return "Git 仓库";
+    return "Git Repository";
   }
   if (plugin.sourceType === "marketplace") {
     return "Marketplace";
   }
-  return "本地目录";
+  return "Local Directory";
 }
 
-function getPluginSourceTypeLabel(plugin: PluginSummary) {
-  return plugin.sourceType === "local" ? "本地" : "Git 仓库";
+function getPluginSourceTypeLabel(
+  plugin: PluginSummary,
+  t: ReturnType<typeof useTranslate>["t"],
+) {
+  if (plugin.sourceType === "marketplace") {
+    return "Marketplace";
+  }
+  const sourceValue = plugin.sourceUrl.trim() || plugin.sourceLabel.trim();
+  if (sourceValue && isGitSourceValue(sourceValue)) {
+    return t("plugins.sourceType.git");
+  }
+  if (plugin.sourceType === "local") {
+    return t("plugins.sourceType.local");
+  }
+  return t("plugins.sourceType.git");
+}
+
+function getPluginInstallSourceLabel(
+  plugin: PluginSummary,
+  t: ReturnType<typeof useTranslate>["t"],
+) {
+  return plugin.installSource === "skilldock"
+    ? t("plugins.installSource.skilldock")
+    : t("plugins.installSource.host");
+}
+
+function getPluginDirectoryPath(plugin: PluginSummary) {
+  return plugin.displayRootPath?.trim() || plugin.rootPath?.trim() || "";
+}
+
+function shouldShowPluginBranch(plugin: PluginSummary) {
+  return plugin.sourceType !== "marketplace" && Boolean(plugin.sourceRef);
+}
+
+function shouldShowPluginGitBadge(plugin: PluginSummary, sourceValue: string) {
+  return plugin.sourceType !== "marketplace" && isGitSourceValue(sourceValue);
+}
+
+function tryParsePluginSourceUrl(value: string) {
+  try {
+    return new URL(value);
+  } catch {
+    return null;
+  }
+}
+
+function buildPluginRepositorySourceUrl(plugin: PluginSummary) {
+  const sourceUrl = plugin.sourceUrl.trim();
+  if (!sourceUrl) {
+    return "";
+  }
+
+  const parsed = tryParsePluginSourceUrl(sourceUrl);
+  if (!parsed) {
+    return sourceUrl;
+  }
+
+  const branch = plugin.sourceRef.trim() || plugin.currentBranch.trim();
+  const relativePath = plugin.pluginRelativePath.trim().replace(/^\/+|\/+$/g, "");
+  if (!branch || !relativePath) {
+    return sourceUrl;
+  }
+
+  const segments = parsed.pathname.split("/").filter(Boolean);
+  const treeIndex = segments.findIndex((segment, index) => {
+    return segment === "tree" || segment === "blob" || (segment === "-" && segments[index + 1] === "tree");
+  });
+  if (treeIndex >= 0) {
+    parsed.pathname = `/${segments.slice(0, treeIndex).join("/")}`;
+    parsed.search = "";
+    parsed.hash = "";
+  }
+
+  if (parsed.hostname.includes("gitlab")) {
+    parsed.pathname = `${parsed.pathname.replace(/\/+$/, "")}/-/tree/${branch}/${relativePath}`;
+  } else {
+    parsed.pathname = `${parsed.pathname.replace(/\/+$/, "")}/tree/${branch}/${relativePath}`;
+  }
+  return parsed.toString();
 }
 
 function getPluginSourceValue(plugin: PluginSummary) {
+  const gitRepositorySourceUrl = buildPluginRepositorySourceUrl(plugin);
+  if (gitRepositorySourceUrl) {
+    return gitRepositorySourceUrl;
+  }
+
   const sourceUrl = plugin.sourceUrl.trim();
   if (sourceUrl) {
     return sourceUrl;
@@ -401,35 +923,64 @@ function getPluginSourceValue(plugin: PluginSummary) {
   return getPluginSourceLabel(plugin);
 }
 
-function getPluginDescription(plugin: PluginSummary) {
-  return plugin.description.trim() || "暂无简介";
+function getPluginDescription(
+  plugin: PluginSummary,
+  t: ReturnType<typeof useTranslate>["t"],
+) {
+  return plugin.description.trim() || t("plugins.description.empty");
 }
 
-function getPluginSubtitle(plugin: PluginSummary) {
-  return getPluginDescription(plugin);
+function getPluginSubtitle(
+  plugin: PluginSummary,
+  t: ReturnType<typeof useTranslate>["t"],
+) {
+  return getPluginDescription(plugin, t);
 }
 
-function getComponentDescription(component: PluginComponentSummary) {
+function getPluginRemoteUpdatedAt(plugin: PluginSummary, t: ReturnType<typeof useTranslate>["t"]) {
+  return formatSkillUpdatedAt(plugin.remoteUpdatedAt)
+    || formatSkillUpdatedAt(plugin.updatedAt)
+    || t("skill.card.notFetched");
+}
+
+function getPluginLocalUpdatedAt(plugin: PluginSummary, t: ReturnType<typeof useTranslate>["t"]) {
+  return formatSkillUpdatedAt(plugin.localUpdatedAt)
+    || formatSkillUpdatedAt(plugin.updatedAt)
+    || t("skill.card.notFetched");
+}
+
+function getPluginLastEditor(plugin: PluginSummary, t: ReturnType<typeof useTranslate>["t"]) {
+  return formatSkillLastEditor(plugin.lastEditor) || t("skill.card.notFetched");
+}
+
+function shouldShowPluginRemoteUpdateInfo(plugin: PluginSummary) {
+  return plugin.sourceType === "git" || plugin.isGitRepo;
+}
+
+function getComponentDescription(
+  component: PluginComponentSummary,
+  t: ReturnType<typeof useTranslate>["t"],
+) {
   const description = component.description.trim();
   if (description) {
     return description;
   }
   if (component.assetType === "skill") {
-    return "Skill 组件";
+    return t("plugins.componentType.skill");
   }
   if (component.assetType === "subagent") {
-    return "Subagent 组件";
+    return t("plugins.componentType.subagent");
   }
   if (component.assetType === "mcp") {
-    return "MCP 配置";
+    return t("plugins.componentType.mcp");
   }
   if (component.assetType === "rule") {
-    return "Rule 组件";
+    return t("plugins.componentType.rule");
   }
   if (component.assetType === "hook") {
-    return "Hook 组件";
+    return t("plugins.componentType.hook");
   }
-  return "Command 组件";
+  return t("plugins.componentType.command");
 }
 
 function ComponentIcon({ assetType }: { assetType: PluginAssetType }) {
@@ -624,18 +1175,48 @@ function isHttpUrl(value: string) {
   }
 }
 
+function isGitSourceValue(value: string) {
+  const normalizedValue = value.trim().toLowerCase();
+  if (!normalizedValue) {
+    return false;
+  }
+
+  if (normalizedValue.startsWith("git@") || normalizedValue.startsWith("ssh://")) {
+    return true;
+  }
+
+  if (normalizedValue.endsWith(".git")) {
+    return true;
+  }
+
+  try {
+    const parsedUrl = new URL(value.trim());
+    if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") {
+      return false;
+    }
+    return parsedUrl.pathname.split("/").filter(Boolean).length >= 2;
+  } catch {
+    return false;
+  }
+}
+
 export function PluginsRoute() {
+  const { t } = useTranslate();
+  const { defaultOpenToolId, language, toolConfigs } = useSkillWorkspace();
+  const { notify } = useNotifications();
   const [plugins, setPlugins] = useState<PluginSummary[]>(() => getRuntimeCachedPlugins() ?? []);
   const [isLoading, setIsLoading] = useState(() => getRuntimeCachedPlugins() === null);
   const [isRefreshing, setIsRefreshing] = useState(() => getPluginScanSessionSnapshot().isScanning);
+  const [isReloading, setIsReloading] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
   const [actionErrorMessage, setActionErrorMessage] = useState("");
   const [previewState, setPreviewState] = useState<PreviewState | null>(null);
   const [previewViewMode, setPreviewViewMode] = useState<SkillFileViewMode>("preview");
   const [isPreviewDirty, setIsPreviewDirty] = useState(false);
+  const [isPreviewSaving, setIsPreviewSaving] = useState(false);
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<PluginFilter>("all");
-  const [activeHost, setActiveHost] = useState<PluginHostTool>("claude-code");
+  const [activeHost, setActiveHost] = useState<PluginTabKey>("all");
   const [pendingPluginIds, setPendingPluginIds] = useState<Set<string>>(
     () => new Set(),
   );
@@ -643,6 +1224,7 @@ export function PluginsRoute() {
     () => new Set(),
   );
   const [deleteConfirmingPluginId, setDeleteConfirmingPluginId] = useState("");
+  const [updateConfirmingPlugin, setUpdateConfirmingPlugin] = useState<PluginSummary | null>(null);
   const [expandedComponentSections, setExpandedComponentSections] =
     useState<ExpandedComponentSections>({});
   const pendingPluginIdsRef = useRef(new Set<string>());
@@ -652,6 +1234,17 @@ export function PluginsRoute() {
     null,
   );
   const { expandedId, handleExpandedChange } = useSingleExpandedRow();
+  const localizedPluginTabs: { key: PluginTabKey; label: string }[] = [
+    { key: "all", label: t("plugins.tabs.all") },
+    { key: "claude-code", label: "Claude Code" },
+    { key: "codex", label: "Codex" },
+    { key: "cursor", label: "Cursor" },
+  ];
+  const pluginFilterOptions: PluginFilterOption[] = [
+    { value: "all", label: t("plugins.filter.all") },
+    { value: "enabled", label: t("plugins.filter.enabled") },
+    { value: "disabled", label: t("plugins.filter.disabled") },
+  ];
 
   useEffect(() => {
     pluginsRef.current = plugins;
@@ -692,18 +1285,36 @@ export function PluginsRoute() {
     }
 
     try {
-      const nextPlugins = isSilent ? await startPluginScanImport() : await alignPluginsLocalState();
+      const nextPlugins = isSilent ? await startPluginStateRefreshImport() : await alignPluginsLocalState();
       commitPlugins(nextPlugins);
       setErrorMessage("");
     } catch (error) {
       console.warn("Failed to load installed plugins", error);
-      setErrorMessage("扫描本地插件失败，请稍后重试。");
+      setErrorMessage(t("plugins.error.scan"));
     } finally {
       if (isSilent) {
         setIsRefreshing(false);
       } else {
         setIsLoading(false);
       }
+    }
+  }
+
+  async function reloadPlugins() {
+    if (isReloading) {
+      return;
+    }
+
+    setIsReloading(true);
+    try {
+      const nextPlugins = await alignPluginsLocalState();
+      commitPlugins(nextPlugins);
+      setErrorMessage("");
+    } catch (error) {
+      console.warn("Failed to refresh installed plugins", error);
+      setErrorMessage(t("plugins.error.refresh"));
+    } finally {
+      setIsReloading(false);
     }
   }
 
@@ -725,15 +1336,33 @@ export function PluginsRoute() {
       }
 
       try {
-        const nextPlugins = await alignPluginsLocalState();
+        const nextPlugins = await fetchStartupInstalledPlugins();
         if (!shouldIgnore) {
           commitPlugins(nextPlugins);
           setErrorMessage("");
+          if (
+            nextPlugins.length === 0 &&
+            !getPluginScanSessionSnapshot().isScanning &&
+            !hasCompletedFirstEmptyPluginsAutoScan()
+          ) {
+            markFirstEmptyPluginsAutoScanCompleted();
+            void startPluginStateRefreshImport().then((refreshedPlugins) => {
+              if (!shouldIgnore) {
+                commitPlugins(refreshedPlugins);
+                setErrorMessage("");
+              }
+            }).catch((refreshError) => {
+              console.warn("Failed to refresh plugin states", refreshError);
+              if (!shouldIgnore) {
+                setErrorMessage(t("plugins.error.scan"));
+              }
+            });
+          }
         }
       } catch (error) {
         console.warn("Failed to load installed plugins", error);
         if (!shouldIgnore) {
-          setErrorMessage("扫描本地插件失败，请稍后重试。");
+          setErrorMessage(t("plugins.error.scan"));
         }
       } finally {
         if (!shouldIgnore) {
@@ -782,12 +1411,19 @@ export function PluginsRoute() {
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
         setPreviewState(null);
+        return;
+      }
+
+      const isSaveShortcut = event.key.toLowerCase() === "s" && (event.metaKey || event.ctrlKey);
+      if (isSaveShortcut) {
+        event.preventDefault();
+        void handlePreviewSave();
       }
     }
 
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [previewState]);
+  }, [previewState, isPreviewSaving, previewViewMode, isPreviewDirty]);
 
   useEffect(() => {
     if (!deleteConfirmingPluginId) {
@@ -809,6 +1445,10 @@ export function PluginsRoute() {
       return;
     }
 
+    if (activeHost === "all") {
+      return;
+    }
+
     const hasActiveHostPlugins = plugins.some(
       (plugin) => plugin.hostTool === activeHost,
     );
@@ -816,7 +1456,9 @@ export function PluginsRoute() {
       return;
     }
 
-    const firstHostWithPlugins = pluginHostTabs.find((tab) =>
+    const firstHostWithPlugins = pluginTabs
+      .filter((tab) => tab.key !== "all")
+      .find((tab) =>
       plugins.some((plugin) => plugin.hostTool === tab.key),
     );
     if (firstHostWithPlugins) {
@@ -825,29 +1467,20 @@ export function PluginsRoute() {
   }, [activeHost, plugins]);
 
   const normalizedQuery = query.trim().toLowerCase();
-  const hostPlugins = plugins
-    .filter((plugin) => plugin.hostTool === activeHost)
+  const scopedPlugins = (activeHost === "all"
+    ? buildAllTabPlugins(plugins)
+    : plugins.filter((plugin) => plugin.hostTool === activeHost))
     .sort(comparePlugins);
   const filterCounts: Record<PluginFilter, number> = {
-    all: hostPlugins.length,
-    enabled: hostPlugins.filter((plugin) => plugin.enabledState === "enabled").length,
-    disabled: hostPlugins.filter((plugin) => plugin.enabledState === "disabled").length,
-    error: hostPlugins.filter(
-      (plugin) => plugin.installState === "broken" || plugin.status === "scan-error",
-    ).length,
+    all: scopedPlugins.length,
+    enabled: scopedPlugins.filter((plugin) => plugin.enabledState === "enabled").length,
+    disabled: scopedPlugins.filter((plugin) => plugin.enabledState === "disabled").length,
   };
-  const filteredPlugins = hostPlugins.filter((plugin) => {
+  const filteredPlugins = scopedPlugins.filter((plugin) => {
     if (filter === "enabled" && plugin.enabledState !== "enabled") {
       return false;
     }
     if (filter === "disabled" && plugin.enabledState !== "disabled") {
-      return false;
-    }
-    if (
-      filter === "error" &&
-      plugin.installState !== "broken" &&
-      plugin.status !== "scan-error"
-    ) {
       return false;
     }
 
@@ -860,9 +1493,13 @@ export function PluginsRoute() {
       plugin.hostTool,
       plugin.sourceType,
       plugin.rootPath,
+      plugin.repoRootPath,
+      plugin.pluginRelativePath,
       plugin.manifestPath,
       plugin.installState,
       plugin.enabledState,
+      plugin.collabStatus,
+      plugin.statusText,
       plugin.sourceLabel,
       plugin.description,
       plugin.sourceUrl,
@@ -881,25 +1518,25 @@ export function PluginsRoute() {
   const toolbar = (
     <section
       className="plugins-page__toolbar-primary skills-header-bar__tools"
-      aria-label="插件工具栏"
+      aria-label={t("plugins.toolbar.aria")}
     >
       <label className="search-field search-field--header skill-search-field">
-        <span className="sr-only">搜索插件</span>
+        <span className="sr-only">{t("plugins.toolbar.searchLabel")}</span>
         <input
           type="search"
-          placeholder="搜索插件名称、宿主工具、组件..."
+          placeholder={t("plugins.toolbar.searchPlaceholder")}
           value={query}
           onChange={(event) => setQuery(event.target.value)}
         />
       </label>
       <div className="plugins-page__toolbar-actions">
-        <label className="skill-status-filter">
-          <span className="sr-only">筛选插件状态</span>
+        <label className="skill-status-filter plugins-page__toolbar-filter">
+          <span className="sr-only">{t("plugins.toolbar.filterLabel")}</span>
           <span className="skill-status-filter__icon" aria-hidden="true">
             <FilterIcon />
           </span>
           <select
-            aria-label="筛选插件状态"
+            aria-label={t("plugins.toolbar.filterLabel")}
             value={filter}
             onChange={(event) => setFilter(event.target.value as PluginFilter)}
           >
@@ -911,15 +1548,26 @@ export function PluginsRoute() {
           </select>
         </label>
         <button
+          className={`secondary-button secondary-button--compact skills-toolbar-button skills-toolbar-button--refresh${isReloading ? " is-loading" : ""}`}
+          type="button"
+          onClick={() => void reloadPlugins()}
+          disabled={isReloading}
+        >
+          <span aria-hidden="true" className="skills-toolbar-button__icon">
+            <RefreshIcon isSpinning={isReloading} />
+          </span>
+          <span>{t("plugins.toolbar.refresh")}</span>
+        </button>
+        <button
           className={`secondary-button secondary-button--compact skills-toolbar-button skills-toolbar-button--refresh${isRefreshing ? " is-loading" : ""}`}
           type="button"
           onClick={() => void loadPlugins({ silent: true })}
           disabled={isRefreshing}
         >
           <span aria-hidden="true" className="skills-toolbar-button__icon">
-            <RefreshIcon isSpinning={isRefreshing} />
+            <ImportIcon isSpinning={isRefreshing} />
           </span>
-          <span>{isRefreshing ? "扫描中..." : "扫描导入"}</span>
+          <span>{isRefreshing ? t("plugins.toolbar.scanning") : t("plugins.toolbar.scanImport")}</span>
         </button>
       </div>
     </section>
@@ -959,7 +1607,7 @@ export function PluginsRoute() {
         component,
         preview: null,
         isLoading: false,
-        errorMessage: "读取组件预览失败。",
+        errorMessage: t("plugins.preview.error.load"),
       });
     }
   }
@@ -981,6 +1629,52 @@ export function PluginsRoute() {
     });
   }
 
+  async function handlePreviewSave() {
+    if (
+      !previewState?.preview
+      || isPreviewSaving
+      || previewViewMode !== "edit"
+    ) {
+      return;
+    }
+
+    setIsPreviewSaving(true);
+    try {
+      const savedPreview = await savePluginComponentPreview({
+        pluginRoot: previewState.plugin.rootPath,
+        componentId: previewState.component.id,
+        assetType: previewState.component.assetType,
+        content: previewState.preview.content,
+      });
+      setPreviewState((current) => {
+        if (!current) {
+          return current;
+        }
+
+        return {
+          ...current,
+          preview: savedPreview,
+          errorMessage: "",
+        };
+      });
+      setIsPreviewDirty(false);
+    } catch (error) {
+      console.warn("Failed to save plugin component preview", error);
+      setPreviewState((current) => {
+        if (!current) {
+          return current;
+        }
+
+        return {
+          ...current,
+          errorMessage: t("plugins.preview.error.save"),
+        };
+      });
+    } finally {
+      setIsPreviewSaving(false);
+    }
+  }
+
   async function handlePluginEnabledChange(plugin: PluginSummary) {
     const pluginKey = getPluginInstanceKey(plugin);
     if (
@@ -991,15 +1685,83 @@ export function PluginsRoute() {
       return;
     }
 
+    const targetPlugins = listPluginActionTargets(plugin, plugins, activeHost === "all")
+      .filter((candidate) => canTogglePlugin(candidate));
+    if (targetPlugins.length === 0) {
+      return;
+    }
+
     const enabled = plugin.enabledState !== "enabled";
+    const targetPluginKeys = targetPlugins.map((candidate) => getPluginInstanceKey(candidate));
+    for (const targetPluginKey of targetPluginKeys) {
+      pendingPluginIdsRef.current.add(targetPluginKey);
+    }
+    setPendingPluginIds((current) => {
+      const next = new Set(current);
+      for (const targetPluginKey of targetPluginKeys) {
+        next.add(targetPluginKey);
+      }
+      return next;
+    });
+    try {
+      const updatedPlugins = await Promise.all(targetPlugins.map((targetPlugin) => setPluginEnabled({
+        pluginId: targetPlugin.id,
+        hostTool: targetPlugin.hostTool,
+        rootPath: targetPlugin.rootPath,
+        enabled,
+      })));
+      setPlugins((current) => {
+        const updatedPluginMap = new Map(updatedPlugins.map((updatedPlugin) => [
+          getPluginInstanceKey(updatedPlugin),
+          updatedPlugin,
+        ]));
+        const nextPlugins = current.map((candidate) => (
+          updatedPluginMap.get(getPluginInstanceKey(candidate)) ?? candidate
+        ));
+        if (!shouldUseFixtureData()) {
+          cachePlugins(nextPlugins);
+        }
+        return nextPlugins;
+      });
+      setErrorMessage("");
+      setActionErrorMessage("");
+    } catch (error) {
+      console.warn("Failed to update plugin enabled state", error);
+      notify({
+        message: enabled ? t("plugins.error.enable") : t("plugins.error.disable"),
+        tone: "error",
+      });
+    } finally {
+      for (const targetPluginKey of targetPluginKeys) {
+        pendingPluginIdsRef.current.delete(targetPluginKey);
+      }
+      setPendingPluginIds((current) => {
+        const next = new Set(current);
+        for (const targetPluginKey of targetPluginKeys) {
+          next.delete(targetPluginKey);
+        }
+        return next;
+      });
+    }
+  }
+
+  async function runPluginUpdate(plugin: PluginSummary) {
+    const pluginKey = getPluginInstanceKey(plugin);
+    if (
+      plugin.collabStatus !== "update-available"
+      || pendingPluginIdsRef.current.has(pluginKey)
+      || deletingPluginIds.has(pluginKey)
+    ) {
+      return;
+    }
+
     pendingPluginIdsRef.current.add(pluginKey);
     setPendingPluginIds((current) => new Set(current).add(pluginKey));
     try {
-      const updatedPlugin = await setPluginEnabled({
+      const updatedPlugin = await updatePlugin({
         pluginId: plugin.id,
         hostTool: plugin.hostTool,
         rootPath: plugin.rootPath,
-        enabled,
       });
       setPlugins((current) => {
         const nextPlugins = current.map((candidate) =>
@@ -1016,10 +1778,12 @@ export function PluginsRoute() {
       });
       setErrorMessage("");
       setActionErrorMessage("");
-      void loadPlugins({ silent: true });
     } catch (error) {
-      console.warn("Failed to update plugin enabled state", error);
-      setActionErrorMessage(enabled ? "开启插件失败，请检查宿主配置。" : "关闭插件失败，请检查宿主配置。");
+      console.warn("Failed to update plugin", error);
+      notify({
+        message: t("plugins.error.update"),
+        tone: "error",
+      });
     } finally {
       pendingPluginIdsRef.current.delete(pluginKey);
       setPendingPluginIds((current) => {
@@ -1030,13 +1794,46 @@ export function PluginsRoute() {
     }
   }
 
+  async function handlePluginUpdate(plugin: PluginSummary) {
+    if (plugin.updateStrategy === "hash" && plugin.localModified) {
+      setUpdateConfirmingPlugin(plugin);
+      return;
+    }
+    await runPluginUpdate(plugin);
+  }
+
   async function handlePluginOpen(plugin: PluginSummary) {
+    const availableTools = buildOpenToolOptions(toolConfigs, language);
+    const availableToolIds = new Set(availableTools.map((tool) => tool.id));
+    const resolvedOpenToolId = availableToolIds.has(defaultOpenToolId)
+      ? defaultOpenToolId
+      : availableTools[0]?.id ?? FALLBACK_OPEN_TOOL_ID;
+
     try {
-      await openPathInFinder({ path: plugin.rootPath });
+      await openPluginInEditor({
+        rootPath: plugin.repoRootPath.trim() || plugin.rootPath,
+        editorId: resolvedOpenToolId,
+      });
+      setActionErrorMessage("");
+    } catch (error) {
+      console.warn("Failed to open plugin folder with default tool", error);
+      notify({
+        message: t("plugins.error.open"),
+        tone: "error",
+      });
+    }
+  }
+
+  async function handlePluginOpenInFinder(plugin: PluginSummary) {
+    try {
+      await openPathInFinder({ path: getPluginDirectoryPath(plugin) });
       setActionErrorMessage("");
     } catch (error) {
       console.warn("Failed to open plugin folder", error);
-      setActionErrorMessage("打开插件目录失败，请检查本地目录是否存在。");
+      notify({
+        message: t("plugins.error.openDirectory"),
+        tone: "error",
+      });
     }
   }
 
@@ -1051,38 +1848,56 @@ export function PluginsRoute() {
       return;
     }
 
-    setDeletingPluginIds((current) => new Set(current).add(pluginKey));
+    const targetPlugins = listPluginActionTargets(plugin, plugins, activeHost === "all");
+    const targetPluginKeys = targetPlugins.map((candidate) => getPluginInstanceKey(candidate));
+    setDeletingPluginIds((current) => {
+      const next = new Set(current);
+      for (const targetPluginKey of targetPluginKeys) {
+        next.add(targetPluginKey);
+      }
+      return next;
+    });
     try {
-      await deletePlugin({
-        pluginId: plugin.id,
-        hostTool: plugin.hostTool,
-        rootPath: plugin.rootPath,
-      });
+      for (const targetPlugin of targetPlugins) {
+        await deletePlugin({
+          pluginId: targetPlugin.id,
+          hostTool: targetPlugin.hostTool,
+          rootPath: targetPlugin.displayRootPath || targetPlugin.rootPath,
+        });
+      }
       setPlugins((current) => {
-        const nextPlugins = current.filter((candidate) => getPluginInstanceKey(candidate) !== pluginKey);
+        const deletedPluginKeySet = new Set(targetPluginKeys);
+        const nextPlugins = current.filter((candidate) => !deletedPluginKeySet.has(getPluginInstanceKey(candidate)));
         if (!shouldUseFixtureData()) {
           cachePlugins(nextPlugins);
         }
         return nextPlugins;
       });
       setPreviewState((current) =>
-        current && getPluginInstanceKey(current.plugin) === pluginKey ? null : current,
+        current && targetPluginKeys.includes(getPluginInstanceKey(current.plugin)) ? null : current,
       );
       setExpandedComponentSections((current) => {
         const next = { ...current };
-        delete next[pluginKey];
+        for (const targetPluginKey of targetPluginKeys) {
+          delete next[targetPluginKey];
+        }
         return next;
       });
       handleExpandedChange(pluginKey, false);
       setActionErrorMessage("");
     } catch (error) {
       console.warn("Failed to delete plugin", error);
-      setActionErrorMessage("删除插件失败，请检查宿主配置和本地目录权限。");
+      notify({
+        message: t("plugins.error.delete"),
+        tone: "error",
+      });
     } finally {
       setDeleteConfirmingPluginId("");
       setDeletingPluginIds((current) => {
         const next = new Set(current);
-        next.delete(pluginKey);
+        for (const targetPluginKey of targetPluginKeys) {
+          next.delete(targetPluginKey);
+        }
         return next;
       });
     }
@@ -1104,30 +1919,87 @@ export function PluginsRoute() {
     const sourceValue = getPluginSourceValue(plugin);
     const pluginKey = getPluginInstanceKey(plugin);
     const expandedSections = expandedComponentSections[pluginKey] ?? {};
+    const pluginDirectoryPath = getPluginDirectoryPath(plugin);
+    const isAllTabAggregate = activeHost === "all";
+    const showRemoteUpdateInfo = shouldShowPluginRemoteUpdateInfo(plugin);
+    const relatedHostCoverageEntries = getPluginHostCoverageEntriesForSummary(
+      plugin,
+      plugins,
+      activeHost === "all",
+    );
+    const shouldShowPluginMetadataGrid = shouldShowPluginBranch(plugin)
+      || !isAllTabAggregate
+      || (!isAllTabAggregate && relatedHostCoverageEntries.length > 1);
 
     return (
       <div className="plugins-page__detail-panel">
         <section className="plugins-page__metadata-panel">
           <div className="plugins-page__metadata-header">
-            <h3>基本信息</h3>
+            <h3>{t("plugins.details.basicInfo")}</h3>
           </div>
           <dl className="detail-grid detail-grid--single">
             <div>
-              <dt>简介</dt>
-              <dd>{getPluginDescription(plugin)}</dd>
+              <dt>{t("plugins.details.description")}</dt>
+              <dd>{getPluginDescription(plugin, t)}</dd>
             </div>
           </dl>
+          {shouldShowPluginMetadataGrid ? (
+            <dl className="tool-list-row__detail-grid plugins-page__metadata-grid">
+              {shouldShowPluginBranch(plugin) ? (
+                <div>
+                  <dt>{t("plugins.details.branch")}</dt>
+                  <dd>{plugin.sourceRef}</dd>
+                </div>
+              ) : null}
+              {!isAllTabAggregate ? (
+                <div>
+                  <dt>{t("plugins.details.pluginDirectory")}</dt>
+                  <dd className="plugins-page__directory-value">
+                    <span
+                      className="plugins-page__directory-path"
+                      title={pluginDirectoryPath}
+                    >
+                      {pluginDirectoryPath}
+                    </span>
+                    <button
+                      type="button"
+                      className="skill-card__icon-button plugins-page__directory-open-button"
+                      aria-label={getPluginOpenActionLabel(plugin, t)}
+                      data-tooltip={getPluginOpenActionLabel(plugin, t)}
+                      onClick={() => void handlePluginOpenInFinder(plugin)}
+                      disabled={!pluginDirectoryPath}
+                    >
+                      <OpenFolderIcon />
+                    </button>
+                  </dd>
+                </div>
+              ) : null}
+              {!isAllTabAggregate && relatedHostCoverageEntries.length > 1 ? (
+                <div>
+                  <dt>{t("plugins.details.installedHosts")}</dt>
+                  <dd>
+                    {renderPluginHostCoverageList(relatedHostCoverageEntries, t)}
+                  </dd>
+                </div>
+              ) : null}
+            </dl>
+          ) : null}
           <dl className="detail-grid detail-grid--source plugins-page__source-grid">
             <div>
-              <dt>来源类型</dt>
-              <dd>{getPluginSourceTypeLabel(plugin)}</dd>
+              <dt>{t("plugins.details.installMethod")}</dt>
+              <dd>{getPluginInstallSourceLabel(plugin, t)}</dd>
             </div>
             <div>
-              <dt>来源</dt>
+              <dt>{t("plugins.details.sourceType")}</dt>
+              <dd>{getPluginSourceTypeLabel(plugin, t)}</dd>
+            </div>
+            <div>
+              <dt>{t("plugins.details.source")}</dt>
               <dd className="detail-grid__source-value" title={sourceValue}>
                 {isHttpUrl(sourceValue) ? (
                   <a
-                    className="detail-grid__source-link"
+                    className="detail-grid__source-link detail-grid__single-line"
+                    data-tooltip={sourceValue}
                     href={sourceValue}
                     onClick={(event) => {
                       event.preventDefault();
@@ -1137,47 +2009,33 @@ export function PluginsRoute() {
                     {sourceValue}
                   </a>
                 ) : (
-                  <span>{sourceValue}</span>
+                  <span className="detail-grid__single-line" data-tooltip={sourceValue}>
+                    {sourceValue}
+                  </span>
                 )}
-                <span
-                  className={`detail-git-badge${
-                    plugin.isGitRepo || plugin.sourceType !== "local"
-                      ? " is-linked"
-                      : " is-unlinked"
-                  }`}
-                >
-                  git
-                </span>
+                {shouldShowPluginGitBadge(plugin, sourceValue) ? (
+                  <span className="detail-git-badge is-linked">git</span>
+                ) : null}
               </dd>
             </div>
           </dl>
-          <dl className="tool-list-row__detail-grid plugins-page__metadata-grid">
-            {plugin.sourceRef ? (
-              <div>
-                <dt>分支</dt>
-                <dd>{plugin.sourceRef}</dd>
-              </div>
-            ) : null}
-            {plugin.sourceRevision ? (
-              <div>
-                <dt>Revision</dt>
-                <dd>{plugin.sourceRevision}</dd>
-              </div>
+          <dl className="detail-grid detail-grid--single">
+            {showRemoteUpdateInfo ? (
+              <>
+                <div>
+                  <dt>{t("plugins.details.remoteUpdatedAt")}</dt>
+                  <dd>{getPluginRemoteUpdatedAt(plugin, t)}</dd>
+                </div>
+                <div>
+                  <dt>{t("plugins.details.lastEditor")}</dt>
+                  <dd>{getPluginLastEditor(plugin, t)}</dd>
+                </div>
+              </>
             ) : null}
             <div>
-              <dt>目录</dt>
-              <dd title={plugin.rootPath}>{plugin.rootPath}</dd>
+              <dt>{t("plugins.details.localUpdatedAt")}</dt>
+              <dd>{getPluginLocalUpdatedAt(plugin, t)}</dd>
             </div>
-            {plugin.relatedHostTools && plugin.relatedHostTools.length > 0 ? (
-              <div>
-                <dt>也安装在</dt>
-                <dd>
-                  {plugin.relatedHostTools
-                    .map((hostTool) => getHostLabel(hostTool))
-                    .join(" · ")}
-                </dd>
-              </div>
-            ) : null}
           </dl>
         </section>
         <div className="plugins-page__component-sections">
@@ -1220,7 +2078,7 @@ export function PluginsRoute() {
                       </span>
                       <span className="plugins-page__component-copy">
                         <strong>{component.name}</strong>
-                        <span>{getComponentDescription(component)}</span>
+                        <span>{getComponentDescription(component, t)}</span>
                       </span>
                       <span className="plugins-page__component-path">
                         {component.packageItemId || component.id}
@@ -1235,14 +2093,16 @@ export function PluginsRoute() {
                     aria-expanded={isComponentSectionExpanded}
                     onClick={() => toggleComponentSection(plugin, section.key)}
                   >
-                    {isComponentSectionExpanded ? "Show Less" : `View ${hiddenCount} More`}
+                    {isComponentSectionExpanded
+                      ? t("plugins.components.showLess")
+                      : t("plugins.components.viewMore", { count: hiddenCount })}
                   </button>
                 ) : null}
               </section>
             );
           })}
           {plugin.components.length === 0 ? (
-            <p className="plugins-page__component-empty">暂无可展示组件</p>
+            <p className="plugins-page__component-empty">{t("plugins.components.empty")}</p>
           ) : null}
         </div>
       </div>
@@ -1253,7 +2113,7 @@ export function PluginsRoute() {
     return (
       <div className="plugins-page">
         {toolbarContainer ? createPortal(toolbar, toolbarContainer) : toolbar}
-        <p>正在加载插件...</p>
+        <p>{t("plugins.loading")}</p>
       </div>
     );
   }
@@ -1272,13 +2132,13 @@ export function PluginsRoute() {
         <div
           className="plugins-page__host-tabs"
           role="tablist"
-          aria-label="插件宿主"
+          aria-label={t("plugins.tabs.aria")}
         >
-          {pluginHostTabs.map((tab) => {
+          {localizedPluginTabs.map((tab) => {
             const selected = tab.key === activeHost;
-            const count = plugins.filter(
-              (plugin) => plugin.hostTool === tab.key,
-            ).length;
+            const count = tab.key === "all"
+              ? buildAllTabPlugins(plugins).length
+              : plugins.filter((plugin) => plugin.hostTool === tab.key).length;
 
             return (
               <button
@@ -1291,7 +2151,16 @@ export function PluginsRoute() {
                 title={tab.label}
                 onClick={() => setActiveHost(tab.key)}
               >
-                <PluginHostLogo hostTool={tab.key} label={tab.label} />
+                {tab.key === "all" ? (
+                  <span
+                    className="plugins-page__host-tab-logo plugins-page__host-tab-logo--all"
+                    aria-hidden="true"
+                  >
+                    {t("plugins.tabs.all")}
+                  </span>
+                ) : (
+                  <PluginHostLogo hostTool={tab.key} label={tab.label} />
+                )}
                 <span className="plugins-page__host-tab-count">{count}</span>
               </button>
             );
@@ -1312,14 +2181,18 @@ export function PluginsRoute() {
         {filteredPlugins.length === 0 ? (
           <div className="panel-card empty-state">
             <h3>
-              {hostPlugins.length === 0
-                ? `还没有检测到 ${getHostLabel(activeHost)} 插件。`
-                : "当前筛选条件下没有匹配的插件。"}
+              {scopedPlugins.length === 0
+                ? activeHost === "all"
+                  ? t("plugins.empty.none")
+                  : t("plugins.empty.hostNone", { host: getHostLabel(activeHost) })
+                : t("plugins.empty.filteredTitle")}
             </h3>
             <p>
-              {hostPlugins.length === 0
-                ? `当前仅展示 ${getHostLabel(activeHost)} 的插件安装实例。`
-                : "试试切换宿主、调整状态筛选，或刷新本地插件状态。"}
+              {scopedPlugins.length === 0
+                ? activeHost === "all"
+                  ? t("plugins.empty.allDescription")
+                  : t("plugins.empty.hostDescription", { host: getHostLabel(activeHost) })
+                : t("plugins.empty.filteredDescription")}
             </p>
           </div>
         ) : (
@@ -1332,42 +2205,86 @@ export function PluginsRoute() {
               plugin,
               isDeleteConfirming,
               isDeleting,
+              t,
             );
-            const openActionLabel = getPluginOpenActionLabel(plugin);
+            const openActionLabel = getPluginOpenActionLabel(plugin, t);
+            const updateActionLabel = getPluginUpdateActionLabel(plugin, isPending, t);
+            const collabBadge = getPluginCollabBadge(plugin, t);
             const componentSummaryBadges = getPluginComponentSummaryLabels(plugin).map((label) => ({
               label,
               tone: "info" as const,
             }));
+            const hostCoverageEntries = activeHost === "all"
+              ? getPluginHostCoverageEntriesForSummary(plugin, plugins)
+              : [];
+            const hostCoverageBadge = renderPluginHostCoverageBadge(plugin, hostCoverageEntries, t);
 
             return (
               <ToolListRow
                 key={pluginKey}
+                rowId={pluginKey}
                 name={plugin.name}
-                subtitle={getPluginSubtitle(plugin)}
+                subtitle={getPluginSubtitle(plugin, t)}
                 leading={<PluginListIcon name={plugin.name} />}
                 badges={[
                   {
-                    label: getPluginEnabledBadge(plugin),
+                    key: "enabled-state",
+                    label: renderPluginEnabledBadge(plugin, t),
                     tone:
                       plugin.enabledState === "enabled" ? "positive" : "neutral",
                   },
                   ...componentSummaryBadges,
+                  ...(hostCoverageBadge
+                    ? [{ key: "host-coverage", label: hostCoverageBadge, tone: "neutral" as const }]
+                    : []),
                 ]}
-                expanded={expandedId === pluginKey}
-                onExpandedChange={(expanded) =>
-                  handleExpandedChange(pluginKey, expanded)
-                }
                 details={renderPluginDetails(plugin)}
+                expanded={expandedId === pluginKey}
+                onExpandedChange={(expanded, summaryElement) =>
+                  handleExpandedChange(pluginKey, expanded, summaryElement)
+                }
+                expandLabel={language === "en" ? "Expand" : "展开"}
+                collapseLabel={language === "en" ? "Collapse" : "收起"}
                 actions={[
+                  ...(collabBadge
+                    ? [
+                        {
+                          key: "collab-status",
+                          label: collabBadge.label,
+                          className: "plugins-page__action-status",
+                          content: (
+                            <span className={`status-badge tone-${collabBadge.tone}`}>
+                              {collabBadge.label}
+                            </span>
+                          ),
+                        },
+                      ]
+                    : []),
+                  ...(plugin.collabStatus === "update-available"
+                    ? [
+                        {
+                          key: "update",
+                          label: updateActionLabel,
+                          ariaLabel: updateActionLabel,
+                          className: "skill-card__icon-button skill-card__icon-button--update",
+                          icon: <RefreshIcon isSpinning={isPending} />,
+                          tooltip: updateActionLabel,
+                          onClick: () => void handlePluginUpdate(plugin),
+                          disabled: isPending || isDeleting,
+                        },
+                      ]
+                    : []),
                   {
                     key: "toggle-enabled",
                     label: getPluginToggleActionLabel(
                       plugin,
                       isPending,
+                      t,
                     ),
                     ariaLabel: getPluginToggleActionLabel(
                       plugin,
                       isPending,
+                      t,
                     ),
                     className: getPluginToggleButtonClassName(plugin),
                     icon: (
@@ -1378,6 +2295,7 @@ export function PluginsRoute() {
                     tooltip: getPluginToggleActionLabel(
                       plugin,
                       isPending,
+                      t,
                     ),
                     onClick: () => void handlePluginEnabledChange(plugin),
                     disabled:
@@ -1396,10 +2314,10 @@ export function PluginsRoute() {
                   isDeleteConfirming
                     ? {
                         key: "delete-confirm",
-                        label: isDeleting ? "删除中" : "确认",
-                        ariaLabel: deleteActionLabel,
+                        label: t("plugins.action.delete.confirm"),
+                        ariaLabel: t("plugins.action.delete.confirmAria", { name: plugin.name }),
                         className: "skill-card__delete-confirm-button",
-                        tooltip: deleteActionLabel,
+                        tooltip: t("plugins.action.delete.confirmAria", { name: plugin.name }),
                         onClick: () => void handlePluginDelete(plugin),
                         disabled: isDeleting,
                       }
@@ -1446,25 +2364,31 @@ export function PluginsRoute() {
                 <div className="skill-file-dialog__actions">
                   <SkillFileViewModeToggle
                     viewMode={previewViewMode}
-                    groupLabel="组件预览视图模式"
-                    previewLabel="预览"
-                    editLabel="编辑"
+                    groupLabel={t("plugins.preview.viewMode")}
+                    previewLabel={t("plugins.preview.preview")}
+                    editLabel={t("plugins.preview.edit")}
                     onViewModeChange={setPreviewViewMode}
                   />
                   <button
                     className="secondary-button secondary-button--compact"
                     type="button"
-                    disabled={!previewState?.preview || previewViewMode !== "edit"}
+                    onClick={() => void handlePreviewSave()}
+                    disabled={
+                      !previewState?.preview
+                      || previewViewMode !== "edit"
+                      || previewState.isLoading
+                      || isPreviewSaving
+                    }
                   >
                     <span aria-hidden="true">⌘</span>
-                    <span>保存</span>
+                    <span>{isPreviewSaving ? t("plugins.preview.saving") : t("plugins.preview.save")}</span>
                   </button>
                 </div>
                 <button
                   className="skill-file-dialog__close"
                   type="button"
                   onClick={() => setPreviewState(null)}
-                  aria-label="关闭组件预览"
+                  aria-label={t("plugins.preview.close")}
                 >
                   ×
                 </button>
@@ -1508,20 +2432,75 @@ export function PluginsRoute() {
                   isLoading={previewState.isLoading}
                   isSaving={false}
                   hasDirtyChanges={isPreviewDirty}
-                  noEditableFileLabel="暂无可预览文件"
-                  unsavedLabel="已修改"
-                  emptyLabel="暂无可预览内容"
-                  emptyMarkdownLabel="当前 Markdown 没有可预览内容。"
+                  noEditableFileLabel={t("plugins.preview.noEditableFile")}
+                  unsavedLabel={t("plugins.preview.unsaved")}
+                  emptyLabel={t("plugins.preview.empty")}
+                  emptyMarkdownLabel={t("plugins.preview.emptyMarkdown")}
                   onContentChange={updatePreviewContent}
                   onSelectFile={() => undefined}
                 />
                 {previewState.isLoading ? (
-                  <p className="dialog-note">正在加载预览...</p>
+                  <p className="dialog-note">{t("plugins.preview.loading")}</p>
                 ) : null}
                 {previewState.errorMessage ? (
                   <p className="dialog-error">{previewState.errorMessage}</p>
                 ) : null}
               </section>
+            </div>
+          </section>
+        </div>
+      ) : null}
+      {updateConfirmingPlugin ? (
+        <div
+          className="dialog-backdrop plugins-page__preview-backdrop"
+          role="presentation"
+          onClick={() => setUpdateConfirmingPlugin(null)}
+        >
+          <section
+            className="skill-file-dialog plugins-page__preview-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="plugin-update-confirm-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="skill-file-dialog__header">
+              <div className="skill-file-dialog__title">
+                <h3 id="plugin-update-confirm-title">更新将覆盖本地修改</h3>
+                <p>{updateConfirmingPlugin.name}</p>
+              </div>
+              <button
+                className="skill-file-dialog__close"
+                type="button"
+                onClick={() => setUpdateConfirmingPlugin(null)}
+                aria-label={t("notifications.close")}
+              >
+                ×
+              </button>
+            </div>
+            <div className="skill-file-dialog__body plugins-page__preview-body">
+              <p>这个插件目录存在本地修改。继续更新会用上游版本覆盖当前本地内容。</p>
+            </div>
+            <div className="skill-file-dialog__footer">
+              <button
+                className="secondary-button"
+                type="button"
+                onClick={() => setUpdateConfirmingPlugin(null)}
+              >
+                取消
+              </button>
+              <button
+                className="primary-button"
+                type="button"
+                onClick={() => {
+                  const plugin = updateConfirmingPlugin;
+                  setUpdateConfirmingPlugin(null);
+                  if (plugin) {
+                    void runPluginUpdate(plugin);
+                  }
+                }}
+              >
+                继续更新
+              </button>
             </div>
           </section>
         </div>

@@ -846,6 +846,26 @@ test("shows supported MCP apps in enable-to-tool controls", async () => {
   expect(screen.getByText("启用到工具")).toBeInTheDocument();
   expect(screen.getAllByRole("button", { name: "Claude Code" })[0]).toHaveClass("tool-pill");
   expect(screen.getAllByRole("button", { name: "Codex" })[0]).toHaveClass("tool-pill");
+  const enabledAppsSection = screen.getByText("启用到工具").closest("section");
+  if (!enabledAppsSection) {
+    throw new Error("missing enabled apps section");
+  }
+  const enabledAppButtons = within(enabledAppsSection)
+    .getAllByRole("button")
+    .filter((button) => button.classList.contains("tool-pill"));
+  expect(enabledAppButtons.map((button) => button.textContent?.trim())).toEqual([
+    "Claude Code",
+    "Codex",
+    "OpenCode",
+    "Cursor",
+    "Gemini CLI",
+    "Antigravity",
+    "Windsurf",
+    "OpenClaw",
+    "Continue",
+    "iFlow",
+    "Kiro",
+  ]);
   expect(screen.queryByRole("button", { name: "Trae" })).not.toBeInTheDocument();
   expect(screen.getByText("Tools")).toBeInTheDocument();
   expect(screen.getAllByText("2 tools").length).toBeGreaterThan(0);

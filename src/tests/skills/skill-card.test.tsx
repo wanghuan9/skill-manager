@@ -50,8 +50,34 @@ test("shows description in the list summary and keeps update metadata in details
 
   await userEvent.click(screen.getByRole("button", { name: /展开 drawio-diagram/ }));
 
-  expect(screen.getByText("远端更新时间")).toBeInTheDocument();
+  expect(screen.getByText(/远端更新时间/)).toBeInTheDocument();
+  expect(screen.getByText(/本地更新时间/)).toBeInTheDocument();
+  expect(screen.getByText(/更新人/)).toBeInTheDocument();
+});
+
+test("hides remote update metadata for non-git skill details", async () => {
+  const skill = installedSkillFixtures.find((item) => item.name === "drawio-diagram");
+  if (!skill) {
+    throw new Error("missing drawio-diagram fixture");
+  }
+  const marketplaceLikeSkill = {
+    ...skill,
+    sourceType: "github" as const,
+    sourceUrl: "https://skills.sh/skills/drawio-diagram",
+    gitLinked: false,
+    remoteUpdatedAt: "2026/5/12 11:38:11",
+    localUpdatedAt: "2026/5/12 09:20:00",
+    lastEditor: "Someone",
+  };
+
+  renderSkillCardWithProviders(marketplaceLikeSkill);
+
+  await userEvent.click(screen.getByRole("button", { name: /展开 drawio-diagram/ }));
+
+  expect(screen.queryByText(/远端更新时间/)).not.toBeInTheDocument();
+  expect(screen.queryByText(/更新人/)).not.toBeInTheDocument();
   expect(screen.getByText("本地更新时间")).toBeInTheDocument();
+  expect(screen.getByText("2026/5/12 09:20:00")).toBeInTheDocument();
 });
 
 test("truncates long descriptions in the list summary", () => {
@@ -90,7 +116,7 @@ test("hides remote updated time for local skill details", async () => {
   expect(screen.queryByText("远端更新时间")).not.toBeInTheDocument();
   expect(screen.queryByText("更新人")).not.toBeInTheDocument();
   expect(screen.getByText("本地更新时间")).toBeInTheDocument();
-  expect(screen.getAllByText("2026/5/12 09:20:00").length).toBeGreaterThan(0);
+  expect(screen.getByText("2026/5/12 09:20:00")).toBeInTheDocument();
 });
 
 test("sanitizes trailing emoticon in remote updater", async () => {

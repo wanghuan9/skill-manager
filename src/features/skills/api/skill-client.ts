@@ -50,6 +50,7 @@ import type {
   PluginSummary,
   PluginStatus,
   PluginUpdateMode,
+  PluginUpdateStrategy,
   PushPreviewSnapshot,
   PushTargetSnapshot,
   RepoSkillCandidate,
@@ -100,6 +101,10 @@ type PluginComponentPreviewInput = {
   assetType: PluginComponentSummary["assetType"];
 };
 
+type SavePluginComponentPreviewInput = PluginComponentPreviewInput & {
+  content: string;
+};
+
 type SetPluginEnabledInput = {
   pluginId: string;
   hostTool: PluginHostTool;
@@ -108,6 +113,12 @@ type SetPluginEnabledInput = {
 };
 
 type DeletePluginInput = {
+  pluginId: string;
+  hostTool: PluginHostTool;
+  rootPath: string;
+};
+
+type UpdatePluginInput = {
   pluginId: string;
   hostTool: PluginHostTool;
   rootPath: string;
@@ -141,6 +152,11 @@ type PushPreviewInput = {
 
 type OpenSkillInEditorInput = {
   skillName: string;
+  editorId: string;
+};
+
+type OpenPluginInEditorInput = {
+  rootPath: string;
   editorId: string;
 };
 
@@ -509,12 +525,26 @@ function normalizePluginUpdateMode(updateMode: string | undefined): PluginUpdate
   return updateMode === "auto" ? "auto" : "unsupported";
 }
 
+function normalizePluginUpdateStrategy(
+  updateStrategy: string | undefined,
+): PluginUpdateStrategy {
+  if (updateStrategy === "git" || updateStrategy === "hash" || updateStrategy === "none") {
+    return updateStrategy;
+  }
+
+  return "none";
+}
+
 function normalizePluginInstallState(installState: string | undefined): PluginInstallState {
   if (installState === "installed" || installState === "broken" || installState === "detected") {
     return installState;
   }
 
   return "installed";
+}
+
+function normalizePluginInstallSource(installSource: string | undefined): PluginSummary["installSource"] {
+  return installSource === "skilldock" ? "skilldock" : "host";
 }
 
 function normalizePluginEnabledState(enabledState: string | undefined): PluginEnabledState {
@@ -578,9 +608,18 @@ function normalizePluginScopes(scopes: PluginScopeSummary[] | undefined): Plugin
   }));
 }
 
+function currentTimestampLabel() {
+  return `${Date.now()}`;
+}
+
 function normalizePluginSummary(plugin: LegacyPluginSummary): PluginSummary {
+  const fallbackUpdatedAt = plugin.updatedAt ?? currentTimestampLabel();
+  const remoteUpdatedAt = plugin.remoteUpdatedAt ?? fallbackUpdatedAt;
+  const localUpdatedAt = plugin.localUpdatedAt ?? fallbackUpdatedAt;
+
   return {
     id: plugin.id ?? "",
+    packageId: plugin.packageId ?? "",
     name: plugin.name ?? "",
     description: plugin.description ?? "",
     hostTool: normalizePluginHostTool(plugin.hostTool),
@@ -589,6 +628,9 @@ function normalizePluginSummary(plugin: LegacyPluginSummary): PluginSummary {
       : [],
     kind: normalizePluginKind(plugin.kind),
     rootPath: plugin.rootPath ?? "",
+    displayRootPath: plugin.displayRootPath ?? plugin.rootPath ?? "",
+    repoRootPath: plugin.repoRootPath ?? plugin.rootPath ?? "",
+    pluginRelativePath: plugin.pluginRelativePath ?? "",
     manifestPath: plugin.manifestPath ?? "",
     sourceType: plugin.sourceType === "git" || plugin.sourceType === "local" || plugin.sourceType === "marketplace"
       ? plugin.sourceType
@@ -600,14 +642,28 @@ function normalizePluginSummary(plugin: LegacyPluginSummary): PluginSummary {
     currentVersion: plugin.currentVersion ?? "",
     currentBranch: plugin.currentBranch ?? "",
     currentCommit: plugin.currentCommit ?? "",
+    collabStatus:
+      plugin.collabStatus === "update-available"
+      || plugin.collabStatus === "pending-push"
+      || plugin.collabStatus === "diverged"
+        ? plugin.collabStatus
+        : "clean",
+    statusText: plugin.statusText ?? "",
     isGitRepo: plugin.isGitRepo ?? false,
     updateMode: normalizePluginUpdateMode(plugin.updateMode),
+    updateStrategy: normalizePluginUpdateStrategy(plugin.updateStrategy),
     updateAvailable: plugin.updateAvailable ?? false,
+    baselineHash: plugin.baselineHash ?? "",
+    localModified: Boolean(plugin.localModified),
     installedAt: plugin.installedAt ?? "",
-    updatedAt: plugin.updatedAt ?? "",
+    updatedAt: fallbackUpdatedAt,
+    remoteUpdatedAt,
+    localUpdatedAt,
+    lastEditor: plugin.lastEditor ?? "",
     lastScannedAt: plugin.lastScannedAt ?? "",
     status: normalizePluginStatus(plugin.status),
     installState: normalizePluginInstallState(plugin.installState),
+    installSource: normalizePluginInstallSource(plugin.installSource),
     enabledState: normalizePluginEnabledState(plugin.enabledState),
     scopes: normalizePluginScopes(plugin.scopes),
     components: normalizePluginComponents(plugin.components),
@@ -637,6 +693,8 @@ function normalizePluginProbeResult(probe: LegacyPluginProbeResult): PluginProbe
     name: probe.name?.trim() || probe.pluginRoot?.split("/").filter(Boolean).at(-1) || "Plugin",
     description: formatSkillDescription(probe.description ?? ""),
     pluginRoot: probe.pluginRoot ?? "",
+    repoRoot: probe.repoRoot ?? probe.gitRoot ?? "",
+    pluginRelativePath: probe.pluginRelativePath ?? "",
     manifestPath: probe.manifestPath ?? "",
     marketplaceManifestPath: probe.marketplaceManifestPath ?? "",
     components: normalizePluginComponents(probe.components),
@@ -722,6 +780,24 @@ export async function fetchInstalledPlugins(): Promise<PluginSummary[]> {
   return normalizePluginSummaryList(plugins);
 }
 
+export async function fetchStartupInstalledPlugins(): Promise<PluginSummary[]> {
+  const plugins = await invokeOrFallback<LegacyPluginSummary[]>(
+    "list_startup_installed_plugins",
+    {},
+    pluginFixtures,
+  );
+  return normalizePluginSummaryList(plugins);
+}
+
+export async function refreshPluginStates(): Promise<PluginSummary[]> {
+  const plugins = await invokeOrFallback<LegacyPluginSummary[]>(
+    "refresh_plugin_states",
+    {},
+    pluginFixtures,
+  );
+  return normalizePluginSummaryList(plugins);
+}
+
 export async function setPluginEnabled(input: SetPluginEnabledInput): Promise<PluginSummary> {
   if (shouldUseFixtureData()) {
     const plugin = pluginFixtures.find((candidate) =>
@@ -746,6 +822,34 @@ export async function setPluginEnabled(input: SetPluginEnabledInput): Promise<Pl
       hostTool: input.hostTool,
       rootPath: input.rootPath,
       enabled: input.enabled,
+    },
+    pluginFixtures[0],
+  );
+  return normalizePluginSummary(plugin);
+}
+
+export async function updatePlugin(input: UpdatePluginInput): Promise<PluginSummary> {
+  if (shouldUseFixtureData()) {
+    const plugin = pluginFixtures.find((candidate) =>
+      candidate.id === input.pluginId
+      || (candidate.hostTool === input.hostTool && candidate.rootPath === input.rootPath)
+    );
+    if (!plugin) {
+      throw new Error("Plugin fixture not found");
+    }
+
+    plugin.collabStatus = "clean";
+    plugin.statusText = "插件目录已是最新。";
+    plugin.updateAvailable = false;
+    plugin.localModified = false;
+    return normalizePluginSummary(plugin);
+  }
+
+  const plugin = await invokeOrFallback<LegacyPluginSummary>(
+    "update_plugin",
+    {
+      hostTool: input.hostTool,
+      rootPath: input.rootPath,
     },
     pluginFixtures[0],
   );
@@ -857,6 +961,27 @@ export async function fetchPluginComponentPreview(
   };
   const preview = await invokeOrFallback<LegacyPluginComponentPreview>(
     "get_plugin_component_preview",
+    input,
+    fallback,
+  );
+  return normalizePluginComponentPreview(preview);
+}
+
+export async function savePluginComponentPreview(
+  input: SavePluginComponentPreviewInput,
+): Promise<PluginComponentPreview> {
+  const fallbackPath =
+    input.assetType === "skill"
+      ? `${input.componentId.replace(/\/+$/, "")}/SKILL.md`
+      : input.componentId;
+  const fallback = {
+    path: fallbackPath,
+    title: fallbackPath.split("/").at(-2) || fallbackPath.split("/").pop() || fallbackPath,
+    assetType: input.assetType,
+    content: input.content,
+  };
+  const preview = await invokeOrFallback<LegacyPluginComponentPreview>(
+    "save_plugin_component_preview",
     input,
     fallback,
   );
@@ -1313,6 +1438,10 @@ export async function resolveMcpMarketplaceSourceUrl(server: McpMarketplaceServe
 
 export async function openSkillInEditor(input: OpenSkillInEditorInput): Promise<void> {
   return invokeOrFallback("open_skill_in_editor", input, undefined);
+}
+
+export async function openPluginInEditor(input: OpenPluginInEditorInput): Promise<void> {
+  return invokeOrFallback("open_plugin_in_editor", input, undefined);
 }
 
 export async function openToolSkillsFolder(input: OpenToolSkillsFolderInput): Promise<void> {

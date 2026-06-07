@@ -41,8 +41,8 @@ function withTime(baseDate: Date, timeText: string) {
   return formatDate(nextDate);
 }
 
-export function parseSkillTimestamp(value: string) {
-  const trimmedValue = value.trim();
+export function parseSkillTimestamp(value: string | null | undefined) {
+  const trimmedValue = typeof value === "string" ? value.trim() : "";
   if (trimmedValue.length === 0) {
     return Number.NEGATIVE_INFINITY;
   }
@@ -79,8 +79,8 @@ export function parseSkillTimestamp(value: string) {
   return Number.isNaN(parsedTimestamp) ? Number.NEGATIVE_INFINITY : parsedTimestamp;
 }
 
-export function formatSkillUpdatedAt(value: string) {
-  const trimmedValue = value.trim();
+export function formatSkillUpdatedAt(value: string | null | undefined) {
+  const trimmedValue = typeof value === "string" ? value.trim() : "";
   if (trimmedValue.length === 0) {
     return trimmedValue;
   }

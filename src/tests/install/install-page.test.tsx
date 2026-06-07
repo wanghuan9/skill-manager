@@ -4,7 +4,7 @@ import { vi } from "vitest";
 import { App } from "@/app/App";
 import * as skillClient from "@/features/skills/api/skill-client";
 import { marketplaceSkillFixtures, mcpMarketplaceServerFixtures } from "@/features/skills/state/skill-fixtures";
-import type { MarketplaceSkill, McpMarketplaceServer } from "@/features/skills/state/skill-store";
+import type { MarketplaceSkill, McpMarketplaceServer, PluginSummary } from "@/features/skills/state/skill-store";
 import { getCachedMcpWorkspace } from "@/features/skills/utils/mcp-workspace-cache";
 
 function resetMcpMarketplaceRuntimeCache() {
@@ -76,6 +76,10 @@ test("discovers repo skills with the full branch from GitLab tree urls", async (
 test("probes plugin sources with Codex-style inputs and host selection", async () => {
   const sourceUrl =
     "https://git.example.com/example-org/example-repo/-/tree/master/example-plugin?ref_type=heads";
+  const branchSpy = vi.spyOn(skillClient, "fetchGitRepoBranches").mockResolvedValue([
+    { name: "main", isDefault: true, isSelected: false },
+    { name: "master", isDefault: false, isSelected: true },
+  ]);
   const probeSpy = vi.spyOn(skillClient, "probePluginSourceCandidates").mockResolvedValue([{
     tool: "codex",
     compatibleHostTools: ["codex", "claude-code"],
@@ -135,6 +139,7 @@ test("probes plugin sources with Codex-style inputs and host selection", async (
     installStrategy: "codex-marketplace",
     warnings: [],
   }]);
+  vi.spyOn(skillClient, "fetchInstalledPlugins").mockResolvedValue([]);
 
   render(<App />);
   await userEvent.click(screen.getByRole("button", { name: /安装/ }));
@@ -149,9 +154,8 @@ test("probes plugin sources with Codex-style inputs and host selection", async (
     sourceUrl,
   );
   await waitFor(() => {
-    expect(screen.getByRole("combobox", { name: "Git 分支" })).toHaveValue("main");
+    expect(screen.getByRole("combobox", { name: "Git 分支" })).toHaveValue("master");
   });
-  await userEvent.selectOptions(screen.getByRole("combobox", { name: "Git 分支" }), "master");
   await userEvent.click(screen.getByRole("button", { name: "识别插件" }));
 
   await waitFor(() => {
@@ -161,7 +165,7 @@ test("probes plugin sources with Codex-style inputs and host selection", async (
       sparsePath: "example-plugin",
     });
   });
-  expect(await screen.findByText("发现 1 个插件，请选择要安装的插件")).toBeInTheDocument();
+  expect(await screen.findByText("基于 Skill 的模块化 Example Plugin 框架")).toBeInTheDocument();
   expect(screen.getByText("2 skill")).toBeInTheDocument();
   expect(screen.getByText("1 mcp")).toBeInTheDocument();
   expect(screen.getByText("1 agents")).toBeInTheDocument();
@@ -170,13 +174,259 @@ test("probes plugin sources with Codex-style inputs and host selection", async (
   expect(screen.queryByText(/根目录:/)).not.toBeInTheDocument();
   expect(screen.queryByText(/Manifest:/)).not.toBeInTheDocument();
   expect(screen.queryByText("兼容宿主")).not.toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "选择插件 example-plugin" })).toHaveClass("is-selected");
-  expect(screen.getByRole("button", { name: /选择 Codex 作为 example-plugin 安装宿主/ })).toHaveAttribute("aria-pressed", "false");
-  expect(screen.getByRole("button", { name: /选择 Claude Code 作为 example-plugin 安装宿主/ })).toHaveAttribute("aria-pressed", "false");
+  expect(screen.getByRole("button", { name: /取消选择 Codex 作为 example-plugin 安装宿主/ })).toHaveAttribute("aria-pressed", "true");
+  expect(screen.getByRole("button", { name: /取消选择 Claude Code 作为 example-plugin 安装宿主/ })).toHaveAttribute("aria-pressed", "true");
   expect(screen.queryByRole("button", { name: /Cursor 作为 example-plugin 安装宿主/ })).not.toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "安装到选中宿主" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "安装到选中宿主" })).toBeEnabled();
 
   probeSpy.mockRestore();
+  branchSpy.mockRestore();
+});
+
+test("marks already installed plugin hosts and still allows installing remaining hosts", async () => {
+  const sourceUrl = "https://git.example.com/example-org/example-repo";
+  const branchSpy = vi.spyOn(skillClient, "fetchGitRepoBranches").mockResolvedValue([
+    { name: "master", isDefault: true, isSelected: true },
+  ]);
+  const probeSpy = vi.spyOn(skillClient, "probePluginSourceCandidates").mockResolvedValue([{
+    tool: "codex",
+    compatibleHostTools: ["codex", "claude-code", "cursor"],
+    kind: "plugin-repo",
+    name: "example-plugin",
+    description: "基于 Skill 的模块化 Example Plugin 框架",
+    pluginRoot: "/tmp/example-repo/example-plugin",
+    repoRoot: "/tmp/example-repo",
+    pluginRelativePath: "example-plugin",
+    manifestPath: "/tmp/example-repo/example-plugin/.codex-plugin/plugin.json",
+    marketplaceManifestPath: "",
+    components: [],
+    sourceType: "git",
+    sourceUrl: "https://git.example.com/example-org/example-repo",
+    isGitRepo: true,
+    gitRoot: "/tmp/example-repo",
+    confidence: "high",
+    installStrategy: "codex-marketplace",
+    warnings: [],
+  }]);
+  const installedPlugins: PluginSummary[] = [
+    {
+      id: "codex:example-plugin",
+      packageId: "example-plugin",
+      name: "example-plugin",
+      description: "",
+      hostTool: "codex",
+      relatedHostTools: ["claude-code"],
+      kind: "plugin-repo",
+      rootPath: "/Users/demo/.codex/plugins/example-plugin",
+      displayRootPath: "/Users/demo/.codex/plugins/example-plugin",
+      repoRootPath: "/Users/demo/.codex/plugins/example-plugin",
+      pluginRelativePath: "example-plugin",
+      manifestPath: "/Users/demo/.codex/plugins/example-plugin/.codex-plugin/plugin.json",
+      sourceType: "git",
+      sourceLabel: "skilldock",
+      sourceUrl: "https://git.example.com/example-org/example-repo",
+      sourceRef: "master",
+      sourceRevision: "abc123",
+      currentVersion: "1.0.0",
+      currentBranch: "master",
+      currentCommit: "abc123",
+      collabStatus: "clean",
+      statusText: "",
+      isGitRepo: true,
+      updateMode: "auto",
+      updateStrategy: "git",
+      updateAvailable: false,
+      baselineHash: "",
+      localModified: false,
+      installedAt: "1",
+      updatedAt: "1",
+      remoteUpdatedAt: "",
+      localUpdatedAt: "",
+      lastEditor: "",
+      lastScannedAt: "1",
+      status: "ready",
+      installState: "installed",
+      installSource: "skilldock",
+      enabledState: "enabled",
+      scopes: [],
+      components: [],
+    },
+    {
+      id: "claude-code:example-plugin",
+      packageId: "example-plugin",
+      name: "example-plugin",
+      description: "",
+      hostTool: "claude-code",
+      relatedHostTools: ["codex"],
+      kind: "plugin-repo",
+      rootPath: "/Users/demo/.claude/plugins/example-plugin",
+      displayRootPath: "/Users/demo/.claude/plugins/example-plugin",
+      repoRootPath: "/Users/demo/.claude/plugins/example-plugin",
+      pluginRelativePath: "example-plugin",
+      manifestPath: "/Users/demo/.claude/plugins/example-plugin/.claude-plugin/plugin.json",
+      sourceType: "git",
+      sourceLabel: "skilldock",
+      sourceUrl: "https://git.example.com/example-org/example-repo",
+      sourceRef: "master",
+      sourceRevision: "abc123",
+      currentVersion: "1.0.0",
+      currentBranch: "master",
+      currentCommit: "abc123",
+      collabStatus: "clean",
+      statusText: "",
+      isGitRepo: true,
+      updateMode: "auto",
+      updateStrategy: "git",
+      updateAvailable: false,
+      baselineHash: "",
+      localModified: false,
+      installedAt: "1",
+      updatedAt: "1",
+      remoteUpdatedAt: "",
+      localUpdatedAt: "",
+      lastEditor: "",
+      lastScannedAt: "1",
+      status: "ready",
+      installState: "installed",
+      installSource: "skilldock",
+      enabledState: "enabled",
+      scopes: [],
+      components: [],
+    },
+  ];
+  const fetchInstalledPluginsSpy = vi.spyOn(skillClient, "fetchInstalledPlugins").mockResolvedValue(installedPlugins);
+  const installSpy = vi.spyOn(skillClient, "installSelectedPluginProbes").mockResolvedValue([]);
+
+  render(<App />);
+  await userEvent.click(screen.getByRole("button", { name: /安装/ }));
+  await userEvent.click(screen.getByRole("tab", { name: "Plugin" }));
+  await userEvent.type(screen.getByRole("textbox", { name: "Git 仓库地址" }), sourceUrl);
+  await waitFor(() => {
+    expect(screen.getByRole("combobox", { name: "Git 分支" })).toHaveValue("master");
+  });
+  await userEvent.click(screen.getByRole("button", { name: "识别插件" }));
+
+  const codexButton = await screen.findByRole("button", { name: "example-plugin 已安装到 Codex" });
+  const claudeButton = screen.getByRole("button", { name: "example-plugin 已安装到 Claude Code" });
+  const cursorButton = screen.getByRole("button", { name: /选择 Cursor 作为 example-plugin 安装宿主/ });
+
+  expect(codexButton).toHaveAttribute("aria-disabled", "true");
+  expect(codexButton).toHaveAttribute("data-tooltip", "Codex · 已安装");
+  expect(claudeButton).toHaveAttribute("aria-disabled", "true");
+  expect(claudeButton).toHaveAttribute("data-tooltip", "Claude Code · 已安装");
+  expect(cursorButton).toHaveAttribute("aria-disabled", "false");
+  expect(cursorButton).toHaveAttribute("aria-pressed", "true");
+  expect(screen.getByRole("button", { name: "选择插件 example-plugin" })).toHaveClass("is-selected");
+  expect(screen.getByRole("button", { name: "安装到选中宿主" })).toBeEnabled();
+
+  await userEvent.click(screen.getByRole("button", { name: "安装到选中宿主" }));
+
+  await waitFor(() => {
+    expect(installSpy).toHaveBeenCalledWith({
+      probes: [expect.objectContaining({ pluginRoot: "/tmp/example-repo/example-plugin" })],
+      hostTools: ["cursor"],
+    });
+  });
+
+  branchSpy.mockRestore();
+  probeSpy.mockRestore();
+  fetchInstalledPluginsSpy.mockRestore();
+  installSpy.mockRestore();
+});
+
+test("disables plugin install when every compatible host already has the plugin", async () => {
+  const sourceUrl = "https://git.example.com/example-org/example-repo";
+  const branchSpy = vi.spyOn(skillClient, "fetchGitRepoBranches").mockResolvedValue([
+    { name: "master", isDefault: true, isSelected: true },
+  ]);
+  const probeSpy = vi.spyOn(skillClient, "probePluginSourceCandidates").mockResolvedValue([{
+    tool: "codex",
+    compatibleHostTools: ["codex", "claude-code"],
+    kind: "plugin-repo",
+    name: "example-plugin",
+    description: "基于 Skill 的模块化 Example Plugin 框架",
+    pluginRoot: "/tmp/example-repo/example-plugin",
+    repoRoot: "/tmp/example-repo",
+    pluginRelativePath: "example-plugin",
+    manifestPath: "/tmp/example-repo/example-plugin/.codex-plugin/plugin.json",
+    marketplaceManifestPath: "",
+    components: [],
+    sourceType: "git",
+    sourceUrl: "https://git.example.com/example-org/example-repo",
+    isGitRepo: true,
+    gitRoot: "/tmp/example-repo",
+    confidence: "high",
+    installStrategy: "codex-marketplace",
+    warnings: [],
+  }]);
+  const installedPlugins: PluginSummary[] = (["codex", "claude-code"] as const).map((hostTool) => ({
+    id: `${hostTool}:example-plugin`,
+    packageId: "example-plugin",
+    name: "example-plugin",
+    description: "",
+    hostTool,
+    relatedHostTools: hostTool === "codex" ? ["claude-code"] : ["codex"],
+    kind: "plugin-repo",
+    rootPath: `/Users/demo/${hostTool}/example-plugin`,
+    displayRootPath: `/Users/demo/${hostTool}/example-plugin`,
+    repoRootPath: `/Users/demo/${hostTool}/example-plugin`,
+    pluginRelativePath: "example-plugin",
+    manifestPath: `/Users/demo/${hostTool}/example-plugin/plugin.json`,
+    sourceType: "git",
+    sourceLabel: "skilldock",
+    sourceUrl: "https://git.example.com/example-org/example-repo",
+    sourceRef: "master",
+    sourceRevision: "abc123",
+    currentVersion: "1.0.0",
+    currentBranch: "master",
+    currentCommit: "abc123",
+    collabStatus: "clean",
+    statusText: "",
+    isGitRepo: true,
+    updateMode: "auto",
+    updateStrategy: "git",
+    updateAvailable: false,
+    baselineHash: "",
+    localModified: false,
+    installedAt: "1",
+    updatedAt: "1",
+    remoteUpdatedAt: "",
+    localUpdatedAt: "",
+    lastEditor: "",
+    lastScannedAt: "1",
+    status: "ready",
+    installState: "installed",
+    installSource: "skilldock",
+    enabledState: "enabled",
+    scopes: [],
+    components: [],
+  }));
+  const fetchInstalledPluginsSpy = vi.spyOn(skillClient, "fetchInstalledPlugins").mockResolvedValue(installedPlugins);
+  const installSpy = vi.spyOn(skillClient, "installSelectedPluginProbes").mockResolvedValue([]);
+
+  render(<App />);
+  await userEvent.click(screen.getByRole("button", { name: /安装/ }));
+  await userEvent.click(screen.getByRole("tab", { name: "Plugin" }));
+  await userEvent.type(screen.getByRole("textbox", { name: "Git 仓库地址" }), sourceUrl);
+  await waitFor(() => {
+    expect(screen.getByRole("combobox", { name: "Git 分支" })).toHaveValue("master");
+  });
+  await userEvent.click(screen.getByRole("button", { name: "识别插件" }));
+
+  const installedCard = await screen.findByRole("button", { name: "插件 example-plugin 已安装" });
+  expect(installedCard).toHaveAttribute("aria-disabled", "true");
+  expect(installedCard).toHaveClass("is-disabled");
+  expect(within(installedCard).getByText("已安装")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "example-plugin 已安装到 Codex" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "example-plugin 已安装到 Claude Code" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "安装到选中宿主" })).toBeDisabled();
+
+  expect(installSpy).not.toHaveBeenCalled();
+
+  branchSpy.mockRestore();
+  probeSpy.mockRestore();
+  fetchInstalledPluginsSpy.mockRestore();
+  installSpy.mockRestore();
 });
 
 test("probes GitLab tree plugin sources with sparse paths", async () => {
@@ -227,6 +477,7 @@ test("probes GitLab tree plugin sources with sparse paths", async () => {
 });
 
 test("renders plugin probe title from manifest name instead of cache directory name", async () => {
+  vi.spyOn(skillClient, "fetchInstalledPlugins").mockResolvedValue([]);
   const probeSpy = vi.spyOn(skillClient, "probePluginSourceCandidates").mockResolvedValue([{
     tool: "cursor",
     compatibleHostTools: ["cursor"],
@@ -254,11 +505,11 @@ test("renders plugin probe title from manifest name instead of cache directory n
     "https://github.com/raisely/cursor-plugin.git",
   );
   await waitFor(() => {
-    expect(screen.getByRole("combobox", { name: "Git 分支" })).toHaveValue("main");
+    expect(screen.getByRole("combobox", { name: "Git 分支" })).toHaveValue("master");
   });
   await userEvent.click(screen.getByRole("button", { name: "识别插件" }));
 
-  expect(await screen.findByText("raisely")).toBeInTheDocument();
+  expect(await screen.findByText("Connect Cursor to Raisely.")).toBeInTheDocument();
   expect(screen.queryByText("plugin-https-github-com-raisely-cursor-plugin-git")).not.toBeInTheDocument();
 
   probeSpy.mockRestore();
@@ -325,6 +576,7 @@ test("probes repository roots and lists every plugin candidate", async () => {
       warnings: [],
     },
   ]);
+  vi.spyOn(skillClient, "fetchInstalledPlugins").mockResolvedValue([]);
   const installSpy = vi.spyOn(skillClient, "installSelectedPluginProbes").mockResolvedValue([]);
 
   render(<App />);
@@ -343,7 +595,6 @@ test("probes repository roots and lists every plugin candidate", async () => {
       gitRef: "master",
     });
   });
-  expect(await screen.findByText("发现 2 个插件，请选择要安装的插件")).toBeInTheDocument();
   expect(await screen.findByText("example-plugin")).toBeInTheDocument();
   expect(screen.getByText("example-plugin")).toBeInTheDocument();
   expect(screen.getByText("1 skill")).toBeInTheDocument();
@@ -351,14 +602,13 @@ test("probes repository roots and lists every plugin candidate", async () => {
   expect(screen.queryByRole("textbox", { name: "Git 仓库地址" })).not.toBeInTheDocument();
   expect(screen.getByRole("button", { name: "返回" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "安装到选中宿主" })).toBeDisabled();
-  expect(screen.getByRole("button", { name: "选择插件 example-plugin" })).not.toHaveClass("is-selected");
-  expect(screen.getByRole("button", { name: "选择插件 example-plugin" })).not.toHaveClass("is-selected");
-  expect(screen.getByRole("button", { name: /选择 Codex 作为 example-plugin 安装宿主/ })).toHaveAttribute("aria-pressed", "false");
-  expect(screen.getByRole("button", { name: /选择 Claude Code 作为 example-plugin 安装宿主/ })).toHaveAttribute("aria-pressed", "false");
-  expect(screen.getByRole("button", { name: /选择 Cursor 作为 example-plugin 安装宿主/ })).toHaveAttribute("aria-pressed", "false");
+  expect(screen.getByText("example-plugin").closest(".plugin-install-preview__item")).not.toHaveClass("is-selected");
+  expect(screen.getByRole("button", { name: /取消选择 Codex 作为 example-plugin 安装宿主/ })).toHaveAttribute("aria-pressed", "true");
+  expect(screen.getByRole("button", { name: /取消选择 Claude Code 作为 example-plugin 安装宿主/ })).toHaveAttribute("aria-pressed", "true");
+  expect(screen.getByRole("button", { name: /取消选择 Cursor 作为 example-plugin 安装宿主/ })).toHaveAttribute("aria-pressed", "true");
   await userEvent.click(screen.getByRole("button", { name: /选择 Claude Code 作为 example-plugin 安装宿主/ }));
   await waitFor(() => {
-    expect(screen.getByRole("button", { name: "选择插件 example-plugin" })).toHaveClass("is-selected");
+    expect(screen.getByText("example-plugin").closest(".plugin-install-preview__item")).toHaveClass("is-selected");
     expect(screen.getByRole("button", { name: /取消选择 Claude Code 作为 example-plugin 安装宿主/ })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByRole("button", { name: /选择 Claude Code 作为 example-plugin 安装宿主/ })).toHaveAttribute("aria-pressed", "false");
     expect(screen.getByRole("button", { name: "安装到选中宿主" })).toBeEnabled();
@@ -378,6 +628,7 @@ test("probes repository roots and lists every plugin candidate", async () => {
 
 test("uses browser fixtures to list example-repo plugin candidates", async () => {
   const sourceUrl = "https://git.example.com/example-org/example-repo";
+  vi.spyOn(skillClient, "fetchInstalledPlugins").mockResolvedValue([]);
 
   render(<App />);
   await userEvent.click(screen.getByRole("button", { name: /安装/ }));
@@ -393,6 +644,110 @@ test("uses browser fixtures to list example-repo plugin candidates", async () =>
   expect(await screen.findByText("example-plugin")).toBeInTheDocument();
   expect(screen.getByText("1 command")).toBeInTheDocument();
   expect(screen.queryByRole("textbox", { name: "Git 仓库地址" })).not.toBeInTheDocument();
+});
+
+test("keeps the plugin install result page open after installing selected hosts", async () => {
+  const sourceUrl = "https://git.example.com/example-org/example-repo";
+  const branchSpy = vi.spyOn(skillClient, "fetchGitRepoBranches").mockResolvedValue([
+    { name: "master", isDefault: true, isSelected: true },
+  ]);
+  const probeSpy = vi.spyOn(skillClient, "probePluginSourceCandidates").mockResolvedValue([
+    {
+      tool: "codex",
+      compatibleHostTools: ["codex", "claude-code", "cursor"],
+      kind: "plugin-repo",
+      name: "example-plugin",
+      description: "基于 Skill 的模块化 Example Plugin 框架",
+      pluginRoot: "/tmp/example-repo/example-plugin",
+      repoRoot: "/tmp/example-repo",
+      pluginRelativePath: "example-plugin",
+      manifestPath: "/tmp/example-repo/example-plugin/.codex-plugin/plugin.json",
+      marketplaceManifestPath: "",
+      components: [],
+      sourceType: "git",
+      sourceUrl,
+      isGitRepo: true,
+      gitRoot: "/tmp/example-repo",
+      confidence: "high",
+      installStrategy: "codex-marketplace",
+      warnings: [],
+    },
+  ]);
+  const fetchInstalledPluginsSpy = vi.spyOn(skillClient, "fetchInstalledPlugins")
+    .mockResolvedValueOnce([])
+    .mockResolvedValueOnce([
+      {
+        id: "codex:example-plugin",
+        packageId: "example-plugin",
+        name: "example-plugin",
+        description: "",
+        hostTool: "codex",
+        relatedHostTools: [],
+        kind: "plugin-repo",
+        rootPath: "/Users/demo/.codex/plugins/example-plugin",
+        displayRootPath: "/Users/demo/.codex/plugins/example-plugin",
+        repoRootPath: "/Users/demo/.codex/plugins/example-plugin",
+        pluginRelativePath: "example-plugin",
+        manifestPath: "/Users/demo/.codex/plugins/example-plugin/plugin.json",
+        sourceType: "git",
+        sourceLabel: "skilldock",
+        sourceUrl,
+        sourceRef: "master",
+        sourceRevision: "abc123",
+        currentVersion: "1.0.0",
+        currentBranch: "master",
+        currentCommit: "abc123",
+        collabStatus: "clean",
+        statusText: "",
+        isGitRepo: true,
+        updateMode: "auto",
+        updateStrategy: "git",
+        updateAvailable: false,
+        baselineHash: "",
+        localModified: false,
+        installedAt: "1",
+        updatedAt: "1",
+        remoteUpdatedAt: "",
+        localUpdatedAt: "",
+        lastEditor: "",
+        lastScannedAt: "1",
+        status: "ready",
+        installState: "installed",
+        installSource: "skilldock",
+        enabledState: "enabled",
+        scopes: [],
+        components: [],
+      },
+    ] as PluginSummary[]);
+  const installSpy = vi.spyOn(skillClient, "installSelectedPluginProbes").mockResolvedValue([]);
+
+  render(<App />);
+  await userEvent.click(screen.getByRole("button", { name: /安装/ }));
+  await userEvent.click(screen.getByRole("tab", { name: "Plugin" }));
+  await userEvent.type(screen.getByRole("textbox", { name: "Git 仓库地址" }), sourceUrl);
+
+  await waitFor(() => {
+    expect(screen.getByRole("combobox", { name: "Git 分支" })).toHaveValue("master");
+  });
+  await userEvent.click(screen.getByRole("button", { name: "识别插件" }));
+
+  expect(await screen.findByRole("button", { name: "选择插件 example-plugin" })).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "安装到选中宿主" }));
+
+  await waitFor(() => {
+    expect(installSpy).toHaveBeenCalledWith({
+      probes: [expect.objectContaining({ pluginRoot: "/tmp/example-repo/example-plugin" })],
+      hostTools: ["codex", "claude-code", "cursor"],
+    });
+  });
+  expect(await screen.findByRole("status")).toHaveTextContent("选中插件已安装");
+  expect(screen.getByRole("button", { name: "返回" })).toBeInTheDocument();
+  expect(screen.queryByRole("textbox", { name: "Git 仓库地址" })).not.toBeInTheDocument();
+
+  branchSpy.mockRestore();
+  probeSpy.mockRestore();
+  fetchInstalledPluginsSpy.mockRestore();
+  installSpy.mockRestore();
 });
 
 test("shows MCP marketplace separately from skill-only install methods", async () => {
@@ -993,6 +1348,25 @@ test("discovers repo skills and allows multi-select install", async () => {
 
   await userEvent.click(screen.getByRole("button", { name: "返回" }));
   expect(screen.getByRole("textbox", { name: "Git 仓库地址" })).toBeInTheDocument();
+});
+
+test("keeps the git install selection page open after installing selected repo skills", async () => {
+  render(<App />);
+  await userEvent.click(screen.getByRole("button", { name: /安装/ }));
+  await userEvent.click(screen.getByRole("tab", { name: "Git 安装" }));
+
+  await userEvent.type(screen.getByRole("textbox", { name: "Git 仓库地址" }), "https://github.com/team/skill-repo");
+  await userEvent.click(screen.getByRole("button", { name: "识别仓库技能" }));
+
+  expect(await screen.findByText("发现 2 个技能，请选择要安装的技能")).toBeInTheDocument();
+
+  await userEvent.click(screen.getByRole("button", { name: /service-observer/i }));
+  await userEvent.click(screen.getByRole("button", { name: "安装选中技能" }));
+
+  expect(await screen.findByRole("status")).toHaveTextContent("选中技能已安装");
+  expect(screen.getByText("release-scribe")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "返回" })).toBeInTheDocument();
+  expect(screen.queryByRole("textbox", { name: "Git 仓库地址" })).not.toBeInTheDocument();
 });
 
 test("installs a local skill from a typed path", async () => {
