@@ -19,7 +19,7 @@ const TOOL_SOURCES = [
   { id: "cursor", homepage: "https://cursor.com/" },
   { id: "gemini", homepage: "https://gemini.google.com/" },
   { id: "antigravity", homepage: "https://antigravity.google/" },
-  { id: "windsurf", homepage: "https://windsurf.com/" },
+  { id: "windsurf", homepage: "https://devin.ai/desktop/", keepExistingFileName: "devin.png" },
   {
     id: "intellij",
     homepage: "https://www.jetbrains.com/idea/",

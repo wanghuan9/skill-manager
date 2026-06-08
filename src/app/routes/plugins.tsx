@@ -4,6 +4,7 @@ import { useTranslate } from "@/app/i18n";
 import { useNotifications } from "@/app/notifications";
 import { formatSkillLastEditor } from "@/features/skills/utils/skill-editor";
 import { formatSkillUpdatedAt } from "@/features/skills/utils/skill-time";
+import { waitForNextPaint } from "@/app/utils/wait-for-next-paint";
 import {
   deletePlugin,
   fetchInstalledPlugins,
@@ -13,6 +14,7 @@ import {
   openPluginInEditor,
   openPathInFinder,
   refreshLocalPluginState,
+  refreshPluginStates,
   savePluginComponentPreview,
   setPluginEnabled,
   shouldUseFixtureData,
@@ -105,8 +107,6 @@ const maxVisibleHostCoverageEntries = 5;
 const PLUGIN_LIBRARY_CHANGE_DEBOUNCE_MS = 500;
 const AUTO_PLUGIN_STATE_REFRESH_INTERVAL_MS = 10 * 60 * 1000;
 const AUTO_PLUGIN_STATE_REFRESH_COOLDOWN_MS = 60 * 1000;
-const STARTUP_PLUGIN_LOCAL_REFRESH_DELAY_MS = 20_000;
-const STARTUP_PLUGIN_LOCAL_REFRESH_BATCH_SIZE = 1;
 const STARTUP_PLUGIN_SYNC_COOLDOWN_MS = 1_500;
 const PLUGIN_LOCAL_ALIGN_COOLDOWN_MS = 2_000;
 const PLUGIN_HEAVY_REFRESH_AFTER_STARTUP_SYNC_DELAY_MS = 800;
@@ -244,13 +244,57 @@ function getRuntimeCachedPlugins() {
   return shouldUseFixtureData() ? null : getCachedPlugins();
 }
 
-function RefreshIcon({ isSpinning = false }: { isSpinning?: boolean }) {
+function RefreshIcon({
+  isSpinning = false,
+  variant = "toolbar",
+}: {
+  isSpinning?: boolean;
+  variant?: "toolbar" | "card";
+}) {
+  const className = variant === "card"
+    ? (isSpinning ? "skill-card__refresh-icon is-spinning" : "skill-card__refresh-icon")
+    : (isSpinning ? "skills-toolbar-button__svg is-spinning" : "skills-toolbar-button__svg");
+  const inlineAnimationStyle = isSpinning
+    ? {
+        animation: "spin 0.8s linear infinite",
+        transformBox: "fill-box" as const,
+        transformOrigin: "center",
+      }
+    : undefined;
+
   return (
-    <svg className={isSpinning ? "skills-toolbar-button__svg is-spinning" : "skills-toolbar-button__svg"} viewBox="0 0 20 20" fill="none" aria-hidden="true">
-      <path d="M16.2 9.1a6.2 6.2 0 0 0-10.7-3.6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-      <path d="M3.7 3.9v3.7h3.7" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-      <path d="M3.8 10.9a6.2 6.2 0 0 0 10.7 3.6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-      <path d="M16.3 16.1v-3.7h-3.7" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    <svg
+      className={className}
+      style={inlineAnimationStyle}
+      viewBox="0 0 20 20"
+      fill="none"
+      aria-hidden="true"
+    >
+      {variant === "card" ? (
+        <>
+          <path
+            d="M15.2 6.6A6.25 6.25 0 1 0 16 10"
+            stroke="currentColor"
+            strokeWidth="1.7"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+          <path
+            d="M15.3 4.2v2.8h-2.8"
+            stroke="currentColor"
+            strokeWidth="1.7"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </>
+      ) : (
+        <>
+          <path d="M16.2 9.1a6.2 6.2 0 0 0-10.7-3.6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+          <path d="M3.7 3.9v3.7h3.7" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+          <path d="M3.8 10.9a6.2 6.2 0 0 0 10.7 3.6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+          <path d="M16.3 16.1v-3.7h-3.7" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+        </>
+      )}
     </svg>
   );
 }
@@ -333,19 +377,12 @@ function OpenFolderIcon() {
   return (
     <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
       <path
-        d="M3.25 6.25h5.05l1.3 1.45h7.15v5.85c0 .9-.73 1.62-1.62 1.62H4.87c-.89 0-1.62-.72-1.62-1.62V6.25Z"
+        d="M3.75 6.5A1.75 1.75 0 0 1 5.5 4.75h3l1.25 1.5h4.75a1.75 1.75 0 0 1 1.75 1.75v5.5a1.75 1.75 0 0 1-1.75 1.75h-9A1.75 1.75 0 0 1 3.75 13.5v-7Z"
         stroke="currentColor"
-        strokeWidth="1.6"
-        strokeLinecap="round"
+        strokeWidth="1.5"
         strokeLinejoin="round"
       />
-      <path
-        d="M3.25 6.25V5.6c0-.9.73-1.62 1.62-1.62h3.08l1.25 1.3"
-        stroke="currentColor"
-        strokeWidth="1.6"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
+      <path d="m8.25 11.75 3.5-3.5M9.25 8.25h2.5v2.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
     </svg>
   );
 }
@@ -381,6 +418,10 @@ function getPluginInstanceKey(plugin: PluginSummary) {
 }
 
 function getPluginDisplayName(plugin: PluginSummary) {
+  const aliasedDisplayName = getAliasedPluginDisplayName(plugin);
+  if (aliasedDisplayName) {
+    return aliasedDisplayName;
+  }
   const manifestName = plugin.manifestName?.trim() ?? "";
   if (manifestName) {
     return manifestName;
@@ -392,16 +433,38 @@ function normalizePluginAggregateIdentity(value: string) {
   return value.trim().toLowerCase().replace(/\.git$/, "");
 }
 
+function normalizePluginAlias(value: string) {
+  const normalizedValue = normalizePluginAggregateIdentity(value);
+  if (normalizedValue === "launchdarkly-mcp") {
+    return "launchdarkly";
+  }
+  return normalizedValue;
+}
+
+function getAliasedPluginDisplayName(plugin: PluginSummary) {
+  const manifestName = plugin.manifestName?.trim() ?? "";
+  const pluginName = plugin.name.trim();
+  const displayCandidates = [manifestName, pluginName];
+
+  for (const candidate of displayCandidates) {
+    if (normalizePluginAlias(candidate) === "launchdarkly") {
+      return "launchdarkly";
+    }
+  }
+
+  return "";
+}
+
 function getPluginCanonicalName(plugin: PluginSummary) {
-  const manifestName = normalizePluginAggregateIdentity(plugin.manifestName || "");
+  const manifestName = normalizePluginAlias(plugin.manifestName || "");
   if (manifestName) {
     return manifestName;
   }
   const prefix = `${plugin.hostTool}:`;
   if (plugin.id.startsWith(prefix)) {
-    return normalizePluginAggregateIdentity(plugin.id.slice(prefix.length));
+    return normalizePluginAlias(plugin.id.slice(prefix.length));
   }
-  return normalizePluginAggregateIdentity(plugin.id);
+  return normalizePluginAlias(plugin.id);
 }
 
 function buildPluginAggregateKey(plugin: PluginSummary) {
@@ -541,6 +604,51 @@ function listPluginActionTargets(
   return allPlugins.filter((candidate) => (
     buildPluginAggregateKey(candidate) === aggregateKey
   ));
+}
+
+function getPluginUpdateOperationKey(plugin: PluginSummary) {
+  const normalizedRoot = normalizePluginAggregateIdentity(
+    plugin.updateStrategy === "git"
+      ? plugin.repoRootPath || plugin.rootPath
+      : plugin.rootPath,
+  );
+  if (normalizedRoot) {
+    return `${plugin.updateStrategy}:${normalizedRoot}`;
+  }
+  return `${plugin.updateStrategy}:${getPluginInstanceKey(plugin)}`;
+}
+
+function listUniquePluginUpdateTargets(plugins: PluginSummary[]) {
+  const updateTargetMap = new Map<string, PluginSummary>();
+
+  for (const plugin of plugins) {
+    const operationKey = getPluginUpdateOperationKey(plugin);
+    if (!updateTargetMap.has(operationKey)) {
+      updateTargetMap.set(operationKey, plugin);
+    }
+  }
+
+  return [...updateTargetMap.values()];
+}
+
+function isPluginActionPending(
+  plugin: PluginSummary,
+  allPlugins: PluginSummary[],
+  pendingPluginIds: Set<string>,
+  includeAllHosts: boolean,
+) {
+  const targetPlugins = listPluginActionTargets(plugin, allPlugins, includeAllHosts);
+  return targetPlugins.some((candidate) => pendingPluginIds.has(getPluginInstanceKey(candidate)));
+}
+
+function getPluginActionErrorMessage(error: unknown, fallbackMessage: string) {
+  if (typeof error === "string" && error.trim()) {
+    return error;
+  }
+  if (error instanceof Error && error.message.trim()) {
+    return error.message;
+  }
+  return fallbackMessage;
 }
 
 function PluginHostLogo({ hostTool, label }: { hostTool: PluginHostTool; label: string }) {
@@ -815,11 +923,11 @@ function getPluginDeleteActionLabel(
   return t("plugins.action.delete.default", { name: pluginName });
 }
 
-function getPluginOpenActionLabel(
+function getPluginOpenActionAriaLabel(
   plugin: PluginSummary,
   t: ReturnType<typeof useTranslate>["t"],
 ) {
-  return t("plugins.action.open", { name: getPluginDisplayName(plugin) });
+  return t("plugins.action.openFolder", { name: getPluginDisplayName(plugin) });
 }
 
 function getPluginUpdateActionLabel(
@@ -875,8 +983,43 @@ function getPluginInstallSourceLabel(
     : t("plugins.installSource.host");
 }
 
-function getPluginDirectoryPath(plugin: PluginSummary) {
-  return plugin.displayRootPath?.trim() || plugin.rootPath?.trim() || "";
+function getPluginOpenRootPath(
+  plugin: PluginSummary,
+  activeHost: PluginTabKey,
+  allPlugins: PluginSummary[],
+) {
+  if (activeHost === "all") {
+    const aggregatePlugins = allPlugins.filter((candidate) => (
+      buildPluginAggregateKey(candidate) === buildPluginAggregateKey(plugin)
+    ));
+    const hostCoverageCount = getPluginHostCoverageEntries(aggregatePlugins).length;
+    if (hostCoverageCount > 1) {
+      const skilldockRoot = aggregatePlugins.find((candidate) => (
+        candidate.installSource === "skilldock"
+        && candidate.repoRootPath.includes("/.skilldock/")
+        && candidate.repoRootPath.trim()
+      ))?.repoRootPath?.trim();
+      return skilldockRoot || plugin.repoRootPath.trim() || plugin.rootPath.trim();
+    }
+    if (plugin.hostTool === "cursor") {
+      return plugin.displayRootPath?.trim() || plugin.rootPath.trim();
+    }
+    return plugin.rootPath.trim() || plugin.repoRootPath.trim();
+  }
+
+  if (plugin.hostTool === "cursor" && activeHost === "cursor") {
+    return plugin.displayRootPath?.trim() || plugin.rootPath;
+  }
+
+  return plugin.rootPath.trim() || plugin.repoRootPath.trim();
+}
+
+function getPluginDirectoryPath(
+  plugin: PluginSummary,
+  activeHost: PluginTabKey,
+  allPlugins: PluginSummary[],
+) {
+  return getPluginOpenRootPath(plugin, activeHost, allPlugins);
 }
 
 function shouldShowPluginBranch(plugin: PluginSummary) {
@@ -1242,7 +1385,10 @@ export function PluginsRoute() {
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<PluginFilter>("all");
   const [activeHost, setActiveHost] = useState<PluginTabKey>("all");
-  const [pendingPluginIds, setPendingPluginIds] = useState<Set<string>>(
+  const [pendingPluginToggleIds, setPendingPluginToggleIds] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const [pendingPluginUpdateIds, setPendingPluginUpdateIds] = useState<Set<string>>(
     () => new Set(),
   );
   const [deletingPluginIds, setDeletingPluginIds] = useState<Set<string>>(
@@ -1252,11 +1398,12 @@ export function PluginsRoute() {
   const [updateConfirmingPlugin, setUpdateConfirmingPlugin] = useState<PluginSummary | null>(null);
   const [expandedComponentSections, setExpandedComponentSections] =
     useState<ExpandedComponentSections>({});
-  const pendingPluginIdsRef = useRef(new Set<string>());
+  const pendingPluginToggleIdsRef = useRef(new Set<string>());
+  const pendingPluginUpdateIdsRef = useRef(new Set<string>());
   const localAlignInFlightRef = useRef<Promise<PluginSummary[]> | null>(null);
   const pluginRefreshDebounceTimerRef = useRef<number | null>(null);
   const pluginLocalRefreshInFlightRef = useRef(new Map<string, Promise<void>>());
-  const startupPluginRefreshTimerRef = useRef<number | null>(null);
+  const pluginStateRefreshInFlightRef = useRef<Promise<void> | null>(null);
   const deferredHeavyRefreshTimerRef = useRef<number | null>(null);
   const lastPluginAutoRefreshAtRef = useRef(0);
   const startupPluginSyncInFlightRef = useRef<Promise<void> | null>(null);
@@ -1288,6 +1435,22 @@ export function PluginsRoute() {
       cachePlugins(nextPlugins);
     }
     setPlugins(nextPlugins);
+  }
+
+  function mergePluginsByInstance(
+    currentPlugins: PluginSummary[],
+    updatedPlugins: PluginSummary[],
+  ) {
+    if (updatedPlugins.length === 0) {
+      return currentPlugins;
+    }
+
+    const updatedPluginMap = new Map(
+      updatedPlugins.map((plugin) => [getPluginInstanceKey(plugin), plugin]),
+    );
+    return currentPlugins.map((plugin) => (
+      updatedPluginMap.get(getPluginInstanceKey(plugin)) ?? plugin
+    ));
   }
 
   async function refreshPluginLocalStateInBackground(
@@ -1326,32 +1489,55 @@ export function PluginsRoute() {
 
   async function refreshPluginStatesInBackground(
     isActive: () => boolean,
-    options?: { minimumIntervalMs?: number; batchSize?: number },
+    options?: { minimumIntervalMs?: number; pluginsSnapshot?: PluginSummary[] },
   ) {
     const now = Date.now();
     const minimumIntervalMs = options?.minimumIntervalMs ?? 0;
     if (minimumIntervalMs > 0 && now - lastPluginAutoRefreshAtRef.current < minimumIntervalMs) {
-      return;
+      return pluginStateRefreshInFlightRef.current ?? Promise.resolve();
     }
 
-    const refreshTargets = pluginsRef.current.filter((plugin) => (
+    const existingRefresh = pluginStateRefreshInFlightRef.current;
+    if (existingRefresh) {
+      return existingRefresh;
+    }
+
+    const refreshTargets = (options?.pluginsSnapshot ?? pluginsRef.current).filter((plugin) => (
       plugin.installSource === "skilldock"
       && plugin.updateMode === "auto"
-      && plugin.isGitRepo
+      && (plugin.updateStrategy === "git" || plugin.updateStrategy === "hash")
     ));
     if (refreshTargets.length === 0) {
       return;
     }
 
     lastPluginAutoRefreshAtRef.current = now;
-    const batchSize = options?.batchSize ?? STARTUP_PLUGIN_LOCAL_REFRESH_BATCH_SIZE;
-    const targets = refreshTargets.slice(0, batchSize);
-    for (const plugin of targets) {
-      if (!isActive()) {
-        return;
+    const refreshPromise = (async () => {
+      try {
+        const refreshedPlugins = await refreshPluginStates();
+        if (!isActive()) {
+          return;
+        }
+        setPlugins((current) => {
+          const nextPlugins = mergePluginsByInstance(current, refreshedPlugins);
+          if (!shouldUseFixtureData()) {
+            cachePlugins(nextPlugins);
+          }
+          return nextPlugins;
+        });
+        setErrorMessage("");
+      } catch (error) {
+        console.warn("Failed to refresh plugin states in background", error);
+      } finally {
+        lastPluginAutoRefreshAtRef.current = Date.now();
+        if (pluginStateRefreshInFlightRef.current === refreshPromise) {
+          pluginStateRefreshInFlightRef.current = null;
+        }
       }
-      await refreshPluginLocalStateInBackground(plugin, isActive);
-    }
+    })();
+
+    pluginStateRefreshInFlightRef.current = refreshPromise;
+    return refreshPromise;
   }
 
   async function alignPluginsLocalState() {
@@ -1399,10 +1585,11 @@ export function PluginsRoute() {
     const syncPromise = fetchStartupInstalledPlugins()
       .then((nextPlugins) => {
         if (!isActive()) {
-          return;
+          return nextPlugins;
         }
         commitPlugins(nextPlugins);
         setErrorMessage("");
+        return nextPlugins;
       })
       .catch((error) => {
         console.warn("Failed to align installed plugins from startup scan", error);
@@ -1451,6 +1638,27 @@ export function PluginsRoute() {
 
     setIsReloading(true);
     try {
+      if (activeHost !== "all") {
+        const refreshTargets = pluginsRef.current.filter(
+          (plugin) => plugin.hostTool === activeHost,
+        );
+        const refreshedPlugins = await Promise.all(
+          refreshTargets.map((plugin) => refreshLocalPluginState({
+            hostTool: plugin.hostTool,
+            rootPath: plugin.rootPath,
+          })),
+        );
+        setPlugins((current) => {
+          const nextPlugins = mergePluginsByInstance(current, refreshedPlugins);
+          if (!shouldUseFixtureData()) {
+            cachePlugins(nextPlugins);
+          }
+          return nextPlugins;
+        });
+        setErrorMessage("");
+        return;
+      }
+
       const nextPlugins = await alignPluginsLocalState();
       commitPlugins(nextPlugins);
       setErrorMessage("");
@@ -1473,7 +1681,12 @@ export function PluginsRoute() {
       }
 
       if (cachedPlugins) {
-        await syncPluginsStartupState(() => !shouldIgnore);
+        const syncedPlugins = await syncPluginsStartupState(() => !shouldIgnore);
+        if (!shouldUseFixtureData()) {
+          void refreshPluginStatesInBackground(() => !shouldIgnore, {
+            pluginsSnapshot: syncedPlugins ?? cachedPlugins,
+          });
+        }
         return;
       }
 
@@ -1489,6 +1702,11 @@ export function PluginsRoute() {
         if (!shouldIgnore) {
           commitPlugins(nextPlugins);
           setErrorMessage("");
+          if (!shouldUseFixtureData()) {
+            void refreshPluginStatesInBackground(() => !shouldIgnore, {
+              pluginsSnapshot: nextPlugins,
+            });
+          }
           if (
             nextPlugins.length === 0 &&
             !getPluginScanSessionSnapshot().isScanning &&
@@ -1548,10 +1766,7 @@ export function PluginsRoute() {
     const refreshPluginStatesIfNeeded = () => {
       void refreshPluginStatesInBackground(
         () => active,
-        {
-          minimumIntervalMs: AUTO_PLUGIN_STATE_REFRESH_COOLDOWN_MS,
-          batchSize: STARTUP_PLUGIN_LOCAL_REFRESH_BATCH_SIZE,
-        },
+        { minimumIntervalMs: AUTO_PLUGIN_STATE_REFRESH_COOLDOWN_MS },
       );
     };
     const syncPluginStartupStateIfNeeded = () => {
@@ -1607,41 +1822,6 @@ export function PluginsRoute() {
       return;
     }
 
-    if (startupPluginRefreshTimerRef.current !== null) {
-      window.clearTimeout(startupPluginRefreshTimerRef.current);
-      startupPluginRefreshTimerRef.current = null;
-    }
-
-    const pluginsNeedingDeferredRefresh = plugins.filter((plugin) => (
-      plugin.installSource === "skilldock"
-      && plugin.updateMode === "auto"
-      && plugin.isGitRepo
-    ));
-    if (pluginsNeedingDeferredRefresh.length === 0) {
-      return;
-    }
-
-    startupPluginRefreshTimerRef.current = window.setTimeout(() => {
-      startupPluginRefreshTimerRef.current = null;
-      void refreshPluginStatesInBackground(
-        () => true,
-        { batchSize: STARTUP_PLUGIN_LOCAL_REFRESH_BATCH_SIZE },
-      );
-    }, STARTUP_PLUGIN_LOCAL_REFRESH_DELAY_MS);
-
-    return () => {
-      if (startupPluginRefreshTimerRef.current !== null) {
-        window.clearTimeout(startupPluginRefreshTimerRef.current);
-        startupPluginRefreshTimerRef.current = null;
-      }
-    };
-  }, [plugins]);
-
-  useEffect(() => {
-    if (shouldUseFixtureData()) {
-      return;
-    }
-
     let active = true;
     let unlisten: (() => void) | null = null;
 
@@ -1691,10 +1871,6 @@ export function PluginsRoute() {
       if (pluginRefreshDebounceTimerRef.current !== null) {
         window.clearTimeout(pluginRefreshDebounceTimerRef.current);
         pluginRefreshDebounceTimerRef.current = null;
-      }
-      if (startupPluginRefreshTimerRef.current !== null) {
-        window.clearTimeout(startupPluginRefreshTimerRef.current);
-        startupPluginRefreshTimerRef.current = null;
       }
       pluginLocalRefreshInFlightRef.current.clear();
     };
@@ -1990,7 +2166,7 @@ export function PluginsRoute() {
     const pluginKey = getPluginInstanceKey(plugin);
     if (
       !canTogglePlugin(plugin)
-      || pendingPluginIdsRef.current.has(pluginKey)
+      || pendingPluginToggleIdsRef.current.has(pluginKey)
       || deletingPluginIds.has(pluginKey)
     ) {
       return;
@@ -2005,9 +2181,9 @@ export function PluginsRoute() {
     const enabled = plugin.enabledState !== "enabled";
     const targetPluginKeys = targetPlugins.map((candidate) => getPluginInstanceKey(candidate));
     for (const targetPluginKey of targetPluginKeys) {
-      pendingPluginIdsRef.current.add(targetPluginKey);
+      pendingPluginToggleIdsRef.current.add(targetPluginKey);
     }
-    setPendingPluginIds((current) => {
+    setPendingPluginToggleIds((current) => {
       const next = new Set(current);
       for (const targetPluginKey of targetPluginKeys) {
         next.add(targetPluginKey);
@@ -2044,9 +2220,9 @@ export function PluginsRoute() {
       });
     } finally {
       for (const targetPluginKey of targetPluginKeys) {
-        pendingPluginIdsRef.current.delete(targetPluginKey);
+        pendingPluginToggleIdsRef.current.delete(targetPluginKey);
       }
-      setPendingPluginIds((current) => {
+      setPendingPluginToggleIds((current) => {
         const next = new Set(current);
         for (const targetPluginKey of targetPluginKeys) {
           next.delete(targetPluginKey);
@@ -2060,15 +2236,16 @@ export function PluginsRoute() {
     const pluginKey = getPluginInstanceKey(plugin);
     if (
       plugin.collabStatus !== "update-available"
-      || pendingPluginIdsRef.current.has(pluginKey)
+      || pendingPluginUpdateIdsRef.current.has(pluginKey)
       || deletingPluginIds.has(pluginKey)
     ) {
       return;
     }
 
-    pendingPluginIdsRef.current.add(pluginKey);
-    setPendingPluginIds((current) => new Set(current).add(pluginKey));
+    pendingPluginUpdateIdsRef.current.add(pluginKey);
+    setPendingPluginUpdateIds((current) => new Set(current).add(pluginKey));
     try {
+      await waitForNextPaint();
       const updatedPlugin = await updatePlugin({
         pluginId: plugin.id,
         hostTool: plugin.hostTool,
@@ -2091,13 +2268,15 @@ export function PluginsRoute() {
       setActionErrorMessage("");
     } catch (error) {
       console.warn("Failed to update plugin", error);
+      const errorMessage = getPluginActionErrorMessage(error, t("plugins.error.update"));
+      setActionErrorMessage(errorMessage);
       notify({
-        message: t("plugins.error.update"),
+        message: errorMessage,
         tone: "error",
       });
     } finally {
-      pendingPluginIdsRef.current.delete(pluginKey);
-      setPendingPluginIds((current) => {
+      pendingPluginUpdateIdsRef.current.delete(pluginKey);
+      setPendingPluginUpdateIds((current) => {
         const next = new Set(current);
         next.delete(pluginKey);
         return next;
@@ -2106,11 +2285,89 @@ export function PluginsRoute() {
   }
 
   async function handlePluginUpdate(plugin: PluginSummary) {
-    if (plugin.updateStrategy === "hash" && plugin.localModified) {
+    const targetPlugins = listPluginActionTargets(plugin, plugins, activeHost === "all");
+    const actionablePlugins = targetPlugins.filter((candidate) => (
+      candidate.collabStatus === "update-available"
+    ));
+    if (actionablePlugins.length === 0) {
+      return;
+    }
+    if (
+      actionablePlugins.some((candidate) =>
+        candidate.updateStrategy === "hash" && candidate.localModified)
+    ) {
       setUpdateConfirmingPlugin(plugin);
       return;
     }
-    await runPluginUpdate(plugin);
+    if (activeHost !== "all" || actionablePlugins.length === 1) {
+      await runPluginUpdate(actionablePlugins[0] ?? plugin);
+      return;
+    }
+
+    const targetPluginKeys = actionablePlugins.map((candidate) => getPluginInstanceKey(candidate));
+    for (const targetPluginKey of targetPluginKeys) {
+      pendingPluginUpdateIdsRef.current.add(targetPluginKey);
+    }
+    setPendingPluginUpdateIds((current) => {
+      const next = new Set(current);
+      for (const targetPluginKey of targetPluginKeys) {
+        next.add(targetPluginKey);
+      }
+      return next;
+    });
+    try {
+      await waitForNextPaint();
+      const uniqueUpdateTargets = listUniquePluginUpdateTargets(actionablePlugins);
+      await Promise.all(uniqueUpdateTargets.map((candidate) => updatePlugin({
+        pluginId: candidate.id,
+        hostTool: candidate.hostTool,
+        rootPath: candidate.rootPath,
+      })));
+      const updatedPlugins = await Promise.all(actionablePlugins.map(async (candidate) => {
+        try {
+          return await refreshLocalPluginState({
+            hostTool: candidate.hostTool,
+            rootPath: candidate.rootPath,
+          });
+        } catch (refreshError) {
+          console.warn("Failed to refresh plugin local state after update", refreshError);
+          return candidate;
+        }
+      }));
+      setPlugins((current) => {
+        const updatedPluginMap = new Map(
+          updatedPlugins.map((updatedPlugin) => [getPluginInstanceKey(updatedPlugin), updatedPlugin]),
+        );
+        const nextPlugins = current.map((candidate) => (
+          updatedPluginMap.get(getPluginInstanceKey(candidate)) ?? candidate
+        ));
+        if (!shouldUseFixtureData()) {
+          cachePlugins(nextPlugins);
+        }
+        return nextPlugins;
+      });
+      setErrorMessage("");
+      setActionErrorMessage("");
+    } catch (error) {
+      console.warn("Failed to update plugin", error);
+      const errorMessage = getPluginActionErrorMessage(error, t("plugins.error.update"));
+      setActionErrorMessage(errorMessage);
+      notify({
+        message: errorMessage,
+        tone: "error",
+      });
+    } finally {
+      for (const targetPluginKey of targetPluginKeys) {
+        pendingPluginUpdateIdsRef.current.delete(targetPluginKey);
+      }
+      setPendingPluginUpdateIds((current) => {
+        const next = new Set(current);
+        for (const targetPluginKey of targetPluginKeys) {
+          next.delete(targetPluginKey);
+        }
+        return next;
+      });
+    }
   }
 
   async function handlePluginOpen(plugin: PluginSummary) {
@@ -2122,7 +2379,7 @@ export function PluginsRoute() {
 
     try {
       await openPluginInEditor({
-        rootPath: plugin.repoRootPath.trim() || plugin.rootPath,
+        rootPath: getPluginOpenRootPath(plugin, activeHost, plugins),
         editorId: resolvedOpenToolId,
       });
       setActionErrorMessage("");
@@ -2137,7 +2394,7 @@ export function PluginsRoute() {
 
   async function handlePluginOpenInFinder(plugin: PluginSummary) {
     try {
-      await openPathInFinder({ path: getPluginDirectoryPath(plugin) });
+      await openPathInFinder({ path: getPluginDirectoryPath(plugin, activeHost, plugins) });
       setActionErrorMessage("");
     } catch (error) {
       console.warn("Failed to open plugin folder", error);
@@ -2230,7 +2487,7 @@ export function PluginsRoute() {
     const sourceValue = getPluginSourceValue(plugin);
     const pluginKey = getPluginInstanceKey(plugin);
     const expandedSections = expandedComponentSections[pluginKey] ?? {};
-    const pluginDirectoryPath = getPluginDirectoryPath(plugin);
+    const pluginDirectoryPath = getPluginDirectoryPath(plugin, activeHost, plugins);
     const isAllTabAggregate = activeHost === "all";
     const showRemoteUpdateInfo = shouldShowPluginRemoteUpdateInfo(plugin);
     const relatedHostCoverageEntries = getPluginHostCoverageEntriesForSummary(
@@ -2265,11 +2522,10 @@ export function PluginsRoute() {
             </div>
             <div>
               <dt>{t("plugins.details.source")}</dt>
-              <dd className="detail-grid__source-value" title={sourceValue}>
+              <dd className="detail-grid__source-value">
                 {isHttpUrl(sourceValue) ? (
                   <a
                     className="detail-grid__source-link detail-grid__single-line"
-                    data-tooltip={sourceValue}
                     href={sourceValue}
                     onClick={(event) => {
                       event.preventDefault();
@@ -2279,7 +2535,7 @@ export function PluginsRoute() {
                     {sourceValue}
                   </a>
                 ) : (
-                  <span className="detail-grid__single-line" data-tooltip={sourceValue}>
+                  <span className="detail-grid__single-line">
                     {sourceValue}
                   </span>
                 )}
@@ -2310,8 +2566,8 @@ export function PluginsRoute() {
                     <button
                       type="button"
                       className="skill-card__icon-button plugins-page__directory-open-button"
-                      aria-label={getPluginOpenActionLabel(plugin, t)}
-                      data-tooltip={getPluginOpenActionLabel(plugin, t)}
+                      aria-label={getPluginOpenActionAriaLabel(plugin, t)}
+                      data-tooltip={t("plugins.action.openFolderTooltip")}
                       onClick={() => void handlePluginOpenInFinder(plugin)}
                       disabled={!pluginDirectoryPath}
                     >
@@ -2510,7 +2766,18 @@ export function PluginsRoute() {
           filteredPlugins.map((plugin) => {
             const pluginKey = getPluginInstanceKey(plugin);
             const pluginDisplayName = getPluginDisplayName(plugin);
-            const isPending = pendingPluginIds.has(pluginKey);
+            const isUpdatePending = isPluginActionPending(
+              plugin,
+              plugins,
+              pendingPluginUpdateIds,
+              activeHost === "all",
+            );
+            const isTogglePending = isPluginActionPending(
+              plugin,
+              plugins,
+              pendingPluginToggleIds,
+              activeHost === "all",
+            );
             const isDeleting = deletingPluginIds.has(pluginKey);
             const isDeleteConfirming = deleteConfirmingPluginId === pluginKey;
             const deleteActionLabel = getPluginDeleteActionLabel(
@@ -2519,8 +2786,8 @@ export function PluginsRoute() {
               isDeleting,
               t,
             );
-            const openActionLabel = getPluginOpenActionLabel(plugin, t);
-            const updateActionLabel = getPluginUpdateActionLabel(plugin, isPending, t);
+            const openActionLabel = getPluginOpenActionAriaLabel(plugin, t);
+            const updateActionLabel = getPluginUpdateActionLabel(plugin, isUpdatePending, t);
             const collabBadge = getPluginCollabBadge(plugin, t);
             const componentSummaryBadges = getPluginComponentSummaryLabels(plugin).map((label) => ({
               label,
@@ -2579,10 +2846,10 @@ export function PluginsRoute() {
                           label: updateActionLabel,
                           ariaLabel: updateActionLabel,
                           className: "skill-card__icon-button skill-card__icon-button--update",
-                          icon: <RefreshIcon isSpinning={isPending} />,
+                          icon: <RefreshIcon isSpinning={isUpdatePending} variant="card" />,
                           tooltip: updateActionLabel,
                           onClick: () => void handlePluginUpdate(plugin),
-                          disabled: isPending || isDeleting,
+                          disabled: isUpdatePending || isDeleting,
                         },
                       ]
                     : []),
@@ -2590,28 +2857,28 @@ export function PluginsRoute() {
                     key: "toggle-enabled",
                     label: getPluginToggleActionLabel(
                       plugin,
-                      isPending,
+                      isTogglePending,
                       t,
                     ),
                     ariaLabel: getPluginToggleActionLabel(
                       plugin,
-                      isPending,
+                      isTogglePending,
                       t,
                     ),
                     className: getPluginToggleButtonClassName(plugin),
                     icon: (
                       <PluginPowerIcon
-                        isSpinning={isPending}
+                        isSpinning={isTogglePending}
                       />
                     ),
                     tooltip: getPluginToggleActionLabel(
                       plugin,
-                      isPending,
+                      isTogglePending,
                       t,
                     ),
                     onClick: () => void handlePluginEnabledChange(plugin),
                     disabled:
-                      isPending || isDeleting || !canTogglePlugin(plugin),
+                      isTogglePending || isDeleting || !canTogglePlugin(plugin),
                   },
                   {
                     key: "open-folder",
@@ -2619,7 +2886,7 @@ export function PluginsRoute() {
                     ariaLabel: openActionLabel,
                     className: "skill-card__icon-button",
                     icon: <OpenFolderIcon />,
-                    tooltip: openActionLabel,
+                    tooltip: t("plugins.action.openFolderTooltip"),
                     onClick: () => void handlePluginOpen(plugin),
                     disabled: isDeleting || !plugin.rootPath.trim(),
                   },
@@ -2641,7 +2908,7 @@ export function PluginsRoute() {
                         icon: <DeleteIcon />,
                         tooltip: deleteActionLabel,
                         onClick: () => void handlePluginDelete(plugin),
-                        disabled: isDeleting || isPending,
+                    disabled: isDeleting || isUpdatePending,
                       },
                 ]}
               />

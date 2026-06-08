@@ -89,7 +89,7 @@ test("resolves default open tool by preferred editor priority", () => {
   const editorId = resolveDefaultOpenToolId([
     buildToolConfig({ id: "qoder", name: "Qoder", supportsDirectOpen: true, statusLabel: "已安装" }),
     buildToolConfig({ id: "trae-cn", name: "Trae CN", supportsDirectOpen: true, statusLabel: "已安装" }),
-    buildToolConfig({ id: "windsurf", name: "Windsurf", supportsDirectOpen: true, statusLabel: "已安装" }),
+    buildToolConfig({ id: "windsurf", name: "Devin", supportsDirectOpen: true, statusLabel: "已安装" }),
     buildToolConfig({ id: "cursor", name: "Cursor", supportsDirectOpen: true, statusLabel: "已安装" }),
   ]);
 
@@ -98,7 +98,16 @@ test("resolves default open tool by preferred editor priority", () => {
 
 test("falls back through preferred editors when cursor is missing", () => {
   const editorId = resolveDefaultOpenToolId([
-    buildToolConfig({ id: "windsurf", name: "Windsurf", supportsDirectOpen: true, statusLabel: "已安装" }),
+    buildToolConfig({ id: "windsurf", name: "Devin", supportsDirectOpen: true, statusLabel: "已安装" }),
+    buildToolConfig({ id: "trae", name: "Trae", supportsDirectOpen: true, statusLabel: "已安装" }),
+  ]);
+
+  expect(editorId).toBe("windsurf");
+});
+
+test("treats renamed Devin install as the windsurf tool id", () => {
+  const editorId = resolveDefaultOpenToolId([
+    buildToolConfig({ id: "windsurf", name: "Devin", supportsDirectOpen: true, statusLabel: "已安装" }),
     buildToolConfig({ id: "trae", name: "Trae", supportsDirectOpen: true, statusLabel: "已安装" }),
   ]);
 

@@ -3,7 +3,11 @@ import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 import { App } from "@/app/App";
 import * as skillClient from "@/features/skills/api/skill-client";
-import { marketplaceSkillFixtures, mcpMarketplaceServerFixtures } from "@/features/skills/state/skill-fixtures";
+import {
+  marketplaceSkillFixtures,
+  mcpMarketplaceServerFixtures,
+  toolConfigFixtures,
+} from "@/features/skills/state/skill-fixtures";
 import type { MarketplaceSkill, McpMarketplaceServer, PluginSummary } from "@/features/skills/state/skill-store";
 import { getCachedMcpWorkspace } from "@/features/skills/utils/mcp-workspace-cache";
 import { getCachedPlugins } from "@/features/skills/utils/plugin-cache";
@@ -601,7 +605,8 @@ test("clears plugin probes and stops blocking on workspace refresh after install
   const refreshSpy = vi.spyOn(skillClient, "refreshPluginStates").mockResolvedValue([]);
   const workspaceRefreshSpy = vi
     .spyOn(skillClient, "fetchToolConfigs")
-    .mockImplementation(() => new Promise(() => {}));
+    .mockResolvedValueOnce(toolConfigFixtures)
+    .mockImplementationOnce(() => new Promise(() => {}));
 
   render(<App />);
   await userEvent.click(screen.getByRole("button", { name: /安装/ }));
@@ -612,6 +617,9 @@ test("clears plugin probes and stops blocking on workspace refresh after install
   });
   await userEvent.click(screen.getByRole("button", { name: "识别插件" }));
   await screen.findByText("Shopify");
+  await waitFor(() => {
+    expect(screen.getByRole("button", { name: "安装到选中宿主" })).toBeEnabled();
+  });
 
   await userEvent.click(screen.getByRole("button", { name: "安装到选中宿主" }));
 
@@ -631,6 +639,9 @@ test("clears plugin probes and stops blocking on workspace refresh after install
 
 test("renders plugin probe title from manifest name instead of cache directory name", async () => {
   vi.spyOn(skillClient, "fetchInstalledPlugins").mockResolvedValue([]);
+  const branchSpy = vi.spyOn(skillClient, "fetchGitRepoBranches").mockResolvedValue([
+    { name: "main", isDefault: true, isSelected: true },
+  ]);
   const probeSpy = vi.spyOn(skillClient, "probePluginSourceCandidates").mockResolvedValue([{
     tool: "cursor",
     compatibleHostTools: ["cursor"],
@@ -658,13 +669,14 @@ test("renders plugin probe title from manifest name instead of cache directory n
     "https://github.com/raisely/cursor-plugin.git",
   );
   await waitFor(() => {
-    expect(screen.getByRole("combobox", { name: "Git 分支" })).toHaveValue("master");
+    expect(screen.getByRole("combobox", { name: "Git 分支" })).toHaveValue("main");
   });
   await userEvent.click(screen.getByRole("button", { name: "识别插件" }));
 
   expect(await screen.findByText("Connect Cursor to Raisely.")).toBeInTheDocument();
   expect(screen.queryByText("plugin-https-github-com-raisely-cursor-plugin-git")).not.toBeInTheDocument();
 
+  branchSpy.mockRestore();
   probeSpy.mockRestore();
 });
 
@@ -756,14 +768,13 @@ test("probes repository roots and lists every plugin candidate", async () => {
   expect(screen.getByRole("button", { name: "返回" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "安装到选中宿主" })).toBeDisabled();
   expect(screen.getByText("example-plugin").closest(".plugin-install-preview__item")).not.toHaveClass("is-selected");
-  expect(screen.getByRole("button", { name: /取消选择 Codex 作为 example-plugin 安装宿主/ })).toHaveAttribute("aria-pressed", "true");
-  expect(screen.getByRole("button", { name: /取消选择 Claude Code 作为 example-plugin 安装宿主/ })).toHaveAttribute("aria-pressed", "true");
-  expect(screen.getByRole("button", { name: /取消选择 Cursor 作为 example-plugin 安装宿主/ })).toHaveAttribute("aria-pressed", "true");
+  expect(screen.getByRole("button", { name: /选择 Codex 作为 example-plugin 安装宿主/ })).toHaveAttribute("aria-pressed", "false");
+  expect(screen.getByRole("button", { name: /选择 Claude Code 作为 example-plugin 安装宿主/ })).toHaveAttribute("aria-pressed", "false");
+  expect(screen.getByRole("button", { name: /选择 Cursor 作为 example-plugin 安装宿主/ })).toHaveAttribute("aria-pressed", "false");
   await userEvent.click(screen.getByRole("button", { name: /选择 Claude Code 作为 example-plugin 安装宿主/ }));
   await waitFor(() => {
     expect(screen.getByText("example-plugin").closest(".plugin-install-preview__item")).toHaveClass("is-selected");
     expect(screen.getByRole("button", { name: /取消选择 Claude Code 作为 example-plugin 安装宿主/ })).toHaveAttribute("aria-pressed", "true");
-    expect(screen.getByRole("button", { name: /选择 Claude Code 作为 example-plugin 安装宿主/ })).toHaveAttribute("aria-pressed", "false");
     expect(screen.getByRole("button", { name: "安装到选中宿主" })).toBeEnabled();
   });
   await userEvent.click(screen.getByRole("button", { name: "安装到选中宿主" }));
@@ -989,6 +1000,9 @@ test("updates the shared plugin cache right after plugin install completes", asy
 
   expect(getCachedPlugins()).toBeNull();
 
+  await waitFor(() => {
+    expect(screen.getByRole("button", { name: "安装到选中宿主" })).toBeEnabled();
+  });
   await userEvent.click(screen.getByRole("button", { name: "安装到选中宿主" }));
 
   await waitFor(() => {
@@ -1077,15 +1091,13 @@ test("shows newly installed plugin before the follow-up plugin refresh resolves"
     },
   ]);
   const fixtureSpy = vi.spyOn(skillClient, "shouldUseFixtureData").mockReturnValue(false);
-  const fetchInstalledPluginsSpy = vi.spyOn(skillClient, "fetchInstalledPlugins");
-  fetchInstalledPluginsSpy
-    .mockResolvedValueOnce([])
-    .mockImplementationOnce(
-      () =>
-        new Promise<PluginSummary[]>((resolve) => {
-          deferredRefresh.resolve = resolve;
-        }),
-    );
+  const fetchInstalledPluginsSpy = vi.spyOn(skillClient, "fetchInstalledPlugins").mockResolvedValue([]);
+  const refreshPluginStatesSpy = vi.spyOn(skillClient, "refreshPluginStates").mockImplementationOnce(
+    () =>
+      new Promise<PluginSummary[]>((resolve) => {
+        deferredRefresh.resolve = resolve;
+      }),
+  );
   const installSpy = vi.spyOn(skillClient, "installSelectedPluginProbes").mockResolvedValue([installedPlugin]);
 
   render(<App />);
@@ -1102,6 +1114,13 @@ test("shows newly installed plugin before the follow-up plugin refresh resolves"
   await userEvent.click(screen.getByRole("button", { name: /插件/ }));
 
   await waitFor(() => {
+    expect(screen.getByRole("button", { name: "安装到选中宿主" })).toBeEnabled();
+  });
+  await userEvent.click(screen.getByRole("button", { name: "安装到选中宿主" }));
+  await userEvent.click(screen.getByRole("button", { name: /插件/ }));
+
+  await waitFor(() => {
+    expect(refreshPluginStatesSpy).toHaveBeenCalledTimes(1);
     expect(screen.getByText("Raisely")).toBeInTheDocument();
     expect(getCachedPlugins()).toEqual([installedPlugin]);
   });
@@ -1111,6 +1130,7 @@ test("shows newly installed plugin before the follow-up plugin refresh resolves"
   probeSpy.mockRestore();
   fixtureSpy.mockRestore();
   fetchInstalledPluginsSpy.mockRestore();
+  refreshPluginStatesSpy.mockRestore();
   installSpy.mockRestore();
 });
 

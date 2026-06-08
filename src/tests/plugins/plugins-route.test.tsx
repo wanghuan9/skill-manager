@@ -52,7 +52,7 @@ function setWorkspaceLanguage(language: "zh-CN" | "en") {
   } as unknown as ReturnType<typeof useSkillWorkspace>);
 }
 
-test("hydrates plugins from persisted cache before the refresh request resolves", async () => {
+test("hydrates plugins from runtime cache before the refresh request resolves", async () => {
   const fixtureSpy = vi.spyOn(skillClient, "shouldUseFixtureData").mockReturnValue(false);
   const cachedPlugins: PluginSummary[] = [
     {
@@ -60,7 +60,7 @@ test("hydrates plugins from persisted cache before the refresh request resolves"
       statusText: "来自启动缓存。",
     },
   ];
-  window.localStorage.setItem("skilldock.pluginsCache", JSON.stringify(cachedPlugins));
+  (window as Window & { __SKILLM_PLUGINS__?: PluginSummary[] | null }).__SKILLM_PLUGINS__ = cachedPlugins;
 
   const deferredFetch: {
     resolve?: (value: PluginSummary[]) => void;
@@ -109,6 +109,7 @@ test("reconciles plugin config with a startup scan even when the plugin list is 
       ],
     },
   ];
+  (window as Window & { __SKILLM_PLUGINS__?: PluginSummary[] | null }).__SKILLM_PLUGINS__ = cachedPlugins;
   const startupPlugins: PluginSummary[] = [
     {
       ...pluginFixtures[0],
@@ -123,7 +124,6 @@ test("reconciles plugin config with a startup scan even when the plugin list is 
       ],
     },
   ];
-  window.localStorage.setItem("skilldock.pluginsCache", JSON.stringify(cachedPlugins));
   const startupSpy = vi
     .spyOn(skillClient, "fetchStartupInstalledPlugins")
     .mockResolvedValueOnce(startupPlugins);
@@ -174,11 +174,12 @@ test("reconciles plugin config again when returning to the plugin page window", 
     .spyOn(skillClient, "fetchStartupInstalledPlugins")
     .mockResolvedValueOnce([initialPlugin])
     .mockResolvedValueOnce([syncedPlugin]);
+  const remoteRefreshSpy = vi.spyOn(skillClient, "refreshPluginStates").mockResolvedValue([syncedPlugin]);
   const localRefreshSpy = vi.spyOn(skillClient, "refreshLocalPluginState");
 
   renderWithI18n(<PluginsRoute />);
 
-  await screen.findByText("未启用");
+  await screen.findByRole("tab", { name: /全部/ });
 
   await act(async () => {
     window.dispatchEvent(new Event("focus"));
@@ -188,13 +189,54 @@ test("reconciles plugin config again when returning to the plugin page window", 
     expect(startupSpy).toHaveBeenCalledTimes(2);
   });
   await waitFor(() => {
+    expect(remoteRefreshSpy).toHaveBeenCalledTimes(1);
+  });
+  await waitFor(() => {
     expect(screen.getByText("已启用")).toBeInTheDocument();
   });
   expect(localRefreshSpy).not.toHaveBeenCalled();
   fixtureSpy.mockRestore();
 });
 
-test("persists the loaded plugin list for the next open", async () => {
+test("refreshes remote plugin states in the background right after startup", async () => {
+  const fixtureSpy = vi.spyOn(skillClient, "shouldUseFixtureData").mockReturnValue(false);
+  const startupPlugins: PluginSummary[] = [
+    {
+      ...pluginFixtures[0],
+      installSource: "skilldock",
+      updateMode: "auto",
+      updateStrategy: "hash",
+      collabStatus: "clean",
+      updateAvailable: false,
+      statusText: "插件目录已是最新。",
+    },
+  ];
+  const refreshedPlugins: PluginSummary[] = [
+    {
+      ...startupPlugins[0],
+      collabStatus: "update-available",
+      updateAvailable: true,
+      statusText: "远端存在更新。",
+    },
+  ];
+  vi.spyOn(skillClient, "fetchStartupInstalledPlugins").mockResolvedValueOnce(startupPlugins);
+  const remoteRefreshSpy = vi.spyOn(skillClient, "refreshPluginStates").mockResolvedValueOnce(refreshedPlugins);
+  const localRefreshSpy = vi.spyOn(skillClient, "refreshLocalPluginState");
+
+  renderWithI18n(<PluginsRoute />);
+
+  await screen.findByRole("tab", { name: /全部/ });
+  await waitFor(() => {
+    expect(remoteRefreshSpy).toHaveBeenCalledTimes(1);
+  });
+  await waitFor(() => {
+    expect(screen.getByRole("button", { name: "更新 Repo Scout 插件" })).toBeInTheDocument();
+  });
+  expect(localRefreshSpy).not.toHaveBeenCalled();
+  fixtureSpy.mockRestore();
+});
+
+test("stores the loaded plugin list in runtime cache", async () => {
   const fixtureSpy = vi.spyOn(skillClient, "shouldUseFixtureData").mockReturnValue(false);
   vi.spyOn(skillClient, "fetchStartupInstalledPlugins").mockResolvedValueOnce(pluginFixtures);
 
@@ -202,11 +244,9 @@ test("persists the loaded plugin list for the next open", async () => {
 
   await screen.findByRole("tab", { name: /全部/ });
 
-  const cachedPayload = JSON.parse(
-    window.localStorage.getItem("skilldock.pluginsCache") ?? "null",
-  );
-  expect(Array.isArray(cachedPayload)).toBe(true);
-  expect(cachedPayload[0]?.id).toBe(pluginFixtures[0]?.id);
+  expect(
+    (window as Window & { __SKILLM_PLUGINS__?: PluginSummary[] | null }).__SKILLM_PLUGINS__,
+  ).toEqual(pluginFixtures);
   fixtureSpy.mockRestore();
 });
 
@@ -615,8 +655,7 @@ test("refreshes the plugin list from the toolbar", async () => {
     resolve?: (value: PluginSummary[]) => void;
   } = {};
   const fetchSpy = vi
-    .spyOn(skillClient, "fetchStartupInstalledPlugins")
-    .mockResolvedValueOnce(pluginFixtures)
+    .spyOn(skillClient, "fetchInstalledPlugins")
     .mockImplementationOnce(
       () =>
         new Promise<PluginSummary[]>((resolve) => {
@@ -647,10 +686,56 @@ test("refreshes the plugin list from the toolbar", async () => {
     await waitFor(() => {
       expect(screen.getByRole("button", { name: "刷新" })).toBeEnabled();
     });
-    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
   } finally {
     fetchSpy.mockRestore();
   }
+});
+
+test("refreshes only the active host tab from the toolbar", async () => {
+  const fetchSpy = vi.spyOn(skillClient, "fetchInstalledPlugins");
+  const localRefreshSpy = vi
+    .spyOn(skillClient, "refreshLocalPluginState")
+    .mockImplementation(async (input) => {
+      const matchedPlugin = pluginFixtures.find((plugin) => (
+        plugin.hostTool === input.hostTool && plugin.rootPath === input.rootPath
+      ));
+      if (!matchedPlugin) {
+        throw new Error("missing plugin fixture for refresh");
+      }
+      return {
+        ...matchedPlugin,
+        statusText: `${matchedPlugin.statusText}（已刷新）`,
+      };
+    });
+
+  renderWithI18n(<PluginsRoute />);
+
+  await screen.findByRole("tab", { name: /全部/ });
+  await userEvent.click(screen.getByRole("tab", { name: /Claude Code/ }));
+
+  const refreshButton = screen.getByRole("button", { name: "刷新" });
+  await userEvent.click(refreshButton);
+
+  await waitFor(() => {
+    expect(refreshButton).toBeEnabled();
+  });
+
+  expect(fetchSpy).not.toHaveBeenCalled();
+  const claudePlugins = pluginFixtures.filter((plugin) => plugin.hostTool === "claude-code");
+  expect(localRefreshSpy).toHaveBeenCalledTimes(claudePlugins.length);
+  for (const plugin of claudePlugins) {
+    expect(localRefreshSpy).toHaveBeenCalledWith({
+      hostTool: "claude-code",
+      rootPath: plugin.rootPath,
+    });
+  }
+  expect(localRefreshSpy).not.toHaveBeenCalledWith(
+    expect.objectContaining({ hostTool: "codex" }),
+  );
+  expect(localRefreshSpy).not.toHaveBeenCalledWith(
+    expect.objectContaining({ hostTool: "cursor" }),
+  );
 });
 
 test("opens plugin git source links externally", async () => {
@@ -760,6 +845,34 @@ test("prefers plugin source url over source label in details", async () => {
   expect(
     screen.getByRole("link", { name: "https://github.com/raisely/cursor-plugin.git" }),
   ).toHaveClass("detail-grid__single-line");
+});
+
+test("does not show tooltip attributes for plugin source details", async () => {
+  const plugins: PluginSummary[] = [
+    {
+      ...pluginFixtures[0],
+      hostTool: "cursor",
+      name: "raisely",
+      sourceType: "git",
+      sourceLabel: "raisely",
+      sourceUrl: "https://github.com/raisely/cursor-plugin.git",
+      rootPath: "/Users/demo/.cursor/plugins/local/raisely",
+    },
+  ];
+  vi.spyOn(skillClient, "fetchStartupInstalledPlugins").mockResolvedValueOnce(plugins);
+
+  renderWithI18n(<PluginsRoute />);
+
+  await screen.findByRole("tab", { name: /全部/ });
+  await userEvent.click(screen.getByRole("tab", { name: /Cursor/ }));
+  await screen.findByText("raisely");
+  await userEvent.click(screen.getByRole("button", { name: /展开 raisely/ }));
+
+  const sourceLink = screen.getByRole("link", {
+    name: "https://github.com/raisely/cursor-plugin.git",
+  });
+  expect(sourceLink).not.toHaveAttribute("data-tooltip");
+  expect(sourceLink.closest("dd")).not.toHaveAttribute("title");
 });
 
 test("shows SkillDock install source with real source and plugin directory only", async () => {
@@ -998,15 +1111,270 @@ test("shows plugin update status and updates from the list action", async () => 
   await screen.findByText("Repo Scout");
 
   expect(screen.getByText("可更新")).toBeInTheDocument();
-  await userEvent.click(screen.getByRole("button", { name: "更新 Repo Scout 插件" }));
+  const updateButton = screen.getByRole("button", { name: "更新 Repo Scout 插件" });
+  expect(updateButton.querySelector(".skill-card__refresh-icon")).toBeInTheDocument();
 
-  expect(updateSpy).toHaveBeenCalledWith({
-    pluginId: "repo-scout",
-    hostTool: "codex",
-    rootPath: "/Users/demo/workspace/repo-scout",
+  await userEvent.click(updateButton);
+
+  await waitFor(() => {
+    expect(updateSpy).toHaveBeenCalledWith({
+      pluginId: "repo-scout",
+      hostTool: "codex",
+      rootPath: "/Users/demo/workspace/repo-scout",
+    });
   });
   await waitFor(() => {
     expect(screen.queryByText("可更新")).not.toBeInTheDocument();
+  });
+
+  updateSpy.mockRestore();
+});
+
+test("shows the same spinning update icon state as skills while a plugin update is pending", async () => {
+  let resolveUpdate: ((plugin: PluginSummary) => void) | null = null;
+  const updateSpy = vi.spyOn(skillClient, "updatePlugin").mockImplementation(
+    () =>
+      new Promise<PluginSummary>((resolve) => {
+        resolveUpdate = resolve;
+      }),
+  );
+
+  renderWithI18n(<PluginsRoute />);
+
+  await screen.findByRole("tab", { name: /全部/ });
+  await userEvent.click(screen.getByRole("tab", { name: /Codex/ }));
+  await screen.findByText("Repo Scout");
+
+  const updateButton = screen.getByRole("button", { name: "更新 Repo Scout 插件" });
+  await userEvent.click(updateButton);
+
+  await waitFor(() => {
+    expect(updateButton).toBeDisabled();
+    expect(updateButton.querySelector(".skill-card__refresh-icon.is-spinning")).toBeInTheDocument();
+  });
+  await waitFor(() => {
+    expect(updateSpy).toHaveBeenCalledTimes(1);
+  });
+
+  if (!resolveUpdate) {
+    updateSpy.mockRestore();
+    throw new Error("missing plugin update resolver");
+  }
+  resolveUpdate({
+    ...pluginFixtures[0],
+    collabStatus: "clean",
+    updateAvailable: false,
+    statusText: "插件目录已是最新。",
+  });
+
+  await waitFor(() => {
+    expect(screen.queryByText("可更新")).not.toBeInTheDocument();
+  });
+
+  updateSpy.mockRestore();
+});
+
+test("shows a spinning update icon for merged all-tab plugins while update is pending", async () => {
+  let resolveUpdate: ((plugin: PluginSummary) => void) | null = null;
+  const updateSpy = vi.spyOn(skillClient, "updatePlugin").mockImplementation(
+    () =>
+      new Promise<PluginSummary>((resolve) => {
+        resolveUpdate = resolve;
+      }),
+  );
+  const refreshSpy = vi.spyOn(skillClient, "refreshLocalPluginState").mockImplementation(
+    async ({ hostTool, rootPath }) => ({
+      ...pluginFixtures[0],
+      id: `${hostTool}:repo-scout`,
+      hostTool,
+      rootPath,
+      repoRootPath: "/Users/demo/.skilldock/plugins/repo-scout",
+      collabStatus: "clean",
+      updateAvailable: false,
+      statusText: "插件目录已是最新。",
+    }),
+  );
+  vi.spyOn(skillClient, "fetchStartupInstalledPlugins").mockResolvedValueOnce([
+    {
+      ...pluginFixtures[0],
+      id: "codex:repo-scout",
+      hostTool: "codex",
+      rootPath: "/Users/demo/.skilldock/plugins/repo-scout/plugins/repo-scout",
+      repoRootPath: "/Users/demo/.skilldock/plugins/repo-scout",
+      manifestPath: "/Users/demo/.skilldock/plugins/repo-scout/plugins/repo-scout/.codex-plugin/plugin.json",
+      relatedHostTools: ["claude-code"],
+    },
+    {
+      ...pluginFixtures[0],
+      id: "claude-code:repo-scout",
+      hostTool: "claude-code",
+      rootPath: "/Users/demo/.skilldock/plugins/repo-scout/plugins/repo-scout",
+      repoRootPath: "/Users/demo/.skilldock/plugins/repo-scout",
+      manifestPath: "/Users/demo/.skilldock/plugins/repo-scout/plugins/repo-scout/.claude-plugin/plugin.json",
+      relatedHostTools: ["codex"],
+      enabledState: "disabled",
+    },
+  ]);
+
+  renderWithI18n(<PluginsRoute />);
+
+  await screen.findByRole("tab", { name: "全部 1" });
+
+  const updateButton = screen.getByRole("button", { name: "更新 Repo Scout 插件" });
+  await userEvent.click(updateButton);
+
+  await waitFor(() => {
+    expect(updateButton).toBeDisabled();
+    expect(updateButton.querySelector(".skill-card__refresh-icon.is-spinning")).toBeInTheDocument();
+  });
+  await waitFor(() => {
+    expect(updateSpy).toHaveBeenCalledTimes(1);
+  });
+
+  if (!resolveUpdate) {
+    updateSpy.mockRestore();
+    refreshSpy.mockRestore();
+    throw new Error("missing plugin update resolver");
+  }
+  resolveUpdate({
+    ...pluginFixtures[0],
+    id: "codex:repo-scout",
+    hostTool: "codex",
+    rootPath: "/Users/demo/.skilldock/plugins/repo-scout/plugins/repo-scout",
+    repoRootPath: "/Users/demo/.skilldock/plugins/repo-scout",
+    collabStatus: "clean",
+    updateAvailable: false,
+    statusText: "插件目录已是最新。",
+  });
+
+  await waitFor(() => {
+    expect(refreshSpy).toHaveBeenCalledTimes(2);
+  });
+  await waitFor(() => {
+    expect(screen.queryByText("可更新")).not.toBeInTheDocument();
+  });
+
+  updateSpy.mockRestore();
+  refreshSpy.mockRestore();
+});
+
+test("keeps the toggle button available and not spinning while plugin update is pending", async () => {
+  let resolveUpdate: ((plugin: PluginSummary) => void) | null = null;
+  const updateSpy = vi.spyOn(skillClient, "updatePlugin").mockImplementation(
+    () =>
+      new Promise<PluginSummary>((resolve) => {
+        resolveUpdate = resolve;
+      }),
+  );
+
+  renderWithI18n(<PluginsRoute />);
+
+  await screen.findByRole("tab", { name: /全部/ });
+  await userEvent.click(screen.getByRole("tab", { name: /Codex/ }));
+  await screen.findByText("Repo Scout");
+
+  await userEvent.click(screen.getByRole("button", { name: "更新 Repo Scout 插件" }));
+
+  const toggleButton = screen.getByRole("button", { name: "关闭 Repo Scout 插件" });
+  await waitFor(() => {
+    expect(updateSpy).toHaveBeenCalledTimes(1);
+    expect(toggleButton).toBeEnabled();
+    expect(toggleButton.querySelector(".plugins-page__power-icon.is-spinning")).not.toBeInTheDocument();
+  });
+
+  if (!resolveUpdate) {
+    updateSpy.mockRestore();
+    throw new Error("missing plugin update resolver");
+  }
+  await act(async () => {
+    resolveUpdate?.({
+      ...pluginFixtures[0],
+      collabStatus: "clean",
+      updateAvailable: false,
+      statusText: "插件目录已是最新。",
+    });
+  });
+  await waitFor(() => {
+    expect(screen.queryByText("可更新")).not.toBeInTheDocument();
+  });
+
+  updateSpy.mockRestore();
+});
+
+test("deduplicates shared plugin package updates in the all tab", async () => {
+  const updateSpy = vi.spyOn(skillClient, "updatePlugin").mockResolvedValue({
+    ...pluginFixtures[0],
+    id: "codex:repo-scout",
+    hostTool: "codex",
+    rootPath: "/Users/demo/.skilldock/plugins/repo-scout/plugins/repo-scout",
+    repoRootPath: "/Users/demo/.skilldock/plugins/repo-scout",
+    collabStatus: "clean",
+    updateAvailable: false,
+    statusText: "插件目录已是最新。",
+  });
+  const refreshSpy = vi.spyOn(skillClient, "refreshLocalPluginState").mockImplementation(
+    async ({ hostTool, rootPath }) => ({
+      ...pluginFixtures[0],
+      id: `${hostTool}:repo-scout`,
+      hostTool,
+      rootPath,
+      repoRootPath: "/Users/demo/.skilldock/plugins/repo-scout",
+      collabStatus: "clean",
+      updateAvailable: false,
+      statusText: "插件目录已是最新。",
+    }),
+  );
+  vi.spyOn(skillClient, "fetchStartupInstalledPlugins").mockResolvedValueOnce([
+    {
+      ...pluginFixtures[0],
+      id: "codex:repo-scout",
+      hostTool: "codex",
+      rootPath: "/Users/demo/.skilldock/plugins/repo-scout/plugins/repo-scout",
+      repoRootPath: "/Users/demo/.skilldock/plugins/repo-scout",
+      manifestPath: "/Users/demo/.skilldock/plugins/repo-scout/plugins/repo-scout/.codex-plugin/plugin.json",
+      relatedHostTools: ["claude-code"],
+    },
+    {
+      ...pluginFixtures[0],
+      id: "claude-code:repo-scout",
+      hostTool: "claude-code",
+      rootPath: "/Users/demo/.skilldock/plugins/repo-scout/plugins/repo-scout",
+      repoRootPath: "/Users/demo/.skilldock/plugins/repo-scout",
+      manifestPath: "/Users/demo/.skilldock/plugins/repo-scout/plugins/repo-scout/.claude-plugin/plugin.json",
+      relatedHostTools: ["codex"],
+      enabledState: "disabled",
+    },
+  ]);
+
+  renderWithI18n(<PluginsRoute />);
+
+  await screen.findByRole("tab", { name: "全部 1" });
+  await userEvent.click(screen.getByRole("button", { name: "更新 Repo Scout 插件" }));
+
+  await waitFor(() => {
+    expect(updateSpy).toHaveBeenCalledTimes(1);
+  });
+  expect(refreshSpy).toHaveBeenCalledTimes(2);
+
+  updateSpy.mockRestore();
+  refreshSpy.mockRestore();
+});
+
+test("shows the backend update error message instead of a generic toast-only message", async () => {
+  const updateSpy = vi.spyOn(skillClient, "updatePlugin").mockRejectedValue(
+    new Error("插件目录存在本地未提交改动，请先推送或清理后再更新。"),
+  );
+
+  renderWithI18n(<PluginsRoute />);
+
+  await screen.findByRole("tab", { name: /全部/ });
+  await userEvent.click(screen.getByRole("tab", { name: /Codex/ }));
+  await userEvent.click(screen.getByRole("button", { name: "更新 Repo Scout 插件" }));
+
+  await waitFor(() => {
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "插件目录存在本地未提交改动，请先推送或清理后再更新。",
+    );
   });
 
   updateSpy.mockRestore();
@@ -1100,7 +1468,8 @@ test("refreshes plugin states after plugin library changes", async () => {
   if (!changeHandler) {
     throw new Error("plugin library change handler was not registered");
   }
-  changeHandler({ changedPaths: ["/Users/demo/.skilldock/plugins/repo-scout/plugins/repo-scout/SKILL.md"] });
+  const registeredChangeHandler: NonNullable<typeof changeHandler> = changeHandler;
+  registeredChangeHandler({ changedPaths: ["/Users/demo/.skilldock/plugins/repo-scout/plugins/repo-scout/SKILL.md"] });
 
   await waitFor(() => {
     expect(refreshSpy).toHaveBeenCalledTimes(1);
@@ -1120,13 +1489,15 @@ test("shows diverged status without an update action", async () => {
     },
   ];
   vi.spyOn(skillClient, "fetchStartupInstalledPlugins").mockResolvedValueOnce(plugins);
+  vi.spyOn(skillClient, "refreshPluginStates").mockResolvedValueOnce(plugins);
 
   renderWithI18n(<PluginsRoute />);
 
   await screen.findByRole("tab", { name: /Codex/ });
   await userEvent.click(screen.getByRole("tab", { name: /Codex/ }));
+  const repoScoutRow = await screen.findByRole("button", { name: /展开 Repo Scout/ });
 
-  expect(screen.getByText("需处理")).toBeInTheDocument();
+  expect(repoScoutRow.closest(".tool-list-row")).toHaveTextContent("需处理");
   expect(screen.queryByRole("button", { name: "更新 Repo Scout 插件" })).not.toBeInTheDocument();
 });
 
@@ -1223,6 +1594,53 @@ test("shows host icons in the trailing host badge and collapses the rest into +N
   expect(within(hostCoverageBadge as HTMLElement).getByText("+3")).toBeInTheDocument();
 });
 
+test("aggregates launchdarkly aliases into one shared plugin card", async () => {
+  const launchDarklyPlugins: PluginSummary[] = [
+    {
+      ...pluginFixtures[0],
+      id: "codex:launchdarkly-mcp",
+      packageId: "launchdarkly-ai-tooling",
+      manifestName: "launchdarkly-mcp",
+      name: "launchdarkly-mcp",
+      sourceLabel: "launchdarkly-ai-tooling",
+      sourceUrl: "https://github.com/launchdarkly/ai-tooling",
+      hostTool: "codex",
+      relatedHostTools: ["claude-code"],
+      rootPath: "/Users/demo/.codex/plugins/launchdarkly-ai-tooling/plugins/launchdarkly-mcp",
+      repoRootPath: "/Users/demo/.codex/plugins/launchdarkly-ai-tooling",
+      pluginRelativePath: "plugins/launchdarkly-mcp",
+      manifestPath: "/Users/demo/.codex/plugins/launchdarkly-ai-tooling/plugins/launchdarkly-mcp/.codex-plugin/plugin.json",
+    },
+    {
+      ...pluginFixtures[0],
+      id: "claude-code:launchdarkly",
+      packageId: "launchdarkly-ai-tooling",
+      manifestName: "launchdarkly",
+      name: "launchdarkly",
+      sourceLabel: "launchdarkly-ai-tooling",
+      sourceUrl: "https://github.com/launchdarkly/ai-tooling",
+      hostTool: "claude-code",
+      relatedHostTools: ["codex"],
+      rootPath: "/Users/demo/.claude/plugins/launchdarkly-ai-tooling/plugins/launchdarkly",
+      repoRootPath: "/Users/demo/.claude/plugins/launchdarkly-ai-tooling",
+      pluginRelativePath: "plugins/launchdarkly",
+      manifestPath: "/Users/demo/.claude/plugins/launchdarkly-ai-tooling/.claude-plugin/plugin.json",
+    },
+  ];
+
+  vi.spyOn(skillClient, "fetchStartupInstalledPlugins").mockResolvedValueOnce(launchDarklyPlugins);
+
+  renderWithI18n(<PluginsRoute />);
+
+  await screen.findByRole("tab", { name: /全部/ });
+
+  const launchdarklyButtons = screen.getAllByRole("button", {
+    name: /展开 launchdarkly/i,
+  });
+  expect(launchdarklyButtons).toHaveLength(1);
+  expect(screen.queryByRole("button", { name: /展开 launchdarkly-mcp/i })).not.toBeInTheDocument();
+});
+
 test("keeps the plugin chevron in the header's rightmost column", async () => {
   renderWithI18n(<PluginsRoute />);
 
@@ -1263,8 +1681,7 @@ test("shows refresh loading animation in the plugin toolbar", async () => {
     resolve?: (value: PluginSummary[]) => void;
   } = {};
   const fetchSpy = vi
-    .spyOn(skillClient, "fetchStartupInstalledPlugins")
-    .mockResolvedValueOnce(pluginFixtures)
+    .spyOn(skillClient, "fetchInstalledPlugins")
     .mockImplementationOnce(
       () =>
         new Promise<PluginSummary[]>((resolve) => {
@@ -1306,8 +1723,7 @@ test("keeps plugin scan import animation after remounting the route", async () =
     resolve?: (value: PluginSummary[]) => void;
   } = {};
   const fetchSpy = vi
-    .spyOn(skillClient, "fetchStartupInstalledPlugins")
-    .mockResolvedValueOnce(pluginFixtures)
+    .spyOn(skillClient, "fetchInstalledPlugins")
     .mockImplementationOnce(
       () =>
         new Promise<PluginSummary[]>((resolve) => {
@@ -1340,7 +1756,7 @@ test("keeps plugin scan import animation after remounting the route", async () =
     await waitFor(() => {
       expect(screen.getByRole("button", { name: "扫描导入" })).toBeEnabled();
     });
-    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
   } finally {
     fetchSpy.mockRestore();
   }
@@ -1429,17 +1845,107 @@ test("opens a plugin folder from the plugin list", async () => {
   await userEvent.click(screen.getByRole("tab", { name: /Claude Code/ }));
   expect(await screen.findByText("ecc")).toBeInTheDocument();
 
-  await userEvent.click(screen.getByRole("button", { name: "打开 ecc 插件" }));
+  await userEvent.click(screen.getByRole("button", { name: "打开 ecc 目录" }));
 
   expect(openPluginSpy).toHaveBeenCalledWith({
     rootPath: "/Users/demo/.claude/plugins/cache/ecc/ecc/1.10.0",
+    editorId: "finder",
+  });
+  expect(screen.getByRole("button", { name: "打开 ecc 目录" })).toHaveAttribute(
+    "data-tooltip",
+    "用默认工具打开 plugin 目录",
+  );
+
+  openPluginSpy.mockRestore();
+});
+
+test("opens the cursor plugin directory from the all tab when only cursor is installed", async () => {
+  const openPluginSpy = vi.spyOn(skillClient, "openPluginInEditor").mockResolvedValue(undefined);
+  const plugins: PluginSummary[] = [
+    {
+      ...pluginFixtures[0],
+      id: "cursor:coding-tutor",
+      packageId: "coding-tutor",
+      name: "Coding Tutor",
+      hostTool: "cursor",
+      rootPath: "/Users/demo/.skilldock/plugins/coding-tutor/plugins/coding-tutor",
+      displayRootPath: "/Users/demo/.cursor/plugins/local/coding-tutor",
+      repoRootPath: "/Users/demo/.skilldock/plugins/coding-tutor",
+      pluginRelativePath: "plugins/coding-tutor",
+      sourceType: "git",
+      sourceUrl: "https://github.com/everyinc/compound-engineering-plugin",
+      installSource: "skilldock",
+    },
+  ];
+  vi.spyOn(skillClient, "fetchStartupInstalledPlugins").mockResolvedValueOnce(plugins);
+
+  renderWithI18n(<PluginsRoute />);
+
+  await screen.findByRole("tab", { name: /全部/ });
+  expect(await screen.findByText("Coding Tutor")).toBeInTheDocument();
+
+  await userEvent.click(screen.getByRole("button", { name: "打开 Coding Tutor 目录" }));
+
+  expect(openPluginSpy).toHaveBeenCalledWith({
+    rootPath: "/Users/demo/.cursor/plugins/local/coding-tutor",
     editorId: "finder",
   });
 
   openPluginSpy.mockRestore();
 });
 
-test("opens the managed plugin repository root with the default tool", async () => {
+test("opens the skilldock repository root from the all tab when multiple hosts are installed", async () => {
+  const openPluginSpy = vi.spyOn(skillClient, "openPluginInEditor").mockResolvedValue(undefined);
+  const plugins: PluginSummary[] = [
+    {
+      ...pluginFixtures[0],
+      id: "cursor:coding-tutor",
+      packageId: "coding-tutor",
+      manifestName: "coding-tutor",
+      name: "Coding Tutor",
+      hostTool: "cursor",
+      rootPath: "/Users/demo/.cursor/plugins/local/coding-tutor",
+      displayRootPath: "/Users/demo/.cursor/plugins/local/coding-tutor",
+      repoRootPath: "/Users/demo/.skilldock/plugins/coding-tutor",
+      pluginRelativePath: "",
+      sourceType: "git",
+      sourceUrl: "https://github.com/everyinc/compound-engineering-plugin",
+      installSource: "skilldock",
+      relatedHostTools: ["claude-code"],
+    },
+    {
+      ...pluginFixtures[0],
+      id: "claude-code:coding-tutor",
+      packageId: "coding-tutor",
+      manifestName: "coding-tutor",
+      name: "Coding Tutor",
+      hostTool: "claude-code",
+      rootPath: "/Users/demo/.claude/plugins/coding-tutor",
+      displayRootPath: "/Users/demo/.claude/plugins/coding-tutor",
+      repoRootPath: "/Users/demo/.skilldock/plugins/coding-tutor",
+      pluginRelativePath: "",
+      sourceType: "git",
+      sourceUrl: "https://github.com/everyinc/compound-engineering-plugin",
+      installSource: "skilldock",
+      relatedHostTools: ["cursor"],
+    },
+  ];
+  vi.spyOn(skillClient, "fetchStartupInstalledPlugins").mockResolvedValueOnce(plugins);
+
+  renderWithI18n(<PluginsRoute />);
+
+  await screen.findByRole("tab", { name: /全部/ });
+  await userEvent.click(screen.getByRole("button", { name: /打开 .* 目录/ }));
+
+  expect(openPluginSpy).toHaveBeenCalledWith({
+    rootPath: "/Users/demo/.skilldock/plugins/coding-tutor",
+    editorId: "finder",
+  });
+
+  openPluginSpy.mockRestore();
+});
+
+test("opens the cursor plugin copy from the cursor tab with the default tool", async () => {
   const openPluginSpy = vi.spyOn(skillClient, "openPluginInEditor").mockResolvedValue(undefined);
   const plugins: PluginSummary[] = [
     {
@@ -1465,10 +1971,10 @@ test("opens the managed plugin repository root with the default tool", async () 
   await userEvent.click(screen.getByRole("tab", { name: /Cursor/ }));
   expect(await screen.findByText("Coding Tutor")).toBeInTheDocument();
 
-  await userEvent.click(screen.getByRole("button", { name: "打开 Coding Tutor 插件" }));
+  await userEvent.click(screen.getByRole("button", { name: "打开 Coding Tutor 目录" }));
 
   expect(openPluginSpy).toHaveBeenCalledWith({
-    rootPath: "/Users/demo/.skilldock/plugins/coding-tutor",
+    rootPath: "/Users/demo/.cursor/plugins/local/coding-tutor",
     editorId: "finder",
   });
 
@@ -1485,7 +1991,7 @@ test("opens a plugin folder from the detail directory row", async () => {
   await userEvent.click(screen.getByRole("tab", { name: /Claude Code/ }));
   expect(await screen.findByText("ecc")).toBeInTheDocument();
   await userEvent.click(screen.getByRole("button", { name: /展开 ecc/ }));
-  await userEvent.click(screen.getAllByRole("button", { name: "打开 ecc 插件" }).at(-1)!);
+  await userEvent.click(screen.getAllByRole("button", { name: "打开 ecc 目录" }).at(-1)!);
 
   expect(openFinderSpy).toHaveBeenCalledWith({
     path: "/Users/demo/.claude/plugins/cache/ecc/ecc/1.10.0",
@@ -1524,16 +2030,13 @@ test("shows and opens the original plugin directory instead of the symlink targe
   await userEvent.click(screen.getByRole("button", { name: /展开 SkillDock Plugin/ }));
 
   expect(
-    screen.getByText("/Users/demo/.codex/marketplaces/skilldock/plugins/skilldock-plugin"),
+    screen.getByText("/Users/demo/.codex/plugins/cache/skilldock-plugin/1.0.0"),
   ).toBeInTheDocument();
-  expect(
-    screen.queryByText("/Users/demo/.skilldock/plugins/skilldock-plugin"),
-  ).not.toBeInTheDocument();
 
-  await userEvent.click(screen.getAllByRole("button", { name: "打开 SkillDock Plugin 插件" }).at(-1)!);
+  await userEvent.click(screen.getAllByRole("button", { name: "打开 SkillDock Plugin 目录" }).at(-1)!);
 
   expect(openFinderSpy).toHaveBeenCalledWith({
-    path: "/Users/demo/.codex/marketplaces/skilldock/plugins/skilldock-plugin",
+    path: "/Users/demo/.codex/plugins/cache/skilldock-plugin/1.0.0",
   });
 
   openFinderSpy.mockRestore();

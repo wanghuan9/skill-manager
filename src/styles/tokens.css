@@ -3945,6 +3945,7 @@ code {
 }
 
 .plugin-install-preview__host-toggle[data-tooltip]::before {
+  display: none;
   top: calc(100% + 8px);
   bottom: auto;
   left: 50%;
@@ -3955,6 +3956,7 @@ code {
 }
 
 .plugin-install-preview__host-toggle[data-tooltip]::after {
+  display: none;
   top: calc(100% + 3px);
   bottom: auto;
   left: 50%;
@@ -3966,11 +3968,13 @@ code {
 
 .plugin-install-preview__host-toggle[data-tooltip]:hover::before,
 .plugin-install-preview__host-toggle[data-tooltip]:focus-visible::before {
+  display: block;
   transform: translate(-50%, 0);
 }
 
 .plugin-install-preview__host-toggle[data-tooltip]:hover::after,
 .plugin-install-preview__host-toggle[data-tooltip]:focus-visible::after {
+  display: block;
   transform: translate(-50%, 0) rotate(45deg);
 }
 

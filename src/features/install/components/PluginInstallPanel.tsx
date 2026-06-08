@@ -663,12 +663,17 @@ export function PluginInstallPanel() {
         cachePlugins(mergedInstalledPlugins);
       }
       setInstalledPlugins(mergedInstalledPlugins);
-      const nextInstalledPlugins = await fetchInstalledPlugins();
-      if (!shouldUseFixtureData()) {
-        cachePlugins(nextInstalledPlugins);
-      }
-      setInstalledPlugins(nextInstalledPlugins);
       void refreshWorkspace({ showRefreshing: false });
+      void refreshPluginStates()
+        .then((nextInstalledPlugins) => {
+          if (!shouldUseFixtureData()) {
+            cachePlugins(nextInstalledPlugins);
+          }
+          setInstalledPlugins(nextInstalledPlugins);
+        })
+        .catch((error) => {
+          console.warn("Failed to refresh installed plugins after install:", error);
+        });
     } catch (error) {
       reportFailure(error, {
         operation: "install_selected_plugin_probes",

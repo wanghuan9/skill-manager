@@ -1,8 +1,9 @@
+use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
-use std::sync::mpsc;
+use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -19,6 +20,16 @@ const RESERVED_WORKSPACE_LINK_NAMES: [&str; 5] =
 const GIT_CLONE_HISTORY_DEPTH: &str = "20";
 const GIT_NETWORK_TIMEOUT: Duration = Duration::from_secs(120);
 const GIT_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
+static REPO_CACHE_LOCKS: OnceLock<Mutex<HashMap<String, Arc<Mutex<()>>>>> = OnceLock::new();
+
+fn repo_cache_lock(repo_key: &str) -> Arc<Mutex<()>> {
+    let lock_map = REPO_CACHE_LOCKS.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut guard = lock_map.lock().unwrap_or_else(|error| error.into_inner());
+    guard
+        .entry(repo_key.to_string())
+        .or_insert_with(|| Arc::new(Mutex::new(())))
+        .clone()
+}
 
 fn sync_trace_enabled() -> bool {
     env::var("SKILLM_TRACE_SYNC").ok().as_deref() == Some("1")
@@ -760,6 +771,8 @@ pub fn clone_repo_for_discovery_with_ref_and_sparse_paths(
     repo_key: &str,
     sparse_paths: &[String],
 ) -> Result<PathBuf, String> {
+    let repo_lock = repo_cache_lock(repo_key);
+    let _repo_guard = repo_lock.lock().unwrap_or_else(|error| error.into_inner());
     let repo_dir = repo_cache_directory(repo_key)?;
     if repo_dir.exists() {
         fs::remove_dir_all(&repo_dir).map_err(|error| format!("清理旧仓库缓存失败: {error}"))?;
@@ -781,6 +794,27 @@ pub fn clone_repo_for_discovery_with_ref_and_sparse_paths(
         return Err(error);
     }
     Ok(repo_dir)
+}
+
+pub fn with_temporary_discovery_repo<T, F>(
+    repo_url: &str,
+    git_ref: Option<&str>,
+    repo_key: &str,
+    sparse_paths: &[String],
+    callback: F,
+) -> Result<T, String>
+where
+    F: FnOnce(&Path) -> Result<T, String>,
+{
+    let repo_root = clone_repo_for_discovery_with_ref_and_sparse_paths(
+        repo_url,
+        git_ref,
+        repo_key,
+        sparse_paths,
+    )?;
+    let result = callback(&repo_root);
+    let _ = fs::remove_dir_all(&repo_root);
+    result
 }
 
 #[allow(dead_code)]
@@ -1910,15 +1944,18 @@ mod tests {
     use super::{
         clone_branch_for_resolved_path, create_skill_symlink, get_tool_skills_path,
         ignore_unnecessary_files, migrate_legacy_skill_symlinks, parse_market_source_url,
-        reconcile_tool_skill_symlinks, remove_reserved_workspace_entries, run_git_in_dir,
-        run_git_output, skill_dir_match_score, tree_relative_path_for_branch, MarketSourceSpec,
-        ResolvedRemoteSkillPath,
+        reconcile_tool_skill_symlinks, remove_reserved_workspace_entries, repo_cache_lock,
+        run_git_in_dir, run_git_output, skill_dir_match_score, tree_relative_path_for_branch,
+        MarketSourceSpec, ResolvedRemoteSkillPath,
     };
     use crate::models::SkillSummary;
     use crate::workspace::TEST_ENV_LOCK;
     use std::fs;
     use std::path::PathBuf;
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Barrier};
+    use std::thread;
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     fn temp_test_dir(label: &str) -> PathBuf {
         let timestamp = SystemTime::now()
@@ -1932,6 +1969,47 @@ mod tests {
         ));
         fs::create_dir_all(&temp_dir).expect("create temp test dir");
         temp_dir
+    }
+
+    #[test]
+    fn repo_cache_lock_serializes_same_repo_key() {
+        let first_holding_lock = Arc::new(AtomicBool::new(false));
+        let second_entered_during_first_hold = Arc::new(AtomicBool::new(false));
+        let barrier = Arc::new(Barrier::new(2));
+
+        let first_lock = repo_cache_lock("shared-key");
+        let second_lock = repo_cache_lock("shared-key");
+
+        let first_holding_lock_for_thread = Arc::clone(&first_holding_lock);
+        let second_entered_for_thread = Arc::clone(&second_entered_during_first_hold);
+        let barrier_for_first = Arc::clone(&barrier);
+        let first = thread::spawn(move || {
+            let _guard = first_lock.lock().unwrap_or_else(|error| error.into_inner());
+            first_holding_lock_for_thread.store(true, Ordering::SeqCst);
+            barrier_for_first.wait();
+            thread::sleep(Duration::from_millis(150));
+            if second_entered_for_thread.load(Ordering::SeqCst) {
+                panic!("same repo key should not enter clone critical section concurrently");
+            }
+            first_holding_lock_for_thread.store(false, Ordering::SeqCst);
+        });
+
+        let first_holding_lock_for_second = Arc::clone(&first_holding_lock);
+        let second_entered_for_second = Arc::clone(&second_entered_during_first_hold);
+        let barrier_for_second = Arc::clone(&barrier);
+        let second = thread::spawn(move || {
+            barrier_for_second.wait();
+            let _guard = second_lock
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            if first_holding_lock_for_second.load(Ordering::SeqCst) {
+                second_entered_for_second.store(true, Ordering::SeqCst);
+            }
+        });
+
+        first.join().expect("first thread should finish");
+        second.join().expect("second thread should finish");
+        assert!(!second_entered_during_first_hold.load(Ordering::SeqCst));
     }
 
     #[test]

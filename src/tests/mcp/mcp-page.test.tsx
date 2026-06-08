@@ -860,7 +860,7 @@ test("shows supported MCP apps in enable-to-tool controls", async () => {
     "Cursor",
     "Gemini CLI",
     "Antigravity",
-    "Windsurf",
+    "Devin",
     "OpenClaw",
     "Continue",
     "iFlow",

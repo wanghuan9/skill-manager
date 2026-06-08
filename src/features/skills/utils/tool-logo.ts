@@ -4,6 +4,7 @@ const TOOL_LOGO_URLS: Record<string, string> = toolLogoManifest;
 
 const TOOL_NAME_IDS: Record<string, string> = {
   "Claude Code": "claude-code",
+  Devin: "windsurf",
   "Gemini CLI": "gemini",
   "GitHub Copilot": "github-copilot",
   "IntelliJ IDEA": "intellij",
@@ -13,6 +14,7 @@ const TOOL_NAME_IDS: Record<string, string> = {
   "Qwen Code": "qwen-code",
   "Roo Code": "roo-code",
   "Trae CN": "trae-cn",
+  Windsurf: "windsurf",
 };
 
 const TOOL_DISPLAY_ORDER = [

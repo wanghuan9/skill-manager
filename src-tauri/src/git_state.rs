@@ -53,7 +53,7 @@ struct GitPendingPushCacheEntry {
 #[derive(Clone, Debug, Default)]
 struct GitCommitMetadata {
     updated_at: Option<String>,
-    author: Option<String>,
+    committer: Option<String>,
 }
 
 struct GitFetchLockGuard {
@@ -140,8 +140,8 @@ pub fn enrich_skill_with_git_state(skill: &SkillSummary) -> SkillSummary {
         .unwrap_or_else(|| fallback_remote_updated_at.clone());
     let remote_updated_by = remote_commit_metadata
         .as_ref()
-        .and_then(|metadata| metadata.author.clone())
-        .or_else(|| local_commit_metadata.author.clone())
+        .and_then(|metadata| metadata.committer.clone())
+        .or_else(|| local_commit_metadata.committer.clone())
         .unwrap_or_else(|| skill.last_editor.clone());
 
     let mut enriched = skill.clone();
@@ -213,8 +213,8 @@ pub fn enrich_newly_installed_skill_with_git_state(skill: &SkillSummary) -> Skil
         .unwrap_or_else(|| fallback_remote_updated_at.clone());
     let remote_updated_by = remote_commit_metadata
         .as_ref()
-        .and_then(|metadata| metadata.author.clone())
-        .or_else(|| local_commit_metadata.author.clone())
+        .and_then(|metadata| metadata.committer.clone())
+        .or_else(|| local_commit_metadata.committer.clone())
         .unwrap_or_else(|| skill.last_editor.clone());
 
     let mut enriched = skill.clone();
@@ -762,8 +762,8 @@ fn latest_commit_metadata(skill_path: &Path) -> GitCommitMetadata {
 }
 
 #[cfg(test)]
-fn latest_remote_commit_author(skill_path: &Path, branch: &str) -> Option<String> {
-    latest_remote_commit_metadata(skill_path, branch).and_then(|metadata| metadata.author)
+fn latest_remote_commit_committer(skill_path: &Path, branch: &str) -> Option<String> {
+    latest_remote_commit_metadata(skill_path, branch).and_then(|metadata| metadata.committer)
 }
 
 fn latest_remote_commit_metadata(skill_path: &Path, branch: &str) -> Option<GitCommitMetadata> {
@@ -781,7 +781,7 @@ fn latest_commit_metadata_for_ref(
     }
     args.push("-1".to_string());
     args.push("--date=format-local:%Y/%-m/%-d %H:%M:%S".to_string());
-    args.push("--pretty=format:%cd%x00%an".to_string());
+    args.push("--pretty=format:%cd%x00%cn".to_string());
     args.push("--".to_string());
     args.push(".".to_string());
 
@@ -792,13 +792,16 @@ fn latest_commit_metadata_for_ref(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned);
-    let author = parts
+    let committer = parts
         .next()
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned);
 
-    Some(GitCommitMetadata { updated_at, author })
+    Some(GitCommitMetadata {
+        updated_at,
+        committer,
+    })
 }
 
 fn latest_local_content_modified_at(skill_path: &Path) -> Option<String> {
@@ -1163,7 +1166,7 @@ mod tests {
     }
 
     #[test]
-    fn latest_remote_commit_author_only_uses_commits_touching_skill_path() {
+    fn latest_remote_commit_committer_only_uses_commits_touching_skill_path() {
         let temp_dir = unique_temp_dir("path-remote-author");
         let remote_dir = temp_dir.join("remote.git");
         let local_dir = temp_dir.join("local");
@@ -1267,15 +1270,67 @@ mod tests {
         git_fetch_with_timeout(&local_dir.join("skills/skill-a"));
         git_fetch_with_timeout(&local_dir.join("skills/skill-b"));
 
-        let skill_a_remote_author =
-            latest_remote_commit_author(&local_dir.join("skills/skill-a"), "main")
-                .expect("skill-a remote author");
-        let skill_b_remote_author =
-            latest_remote_commit_author(&local_dir.join("skills/skill-b"), "main")
-                .expect("skill-b remote author");
+        let skill_a_remote_committer =
+            latest_remote_commit_committer(&local_dir.join("skills/skill-a"), "main")
+                .expect("skill-a remote committer");
+        let skill_b_remote_committer =
+            latest_remote_commit_committer(&local_dir.join("skills/skill-b"), "main")
+                .expect("skill-b remote committer");
 
-        assert_eq!(skill_a_remote_author, "Skill A Author");
-        assert_eq!(skill_b_remote_author, "Skill B Author");
+        assert_eq!(skill_a_remote_committer, "Skill A Author");
+        assert_eq!(skill_b_remote_committer, "Skill B Author");
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn enrich_skill_uses_real_git_committer_for_last_editor() {
+        let temp_dir = unique_temp_dir("skill-last-editor-committer");
+        let repo_dir = temp_dir.join("repo");
+        let skill_dir = repo_dir.join("skills/coding-tutor");
+
+        fs::create_dir_all(&skill_dir).expect("create skill dir");
+        fs::write(skill_dir.join("SKILL.md"), "# coding-tutor\n").expect("write skill file");
+
+        run_git_test(["init", repo_dir.to_str().expect("repo path")]);
+        run_git_test([
+            "-C",
+            repo_dir.to_str().expect("repo path"),
+            "checkout",
+            "-b",
+            "main",
+        ]);
+        run_git_test([
+            "-C",
+            repo_dir.to_str().expect("repo path"),
+            "config",
+            "user.name",
+            "Real Committer",
+        ]);
+        run_git_test([
+            "-C",
+            repo_dir.to_str().expect("repo path"),
+            "config",
+            "user.email",
+            "committer@example.com",
+        ]);
+        run_git_test(["-C", repo_dir.to_str().expect("repo path"), "add", "."]);
+        run_git_test([
+            "-C",
+            repo_dir.to_str().expect("repo path"),
+            "commit",
+            "--author",
+            "Original Author <author@example.com>",
+            "-m",
+            "add skill",
+        ]);
+
+        let mut skill = skill_summary("coding-tutor", &skill_dir);
+        skill.branch = "main".into();
+
+        let enriched = enrich_skill_with_git_state(&skill);
+
+        assert_eq!(enriched.last_editor, "Real Committer");
 
         let _ = fs::remove_dir_all(temp_dir);
     }

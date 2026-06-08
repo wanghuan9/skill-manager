@@ -900,7 +900,7 @@ fn target_app_specs() -> Result<Vec<McpTargetAppSpec>, String> {
         ),
         supported_app_spec(
             APP_WINDSURF,
-            "Windsurf",
+            "Devin",
             home_dir.join(".codeium/windsurf/mcp_config.json"),
             home_dir.join(".codeium/windsurf"),
         ),
@@ -1037,20 +1037,6 @@ fn supported_app_spec(
         config_path,
         config_dir,
         is_mcp_supported: true,
-    }
-}
-
-fn unsupported_app_spec(
-    id: &'static str,
-    name: &'static str,
-    config_dir: PathBuf,
-) -> McpTargetAppSpec {
-    McpTargetAppSpec {
-        id,
-        name,
-        config_path: PathBuf::new(),
-        config_dir,
-        is_mcp_supported: false,
     }
 }
 

@@ -10,6 +10,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use regex::{Regex, RegexBuilder};
 use reqwest::Client;
 use serde::{Deserialize, Deserializer, Serialize};
+use sha2::{Digest, Sha256};
 use zip::ZipArchive;
 
 use crate::git_state::{
@@ -18,12 +19,12 @@ use crate::git_state::{
     enrich_skill_with_local_git_state,
 };
 use crate::library::{
-    clone_repo_for_discovery_with_ref_and_sparse_paths, clone_repo_skill, create_skill_symlink,
-    ensure_repo_skill_with_ref_and_sparse_paths, get_tool_skills_path,
-    install_market_skill_from_source, parse_market_source_url, reconcile_tool_skill_symlinks,
-    remove_reserved_workspace_entries, remove_reserved_workspace_symlinks_from_all_tools,
-    remove_skill_symlink, remove_skill_symlinks_from_all_tools, sanitize_storage_name,
-    skill_directory, tree_relative_path_for_branch,
+    clone_repo_skill, create_skill_symlink, ensure_repo_skill_with_ref_and_sparse_paths,
+    get_tool_skills_path, install_market_skill_from_source, parse_market_source_url,
+    reconcile_tool_skill_symlinks, remove_reserved_workspace_entries,
+    remove_reserved_workspace_symlinks_from_all_tools, remove_skill_symlink,
+    remove_skill_symlinks_from_all_tools, sanitize_storage_name, skill_directory,
+    tree_relative_path_for_branch, with_temporary_discovery_repo,
 };
 use crate::models::{
     AppSettings, GitAccountSummary, GitBranchOption, GitChangeFile, LocalInstallSkillCandidate,
@@ -1443,6 +1444,7 @@ const EDITOR_HOST_APPS: &[&str] = &[
     "Visual Studio Code",
     "Visual Studio Code - Insiders",
     "Windsurf",
+    "Devin",
     "Trae",
     "TRAE",
     "Trae CN",
@@ -1453,7 +1455,7 @@ const EDITOR_HOST_APPS: &[&str] = &[
     "PyCharm",
 ];
 
-const EDITOR_HOST_EXECUTABLES: &[&str] = &["cursor", "code", "windsurf", "trae", "idea"];
+const EDITOR_HOST_EXECUTABLES: &[&str] = &["cursor", "code", "windsurf", "devin", "trae", "idea"];
 
 fn find_executable_path(executable_name: &str) -> Option<String> {
     if executable_name.contains('/') {
@@ -1650,7 +1652,7 @@ fn build_tool_configs() -> Vec<ToolConfig> {
         ),
         (
             "windsurf",
-            "Windsurf",
+            "Devin",
             home_path.join(".codeium/windsurf/skills"),
             true,
             "editor",
@@ -1660,7 +1662,7 @@ fn build_tool_configs() -> Vec<ToolConfig> {
                 home_path.join(".windsurf"),
                 home_path.join(".codeium/windsurf"),
             ],
-            software_spec(&["Windsurf"], &["windsurf"]),
+            software_spec(&["Windsurf", "Devin"], &["windsurf", "devin"]),
         ),
         (
             "intellij",
@@ -1961,12 +1963,19 @@ fn build_git_account() -> GitAccountSummary {
     }
 }
 
+fn canonical_tool_display_name(tool_name: &str) -> String {
+    match tool_name.trim() {
+        "Windsurf" | "Devin" => "Devin".to_string(),
+        value => value.to_string(),
+    }
+}
+
 fn installed_tool_sync_entries_from_configs(tool_configs: &[ToolConfig]) -> Vec<ToolSyncStatus> {
     tool_configs
         .iter()
         .filter(|tool| tool.status_label == "已安装" && tool.id != "intellij")
         .map(|tool| ToolSyncStatus {
-            name: tool.name.clone(),
+            name: canonical_tool_display_name(&tool.name),
             status_label: "未启用".into(),
         })
         .collect()
@@ -2009,7 +2018,7 @@ fn installed_tool_sync_entries_for_skill(
         .iter()
         .filter(|tool| tool.status_label == "已安装" && tool.id != "intellij")
         .map(|tool| ToolSyncStatus {
-            name: tool.name.clone(),
+            name: canonical_tool_display_name(&tool.name),
             status_label: inspect_skill_tool_status(skill, &tool.name),
         })
         .collect()
@@ -2023,14 +2032,14 @@ fn normalize_skill_tools_with_entries(
         .tools
         .iter()
         .cloned()
-        .map(|tool| (tool.name.clone(), tool.status_label))
+        .map(|tool| (canonical_tool_display_name(&tool.name), tool.status_label))
         .collect::<BTreeMap<_, _>>();
     let merged_tools = installed_tool_entries
         .iter()
         .map(|tool| ToolSyncStatus {
-            name: tool.name.clone(),
+            name: canonical_tool_display_name(&tool.name),
             status_label: tool_status_map
-                .remove(&tool.name)
+                .remove(&canonical_tool_display_name(&tool.name))
                 .unwrap_or_else(|| tool.status_label.clone()),
         })
         .collect::<Vec<_>>();
@@ -2373,13 +2382,12 @@ fn normalize_known_tool_names(tool_names: &[String]) -> Vec<String> {
     let mut seen_tool_names = BTreeSet::new();
 
     for tool_name in tool_names {
-        let normalized_tool_name = tool_name.trim();
-        if normalized_tool_name.is_empty()
-            || !seen_tool_names.insert(normalized_tool_name.to_string())
+        let normalized_tool_name = canonical_tool_display_name(tool_name);
+        if normalized_tool_name.is_empty() || !seen_tool_names.insert(normalized_tool_name.clone())
         {
             continue;
         }
-        known_tool_names.push(normalized_tool_name.to_string());
+        known_tool_names.push(normalized_tool_name);
     }
 
     known_tool_names
@@ -2401,7 +2409,7 @@ fn align_skill_tools_with_known_names(skill: &mut SkillSummary, tool_names: &[St
         .tools
         .iter()
         .cloned()
-        .map(|tool| (tool.name, tool.status_label))
+        .map(|tool| (canonical_tool_display_name(&tool.name), tool.status_label))
         .collect::<BTreeMap<_, _>>();
     let mut merged_tools = known_tool_names
         .into_iter()
@@ -2417,8 +2425,11 @@ fn align_skill_tools_with_known_names(skill: &mut SkillSummary, tool_names: &[St
         skill
             .tools
             .iter()
-            .filter(|tool| !known_tool_name_set.contains(&tool.name))
-            .cloned(),
+            .filter(|tool| !known_tool_name_set.contains(&canonical_tool_display_name(&tool.name)))
+            .map(|tool| ToolSyncStatus {
+                name: canonical_tool_display_name(&tool.name),
+                status_label: tool.status_label.clone(),
+            }),
     );
 
     skill.synced_tool_count = merged_tools
@@ -2532,7 +2543,7 @@ fn editor_app_name_candidates(editor_id: &str) -> &[&str] {
     match editor_id {
         "antigravity" => &["Antigravity"],
         "cursor" => &["Cursor"],
-        "windsurf" => &["Windsurf"],
+        "windsurf" => &["Windsurf", "Devin"],
         "kiro" => &["Kiro", "Kiro CLI"],
         "trae" => &["Trae", "TRAE"],
         "trae-cn" => &["Trae CN", "TRAE CN"],
@@ -2549,7 +2560,7 @@ fn editor_app_name_candidates(editor_id: &str) -> &[&str] {
 fn editor_cli_name_candidates(editor_id: &str) -> &[&str] {
     match editor_id {
         "cursor" => &["cursor"],
-        "windsurf" => &["windsurf"],
+        "windsurf" => &["windsurf", "devin"],
         "kiro" => &["kiro"],
         "trae" => &["trae"],
         "trae-cn" => &["trae-cn", "trae"],
@@ -2632,7 +2643,7 @@ fn tool_name_to_id(tool_name: &str) -> Result<String, String> {
         "Cursor" => Ok("cursor".to_string()),
         "Gemini CLI" => Ok("gemini".to_string()),
         "Antigravity" => Ok("antigravity".to_string()),
-        "Windsurf" => Ok("windsurf".to_string()),
+        "Windsurf" | "Devin" => Ok("windsurf".to_string()),
         "IntelliJ IDEA" => Ok("intellij".to_string()),
         "OpenClaw" => Ok("openclaw".to_string()),
         "Continue" => Ok("continue".to_string()),
@@ -3370,6 +3381,57 @@ fn intellij_config_dirs() -> Result<Vec<PathBuf>, String> {
     Ok(config_dirs)
 }
 
+fn is_under_cursor_local_plugins(project_path: &Path) -> bool {
+    let Some(home_dir) = env::var_os("HOME") else {
+        return false;
+    };
+    project_path.starts_with(PathBuf::from(home_dir).join(".cursor/plugins/local"))
+}
+
+fn remove_ignored_name_from_filetypes_xml(xml: &str, ignored_name: &str) -> String {
+    let pattern =
+        Regex::new(r#"<ignoreFiles list="([^"]*)"\s*/>"#).expect("filetypes ignoreFiles regex");
+    let Some(captures) = pattern.captures(xml) else {
+        return xml.to_string();
+    };
+    let Some(list_match) = captures.get(1) else {
+        return xml.to_string();
+    };
+
+    let filtered_list = list_match
+        .as_str()
+        .split(';')
+        .filter(|entry| !entry.trim().is_empty() && entry.trim() != ignored_name)
+        .collect::<Vec<_>>()
+        .join(";");
+    let replacement = format!(r#"<ignoreFiles list="{filtered_list}" />"#);
+    pattern.replace(xml, replacement).to_string()
+}
+
+fn ensure_intellij_cursor_path_not_ignored(project_path: &str) -> Result<(), String> {
+    let project_root =
+        fs::canonicalize(project_path).unwrap_or_else(|_| PathBuf::from(project_path));
+    if !is_under_cursor_local_plugins(&project_root) {
+        return Ok(());
+    }
+
+    for config_dir in intellij_config_dirs()? {
+        let filetypes_path = config_dir.join("options/filetypes.xml");
+        if !filetypes_path.exists() {
+            continue;
+        }
+        let current_xml = fs::read_to_string(&filetypes_path)
+            .map_err(|error| format!("读取 IDEA filetypes 配置失败: {error}"))?;
+        let next_xml = remove_ignored_name_from_filetypes_xml(&current_xml, ".cursor");
+        if next_xml != current_xml {
+            fs::write(&filetypes_path, next_xml)
+                .map_err(|error| format!("写入 IDEA filetypes 配置失败: {error}"))?;
+        }
+    }
+
+    Ok(())
+}
+
 fn ensure_intellij_managed_skills_root_trusted() -> Result<(), String> {
     let managed_skills_root = workspace::managed_skill_library_root()?;
     let managed_skills_root_macro = path_to_jetbrains_macro(&managed_skills_root);
@@ -3383,7 +3445,7 @@ fn ensure_intellij_managed_skills_root_trusted() -> Result<(), String> {
     Ok(())
 }
 
-fn trust_intellij_project_path(project_path: &str) -> Result<(), String> {
+pub(crate) fn trust_intellij_project_path(project_path: &str) -> Result<(), String> {
     let project_path =
         fs::canonicalize(project_path).unwrap_or_else(|_| PathBuf::from(project_path));
     let trusted_paths = intellij_trusted_locations_for_project(&project_path)
@@ -3394,6 +3456,231 @@ fn trust_intellij_project_path(project_path: &str) -> Result<(), String> {
         let trusted_paths_path = config_dir.join("options/trusted-paths.xml");
         for trusted_path in &trusted_paths {
             upsert_trusted_project_path(&trusted_paths_path, trusted_path)?;
+        }
+    }
+
+    Ok(())
+}
+
+pub(crate) fn ensure_intellij_git_project_files(project_path: &str) -> Result<(), String> {
+    let project_root =
+        fs::canonicalize(project_path).unwrap_or_else(|_| PathBuf::from(project_path));
+    if !project_root.join(".git").exists() {
+        return Ok(());
+    }
+
+    let idea_dir = project_root.join(".idea");
+    fs::create_dir_all(&idea_dir).map_err(|error| format!("创建 IDEA 项目目录失败: {error}"))?;
+
+    let vcs_path = idea_dir.join("vcs.xml");
+    let vcs_content = r#"<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="VcsDirectoryMappings">
+    <mapping directory="" vcs="Git" />
+  </component>
+</project>
+"#;
+    fs::write(&vcs_path, vcs_content)
+        .map_err(|error| format!("写入 IDEA VCS 配置失败: {error}"))?;
+
+    let module_name = project_root
+        .file_name()
+        .and_then(|value| value.to_str())
+        .map(sanitize_storage_name)
+        .unwrap_or_else(|| "skilldock-plugin".to_string());
+    let module_file_name = format!("{module_name}.iml");
+
+    let modules_path = idea_dir.join("modules.xml");
+    let modules_content = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="ProjectModuleManager">
+    <modules>
+      <module fileurl="file://$PROJECT_DIR$/.idea/{module_file_name}" filepath="$PROJECT_DIR$/.idea/{module_file_name}" />
+    </modules>
+  </component>
+</project>
+"#
+    );
+    fs::write(&modules_path, modules_content)
+        .map_err(|error| format!("写入 IDEA modules 配置失败: {error}"))?;
+
+    let module_path = idea_dir.join(module_file_name);
+    let module_content = r#"<?xml version="1.0" encoding="UTF-8"?>
+<module type="JAVA_MODULE" version="4">
+  <component name="NewModuleRootManager" inherit-compiler-output="true">
+    <exclude-output />
+    <content url="file://$MODULE_DIR$" />
+    <orderEntry type="inheritedJdk" />
+    <orderEntry type="sourceFolder" forTests="false" />
+  </component>
+</module>
+"#;
+    fs::write(&module_path, module_content)
+        .map_err(|error| format!("写入 IDEA module 配置失败: {error}"))?;
+
+    Ok(())
+}
+
+fn intellij_project_id_for_path(project_root: &Path) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(project_root.to_string_lossy().as_bytes());
+    let digest = format!("{:x}", hasher.finalize());
+    format!("skilldock-{}", &digest[..20])
+}
+
+pub(crate) fn ensure_intellij_project_identity(project_path: &str) -> Result<(), String> {
+    let project_root =
+        fs::canonicalize(project_path).unwrap_or_else(|_| PathBuf::from(project_path));
+    let idea_dir = project_root.join(".idea");
+    fs::create_dir_all(&idea_dir).map_err(|error| format!("创建 IDEA 项目目录失败: {error}"))?;
+
+    let project_id_path = idea_dir.join("projectId.xml");
+    let content = format!(
+        "<project version=\"4\">\n  <component name=\"ProjectId\" id=\"{}\" />\n</project>\n",
+        intellij_project_id_for_path(&project_root)
+    );
+    fs::write(&project_id_path, content)
+        .map_err(|error| format!("写入 IDEA ProjectId 配置失败: {error}"))
+}
+
+fn extract_recent_project_entries(xml: &str) -> Vec<(String, String)> {
+    let entry_regex = RegexBuilder::new(r#"<entry key="([^"]+)">(.+?)</entry>"#)
+        .dot_matches_new_line(true)
+        .build()
+        .expect("recent project entry regex");
+    let workspace_id_regex =
+        Regex::new(r#"projectWorkspaceId="([^"]+)""#).expect("recent project workspace id regex");
+
+    entry_regex
+        .captures_iter(xml)
+        .filter_map(|captures| {
+            let key = captures.get(1)?.as_str().to_string();
+            let body = captures.get(2)?.as_str();
+            let workspace_id = workspace_id_regex
+                .captures(body)
+                .and_then(|match_group| match_group.get(1))
+                .map(|value| value.as_str().to_string())
+                .unwrap_or_default();
+            Some((key, workspace_id))
+        })
+        .collect()
+}
+
+pub(crate) fn cleanup_intellij_recent_project_conflicts(project_path: &str) -> Result<(), String> {
+    let project_root =
+        fs::canonicalize(project_path).unwrap_or_else(|_| PathBuf::from(project_path));
+    let project_macro = path_to_jetbrains_macro(&project_root);
+
+    for config_dir in intellij_config_dirs()? {
+        let recent_projects_path = config_dir.join("options/recentProjects.xml");
+        if !recent_projects_path.exists() {
+            continue;
+        }
+
+        let current_xml = fs::read_to_string(&recent_projects_path)
+            .map_err(|error| format!("读取 IDEA recentProjects 配置失败: {error}"))?;
+        let entries = extract_recent_project_entries(&current_xml);
+        let workspace_ids = entries
+            .iter()
+            .filter(|(key, _)| key == &project_macro)
+            .map(|(_, workspace_id)| workspace_id.clone())
+            .filter(|workspace_id| !workspace_id.is_empty())
+            .collect::<Vec<_>>();
+        if workspace_ids.is_empty() {
+            continue;
+        }
+
+        let conflicting_ids = workspace_ids
+            .iter()
+            .filter(|workspace_id| {
+                entries.iter().any(|(key, candidate_id)| {
+                    key != &project_macro && candidate_id == *workspace_id
+                })
+            })
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        if conflicting_ids.is_empty() {
+            continue;
+        }
+
+        let entry_regex = RegexBuilder::new(r#"\s*<entry key="([^"]+)">(.+?)</entry>"#)
+            .dot_matches_new_line(true)
+            .build()
+            .expect("recent project cleanup regex");
+        let workspace_id_regex = Regex::new(r#"projectWorkspaceId="([^"]+)""#)
+            .expect("recent project cleanup workspace id regex");
+
+        let next_xml = entry_regex
+            .replace_all(&current_xml, |captures: &regex::Captures<'_>| {
+                let key = captures
+                    .get(1)
+                    .map(|value| value.as_str())
+                    .unwrap_or_default();
+                let body = captures
+                    .get(2)
+                    .map(|value| value.as_str())
+                    .unwrap_or_default();
+                let workspace_id = workspace_id_regex
+                    .captures(body)
+                    .and_then(|match_group| match_group.get(1))
+                    .map(|value| value.as_str())
+                    .unwrap_or_default();
+                if key == project_macro || conflicting_ids.contains(workspace_id) {
+                    String::new()
+                } else {
+                    captures
+                        .get(0)
+                        .map(|value| value.as_str().to_string())
+                        .unwrap_or_default()
+                }
+            })
+            .to_string()
+            .replace(
+                &format!(r#"<option name="lastOpenedProject" value="{project_macro}" />"#),
+                r#"<option name="lastOpenedProject" value="" />"#,
+            );
+        if next_xml != current_xml {
+            fs::write(&recent_projects_path, next_xml)
+                .map_err(|error| format!("写入 IDEA recentProjects 配置失败: {error}"))?;
+        }
+
+        for workspace_id in conflicting_ids {
+            let workspace_state_path = config_dir.join(format!("workspace/{workspace_id}.xml"));
+            let _ = fs::remove_file(workspace_state_path);
+        }
+    }
+
+    Ok(())
+}
+
+pub(crate) fn cleanup_intellij_workspace_state(project_path: &str) -> Result<(), String> {
+    let project_root =
+        fs::canonicalize(project_path).unwrap_or_else(|_| PathBuf::from(project_path));
+    if !project_root.join(".git").exists() {
+        return Ok(());
+    }
+
+    let idea_dir = project_root.join(".idea");
+    if !idea_dir.exists() {
+        return Ok(());
+    }
+
+    // Remove transient IDE workspace state so JetBrains re-imports the project
+    // from the real Git root instead of reusing stale local attachment metadata.
+    for file_name in [
+        "workspace.xml",
+        "MarsCodeWorkspaceAppSettings.xml",
+        "editorJumperProjectSettings.xml",
+    ] {
+        let file_path = idea_dir.join(file_name);
+        if file_path.exists() {
+            fs::remove_file(&file_path).map_err(|error| {
+                format!(
+                    "清理 IDEA 工作区状态失败（{}）: {error}",
+                    file_path.display()
+                )
+            })?;
         }
     }
 
@@ -3427,12 +3714,17 @@ fn is_editor_running(app_display_name: &str) -> bool {
 /// Strategy:
 /// - If editor is already running: use `open -a` to open in existing instance (no flicker)
 /// - If editor is not running: use CLI to launch and open directory (reliable cold start)
-fn open_path_with_editor(path: &str, editor_id: &str) -> Result<(), String> {
+pub(crate) fn open_path_with_editor(path: &str, editor_id: &str) -> Result<(), String> {
     let info = resolve_editor_open_info(editor_id)?;
 
     // JetBrains' command-line launcher opens projects in a trusted headless flow.
     // Prefer it consistently so IDEA does not fall back to Finder-style open behavior.
     if editor_id == "intellij" {
+        ensure_intellij_cursor_path_not_ignored(path)?;
+        cleanup_intellij_recent_project_conflicts(path)?;
+        ensure_intellij_project_identity(path)?;
+        ensure_intellij_git_project_files(path)?;
+        cleanup_intellij_workspace_state(path)?;
         if let Some(ref cli_path) = info.cli_path {
             return open_path_with_cli(cli_path, path);
         }
@@ -4515,15 +4807,13 @@ pub async fn discover_repo_skills(
         let candidates = if sparse_paths.is_empty() {
             discover_repo_skills_without_path_hint(&spec, selected_branch.as_deref())?
         } else {
-            let repo_root = clone_repo_for_discovery_with_ref_and_sparse_paths(
+            with_temporary_discovery_repo(
                 &spec.clone_url,
                 selected_branch.as_deref(),
                 &spec.repo_key,
                 &sparse_paths,
-            )?;
-            let candidates = scan_repo_skill_candidates(&repo_root, path_hint.as_deref());
-            cleanup_discovery_repo(&repo_root);
-            candidates?
+                |repo_root| scan_repo_skill_candidates(repo_root, path_hint.as_deref()),
+            )?
         };
         if candidates.is_empty() {
             return Err("未在仓库中识别到任何包含 SKILL.md 的技能目录。".into());
@@ -4552,32 +4842,21 @@ fn discover_repo_skills_without_path_hint(
     spec: &RepoInstallSpec,
     git_ref: Option<&str>,
 ) -> Result<Vec<RepoSkillCandidate>, String> {
-    if let Ok(repo_root) = clone_repo_for_discovery_with_ref_and_sparse_paths(
+    if let Ok(candidates) = with_temporary_discovery_repo(
         &spec.clone_url,
         git_ref,
         &spec.repo_key,
         &["skills".to_string()],
+        |repo_root| Ok(scan_repo_skill_candidates(repo_root, None).unwrap_or_default()),
     ) {
-        let candidates = scan_repo_skill_candidates(&repo_root, None).unwrap_or_default();
-        cleanup_discovery_repo(&repo_root);
         if !candidates.is_empty() {
             return Ok(candidates);
         }
     }
 
-    let repo_root = clone_repo_for_discovery_with_ref_and_sparse_paths(
-        &spec.clone_url,
-        git_ref,
-        &spec.repo_key,
-        &[],
-    )?;
-    let candidates = scan_repo_skill_candidates(&repo_root, None);
-    cleanup_discovery_repo(&repo_root);
-    candidates
-}
-
-fn cleanup_discovery_repo(repo_root: &Path) {
-    let _ = fs::remove_dir_all(repo_root);
+    with_temporary_discovery_repo(&spec.clone_url, git_ref, &spec.repo_key, &[], |repo_root| {
+        scan_repo_skill_candidates(repo_root, None)
+    })
 }
 
 #[tauri::command]
@@ -5757,17 +6036,18 @@ mod tests {
         apply_skill_install_activation, build_local_candidates, build_repo_skill_source_url,
         cleanup_local_skill_install_on_error, collect_local_skill_dirs,
         collect_skills_manager_cached_items, collect_skillsmp_items, copy_local_skill_dir,
-        detect_preferred_app_language_from_system, import_local_skill, insert_trusted_project_path,
-        inspect_skill_tool_status, install_selected_local_skill_dirs,
-        intellij_trusted_locations_for_project, load_marketplace_cache_page,
-        map_in_parallel_preserving_order, map_skillsmp_items_to_marketplace,
-        normalize_installed_skill_source_url, normalize_skill_tools, open_target_path_for_skill,
-        parse_apple_languages_output, parse_repo_install_spec, parse_skills_sh_homepage_items,
-        refresh_installed_skill_git_state, remove_trusted_project_paths,
+        detect_preferred_app_language_from_system, ensure_intellij_git_project_files,
+        import_local_skill, insert_trusted_project_path, inspect_skill_tool_status,
+        install_selected_local_skill_dirs, intellij_trusted_locations_for_project,
+        load_marketplace_cache_page, map_in_parallel_preserving_order,
+        map_skillsmp_items_to_marketplace, normalize_installed_skill_source_url,
+        normalize_skill_tools, open_target_path_for_skill, parse_apple_languages_output,
+        parse_repo_install_spec, parse_skills_sh_homepage_items, refresh_installed_skill_git_state,
+        remove_ignored_name_from_filetypes_xml, remove_trusted_project_paths,
         resolve_skill_install_name, resolve_startup_installed_skills, run_git_command,
         save_marketplace_cache, scan_local_install_skill_candidates, scan_repo_skill_candidates,
-        selected_repo_path_hint, should_use_skills_sh_homepage_page, update_skill_repo,
-        REFRESH_GIT_STATES_CONCURRENCY,
+        selected_repo_path_hint, should_use_skills_sh_homepage_page, tool_name_to_id,
+        update_skill_repo, REFRESH_GIT_STATES_CONCURRENCY,
     };
     use crate::models::{MarketplaceSkill, SkillSummary, WorkspacePersistence};
     use crate::workspace::TEST_ENV_LOCK;
@@ -6435,6 +6715,58 @@ mod tests {
         assert!(xml.contains("<entry key=\"$USER_HOME$/Projects\" value=\"true\" />"));
         assert!(xml.contains("<entry key=\"$USER_HOME$/.skilldock/skills\" value=\"true\" />"));
         assert_eq!(xml, duplicate_xml);
+    }
+
+    #[test]
+    fn removes_cursor_name_from_intellij_ignored_file_list() {
+        let existing_xml = r#"<application>
+  <component name="FileTypeManager" version="17">
+    <ignoreFiles list="*.iml;.cursor;.git;.idea;out" />
+  </component>
+</application>
+"#;
+
+        let xml = remove_ignored_name_from_filetypes_xml(existing_xml, ".cursor");
+
+        assert!(!xml.contains("*.iml;.cursor;.git"));
+        assert!(xml.contains(r#"<ignoreFiles list="*.iml;.git;.idea;out" />"#));
+    }
+
+    #[test]
+    fn leaves_intellij_ignored_file_list_unchanged_when_cursor_not_present() {
+        let existing_xml = r#"<application>
+  <component name="FileTypeManager" version="17">
+    <ignoreFiles list="*.iml;.git;.idea;out" />
+  </component>
+</application>
+"#;
+
+        let xml = remove_ignored_name_from_filetypes_xml(existing_xml, ".cursor");
+
+        assert_eq!(xml, existing_xml);
+    }
+
+    #[test]
+    fn creates_stable_intellij_project_files_for_git_plugin_roots() {
+        let temp_dir = temp_test_dir("intellij-plugin-project-files");
+        let project_path = temp_dir.join("repo");
+        fs::create_dir_all(project_path.join(".git")).expect("create .git marker");
+
+        ensure_intellij_git_project_files(&project_path.to_string_lossy())
+            .expect("create IDEA project files");
+
+        let vcs_xml = fs::read_to_string(project_path.join(".idea/vcs.xml")).expect("read vcs.xml");
+        let modules_xml =
+            fs::read_to_string(project_path.join(".idea/modules.xml")).expect("read modules.xml");
+        let module_xml =
+            fs::read_to_string(project_path.join(".idea/repo.iml")).expect("read module file");
+
+        assert!(vcs_xml.contains(r#"<mapping directory="" vcs="Git" />"#));
+        assert!(modules_xml.contains("repo.iml"));
+        assert!(module_xml.contains(r#"<module type="JAVA_MODULE" version="4">"#));
+        assert!(module_xml.contains(r#"<content url="file://$MODULE_DIR$" />"#));
+
+        let _ = fs::remove_dir_all(temp_dir);
     }
 
     #[test]
@@ -7322,5 +7654,13 @@ mod tests {
             .any(|tool| { tool.name == "Claude Code" && tool.status_label == "未启用" }));
 
         let _ = fs::remove_dir_all(temp_home);
+    }
+
+    #[test]
+    fn maps_devin_tool_name_to_windsurf_id() {
+        assert_eq!(
+            tool_name_to_id("Devin").expect("resolve devin tool id"),
+            "windsurf"
+        );
     }
 }

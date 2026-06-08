@@ -88,6 +88,8 @@ pub struct PluginSummary {
     pub baseline_hash: String,
     #[serde(default)]
     pub local_modified: bool,
+    #[serde(default)]
+    pub local_modified_source: String,
     pub installed_at: String,
     pub updated_at: String,
     #[serde(default)]

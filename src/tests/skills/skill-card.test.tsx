@@ -167,7 +167,7 @@ test("renders enabled tools as a compact summary pill", async () => {
 
   const { container } = renderSkillCardWithProviders(skill);
   const enabledToolsButton = screen.getByRole("button", {
-    name: "已启用工具：Claude Code、Codex、Cursor、Windsurf",
+    name: "已启用工具：Claude Code、Codex、Cursor、Devin",
   });
 
   expect(enabledToolsButton).toHaveTextContent("已启用 4");
@@ -187,7 +187,7 @@ test("keeps expanded enabled tools in a stable shared order", async () => {
   const skillWithManyTools = {
     ...skill,
     tools: [
-      { name: "Windsurf", statusLabel: "已同步" },
+      { name: "Devin", statusLabel: "已同步" },
       { name: "Continue", statusLabel: "已同步" },
       { name: "Cursor", statusLabel: "已同步" },
       { name: "Antigravity", statusLabel: "已同步" },
@@ -200,7 +200,7 @@ test("keeps expanded enabled tools in a stable shared order", async () => {
 
   const { container } = renderSkillCardWithProviders(skillWithManyTools);
   const enabledToolsButton = screen.getByRole("button", {
-    name: "已启用工具：Claude Code、Codex、OpenCode、Cursor、Gemini CLI、Antigravity、Windsurf、Continue",
+    name: "已启用工具：Claude Code、Codex、OpenCode、Cursor、Gemini CLI、Antigravity、Devin、Continue",
   });
 
   expect(enabledToolsButton).toHaveTextContent("已启用 8");
