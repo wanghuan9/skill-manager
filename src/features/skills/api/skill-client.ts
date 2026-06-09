@@ -1731,7 +1731,7 @@ export function startMcpServersImport(
       activeMcpImportPromise = null;
       setMcpImportSession({
         isImporting: false,
-        progress: mcpImportSession.progress,
+        progress: null,
       });
     });
 

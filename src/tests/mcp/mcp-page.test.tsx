@@ -387,6 +387,103 @@ test("keeps MCP import progress state when switching away and back", async () =>
   importSpy.mockRestore();
 });
 
+test("clears MCP import progress after import completes", async () => {
+  const workspace = await skillClient.fetchMcpWorkspace();
+  let importListener: ((snapshot: skillClient.McpImportSessionSnapshot) => void) | undefined;
+  const importSpy = vi.spyOn(skillClient, "importMcpServersFromApps").mockImplementation(async () => {
+    importListener?.({
+      isImporting: true,
+      progress: {
+        appId: "codex",
+        appName: "Codex",
+        serverId: "context7",
+        serverName: "context7",
+        importedCount: 1,
+        scannedCount: 1,
+        phase: "imported",
+        changed: true,
+        workspace,
+      },
+    });
+    return 1;
+  });
+  const subscribeSpy = vi
+    .spyOn(skillClient, "subscribeMcpImportSessionChange")
+    .mockImplementation((listener) => {
+      importListener = listener;
+      listener(skillClient.getMcpImportSessionSnapshot());
+      return () => {
+        importListener = undefined;
+      };
+    });
+
+  try {
+    await skillClient.startMcpServersImport();
+
+    expect(skillClient.getMcpImportSessionSnapshot()).toEqual({
+      isImporting: false,
+      progress: null,
+    });
+  } finally {
+    subscribeSpy.mockRestore();
+    importSpy.mockRestore();
+  }
+});
+
+test("ignores completed MCP import progress snapshots when entering the MCP tab", async () => {
+  window.localStorage.clear();
+  const workspace = await skillClient.fetchMcpWorkspace();
+  const staleProgressWorkspace = {
+    ...workspace,
+    servers: workspace.servers.map((server) => (
+      server.id === "context7"
+        ? {
+            ...server,
+            tools: [],
+            toolsDiscoveredAt: "",
+            toolsDiscoveryError: "",
+          }
+        : server
+    )),
+  };
+  const completedImportSnapshot: skillClient.McpImportSessionSnapshot = {
+    isImporting: false,
+    progress: {
+      appId: "codex",
+      appName: "Codex",
+      serverId: "context7",
+      serverName: "context7",
+      importedCount: 1,
+      scannedCount: 1,
+      phase: "hydrated",
+      changed: true,
+      workspace: staleProgressWorkspace,
+    },
+  };
+  const fetchSpy = vi.spyOn(skillClient, "fetchMcpWorkspace").mockResolvedValue(workspace);
+  const fixtureSpy = vi.spyOn(skillClient, "shouldUseFixtureData").mockReturnValue(false);
+  const subscribeSpy = vi
+    .spyOn(skillClient, "subscribeMcpImportSessionChange")
+    .mockImplementation((listener) => {
+      listener(completedImportSnapshot);
+      return () => undefined;
+    });
+
+  try {
+    render(<App />);
+
+    await userEvent.click(screen.getByRole("button", { name: "MCP" }));
+
+    expect(await screen.findByText("context7")).toBeInTheDocument();
+    expect(await screen.findByText("2 tools")).toBeInTheDocument();
+    expect(screen.queryByText("工具待探测")).not.toBeInTheDocument();
+  } finally {
+    subscribeSpy.mockRestore();
+    fixtureSpy.mockRestore();
+    fetchSpy.mockRestore();
+  }
+});
+
 test("does not restart undiscovered MCP probing on every import progress workspace update", async () => {
   window.localStorage.clear();
   const workspace = await skillClient.fetchMcpWorkspace();

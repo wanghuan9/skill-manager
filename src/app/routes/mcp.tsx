@@ -859,7 +859,7 @@ export function McpRoute(props: McpRouteProps = {}) {
 
   useEffect(() => subscribeMcpImportSessionChange((snapshot) => {
     setImportSession(snapshot);
-    if (snapshot.progress) {
+    if (snapshot.isImporting && snapshot.progress) {
       commitWorkspace(snapshot.progress.workspace);
     }
   }), []);
