@@ -10,7 +10,6 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use regex::{Regex, RegexBuilder};
 use reqwest::Client;
 use serde::{Deserialize, Deserializer, Serialize};
-use sha2::{Digest, Sha256};
 use zip::ZipArchive;
 
 use crate::git_state::{
@@ -3381,57 +3380,6 @@ fn intellij_config_dirs() -> Result<Vec<PathBuf>, String> {
     Ok(config_dirs)
 }
 
-fn is_under_cursor_local_plugins(project_path: &Path) -> bool {
-    let Some(home_dir) = env::var_os("HOME") else {
-        return false;
-    };
-    project_path.starts_with(PathBuf::from(home_dir).join(".cursor/plugins/local"))
-}
-
-fn remove_ignored_name_from_filetypes_xml(xml: &str, ignored_name: &str) -> String {
-    let pattern =
-        Regex::new(r#"<ignoreFiles list="([^"]*)"\s*/>"#).expect("filetypes ignoreFiles regex");
-    let Some(captures) = pattern.captures(xml) else {
-        return xml.to_string();
-    };
-    let Some(list_match) = captures.get(1) else {
-        return xml.to_string();
-    };
-
-    let filtered_list = list_match
-        .as_str()
-        .split(';')
-        .filter(|entry| !entry.trim().is_empty() && entry.trim() != ignored_name)
-        .collect::<Vec<_>>()
-        .join(";");
-    let replacement = format!(r#"<ignoreFiles list="{filtered_list}" />"#);
-    pattern.replace(xml, replacement).to_string()
-}
-
-fn ensure_intellij_cursor_path_not_ignored(project_path: &str) -> Result<(), String> {
-    let project_root =
-        fs::canonicalize(project_path).unwrap_or_else(|_| PathBuf::from(project_path));
-    if !is_under_cursor_local_plugins(&project_root) {
-        return Ok(());
-    }
-
-    for config_dir in intellij_config_dirs()? {
-        let filetypes_path = config_dir.join("options/filetypes.xml");
-        if !filetypes_path.exists() {
-            continue;
-        }
-        let current_xml = fs::read_to_string(&filetypes_path)
-            .map_err(|error| format!("读取 IDEA filetypes 配置失败: {error}"))?;
-        let next_xml = remove_ignored_name_from_filetypes_xml(&current_xml, ".cursor");
-        if next_xml != current_xml {
-            fs::write(&filetypes_path, next_xml)
-                .map_err(|error| format!("写入 IDEA filetypes 配置失败: {error}"))?;
-        }
-    }
-
-    Ok(())
-}
-
 fn ensure_intellij_managed_skills_root_trusted() -> Result<(), String> {
     let managed_skills_root = workspace::managed_skill_library_root()?;
     let managed_skills_root_macro = path_to_jetbrains_macro(&managed_skills_root);
@@ -3554,171 +3502,6 @@ fn intellij_vcs_mapping_directory(project_root: &Path, git_root: &Path) -> Strin
     path_to_jetbrains_macro(git_root)
 }
 
-fn intellij_project_id_for_path(project_root: &Path) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(project_root.to_string_lossy().as_bytes());
-    let digest = format!("{:x}", hasher.finalize());
-    format!("skilldock-{}", &digest[..20])
-}
-
-pub(crate) fn ensure_intellij_project_identity(project_path: &str) -> Result<(), String> {
-    let project_root =
-        fs::canonicalize(project_path).unwrap_or_else(|_| PathBuf::from(project_path));
-    let idea_dir = project_root.join(".idea");
-    fs::create_dir_all(&idea_dir).map_err(|error| format!("创建 IDEA 项目目录失败: {error}"))?;
-
-    let project_id_path = idea_dir.join("projectId.xml");
-    let content = format!(
-        "<project version=\"4\">\n  <component name=\"ProjectId\" id=\"{}\" />\n</project>\n",
-        intellij_project_id_for_path(&project_root)
-    );
-    fs::write(&project_id_path, content)
-        .map_err(|error| format!("写入 IDEA ProjectId 配置失败: {error}"))
-}
-
-fn extract_recent_project_entries(xml: &str) -> Vec<(String, String)> {
-    let entry_regex = RegexBuilder::new(r#"<entry key="([^"]+)">(.+?)</entry>"#)
-        .dot_matches_new_line(true)
-        .build()
-        .expect("recent project entry regex");
-    let workspace_id_regex =
-        Regex::new(r#"projectWorkspaceId="([^"]+)""#).expect("recent project workspace id regex");
-
-    entry_regex
-        .captures_iter(xml)
-        .filter_map(|captures| {
-            let key = captures.get(1)?.as_str().to_string();
-            let body = captures.get(2)?.as_str();
-            let workspace_id = workspace_id_regex
-                .captures(body)
-                .and_then(|match_group| match_group.get(1))
-                .map(|value| value.as_str().to_string())
-                .unwrap_or_default();
-            Some((key, workspace_id))
-        })
-        .collect()
-}
-
-pub(crate) fn cleanup_intellij_recent_project_conflicts(project_path: &str) -> Result<(), String> {
-    let project_root =
-        fs::canonicalize(project_path).unwrap_or_else(|_| PathBuf::from(project_path));
-    let project_macro = path_to_jetbrains_macro(&project_root);
-
-    for config_dir in intellij_config_dirs()? {
-        let recent_projects_path = config_dir.join("options/recentProjects.xml");
-        if !recent_projects_path.exists() {
-            continue;
-        }
-
-        let current_xml = fs::read_to_string(&recent_projects_path)
-            .map_err(|error| format!("读取 IDEA recentProjects 配置失败: {error}"))?;
-        let entries = extract_recent_project_entries(&current_xml);
-        let workspace_ids = entries
-            .iter()
-            .filter(|(key, _)| key == &project_macro)
-            .map(|(_, workspace_id)| workspace_id.clone())
-            .filter(|workspace_id| !workspace_id.is_empty())
-            .collect::<Vec<_>>();
-        if workspace_ids.is_empty() {
-            continue;
-        }
-
-        let conflicting_ids = workspace_ids
-            .iter()
-            .filter(|workspace_id| {
-                entries.iter().any(|(key, candidate_id)| {
-                    key != &project_macro && candidate_id == *workspace_id
-                })
-            })
-            .cloned()
-            .collect::<BTreeSet<_>>();
-        if conflicting_ids.is_empty() {
-            continue;
-        }
-
-        let entry_regex = RegexBuilder::new(r#"\s*<entry key="([^"]+)">(.+?)</entry>"#)
-            .dot_matches_new_line(true)
-            .build()
-            .expect("recent project cleanup regex");
-        let workspace_id_regex = Regex::new(r#"projectWorkspaceId="([^"]+)""#)
-            .expect("recent project cleanup workspace id regex");
-
-        let next_xml = entry_regex
-            .replace_all(&current_xml, |captures: &regex::Captures<'_>| {
-                let key = captures
-                    .get(1)
-                    .map(|value| value.as_str())
-                    .unwrap_or_default();
-                let body = captures
-                    .get(2)
-                    .map(|value| value.as_str())
-                    .unwrap_or_default();
-                let workspace_id = workspace_id_regex
-                    .captures(body)
-                    .and_then(|match_group| match_group.get(1))
-                    .map(|value| value.as_str())
-                    .unwrap_or_default();
-                if key == project_macro || conflicting_ids.contains(workspace_id) {
-                    String::new()
-                } else {
-                    captures
-                        .get(0)
-                        .map(|value| value.as_str().to_string())
-                        .unwrap_or_default()
-                }
-            })
-            .to_string()
-            .replace(
-                &format!(r#"<option name="lastOpenedProject" value="{project_macro}" />"#),
-                r#"<option name="lastOpenedProject" value="" />"#,
-            );
-        if next_xml != current_xml {
-            fs::write(&recent_projects_path, next_xml)
-                .map_err(|error| format!("写入 IDEA recentProjects 配置失败: {error}"))?;
-        }
-
-        for workspace_id in conflicting_ids {
-            let workspace_state_path = config_dir.join(format!("workspace/{workspace_id}.xml"));
-            let _ = fs::remove_file(workspace_state_path);
-        }
-    }
-
-    Ok(())
-}
-
-pub(crate) fn cleanup_intellij_workspace_state(project_path: &str) -> Result<(), String> {
-    let project_root =
-        fs::canonicalize(project_path).unwrap_or_else(|_| PathBuf::from(project_path));
-    if intellij_project_git_root(&project_root).is_none() {
-        return Ok(());
-    }
-
-    let idea_dir = project_root.join(".idea");
-    if !idea_dir.exists() {
-        return Ok(());
-    }
-
-    // Remove transient IDE workspace state so JetBrains re-imports the project
-    // from the real Git root instead of reusing stale local attachment metadata.
-    for file_name in [
-        "workspace.xml",
-        "MarsCodeWorkspaceAppSettings.xml",
-        "editorJumperProjectSettings.xml",
-    ] {
-        let file_path = idea_dir.join(file_name);
-        if file_path.exists() {
-            fs::remove_file(&file_path).map_err(|error| {
-                format!(
-                    "清理 IDEA 工作区状态失败（{}）: {error}",
-                    file_path.display()
-                )
-            })?;
-        }
-    }
-
-    Ok(())
-}
-
 fn open_path_with_default_text_editor(path: &str) -> Result<(), String> {
     let output = Command::new("open")
         .args(["-t", path])
@@ -3752,11 +3535,6 @@ pub(crate) fn open_path_with_editor(path: &str, editor_id: &str) -> Result<(), S
     // JetBrains' command-line launcher opens projects in a trusted headless flow.
     // Prefer it consistently so IDEA does not fall back to Finder-style open behavior.
     if editor_id == "intellij" {
-        ensure_intellij_cursor_path_not_ignored(path)?;
-        cleanup_intellij_recent_project_conflicts(path)?;
-        ensure_intellij_project_identity(path)?;
-        ensure_intellij_git_project_files(path)?;
-        cleanup_intellij_workspace_state(path)?;
         if let Some(ref cli_path) = info.cli_path {
             return open_path_with_cli(cli_path, path);
         }
@@ -6075,11 +5853,10 @@ mod tests {
         map_skillsmp_items_to_marketplace, normalize_installed_skill_source_url,
         normalize_skill_tools, open_target_path_for_skill, parse_apple_languages_output,
         parse_repo_install_spec, parse_skills_sh_homepage_items, refresh_installed_skill_git_state,
-        remove_ignored_name_from_filetypes_xml, remove_trusted_project_paths,
-        resolve_skill_install_name, resolve_startup_installed_skills, run_git_command,
-        save_marketplace_cache, scan_local_install_skill_candidates, scan_repo_skill_candidates,
-        selected_repo_path_hint, should_use_skills_sh_homepage_page, tool_name_to_id,
-        update_skill_repo, REFRESH_GIT_STATES_CONCURRENCY,
+        remove_trusted_project_paths, resolve_skill_install_name, resolve_startup_installed_skills,
+        run_git_command, save_marketplace_cache, scan_local_install_skill_candidates,
+        scan_repo_skill_candidates, selected_repo_path_hint, should_use_skills_sh_homepage_page,
+        tool_name_to_id, update_skill_repo, REFRESH_GIT_STATES_CONCURRENCY,
     };
     use crate::models::{MarketplaceSkill, SkillSummary, WorkspacePersistence};
     use crate::workspace::TEST_ENV_LOCK;
@@ -6747,35 +6524,6 @@ mod tests {
         assert!(xml.contains("<entry key=\"$USER_HOME$/Projects\" value=\"true\" />"));
         assert!(xml.contains("<entry key=\"$USER_HOME$/.skilldock/skills\" value=\"true\" />"));
         assert_eq!(xml, duplicate_xml);
-    }
-
-    #[test]
-    fn removes_cursor_name_from_intellij_ignored_file_list() {
-        let existing_xml = r#"<application>
-  <component name="FileTypeManager" version="17">
-    <ignoreFiles list="*.iml;.cursor;.git;.idea;out" />
-  </component>
-</application>
-"#;
-
-        let xml = remove_ignored_name_from_filetypes_xml(existing_xml, ".cursor");
-
-        assert!(!xml.contains("*.iml;.cursor;.git"));
-        assert!(xml.contains(r#"<ignoreFiles list="*.iml;.git;.idea;out" />"#));
-    }
-
-    #[test]
-    fn leaves_intellij_ignored_file_list_unchanged_when_cursor_not_present() {
-        let existing_xml = r#"<application>
-  <component name="FileTypeManager" version="17">
-    <ignoreFiles list="*.iml;.git;.idea;out" />
-  </component>
-</application>
-"#;
-
-        let xml = remove_ignored_name_from_filetypes_xml(existing_xml, ".cursor");
-
-        assert_eq!(xml, existing_xml);
     }
 
     #[test]
