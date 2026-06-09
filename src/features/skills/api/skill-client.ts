@@ -449,6 +449,7 @@ function normalizeMcpWorkspaceSnapshot(workspace: McpWorkspaceSnapshot): McpWork
   const language = getCurrentAppLanguage();
   return {
     ...workspace,
+    storageInitialized: workspace.storageInitialized ?? true,
     apps: workspace.apps.map((app) => ({
       ...app,
       statusLabel: localizeToolStatusLabel(app.statusLabel, language),

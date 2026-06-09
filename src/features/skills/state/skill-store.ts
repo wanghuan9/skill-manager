@@ -365,6 +365,7 @@ export type McpServerRecord = {
 
 export type McpWorkspaceSnapshot = {
   storagePath: string;
+  storageInitialized: boolean;
   apps: McpTargetApp[];
   servers: McpServerSummary[];
 };

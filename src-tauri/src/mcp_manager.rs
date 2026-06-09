@@ -163,6 +163,7 @@ pub struct McpServerSummary {
 #[serde(rename_all = "camelCase")]
 pub struct McpWorkspaceSnapshot {
     pub storage_path: String,
+    pub storage_initialized: bool,
     pub apps: Vec<McpTargetApp>,
     pub servers: Vec<McpServerSummary>,
 }
@@ -522,6 +523,7 @@ pub async fn import_mcp_servers_from_apps(app_handle: AppHandle) -> Result<usize
         }
     }
 
+    save_mcp_records(&records)?;
     Ok(added_server_ids.len())
 }
 
@@ -716,6 +718,7 @@ fn build_mcp_workspace_snapshot() -> Result<McpWorkspaceSnapshot, String> {
 
     Ok(McpWorkspaceSnapshot {
         storage_path: mcp_state_file()?.to_string_lossy().to_string(),
+        storage_initialized: is_mcp_state_storage_initialized(),
         apps,
         servers,
     })
@@ -4195,16 +4198,13 @@ fn write_text_value(path: &Path, value: &str) -> Result<(), String> {
 }
 
 fn load_mcp_records() -> Result<Vec<McpServerRecord>, String> {
-    let Some((_, content)) = workspace_file_candidates(MCP_STATE_FILE_NAME)
-        .into_iter()
-        .find_map(|path| {
-            fs::read_to_string(&path)
-                .ok()
-                .map(|content| (path, content))
-        })
-    else {
+    let Some(content) = load_mcp_state_content() else {
         return Ok(Vec::new());
     };
+    if content.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+
     let persistence = serde_json::from_str::<McpPersistence>(&content)
         .map_err(|error| format!("解析 MCP 状态失败: {error}"))?;
     persistence
@@ -4212,6 +4212,18 @@ fn load_mcp_records() -> Result<Vec<McpServerRecord>, String> {
         .into_iter()
         .map(normalize_record)
         .collect()
+}
+
+fn load_mcp_state_content() -> Option<String> {
+    workspace_file_candidates(MCP_STATE_FILE_NAME)
+        .into_iter()
+        .find_map(|path| fs::read_to_string(&path).ok())
+}
+
+fn is_mcp_state_storage_initialized() -> bool {
+    load_mcp_state_content()
+        .map(|content| !content.trim().is_empty())
+        .unwrap_or(false)
 }
 
 fn save_mcp_records(records: &[McpServerRecord]) -> Result<(), String> {
@@ -5490,6 +5502,114 @@ A comprehensive GitLab MCP server for AI clients. Manage projects, merge request
                 "args": ["-y", "@playwright/mcp"]
             })
         );
+    }
+
+    #[test]
+    fn empty_mcp_state_file_loads_as_uninitialized_empty_workspace() {
+        use crate::workspace::TEST_ENV_LOCK;
+
+        let _guard = TEST_ENV_LOCK
+            .lock()
+            .expect("test env lock should not be poisoned");
+        let temp_home = env::temp_dir().join(format!(
+            "skilldock-mcp-empty-state-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|duration| duration.as_nanos())
+                .unwrap_or_default()
+        ));
+        let state_dir = temp_home.join(".skilldock");
+        fs::create_dir_all(&state_dir).expect("create temp state dir");
+        fs::write(state_dir.join(MCP_STATE_FILE_NAME), "").expect("write empty state file");
+        let original_home = env::var_os("HOME");
+        env::set_var("HOME", &temp_home);
+
+        let cleanup = || {
+            if let Some(home) = original_home.as_ref() {
+                env::set_var("HOME", home);
+            } else {
+                env::remove_var("HOME");
+            }
+            let _ = fs::remove_dir_all(&temp_home);
+        };
+
+        let records = match load_mcp_records() {
+            Ok(records) => records,
+            Err(error) => {
+                cleanup();
+                panic!("load empty mcp state failed: {error}");
+            }
+        };
+        assert!(records.is_empty());
+
+        let snapshot = match build_mcp_workspace_snapshot() {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                cleanup();
+                panic!("build empty mcp workspace failed: {error}");
+            }
+        };
+        assert!(!snapshot.storage_initialized);
+        assert!(snapshot.servers.is_empty());
+
+        cleanup();
+    }
+
+    #[test]
+    fn saving_empty_mcp_records_initializes_storage_with_servers_array() {
+        use crate::workspace::TEST_ENV_LOCK;
+
+        let _guard = TEST_ENV_LOCK
+            .lock()
+            .expect("test env lock should not be poisoned");
+        let temp_home = env::temp_dir().join(format!(
+            "skilldock-mcp-save-empty-state-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|duration| duration.as_nanos())
+                .unwrap_or_default()
+        ));
+        fs::create_dir_all(&temp_home).expect("create temp home");
+        let original_home = env::var_os("HOME");
+        env::set_var("HOME", &temp_home);
+
+        let cleanup = || {
+            if let Some(home) = original_home.as_ref() {
+                env::set_var("HOME", home);
+            } else {
+                env::remove_var("HOME");
+            }
+            let _ = fs::remove_dir_all(&temp_home);
+        };
+
+        if let Err(error) = save_mcp_records(&[]) {
+            cleanup();
+            panic!("save empty mcp records failed: {error}");
+        }
+
+        let state_file = temp_home.join(".skilldock").join(MCP_STATE_FILE_NAME);
+        let content = match fs::read_to_string(&state_file) {
+            Ok(content) => content,
+            Err(error) => {
+                cleanup();
+                panic!("read saved mcp state failed: {error}");
+            }
+        };
+        assert_eq!(content.trim(), "{\n  \"servers\": []\n}");
+
+        let snapshot = match build_mcp_workspace_snapshot() {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                cleanup();
+                panic!("build initialized empty mcp workspace failed: {error}");
+            }
+        };
+        assert!(snapshot.storage_initialized);
+        assert!(snapshot.servers.is_empty());
+
+        cleanup();
     }
 
     #[test]

@@ -221,6 +221,88 @@ test("imports MCP servers and probes every server that still lacks tools", async
   }
 });
 
+test("automatically scan imports when the MCP workspace is empty", async () => {
+  window.localStorage.clear();
+  const workspace = await skillClient.fetchMcpWorkspace();
+  const emptyWorkspace = {
+    ...workspace,
+    storageInitialized: true,
+    servers: [],
+  };
+  const importedWorkspace = {
+    ...workspace,
+    storageInitialized: true,
+  };
+  let resolveImport: ((count: number) => void) | undefined;
+  const fetchSpy = vi
+    .spyOn(skillClient, "fetchMcpWorkspace")
+    .mockResolvedValueOnce(emptyWorkspace)
+    .mockResolvedValue(importedWorkspace);
+  const importSpy = vi.spyOn(skillClient, "importMcpServersFromApps").mockImplementation(
+    () =>
+      new Promise((resolve) => {
+        resolveImport = resolve;
+      }),
+  );
+  const refreshSpy = vi.spyOn(skillClient, "refreshMcpServerTools").mockResolvedValue(importedWorkspace);
+  const fixtureSpy = vi.spyOn(skillClient, "shouldUseFixtureData").mockReturnValue(false);
+
+  try {
+    render(<App />);
+
+    await userEvent.click(screen.getByRole("button", { name: "MCP" }));
+
+    await waitFor(() => {
+      expect(importSpy).toHaveBeenCalledTimes(1);
+      expect(within(screen.getByLabelText("MCP 工具栏")).getByRole("button", { name: "扫描中..." })).toBeDisabled();
+    });
+
+    const finishImport = resolveImport;
+    if (!finishImport) {
+      throw new Error("auto import handler was not called");
+    }
+    finishImport(1);
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "扫描导入" })).toBeEnabled();
+      expect(screen.getByText("context7")).toBeInTheDocument();
+    });
+    expect(refreshSpy).not.toHaveBeenCalled();
+  } finally {
+    fixtureSpy.mockRestore();
+    refreshSpy.mockRestore();
+    importSpy.mockRestore();
+    fetchSpy.mockRestore();
+  }
+});
+
+test("does not automatically scan import again during the empty MCP cooldown", async () => {
+  window.localStorage.clear();
+  window.localStorage.setItem("skilldock.mcp.emptyAutoImportLastAttemptAt", String(Date.now()));
+  const workspace = await skillClient.fetchMcpWorkspace();
+  const emptyWorkspace = {
+    ...workspace,
+    storageInitialized: true,
+    servers: [],
+  };
+  const fetchSpy = vi.spyOn(skillClient, "fetchMcpWorkspace").mockResolvedValue(emptyWorkspace);
+  const importSpy = vi.spyOn(skillClient, "importMcpServersFromApps").mockResolvedValue(0);
+  const fixtureSpy = vi.spyOn(skillClient, "shouldUseFixtureData").mockReturnValue(false);
+
+  try {
+    render(<App />);
+
+    await userEvent.click(screen.getByRole("button", { name: "MCP" }));
+
+    expect(await screen.findByRole("heading", { name: "还没有安装 MCP" })).toBeInTheDocument();
+    expect(importSpy).not.toHaveBeenCalled();
+  } finally {
+    fixtureSpy.mockRestore();
+    importSpy.mockRestore();
+    fetchSpy.mockRestore();
+  }
+});
+
 test("does not auto probe MCP servers that already have tools even when discovered time is missing", async () => {
   window.localStorage.clear();
   const workspace = await skillClient.fetchMcpWorkspace();

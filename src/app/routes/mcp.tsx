@@ -55,9 +55,12 @@ const MCP_CONFIG_PARAM_FIELDS = ["env", "headers"];
 const MCP_SUMMARY_APP_ICON_LIMIT = 7;
 const MCP_AUTO_PROBE_COOLDOWN_MS = 5_000;
 const MCP_LOCAL_ALIGN_COOLDOWN_MS = 2_000;
+const MCP_EMPTY_AUTO_IMPORT_COOLDOWN_MS = 10_000;
+const MCP_EMPTY_AUTO_IMPORT_LAST_ATTEMPT_KEY = "skilldock.mcp.emptyAutoImportLastAttemptAt";
 
 const mcpAutoProbeAttemptedAtBySignature = new Map<string, number>();
 const mcpAutoProbeInFlightSignatures = new Set<string>();
+let mcpEmptyAutoImportInFlight = false;
 
 const EMPTY_FORM_STATE: McpFormState = {
   id: "",
@@ -117,6 +120,7 @@ function finishMcpAutoProbe(autoProbeSignature: string) {
 export function resetMcpAutoProbeRuntimeForTests() {
   mcpAutoProbeAttemptedAtBySignature.clear();
   mcpAutoProbeInFlightSignatures.clear();
+  mcpEmptyAutoImportInFlight = false;
 }
 
 function buildMcpFeedbackContext(workspace: McpWorkspaceSnapshot | null) {
@@ -139,6 +143,26 @@ function buildMcpFeedbackContext(workspace: McpWorkspaceSnapshot | null) {
       toolsDiscoveryError: server.toolsDiscoveryError,
     })),
   };
+}
+
+function readMcpEmptyAutoImportLastAttemptAt() {
+  try {
+    return Number(window.localStorage.getItem(MCP_EMPTY_AUTO_IMPORT_LAST_ATTEMPT_KEY) ?? "0") || 0;
+  } catch {
+    return 0;
+  }
+}
+
+function markMcpEmptyAutoImportAttempted() {
+  try {
+    window.localStorage.setItem(MCP_EMPTY_AUTO_IMPORT_LAST_ATTEMPT_KEY, String(Date.now()));
+  } catch {
+    // localStorage may be unavailable in restricted contexts; the in-flight lock still prevents immediate duplication.
+  }
+}
+
+function isMcpEmptyAutoImportCoolingDown() {
+  return Date.now() - readMcpEmptyAutoImportLastAttemptAt() < MCP_EMPTY_AUTO_IMPORT_COOLDOWN_MS;
 }
 
 function buildFormState(server: McpServerSummary): McpFormState {
@@ -717,11 +741,11 @@ export function McpRoute(props: McpRouteProps = {}) {
     return nextSnapshot;
   }
 
-  async function alignMcpWorkspaceLocalState() {
+  async function alignMcpWorkspaceLocalState(options: { force?: boolean } = {}) {
     if (localAlignInFlightRef.current) {
       return localAlignInFlightRef.current;
     }
-    if (Date.now() - lastLocalAlignAtRef.current < MCP_LOCAL_ALIGN_COOLDOWN_MS) {
+    if (!options.force && Date.now() - lastLocalAlignAtRef.current < MCP_LOCAL_ALIGN_COOLDOWN_MS) {
       return Promise.resolve(workspaceRef.current);
     }
 
@@ -746,11 +770,48 @@ export function McpRoute(props: McpRouteProps = {}) {
 
   async function scanImportMcpServers(options: { probeUndiscoveredTools?: boolean } = {}) {
     const count = await startMcpServersImport(importMcpServersFromApps);
-    const snapshot = await alignMcpWorkspaceLocalState();
+    const snapshot = await alignMcpWorkspaceLocalState({ force: true });
     if (options.probeUndiscoveredTools ?? true) {
       await probeMcpTools(snapshot, shouldAutoRefreshMcpTools, { dedupeAutoRefresh: true });
     }
     return count;
+  }
+
+  async function maybeAutoImportEmptyMcpWorkspace(snapshot: McpWorkspaceSnapshot | null) {
+    if (
+      shouldUseFixtureData()
+      || mcpEmptyAutoImportInFlight
+      || !snapshot
+      || snapshot.servers.length > 0
+      || isMcpEmptyAutoImportCoolingDown()
+      || importSession.isImporting
+      || importActionLockedRef.current
+    ) {
+      return;
+    }
+
+    mcpEmptyAutoImportInFlight = true;
+    importActionLockedRef.current = true;
+    markMcpEmptyAutoImportAttempted();
+    await waitForNextPaint();
+    try {
+      const count = await scanImportMcpServers();
+      if (count > 0) {
+        notify({
+          tone: "success",
+          message: t("mcp.import.added", { count }),
+        });
+      }
+    } catch (error) {
+      reportFailure(error, {
+        operation: "auto_import_empty_mcp_servers_from_apps",
+        fallbackMessage: t("mcp.import.failed"),
+        context: buildMcpFeedbackContext(workspaceRef.current),
+      });
+    } finally {
+      mcpEmptyAutoImportInFlight = false;
+      importActionLockedRef.current = false;
+    }
   }
 
   useEffect(() => {
@@ -763,9 +824,13 @@ export function McpRoute(props: McpRouteProps = {}) {
           commitWorkspace(cachedWorkspace);
         }
         const snapshot = await alignMcpWorkspaceLocalState();
-        await probeMcpTools(snapshot, shouldRefreshMcpToolsOnManualRefresh, {
-          dedupeAutoRefresh: true,
-        });
+        if (snapshot?.servers.length === 0) {
+          await maybeAutoImportEmptyMcpWorkspace(snapshot);
+        } else {
+          await probeMcpTools(snapshot, shouldRefreshMcpToolsOnManualRefresh, {
+            dedupeAutoRefresh: true,
+          });
+        }
         if (active) {
           setErrorMessage("");
         }
@@ -884,7 +949,7 @@ export function McpRoute(props: McpRouteProps = {}) {
     setIsRefreshing(true);
     await waitForNextPaint();
     try {
-      const snapshot = await alignMcpWorkspaceLocalState();
+      const snapshot = await alignMcpWorkspaceLocalState({ force: true });
       await probeMcpTools(snapshot, shouldRefreshMcpToolsOnManualRefresh);
     } catch (error) {
       reportFailure(error, {
