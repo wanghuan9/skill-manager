@@ -611,7 +611,28 @@ fn load_update_cache() -> GitUpdateCache {
     else {
         return GitUpdateCache::default();
     };
-    serde_json::from_str(&contents).unwrap_or_default()
+    let mut cache = serde_json::from_str(&contents).unwrap_or_default();
+    if prune_stale_update_cache(&mut cache) {
+        let _ = save_update_cache(&cache);
+    }
+    cache
+}
+
+fn prune_stale_update_cache(cache: &mut GitUpdateCache) -> bool {
+    let original_entries_len = cache.entries.len();
+    let original_pending_push_entries_len = cache.pending_push_entries.len();
+    cache
+        .entries
+        .retain(|entry| cached_skill_path_exists(&entry.local_path));
+    cache
+        .pending_push_entries
+        .retain(|entry| cached_skill_path_exists(&entry.local_path));
+    cache.entries.len() != original_entries_len
+        || cache.pending_push_entries.len() != original_pending_push_entries_len
+}
+
+fn cached_skill_path_exists(local_path: &str) -> bool {
+    !local_path.trim().is_empty() && Path::new(local_path).exists()
 }
 
 fn save_update_cache(cache: &GitUpdateCache) -> Result<(), String> {
@@ -1436,6 +1457,93 @@ mod tests {
 
         assert_eq!(enriched.local_updated_at, "2099/1/1 00:00:00");
         assert_eq!(enriched.last_synced_at, enriched.local_updated_at);
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn prunes_stale_update_cache_entries() {
+        let _guard = crate::workspace::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let temp_dir = unique_temp_dir("prune-stale-update-cache");
+        let temp_home = temp_dir.join("home");
+        let existing_skill_dir = temp_dir.join("existing-skill");
+        let missing_skill_dir = temp_dir.join("missing-skill");
+        let original_home = env::var_os("HOME");
+
+        fs::create_dir_all(temp_home.join(".skilldock")).expect("create workspace");
+        fs::create_dir_all(&existing_skill_dir).expect("create existing skill dir");
+        let cache_path = temp_home.join(".skilldock").join(UPDATE_CACHE_FILE_NAME);
+        let cache = GitUpdateCache {
+            entries: vec![
+                GitUpdateCacheEntry {
+                    skill_name: "existing-skill".into(),
+                    local_path: existing_skill_dir.to_string_lossy().into_owned(),
+                    branch: "main".into(),
+                    head: "abc123".into(),
+                    behind: 1,
+                },
+                GitUpdateCacheEntry {
+                    skill_name: "missing-skill".into(),
+                    local_path: missing_skill_dir.to_string_lossy().into_owned(),
+                    branch: "main".into(),
+                    head: "def456".into(),
+                    behind: 2,
+                },
+            ],
+            pending_push_entries: vec![
+                GitPendingPushCacheEntry {
+                    skill_name: "existing-skill".into(),
+                    local_path: existing_skill_dir.to_string_lossy().into_owned(),
+                    branch: "main".into(),
+                    head: "abc123".into(),
+                    working_tree_signature: " M SKILL.md".into(),
+                    ahead: 1,
+                },
+                GitPendingPushCacheEntry {
+                    skill_name: "missing-skill".into(),
+                    local_path: missing_skill_dir.to_string_lossy().into_owned(),
+                    branch: "main".into(),
+                    head: "def456".into(),
+                    working_tree_signature: " M SKILL.md".into(),
+                    ahead: 1,
+                },
+            ],
+        };
+        fs::write(
+            &cache_path,
+            serde_json::to_string_pretty(&cache).expect("serialize cache"),
+        )
+        .expect("write update cache");
+
+        unsafe {
+            env::set_var("HOME", &temp_home);
+        }
+        let pruned_cache = load_update_cache();
+        if let Some(home) = original_home {
+            unsafe {
+                env::set_var("HOME", home);
+            }
+        } else {
+            unsafe {
+                env::remove_var("HOME");
+            }
+        }
+
+        assert_eq!(pruned_cache.entries.len(), 1);
+        assert_eq!(pruned_cache.entries[0].skill_name, "existing-skill");
+        assert_eq!(pruned_cache.pending_push_entries.len(), 1);
+        assert_eq!(
+            pruned_cache.pending_push_entries[0].skill_name,
+            "existing-skill"
+        );
+
+        let persisted_cache: GitUpdateCache =
+            serde_json::from_str(&fs::read_to_string(&cache_path).expect("read persisted cache"))
+                .expect("parse persisted cache");
+        assert_eq!(persisted_cache.entries.len(), 1);
+        assert_eq!(persisted_cache.pending_push_entries.len(), 1);
 
         let _ = fs::remove_dir_all(temp_dir);
     }
