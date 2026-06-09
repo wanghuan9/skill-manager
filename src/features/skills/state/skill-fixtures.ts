@@ -681,6 +681,8 @@ function buildMcpFixtureTools(toolNames: string[], disabledToolNames: string[] =
 
 export const mcpWorkspaceFixture: McpWorkspaceSnapshot = {
   storagePath: "/Users/demo/.skilldock/mcp-servers.json",
+  hasStorageFile: true,
+  initialImportChecked: true,
   apps: mcpFixtureApps,
   servers: [
     {

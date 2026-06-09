@@ -159,6 +159,26 @@ function toggleSelection(current: string[], value: string) {
   return current.includes(value) ? current.filter((item) => item !== value) : [...current, value];
 }
 
+function normalizeSearchText(value: string) {
+  return value.trim().toLowerCase();
+}
+
+function probeMatchesQuery(probe: PluginProbeResult, query: string) {
+  if (!query) {
+    return true;
+  }
+
+  const componentText = probe.components
+    .map((component) => `${component.name} ${component.description} ${component.packageItemId} ${component.assetType}`)
+    .join(" ");
+  return [
+    probeTitle(probe),
+    probeSubtitle(probe),
+    probe.pluginRelativePath,
+    componentText,
+  ].some((value) => (value ?? "").toLowerCase().includes(query));
+}
+
 function isPluginHostTool(value: string): value is PluginHostTool {
   return pluginHostOptions.some((option) => option.key === value);
 }
@@ -467,10 +487,16 @@ export function PluginInstallPanel() {
   const [isLoadingBranches, setIsLoadingBranches] = useState(false);
   const [isProbing, setIsProbing] = useState(false);
   const [isInstalling, setIsInstalling] = useState(false);
+  const [resultQuery, setResultQuery] = useState("");
   const installedHostApps = useMemo(() => buildInstalledPluginHostSet(toolConfigs), [toolConfigs]);
   const selectableProbes = useMemo(
     () => probes.filter((probe) => probe.kind === "plugin-repo"),
     [probes],
+  );
+  const normalizedResultQuery = useMemo(() => normalizeSearchText(resultQuery), [resultQuery]);
+  const visibleProbes = useMemo(
+    () => probes.filter((probe) => probeMatchesQuery(probe, normalizedResultQuery)),
+    [normalizedResultQuery, probes],
   );
   const installedPluginHostsByProbeRoot = useMemo(
     () => buildInstalledPluginHostsByProbeRoot(selectableProbes, installedPlugins),
@@ -522,6 +548,7 @@ export function PluginInstallPanel() {
     setProbes([]);
     setSelectedPluginRoots([]);
     setSelectedHostsByPluginRoot({});
+    setResultQuery("");
     if (!normalizedSource || normalizedSource.length < 5) {
       setIsLoadingBranches(false);
       return;
@@ -597,10 +624,12 @@ export function PluginInstallPanel() {
         nextInstalledHostsByProbeRoot,
         installedHostApps,
       ));
+      setResultQuery("");
     } catch (error) {
       setProbes([]);
       setSelectedPluginRoots([]);
       setSelectedHostsByPluginRoot({});
+      setResultQuery("");
       reportFailure(error, {
         operation: "probe_plugin_source_candidates",
         fallbackMessage: t("install.plugin.error.probeFailed"),
@@ -658,6 +687,7 @@ export function PluginInstallPanel() {
       setProbes([]);
       setSelectedPluginRoots([]);
       setSelectedHostsByPluginRoot({});
+      setResultQuery("");
       const mergedInstalledPlugins = mergeInstalledPlugins(installedPlugins, newlyInstalledPlugins);
       if (!shouldUseFixtureData()) {
         cachePlugins(mergedInstalledPlugins);
@@ -774,6 +804,7 @@ export function PluginInstallPanel() {
                       setProbes([]);
                       setSelectedPluginRoots([]);
                       setSelectedHostsByPluginRoot({});
+                      setResultQuery("");
                     }}
                   >
                     {branches.map((branch) => (
@@ -807,9 +838,21 @@ export function PluginInstallPanel() {
 
       {probes.length > 0 ? (
         <div className="repo-install__selection plugin-install-preview">
-          <p className="repo-install__notice">{t("install.plugin.found", { count: selectableProbes.length })}</p>
+          <div className="repo-install__result-header">
+            <p className="repo-install__notice">{t("install.plugin.found", { count: selectableProbes.length })}</p>
+            <label className="repo-install__search">
+              <span className="sr-only">{t("install.plugin.searchAria")}</span>
+              <input
+                type="search"
+                value={resultQuery}
+                onChange={(event) => setResultQuery(event.target.value)}
+                placeholder={t("install.plugin.searchPlaceholder")}
+                aria-label={t("install.plugin.searchAria")}
+              />
+            </label>
+          </div>
           <div className="repo-install__list">
-            {probes.map((probe) => {
+            {visibleProbes.map((probe) => {
               const componentLabels = componentSummaryLabels(probe.components);
               const selected = selectedPluginRoots.includes(probe.pluginRoot);
               const hostTools = probe.compatibleHostTools;
@@ -909,6 +952,9 @@ export function PluginInstallPanel() {
                 </div>
               );
             })}
+            {visibleProbes.length === 0 ? (
+              <p className="repo-install__empty">{t("install.plugin.emptySearch", { query: resultQuery.trim() })}</p>
+            ) : null}
           </div>
           <div className="repo-install__actions plugin-install-preview__actions">
             <button
@@ -918,6 +964,7 @@ export function PluginInstallPanel() {
                 setProbes([]);
                 setSelectedPluginRoots([]);
                 setSelectedHostsByPluginRoot({});
+                setResultQuery("");
               }}
             >
               {t("install.repo.back")}

@@ -74,11 +74,13 @@ type PluginScanSession = {
   plugins: PluginSummary[] | null;
 };
 type PluginScanSessionListener = (session: PluginScanSession) => void;
+type PluginsRouteOpenedListener = () => void;
 type PluginHostCoverageEntry = {
   hostTool: PluginHostTool;
   enabledState: PluginSummary["enabledState"];
   hasError: boolean;
 };
+const PLUGINS_ROUTE_OPENED_EVENT = "skilldock:plugins-route-opened";
 const pluginTabs: { key: PluginTabKey; label: string }[] = [
   { key: "all", label: "All" },
   { key: "claude-code", label: "Claude Code" },
@@ -122,6 +124,7 @@ let pluginScanSession: PluginScanSession = {
 let activePluginScanPromise: Promise<PluginSummary[]> | null = null;
 const pluginScanSessionListeners = new Set<PluginScanSessionListener>();
 const FIRST_EMPTY_PLUGINS_AUTO_SCAN_KEY = "skilldock.plugins.firstEmptyAutoScanCompleted";
+let hasRequestedPluginsRouteOpen = false;
 
 function getPluginScanSessionSnapshot() {
   return { ...pluginScanSession };
@@ -147,6 +150,30 @@ function markFirstEmptyPluginsAutoScanCompleted() {
   }
 
   window.localStorage.setItem(FIRST_EMPTY_PLUGINS_AUTO_SCAN_KEY, "true");
+}
+
+export function notifyPluginsRouteOpened() {
+  hasRequestedPluginsRouteOpen = true;
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  window.dispatchEvent(new Event(PLUGINS_ROUTE_OPENED_EVENT));
+}
+
+function hasRequestedPluginsRouteAutoScan() {
+  return hasRequestedPluginsRouteOpen;
+}
+
+function subscribePluginsRouteOpened(listener: PluginsRouteOpenedListener) {
+  if (typeof window === "undefined") {
+    return () => undefined;
+  }
+
+  window.addEventListener(PLUGINS_ROUTE_OPENED_EVENT, listener);
+  return () => {
+    window.removeEventListener(PLUGINS_ROUTE_OPENED_EVENT, listener);
+  };
 }
 
 function setPluginScanSession(nextSession: PluginScanSession) {
@@ -233,6 +260,7 @@ function startPluginStateRefreshImport() {
 
 export function resetPluginScanSessionForTests() {
   activePluginScanPromise = null;
+  hasRequestedPluginsRouteOpen = false;
   pluginScanSession = {
     isScanning: false,
     plugins: null,
@@ -1432,9 +1460,10 @@ export function PluginsRoute() {
   const pluginStateRefreshInFlightRef = useRef<Promise<void> | null>(null);
   const deferredHeavyRefreshTimerRef = useRef<number | null>(null);
   const lastPluginAutoRefreshAtRef = useRef(0);
-  const startupPluginSyncInFlightRef = useRef<Promise<void> | null>(null);
+  const startupPluginSyncInFlightRef = useRef<Promise<PluginSummary[] | void> | null>(null);
   const lastStartupPluginSyncAtRef = useRef(0);
   const lastPluginLocalAlignAtRef = useRef(0);
+  const hasLoadedInitialPluginsRef = useRef(getRuntimeCachedPlugins() !== null);
   const pluginsRef = useRef(plugins);
   const [toolbarContainer, setToolbarContainer] = useState<HTMLElement | null>(
     null,
@@ -1460,6 +1489,7 @@ export function PluginsRoute() {
     if (!shouldUseFixtureData()) {
       cachePlugins(nextPlugins);
     }
+    pluginsRef.current = nextPlugins;
     setPlugins(nextPlugins);
   }
 
@@ -1490,7 +1520,8 @@ export function PluginsRoute() {
       return;
     }
 
-    const refreshPromise = (async () => {
+    let refreshPromise!: Promise<void>;
+    refreshPromise = (async () => {
       try {
         const refreshedPlugin = await refreshLocalPluginState({
           hostTool: plugin.hostTool,
@@ -1549,6 +1580,7 @@ export function PluginsRoute() {
           if (!shouldUseFixtureData()) {
             cachePlugins(nextPlugins);
           }
+          pluginsRef.current = nextPlugins;
           return nextPlugins;
         });
         setErrorMessage("");
@@ -1556,9 +1588,7 @@ export function PluginsRoute() {
         console.warn("Failed to refresh plugin states in background", error);
       } finally {
         lastPluginAutoRefreshAtRef.current = Date.now();
-        if (pluginStateRefreshInFlightRef.current === refreshPromise) {
-          pluginStateRefreshInFlightRef.current = null;
-        }
+        pluginStateRefreshInFlightRef.current = null;
       }
     })();
 
@@ -1628,6 +1658,34 @@ export function PluginsRoute() {
 
     startupPluginSyncInFlightRef.current = syncPromise;
     return syncPromise;
+  }
+
+  function maybeStartFirstEmptyPluginsAutoScan(isActive: () => boolean) {
+    if (
+      pluginsRef.current.length > 0 ||
+      !hasLoadedInitialPluginsRef.current ||
+      getPluginScanSessionSnapshot().isScanning ||
+      hasCompletedFirstEmptyPluginsAutoScan() ||
+      !hasRequestedPluginsRouteAutoScan()
+    ) {
+      return false;
+    }
+
+    markFirstEmptyPluginsAutoScanCompleted();
+    void startPluginStateRefreshImport().then((refreshedPlugins) => {
+      if (!isActive()) {
+        return;
+      }
+      commitPlugins(refreshedPlugins);
+      setErrorMessage("");
+    }).catch((refreshError) => {
+      console.warn("Failed to refresh plugin states", refreshError);
+      if (!isActive()) {
+        return;
+      }
+      setErrorMessage(t("plugins.error.scan"));
+    });
+    return true;
   }
 
   async function loadPlugins(options?: { silent?: boolean }) {
@@ -1703,11 +1761,16 @@ export function PluginsRoute() {
       const cachedPlugins = getRuntimeCachedPlugins();
       if (cachedPlugins && !shouldIgnore) {
         setPlugins(cachedPlugins);
+        pluginsRef.current = cachedPlugins;
         setIsLoading(false);
       }
 
       if (cachedPlugins) {
         const syncedPlugins = await syncPluginsStartupState(() => !shouldIgnore);
+        if (!shouldIgnore) {
+          hasLoadedInitialPluginsRef.current = true;
+          maybeStartFirstEmptyPluginsAutoScan(() => !shouldIgnore);
+        }
         if (!shouldUseFixtureData()) {
           void refreshPluginStatesInBackground(() => !shouldIgnore, {
             pluginsSnapshot: syncedPlugins ?? cachedPlugins,
@@ -1727,30 +1790,14 @@ export function PluginsRoute() {
         const nextPlugins = await fetchStartupInstalledPlugins();
         if (!shouldIgnore) {
           commitPlugins(nextPlugins);
+          hasLoadedInitialPluginsRef.current = true;
           setErrorMessage("");
           if (!shouldUseFixtureData()) {
             void refreshPluginStatesInBackground(() => !shouldIgnore, {
               pluginsSnapshot: nextPlugins,
             });
           }
-          if (
-            nextPlugins.length === 0 &&
-            !getPluginScanSessionSnapshot().isScanning &&
-            !hasCompletedFirstEmptyPluginsAutoScan()
-          ) {
-            markFirstEmptyPluginsAutoScanCompleted();
-            void startPluginStateRefreshImport().then((refreshedPlugins) => {
-              if (!shouldIgnore) {
-                commitPlugins(refreshedPlugins);
-                setErrorMessage("");
-              }
-            }).catch((refreshError) => {
-              console.warn("Failed to refresh plugin states", refreshError);
-              if (!shouldIgnore) {
-                setErrorMessage(t("plugins.error.scan"));
-              }
-            });
-          }
+          maybeStartFirstEmptyPluginsAutoScan(() => !shouldIgnore);
         }
       } catch (error) {
         console.warn("Failed to load installed plugins", error);
@@ -1782,6 +1829,23 @@ export function PluginsRoute() {
       setErrorMessage("");
     }
   }), []);
+
+  useEffect(() => {
+    let active = true;
+    const handlePluginsRouteOpened = () => {
+      maybeStartFirstEmptyPluginsAutoScan(() => active);
+    };
+    const unsubscribe = subscribePluginsRouteOpened(handlePluginsRouteOpened);
+
+    if (hasRequestedPluginsRouteAutoScan()) {
+      handlePluginsRouteOpened();
+    }
+
+    return () => {
+      active = false;
+      unsubscribe();
+    };
+  }, []);
 
   useEffect(() => {
     if (shouldUseFixtureData()) {

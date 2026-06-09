@@ -3,7 +3,11 @@ import { beforeEach, vi } from "vitest";
 import userEvent from "@testing-library/user-event";
 import { act } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { PluginsRoute, resetPluginScanSessionForTests } from "@/app/routes/plugins";
+import {
+  PluginsRoute,
+  notifyPluginsRouteOpened,
+  resetPluginScanSessionForTests,
+} from "@/app/routes/plugins";
 import * as skillClient from "@/features/skills/api/skill-client";
 import { pluginFixtures } from "@/features/skills/state/skill-fixtures";
 import type { PluginHostTool, PluginSummary } from "@/features/skills/state/skill-store";
@@ -250,24 +254,46 @@ test("stores the loaded plugin list in runtime cache", async () => {
   fixtureSpy.mockRestore();
 });
 
-test("triggers one automatic scan import on the first empty open", async () => {
+test("waits for the first plugins tab click before automatic scan import", async () => {
   const fixtureSpy = vi.spyOn(skillClient, "shouldUseFixtureData").mockReturnValue(false);
   const startupSpy = vi
     .spyOn(skillClient, "fetchStartupInstalledPlugins")
     .mockResolvedValueOnce([]);
+  let resolveScan: ((plugins: PluginSummary[]) => void) | null = null;
   const scanSpy = vi
     .spyOn(skillClient, "fetchInstalledPlugins")
-    .mockResolvedValue(pluginFixtures);
+    .mockImplementation(
+      () =>
+        new Promise<PluginSummary[]>((resolve) => {
+          resolveScan = resolve;
+        }),
+    );
 
   renderWithI18n(<PluginsRoute />);
 
   await screen.findByRole("tab", { name: /全部/ });
 
   expect(startupSpy).toHaveBeenCalledTimes(1);
+  expect(scanSpy).not.toHaveBeenCalled();
+  expect(window.localStorage.getItem("skilldock.plugins.firstEmptyAutoScanCompleted")).toBeNull();
+
+  act(() => {
+    notifyPluginsRouteOpened();
+  });
+
+  await screen.findByRole("button", { name: "扫描中..." });
   await waitFor(() => {
     expect(scanSpy).toHaveBeenCalledTimes(1);
   });
   expect(window.localStorage.getItem("skilldock.plugins.firstEmptyAutoScanCompleted")).toBe("true");
+  if (!resolveScan) {
+    fixtureSpy.mockRestore();
+    throw new Error("missing scan resolver");
+  }
+  const completeScan = resolveScan as (plugins: PluginSummary[]) => void;
+  await act(async () => {
+    completeScan(pluginFixtures);
+  });
   fixtureSpy.mockRestore();
 });
 
@@ -284,6 +310,9 @@ test("does not trigger automatic scan import again after the first empty open", 
   renderWithI18n(<PluginsRoute />);
 
   await screen.findByRole("tab", { name: /全部/ });
+  act(() => {
+    notifyPluginsRouteOpened();
+  });
 
   expect(startupSpy).toHaveBeenCalledTimes(1);
   expect(scanSpy).not.toHaveBeenCalled();
@@ -1160,7 +1189,8 @@ test("shows the same spinning update icon state as skills while a plugin update 
     updateSpy.mockRestore();
     throw new Error("missing plugin update resolver");
   }
-  resolveUpdate({
+  const completeUpdate = resolveUpdate as (plugin: PluginSummary) => void;
+  completeUpdate({
     ...pluginFixtures[0],
     collabStatus: "clean",
     updateAvailable: false,
@@ -1236,7 +1266,8 @@ test("shows a spinning update icon for merged all-tab plugins while update is pe
     refreshSpy.mockRestore();
     throw new Error("missing plugin update resolver");
   }
-  resolveUpdate({
+  const completeUpdate = resolveUpdate as (plugin: PluginSummary) => void;
+  completeUpdate({
     ...pluginFixtures[0],
     id: "codex:repo-scout",
     hostTool: "codex",
@@ -1286,8 +1317,9 @@ test("keeps the toggle button available and not spinning while plugin update is 
     updateSpy.mockRestore();
     throw new Error("missing plugin update resolver");
   }
+  const completeUpdate = resolveUpdate as (plugin: PluginSummary) => void;
   await act(async () => {
-    resolveUpdate?.({
+    completeUpdate({
       ...pluginFixtures[0],
       collabStatus: "clean",
       updateAvailable: false,
@@ -1398,6 +1430,15 @@ test("prompts before updating a hash-based plugin with local modifications", asy
       updateAvailable: true,
     },
   ]);
+  vi.spyOn(skillClient, "refreshPluginStates").mockResolvedValueOnce([
+    {
+      ...pluginFixtures[0],
+      updateStrategy: "hash",
+      localModified: true,
+      collabStatus: "update-available",
+      updateAvailable: true,
+    },
+  ]);
 
   renderWithI18n(<PluginsRoute />);
 
@@ -1433,6 +1474,7 @@ test("shows pending push status without an update action", async () => {
     },
   ];
   vi.spyOn(skillClient, "fetchStartupInstalledPlugins").mockResolvedValueOnce(plugins);
+  vi.spyOn(skillClient, "refreshPluginStates").mockResolvedValueOnce(plugins);
 
   renderWithI18n(<PluginsRoute />);
 
@@ -1468,7 +1510,7 @@ test("refreshes plugin states after plugin library changes", async () => {
   if (!changeHandler) {
     throw new Error("plugin library change handler was not registered");
   }
-  const registeredChangeHandler: NonNullable<typeof changeHandler> = changeHandler;
+  const registeredChangeHandler = changeHandler as (payload: { changedPaths: string[] }) => void;
   registeredChangeHandler({ changedPaths: ["/Users/demo/.skilldock/plugins/repo-scout/plugins/repo-scout/SKILL.md"] });
 
   await waitFor(() => {

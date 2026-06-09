@@ -42,6 +42,7 @@ const SKILLDOCK_PACKAGE_IDENTITY_METADATA_FILE: &str = "package.json";
 const SKILLDOCK_PLUGIN_SOURCE_METADATA_DIR: &str = "plugin-source";
 const SKILLDOCK_PLUGIN_UPDATE_METADATA_DIR: &str = "update";
 const PLUGIN_PACKAGE_HASH_LEN: usize = 8;
+const PLUGIN_GIT_CLONE_HISTORY_DEPTH: &str = "20";
 const PLUGIN_UPDATE_CACHE_FILE_NAME: &str = "plugin-update-cache.json";
 const PLUGIN_LIST_CACHE_FILE_NAME: &str = "plugin-list-cache.json";
 
@@ -3620,6 +3621,10 @@ fn ensure_shared_plugin_repo(
     let mut args = vec![
         "clone".to_string(),
         "--filter=blob:none".to_string(),
+        "--depth".to_string(),
+        PLUGIN_GIT_CLONE_HISTORY_DEPTH.to_string(),
+        "--no-single-branch".to_string(),
+        "--no-tags".to_string(),
         "--sparse".to_string(),
     ];
     if let Some(branch) = git_ref.and_then(non_empty_trimmed_string) {

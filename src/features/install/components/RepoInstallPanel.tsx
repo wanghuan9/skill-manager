@@ -46,6 +46,22 @@ function toggleSelection(current: string[], value: string) {
   return current.includes(value) ? current.filter((item) => item !== value) : [...current, value];
 }
 
+function normalizeSearchText(value: string) {
+  return value.trim().toLowerCase();
+}
+
+function repoCandidateMatchesQuery(candidate: RepoSkillCandidate, query: string) {
+  if (!query) {
+    return true;
+  }
+
+  return [
+    candidate.name,
+    candidate.description,
+    candidate.relativePath,
+  ].some((value) => value.toLowerCase().includes(query));
+}
+
 export function RepoInstallPanel() {
   const { t } = useTranslate();
   const { discoverRepoSkills, installFromRepo, installedSkills } = useSkillWorkspace();
@@ -59,9 +75,15 @@ export function RepoInstallPanel() {
   const [isLoadingBranches, setIsLoadingBranches] = useState(false);
   const [isDiscovering, setIsDiscovering] = useState(false);
   const [isInstalling, setIsInstalling] = useState(false);
+  const [resultQuery, setResultQuery] = useState("");
   const normalizedRepoUrl = useMemo(() => normalizeRepoInput(repoInput), [repoInput]);
   const isValid = isValidRepoUrl(normalizedRepoUrl);
   const selectedGitRef = selectedBranch.trim() || undefined;
+  const normalizedResultQuery = useMemo(() => normalizeSearchText(resultQuery), [resultQuery]);
+  const visibleCandidates = useMemo(
+    () => candidates.filter((candidate) => repoCandidateMatchesQuery(candidate, normalizedResultQuery)),
+    [candidates, normalizedResultQuery],
+  );
   const installedSkillNames = useMemo(
     () => new Set(installedSkills.map((skill) => skill.name)),
     [installedSkills],
@@ -76,6 +98,7 @@ export function RepoInstallPanel() {
     setSelectedBranch("");
     setCandidates([]);
     setSelectedPaths([]);
+    setResultQuery("");
     if (!isValid) {
       setIsLoadingBranches(false);
       return;
@@ -135,9 +158,11 @@ export function RepoInstallPanel() {
       ]);
       setCandidates(discovered);
       setSelectedPaths([]);
+      setResultQuery("");
     } catch (error) {
       setCandidates([]);
       setSelectedPaths([]);
+      setResultQuery("");
       reportFailure(error, {
         operation: "discover_repo_skills",
         fallbackMessage: t("install.repo.error.readFailed"),
@@ -224,9 +249,21 @@ export function RepoInstallPanel() {
       ) : null}
       {candidates.length > 0 ? (
         <div className="repo-install__selection">
-          <p className="repo-install__notice">{t("install.repo.found", { count: candidates.length })}</p>
+          <div className="repo-install__result-header">
+            <p className="repo-install__notice">{t("install.repo.found", { count: candidates.length })}</p>
+            <label className="repo-install__search">
+              <span className="sr-only">{t("install.repo.searchAria")}</span>
+              <input
+                type="search"
+                value={resultQuery}
+                onChange={(event) => setResultQuery(event.target.value)}
+                placeholder={t("install.repo.searchPlaceholder")}
+                aria-label={t("install.repo.searchAria")}
+              />
+            </label>
+          </div>
           <div className="repo-install__list">
-            {candidates.map((candidate) => {
+            {visibleCandidates.map((candidate) => {
               const selected = selectedPaths.includes(candidate.relativePath);
 
               return (
@@ -254,6 +291,9 @@ export function RepoInstallPanel() {
                 </button>
               );
             })}
+            {visibleCandidates.length === 0 ? (
+              <p className="repo-install__empty">{t("install.repo.emptySearch", { query: resultQuery.trim() })}</p>
+            ) : null}
           </div>
           <div className="repo-install__actions">
             <button
@@ -262,6 +302,7 @@ export function RepoInstallPanel() {
               onClick={() => {
                 setCandidates([]);
                 setSelectedPaths([]);
+                setResultQuery("");
               }}
             >
               {t("install.repo.back")}

@@ -914,7 +914,7 @@ fn clone_repo_with_optional_branch(
     let mut command = Command::new("git");
     command.arg("clone");
     command.arg("--depth").arg(GIT_CLONE_HISTORY_DEPTH);
-    command.arg("--single-branch");
+    command.arg("--no-single-branch");
     command.arg("--no-tags");
     if let Some(branch_name) = branch.filter(|value| !value.trim().is_empty()) {
         command.arg("--branch").arg(branch_name);
@@ -946,7 +946,7 @@ fn clone_repo_with_sparse_paths(
         .arg("--filter=blob:none")
         .arg("--depth")
         .arg(GIT_CLONE_HISTORY_DEPTH)
-        .arg("--single-branch")
+        .arg("--no-single-branch")
         .arg("--no-tags")
         .arg("--sparse")
         .arg("--no-checkout");
