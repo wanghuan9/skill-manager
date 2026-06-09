@@ -159,6 +159,21 @@ function toggleSelection(current: string[], value: string) {
   return current.includes(value) ? current.filter((item) => item !== value) : [...current, value];
 }
 
+function normalizeProbeSearch(value: string) {
+  return value.trim().toLowerCase();
+}
+
+function matchesPluginProbe(probe: PluginProbeResult, query: string) {
+  if (!query) {
+    return true;
+  }
+
+  return [
+    probeTitle(probe),
+    probeSubtitle(probe),
+  ].some((value) => value.toLowerCase().includes(query));
+}
+
 function isPluginHostTool(value: string): value is PluginHostTool {
   return pluginHostOptions.some((option) => option.key === value);
 }
@@ -463,6 +478,7 @@ export function PluginInstallPanel() {
   const [probes, setProbes] = useState<PluginProbeResult[]>([]);
   const [selectedPluginRoots, setSelectedPluginRoots] = useState<string[]>([]);
   const [selectedHostsByPluginRoot, setSelectedHostsByPluginRoot] = useState<Record<string, PluginHostTool[]>>({});
+  const [probeSearchQuery, setProbeSearchQuery] = useState("");
   const [installedPlugins, setInstalledPlugins] = useState<PluginSummary[]>([]);
   const [isLoadingBranches, setIsLoadingBranches] = useState(false);
   const [isProbing, setIsProbing] = useState(false);
@@ -471,6 +487,11 @@ export function PluginInstallPanel() {
   const selectableProbes = useMemo(
     () => probes.filter((probe) => probe.kind === "plugin-repo"),
     [probes],
+  );
+  const normalizedProbeSearchQuery = normalizeProbeSearch(probeSearchQuery);
+  const filteredProbes = useMemo(
+    () => probes.filter((probe) => matchesPluginProbe(probe, normalizedProbeSearchQuery)),
+    [normalizedProbeSearchQuery, probes],
   );
   const installedPluginHostsByProbeRoot = useMemo(
     () => buildInstalledPluginHostsByProbeRoot(selectableProbes, installedPlugins),
@@ -522,6 +543,7 @@ export function PluginInstallPanel() {
     setProbes([]);
     setSelectedPluginRoots([]);
     setSelectedHostsByPluginRoot({});
+    setProbeSearchQuery("");
     if (!normalizedSource || normalizedSource.length < 5) {
       setIsLoadingBranches(false);
       return;
@@ -571,6 +593,7 @@ export function PluginInstallPanel() {
     flushSync(() => {
       setIsProbing(true);
     });
+    setProbeSearchQuery("");
     await waitForNextPaint();
 
     try {
@@ -658,6 +681,7 @@ export function PluginInstallPanel() {
       setProbes([]);
       setSelectedPluginRoots([]);
       setSelectedHostsByPluginRoot({});
+      setProbeSearchQuery("");
       const mergedInstalledPlugins = mergeInstalledPlugins(installedPlugins, newlyInstalledPlugins);
       if (!shouldUseFixtureData()) {
         cachePlugins(mergedInstalledPlugins);
@@ -774,6 +798,7 @@ export function PluginInstallPanel() {
                       setProbes([]);
                       setSelectedPluginRoots([]);
                       setSelectedHostsByPluginRoot({});
+                      setProbeSearchQuery("");
                     }}
                   >
                     {branches.map((branch) => (
@@ -807,109 +832,130 @@ export function PluginInstallPanel() {
 
       {probes.length > 0 ? (
         <div className="repo-install__selection plugin-install-preview">
-          <p className="repo-install__notice">{t("install.plugin.found", { count: selectableProbes.length })}</p>
-          <div className="repo-install__list">
-            {probes.map((probe) => {
-              const componentLabels = componentSummaryLabels(probe.components);
-              const selected = selectedPluginRoots.includes(probe.pluginRoot);
-              const hostTools = probe.compatibleHostTools;
-              const fullyInstalled = isProbeFullyInstalled(probe, installedPluginHostsByProbeRoot);
-              const canToggleCard = probe.kind === "plugin-repo" && !fullyInstalled;
-              const cardAriaLabel = fullyInstalled
-                ? `插件 ${probeTitle(probe)} 已安装`
-                : `选择插件 ${probeTitle(probe)}`;
+          <div className="repo-install__summary-row">
+            <p className="repo-install__notice">{t("install.plugin.found", { count: selectableProbes.length })}</p>
+            <label className="market-search-field repo-install__search-field">
+              <span className="sr-only">{t("install.plugin.searchAria")}</span>
+              <div className="market-search-input-wrap">
+                <input
+                  className="market-search-input"
+                  type="search"
+                  value={probeSearchQuery}
+                  placeholder={t("install.plugin.searchPlaceholder")}
+                  onChange={(event) => setProbeSearchQuery(event.target.value)}
+                />
+              </div>
+            </label>
+          </div>
+          {filteredProbes.length > 0 ? (
+            <div className="repo-install__list">
+              {filteredProbes.map((probe) => {
+                const componentLabels = componentSummaryLabels(probe.components);
+                const selected = selectedPluginRoots.includes(probe.pluginRoot);
+                const hostTools = probe.compatibleHostTools;
+                const fullyInstalled = isProbeFullyInstalled(probe, installedPluginHostsByProbeRoot);
+                const canToggleCard = probe.kind === "plugin-repo" && !fullyInstalled;
+                const cardAriaLabel = fullyInstalled
+                  ? `插件 ${probeTitle(probe)} 已安装`
+                  : `选择插件 ${probeTitle(probe)}`;
 
-              return (
-                <div
-                  key={probe.pluginRoot}
-                  className={`repo-install__option plugin-install-preview__item${
-                    selected ? " is-selected" : ""
-                  }${fullyInstalled ? " is-disabled" : ""}`}
-                  role="button"
-                  tabIndex={canToggleCard ? 0 : -1}
-                  aria-disabled={!canToggleCard}
-                  aria-label={cardAriaLabel}
-                  onClick={() => {
-                    if (canToggleCard) {
-                      handleProbeToggle(probe);
-                    }
-                  }}
-                  onKeyDown={(event) => {
-                    if (canToggleCard) {
-                      handleButtonLikeKeyDown(event, () => handleProbeToggle(probe));
-                    }
-                  }}
-                >
-                  <div className="plugin-install-preview__summary">
-                    <div className="plugin-install-preview__summary-main">
-                      <div>
-                        <h3 className={fullyInstalled ? "repo-install__option-title-text is-disabled" : "repo-install__option-title-text"}>
-                          {probeTitle(probe)}
-                        </h3>
-                        <span>{probeSubtitle(probe)}</span>
+                return (
+                  <div
+                    key={probe.pluginRoot}
+                    className={`repo-install__option plugin-install-preview__item${
+                      selected ? " is-selected" : ""
+                    }${fullyInstalled ? " is-disabled" : ""}`}
+                    role="button"
+                    tabIndex={canToggleCard ? 0 : -1}
+                    aria-disabled={!canToggleCard}
+                    aria-label={cardAriaLabel}
+                    onClick={() => {
+                      if (canToggleCard) {
+                        handleProbeToggle(probe);
+                      }
+                    }}
+                    onKeyDown={(event) => {
+                      if (canToggleCard) {
+                        handleButtonLikeKeyDown(event, () => handleProbeToggle(probe));
+                      }
+                    }}
+                  >
+                    <div className="plugin-install-preview__summary">
+                      <div className="plugin-install-preview__summary-main">
+                        <div>
+                          <h3 className={fullyInstalled ? "repo-install__option-title-text is-disabled" : "repo-install__option-title-text"}>
+                            {probeTitle(probe)}
+                          </h3>
+                          <span>{probeSubtitle(probe)}</span>
+                        </div>
+                        {componentLabels.length > 0 ? (
+                          <div className="plugin-install-preview__components" aria-label={`${probeTitle(probe)} 插件组件数量`}>
+                            {componentLabels.map((label) => (
+                              <span key={label} className="plugin-install-preview__component-chip">{label}</span>
+                            ))}
+                          </div>
+                        ) : null}
                       </div>
-                      {componentLabels.length > 0 ? (
-                        <div className="plugin-install-preview__components" aria-label={`${probeTitle(probe)} 插件组件数量`}>
-                          {componentLabels.map((label) => (
-                            <span key={label} className="plugin-install-preview__component-chip">{label}</span>
-                          ))}
+                      {hostTools.length > 0 ? (
+                        <div className="plugin-install-preview__summary-side">
+                          {fullyInstalled ? (
+                            <span className="repo-install__option-badge">
+                              {t("install.repo.badgeInstalled")}
+                            </span>
+                          ) : null}
+                          <div className="plugin-install-preview__host-icons" aria-label={`${probeTitle(probe)} 安装宿主`}>
+                            {hostTools.map((hostTool) => {
+                              const hostSelected = (selectedHostsByPluginRoot[probe.pluginRoot] ?? [])
+                                .includes(hostTool);
+                              const hostAppInstalled = installedHostApps.has(hostTool);
+                              const pluginInstalled = (installedPluginHostsByProbeRoot[probe.pluginRoot] ?? new Set<PluginHostTool>())
+                                .has(hostTool);
+                              return (
+                                <button
+                                  key={hostTool}
+                                  className={`plugin-install-preview__host-toggle${
+                                    hostSelected ? " is-selected" : ""
+                                  }${hostAppInstalled ? "" : " is-unavailable"}${
+                                    pluginInstalled ? " is-installed" : ""
+                                  }`}
+                                  type="button"
+                                  data-tooltip={hostInstallTargetTooltip(hostTool, hostAppInstalled, pluginInstalled, hostSelected)}
+                                  aria-pressed={hostSelected}
+                                  aria-disabled={!hostAppInstalled || pluginInstalled}
+                                  aria-label={
+                                    !hostAppInstalled
+                                      ? `${hostLabel(hostTool)} 未安装，无法作为 ${probeTitle(probe)} 安装宿主`
+                                      : pluginInstalled
+                                        ? `${probeTitle(probe)} 已安装到 ${hostLabel(hostTool)}`
+                                        : `${hostSelected ? "取消选择" : "选择"} ${hostLabel(hostTool)} 作为 ${probeTitle(probe)} 安装宿主`
+                                  }
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    handleProbeHostToggle(probe, hostTool);
+                                  }}
+                                >
+                                  <PluginHostIcon
+                                    hostTool={hostTool}
+                                    isSelected={hostSelected}
+                                    isInstalled={pluginInstalled}
+                                  />
+                                </button>
+                              );
+                            })}
+                          </div>
                         </div>
                       ) : null}
                     </div>
-                    {hostTools.length > 0 ? (
-                      <div className="plugin-install-preview__summary-side">
-                        {fullyInstalled ? (
-                          <span className="repo-install__option-badge">
-                            {t("install.repo.badgeInstalled")}
-                          </span>
-                        ) : null}
-                        <div className="plugin-install-preview__host-icons" aria-label={`${probeTitle(probe)} 安装宿主`}>
-                          {hostTools.map((hostTool) => {
-                            const hostSelected = (selectedHostsByPluginRoot[probe.pluginRoot] ?? [])
-                              .includes(hostTool);
-                            const hostAppInstalled = installedHostApps.has(hostTool);
-                            const pluginInstalled = (installedPluginHostsByProbeRoot[probe.pluginRoot] ?? new Set<PluginHostTool>())
-                              .has(hostTool);
-                            return (
-                              <button
-                                key={hostTool}
-                                className={`plugin-install-preview__host-toggle${
-                                  hostSelected ? " is-selected" : ""
-                                }${hostAppInstalled ? "" : " is-unavailable"}${
-                                  pluginInstalled ? " is-installed" : ""
-                                }`}
-                                type="button"
-                                data-tooltip={hostInstallTargetTooltip(hostTool, hostAppInstalled, pluginInstalled, hostSelected)}
-                                aria-pressed={hostSelected}
-                                aria-disabled={!hostAppInstalled || pluginInstalled}
-                                aria-label={
-                                  !hostAppInstalled
-                                    ? `${hostLabel(hostTool)} 未安装，无法作为 ${probeTitle(probe)} 安装宿主`
-                                    : pluginInstalled
-                                      ? `${probeTitle(probe)} 已安装到 ${hostLabel(hostTool)}`
-                                      : `${hostSelected ? "取消选择" : "选择"} ${hostLabel(hostTool)} 作为 ${probeTitle(probe)} 安装宿主`
-                                }
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  handleProbeHostToggle(probe, hostTool);
-                                }}
-                              >
-                                <PluginHostIcon
-                                  hostTool={hostTool}
-                                  isSelected={hostSelected}
-                                  isInstalled={pluginInstalled}
-                                />
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    ) : null}
                   </div>
-                </div>
-              );
-            })}
-          </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="repo-install__empty">
+              <h3>{t("install.plugin.emptySearchTitle")}</h3>
+              <p>{t("install.plugin.emptySearchDescription")}</p>
+            </div>
+          )}
           <div className="repo-install__actions plugin-install-preview__actions">
             <button
               className="secondary-button"
@@ -918,6 +964,7 @@ export function PluginInstallPanel() {
                 setProbes([]);
                 setSelectedPluginRoots([]);
                 setSelectedHostsByPluginRoot({});
+                setProbeSearchQuery("");
               }}
             >
               {t("install.repo.back")}

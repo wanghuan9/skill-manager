@@ -3690,8 +3690,45 @@ code {
   align-content: start;
 }
 
+.repo-install__summary-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.repo-install__search-field {
+  margin-left: auto;
+  width: min(360px, 100%);
+  flex: 0 1 360px;
+}
+
+.repo-install__empty {
+  display: grid;
+  place-content: center;
+  gap: 8px;
+  min-height: 180px;
+  padding: 24px;
+  border: 1px dashed #d8e2f0;
+  border-radius: 16px;
+  background: #f8fbff;
+  text-align: center;
+  color: var(--muted);
+}
+
+.repo-install__empty h3,
+.repo-install__empty p {
+  margin: 0;
+}
+
+.repo-install__empty h3 {
+  color: var(--text);
+  font-size: 0.95rem;
+}
+
 .repo-install__list {
   display: grid;
+  align-content: start;
   gap: 10px;
   min-height: 0;
   overflow: auto;
@@ -3810,6 +3847,18 @@ code {
   overflow: visible;
   padding-right: 0;
   padding-top: 0;
+}
+
+@media (max-width: 760px) {
+  .repo-install__summary-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .repo-install__search-field {
+    margin-left: 0;
+    flex-basis: auto;
+  }
 }
 
 .plugin-install-preview__summary {

@@ -46,6 +46,21 @@ function toggleSelection(current: string[], value: string) {
   return current.includes(value) ? current.filter((item) => item !== value) : [...current, value];
 }
 
+function normalizeCandidateSearch(value: string) {
+  return value.trim().toLowerCase();
+}
+
+function matchesRepoSkillCandidate(candidate: RepoSkillCandidate, query: string) {
+  if (!query) {
+    return true;
+  }
+
+  return [
+    candidate.name,
+    formatSkillDescription(candidate.description),
+  ].some((value) => value.toLowerCase().includes(query));
+}
+
 export function RepoInstallPanel() {
   const { t } = useTranslate();
   const { discoverRepoSkills, installFromRepo, installedSkills } = useSkillWorkspace();
@@ -56,6 +71,7 @@ export function RepoInstallPanel() {
   const [selectedBranch, setSelectedBranch] = useState("");
   const [candidates, setCandidates] = useState<RepoSkillCandidate[]>([]);
   const [selectedPaths, setSelectedPaths] = useState<string[]>([]);
+  const [candidateSearchQuery, setCandidateSearchQuery] = useState("");
   const [isLoadingBranches, setIsLoadingBranches] = useState(false);
   const [isDiscovering, setIsDiscovering] = useState(false);
   const [isInstalling, setIsInstalling] = useState(false);
@@ -69,6 +85,11 @@ export function RepoInstallPanel() {
   const hasSelectableCandidates = useMemo(
     () => candidates.some((candidate) => !installedSkillNames.has(candidate.name)),
     [candidates, installedSkillNames],
+  );
+  const normalizedCandidateSearchQuery = normalizeCandidateSearch(candidateSearchQuery);
+  const filteredCandidates = useMemo(
+    () => candidates.filter((candidate) => matchesRepoSkillCandidate(candidate, normalizedCandidateSearchQuery)),
+    [candidates, normalizedCandidateSearchQuery],
   );
 
   useEffect(() => {
@@ -125,6 +146,7 @@ export function RepoInstallPanel() {
     flushSync(() => {
       setIsDiscovering(true);
     });
+    setCandidateSearchQuery("");
 
     await waitForNextPaint();
 
@@ -224,37 +246,58 @@ export function RepoInstallPanel() {
       ) : null}
       {candidates.length > 0 ? (
         <div className="repo-install__selection">
-          <p className="repo-install__notice">{t("install.repo.found", { count: candidates.length })}</p>
-          <div className="repo-install__list">
-            {candidates.map((candidate) => {
-              const selected = selectedPaths.includes(candidate.relativePath);
-
-              return (
-                <button
-                  key={candidate.id}
-                  className={`repo-install__option${selected ? " is-selected" : ""}`}
-                  type="button"
-                  disabled={installedSkillNames.has(candidate.name)}
-                  onClick={() =>
-                    !installedSkillNames.has(candidate.name)
-                      ? setSelectedPaths((current) => toggleSelection(current, candidate.relativePath))
-                      : undefined
-                  }
-                >
-                  <div className="repo-install__option-main">
-                    <div className="repo-install__option-title">
-                      <h3>{candidate.name}</h3>
-                      {installedSkillNames.has(candidate.name) ? (
-                        <span className="repo-install__option-badge">{t("install.repo.badgeInstalled")}</span>
-                      ) : null}
-                    </div>
-                    <p>{formatSkillDescription(candidate.description) || t("skills.description.empty")}</p>
-                    <span>{candidate.relativePath}</span>
-                  </div>
-                </button>
-              );
-            })}
+          <div className="repo-install__summary-row">
+            <p className="repo-install__notice">{t("install.repo.found", { count: candidates.length })}</p>
+            <label className="market-search-field repo-install__search-field">
+              <span className="sr-only">{t("install.repo.searchAria")}</span>
+              <div className="market-search-input-wrap">
+                <input
+                  className="market-search-input"
+                  type="search"
+                  value={candidateSearchQuery}
+                  placeholder={t("install.repo.searchPlaceholder")}
+                  onChange={(event) => setCandidateSearchQuery(event.target.value)}
+                />
+              </div>
+            </label>
           </div>
+          {filteredCandidates.length > 0 ? (
+            <div className="repo-install__list">
+              {filteredCandidates.map((candidate) => {
+                const selected = selectedPaths.includes(candidate.relativePath);
+
+                return (
+                  <button
+                    key={candidate.id}
+                    className={`repo-install__option${selected ? " is-selected" : ""}`}
+                    type="button"
+                    disabled={installedSkillNames.has(candidate.name)}
+                    onClick={() =>
+                      !installedSkillNames.has(candidate.name)
+                        ? setSelectedPaths((current) => toggleSelection(current, candidate.relativePath))
+                        : undefined
+                    }
+                  >
+                    <div className="repo-install__option-main">
+                      <div className="repo-install__option-title">
+                        <h3>{candidate.name}</h3>
+                        {installedSkillNames.has(candidate.name) ? (
+                          <span className="repo-install__option-badge">{t("install.repo.badgeInstalled")}</span>
+                        ) : null}
+                      </div>
+                      <p>{formatSkillDescription(candidate.description) || t("skills.description.empty")}</p>
+                      <span>{candidate.relativePath}</span>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="repo-install__empty">
+              <h3>{t("install.repo.emptySearchTitle")}</h3>
+              <p>{t("install.repo.emptySearchDescription")}</p>
+            </div>
+          )}
           <div className="repo-install__actions">
             <button
               className="secondary-button"
@@ -262,6 +305,7 @@ export function RepoInstallPanel() {
               onClick={() => {
                 setCandidates([]);
                 setSelectedPaths([]);
+                setCandidateSearchQuery("");
               }}
             >
               {t("install.repo.back")}

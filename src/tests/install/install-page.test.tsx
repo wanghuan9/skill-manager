@@ -514,7 +514,7 @@ test("treats manifest name as the stable identity when plugin display names diff
     installStrategy: "codex-marketplace",
     warnings: [],
   }]);
-  vi.spyOn(skillClient, "fetchInstalledPlugins").mockResolvedValue([{
+  const fetchInstalledPluginsSpy = vi.spyOn(skillClient, "fetchInstalledPlugins").mockResolvedValue([{
     id: "codex:shopify-plugin",
     packageId: "shopify-ai-toolkit",
     manifestName: "shopify-plugin",
@@ -573,6 +573,7 @@ test("treats manifest name as the stable identity when plugin display names diff
 
   branchSpy.mockRestore();
   probeSpy.mockRestore();
+  fetchInstalledPluginsSpy.mockRestore();
 });
 
 test("clears plugin probes and stops blocking on workspace refresh after install", async () => {
@@ -808,6 +809,41 @@ test("uses browser fixtures to list example-repo plugin candidates", async () =>
   expect(await screen.findByText("example-plugin")).toBeInTheDocument();
   expect(screen.getByText("1 command")).toBeInTheDocument();
   expect(screen.queryByRole("textbox", { name: "Git 仓库地址" })).not.toBeInTheDocument();
+});
+
+test("filters discovered plugin candidates by name and description", async () => {
+  const sourceUrl = "https://git.example.com/example-org/example-repo";
+  const fetchInstalledPluginsSpy = vi.spyOn(skillClient, "fetchInstalledPlugins").mockResolvedValue([]);
+
+  render(<App />);
+  await userEvent.click(screen.getByRole("button", { name: /安装/ }));
+  await userEvent.click(screen.getByRole("tab", { name: "Plugin" }));
+  await userEvent.type(screen.getByRole("textbox", { name: "Git 仓库地址" }), sourceUrl);
+
+  await waitFor(() => {
+    expect(screen.getByRole("combobox", { name: "Git 分支" })).toBeInTheDocument();
+  });
+  await userEvent.click(screen.getByRole("button", { name: "识别插件" }));
+
+  expect(await screen.findByText("example-plugin")).toBeInTheDocument();
+  expect(await screen.findByText("example-plugin")).toBeInTheDocument();
+  const searchInput = screen.getByRole("searchbox", { name: "搜索仓库插件" });
+
+  await userEvent.type(searchInput, "workflow");
+  expect(screen.queryByText("example-plugin")).not.toBeInTheDocument();
+  expect(screen.getByText("example-plugin")).toBeInTheDocument();
+
+  await userEvent.clear(searchInput);
+  await userEvent.type(searchInput, "框架");
+  expect(screen.getByText("example-plugin")).toBeInTheDocument();
+  expect(screen.queryByText("example-plugin")).not.toBeInTheDocument();
+
+  await userEvent.clear(searchInput);
+  await userEvent.type(searchInput, "missing");
+  expect(screen.getByText("暂无匹配的插件")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "返回" })).toBeInTheDocument();
+
+  fetchInstalledPluginsSpy.mockRestore();
 });
 
 test("keeps the plugin install result page open after installing selected hosts", async () => {
@@ -1738,6 +1774,32 @@ test("discovers repo skills and allows multi-select install", async () => {
 
   await userEvent.click(screen.getByRole("button", { name: "返回" }));
   expect(screen.getByRole("textbox", { name: "Git 仓库地址" })).toBeInTheDocument();
+});
+
+test("filters discovered repo skills by name and description", async () => {
+  render(<App />);
+  await userEvent.click(screen.getByRole("button", { name: /安装/ }));
+  await userEvent.click(screen.getByRole("tab", { name: "Git 安装" }));
+
+  await userEvent.type(screen.getByRole("textbox", { name: "Git 仓库地址" }), "https://github.com/team/skill-repo");
+  await userEvent.click(screen.getByRole("button", { name: "识别仓库技能" }));
+
+  expect(await screen.findByText("发现 2 个技能，请选择要安装的技能")).toBeInTheDocument();
+  const searchInput = screen.getByRole("searchbox", { name: "搜索仓库技能" });
+
+  await userEvent.type(searchInput, "service");
+  expect(screen.getByText("service-observer")).toBeInTheDocument();
+  expect(screen.queryByText("release-scribe")).not.toBeInTheDocument();
+
+  await userEvent.clear(searchInput);
+  await userEvent.type(searchInput, "发布纪要");
+  expect(screen.queryByText("service-observer")).not.toBeInTheDocument();
+  expect(screen.getByText("release-scribe")).toBeInTheDocument();
+
+  await userEvent.clear(searchInput);
+  await userEvent.type(searchInput, "missing");
+  expect(screen.getByText("暂无匹配的技能")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "返回" })).toBeInTheDocument();
 });
 
 test("keeps the git install selection page open after installing selected repo skills", async () => {
