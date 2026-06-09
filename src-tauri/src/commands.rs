@@ -3349,8 +3349,8 @@ fn intellij_trusted_locations_for_project(project_path: &Path) -> Vec<PathBuf> {
     }
 
     let mut trusted_locations = Vec::new();
-    if project_path.join(".git").exists() {
-        trusted_locations.push(project_path.to_path_buf());
+    if let Some(git_root) = intellij_project_git_root(project_path) {
+        trusted_locations.push(git_root);
     } else {
         trusted_locations.push(project_path.parent().unwrap_or(project_path).to_path_buf());
     }
@@ -3465,21 +3465,25 @@ pub(crate) fn trust_intellij_project_path(project_path: &str) -> Result<(), Stri
 pub(crate) fn ensure_intellij_git_project_files(project_path: &str) -> Result<(), String> {
     let project_root =
         fs::canonicalize(project_path).unwrap_or_else(|_| PathBuf::from(project_path));
-    if !project_root.join(".git").exists() {
+    let Some(git_root) = intellij_project_git_root(&project_root) else {
         return Ok(());
-    }
+    };
 
     let idea_dir = project_root.join(".idea");
     fs::create_dir_all(&idea_dir).map_err(|error| format!("创建 IDEA 项目目录失败: {error}"))?;
 
+    let vcs_mapping_directory = intellij_vcs_mapping_directory(&project_root, &git_root);
     let vcs_path = idea_dir.join("vcs.xml");
-    let vcs_content = r#"<?xml version="1.0" encoding="UTF-8"?>
+    let vcs_content = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
 <project version="4">
   <component name="VcsDirectoryMappings">
-    <mapping directory="" vcs="Git" />
+    <mapping directory="{}" vcs="Git" />
   </component>
 </project>
-"#;
+"#,
+        xml_escape_attribute(&vcs_mapping_directory)
+    );
     fs::write(&vcs_path, vcs_content)
         .map_err(|error| format!("写入 IDEA VCS 配置失败: {error}"))?;
 
@@ -3520,6 +3524,34 @@ pub(crate) fn ensure_intellij_git_project_files(project_path: &str) -> Result<()
         .map_err(|error| format!("写入 IDEA module 配置失败: {error}"))?;
 
     Ok(())
+}
+
+fn intellij_project_git_root(project_root: &Path) -> Option<PathBuf> {
+    if project_root.join(".git").exists() {
+        return Some(project_root.to_path_buf());
+    }
+    repository_root_path(&project_root.to_string_lossy())
+        .ok()
+        .map(PathBuf::from)
+}
+
+fn intellij_vcs_mapping_directory(project_root: &Path, git_root: &Path) -> String {
+    if project_root == git_root {
+        return String::new();
+    }
+
+    if let Ok(relative_from_git_root) = project_root.strip_prefix(git_root) {
+        let parent_count = relative_from_git_root.components().count();
+        if parent_count > 0 {
+            let parents = std::iter::repeat("..")
+                .take(parent_count)
+                .collect::<Vec<_>>()
+                .join("/");
+            return format!("$PROJECT_DIR$/{parents}");
+        }
+    }
+
+    path_to_jetbrains_macro(git_root)
 }
 
 fn intellij_project_id_for_path(project_root: &Path) -> String {
@@ -3657,7 +3689,7 @@ pub(crate) fn cleanup_intellij_recent_project_conflicts(project_path: &str) -> R
 pub(crate) fn cleanup_intellij_workspace_state(project_path: &str) -> Result<(), String> {
     let project_root =
         fs::canonicalize(project_path).unwrap_or_else(|_| PathBuf::from(project_path));
-    if !project_root.join(".git").exists() {
+    if intellij_project_git_root(&project_root).is_none() {
         return Ok(());
     }
 
@@ -6765,6 +6797,23 @@ mod tests {
         assert!(modules_xml.contains("repo.iml"));
         assert!(module_xml.contains(r#"<module type="JAVA_MODULE" version="4">"#));
         assert!(module_xml.contains(r#"<content url="file://$MODULE_DIR$" />"#));
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn creates_intellij_vcs_mapping_for_nested_git_plugin_paths() {
+        let temp_dir = temp_test_dir("intellij-nested-plugin-project-files");
+        let repo_path = temp_dir.join("repo");
+        let project_path = repo_path.join("plugins/coding-tutor");
+        fs::create_dir_all(&project_path).expect("create nested plugin path");
+        run_git_test(&repo_path, &["init", "-b", "main"]);
+
+        ensure_intellij_git_project_files(&project_path.to_string_lossy())
+            .expect("create nested IDEA project files");
+
+        let vcs_xml = fs::read_to_string(project_path.join(".idea/vcs.xml")).expect("read vcs.xml");
+        assert!(vcs_xml.contains(r#"<mapping directory="$PROJECT_DIR$/../.." vcs="Git" />"#));
 
         let _ = fs::remove_dir_all(temp_dir);
     }

@@ -1991,12 +1991,14 @@ test("opens a plugin folder from the detail directory row", async () => {
   await userEvent.click(screen.getByRole("tab", { name: /Claude Code/ }));
   expect(await screen.findByText("ecc")).toBeInTheDocument();
   await userEvent.click(screen.getByRole("button", { name: /展开 ecc/ }));
-  await userEvent.click(screen.getAllByRole("button", { name: "打开 ecc 目录" }).at(-1)!);
+  const detailOpenButton = screen.getByRole("button", { name: "在访达中打开 ecc 插件目录" });
+  await userEvent.click(detailOpenButton);
 
   expect(openFinderSpy).toHaveBeenCalledWith({
     path: "/Users/demo/.claude/plugins/cache/ecc/ecc/1.10.0",
   });
   expect(openPluginSpy).not.toHaveBeenCalled();
+  expect(detailOpenButton).toHaveAttribute("data-tooltip", "在访达中打开插件目录");
 
   openFinderSpy.mockRestore();
   openPluginSpy.mockRestore();
@@ -2033,7 +2035,7 @@ test("shows and opens the original plugin directory instead of the symlink targe
     screen.getByText("/Users/demo/.codex/plugins/cache/skilldock-plugin/1.0.0"),
   ).toBeInTheDocument();
 
-  await userEvent.click(screen.getAllByRole("button", { name: "打开 SkillDock Plugin 目录" }).at(-1)!);
+  await userEvent.click(screen.getByRole("button", { name: "在访达中打开 SkillDock Plugin 插件目录" }));
 
   expect(openFinderSpy).toHaveBeenCalledWith({
     path: "/Users/demo/.codex/plugins/cache/skilldock-plugin/1.0.0",
