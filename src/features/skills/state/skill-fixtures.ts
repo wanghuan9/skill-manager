@@ -748,7 +748,7 @@ export const appSettingsFixture: AppSettings = {
   storagePath: "/Users/demo/.skilldock/settings.json",
   defaultOpenToolId: "",
   skillInstallActivation: "apply-all-tools",
-  mcpInstallActivation: "disable-all-tools",
+  mcpInstallActivation: "apply-all-tools",
   language: "zh-CN",
   languageSource: "user",
 };

@@ -420,7 +420,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
           storagePath: "",
           defaultOpenToolId: "",
           skillInstallActivation: "apply-all-tools",
-          mcpInstallActivation: "disable-all-tools",
+          mcpInstallActivation: "apply-all-tools",
           language: "zh-CN",
           languageSource: "auto",
         },

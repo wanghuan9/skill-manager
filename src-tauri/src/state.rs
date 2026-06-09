@@ -391,7 +391,7 @@ pub fn normalize_mcp_install_activation(value: &str) -> &'static str {
     match value.trim() {
         MCP_INSTALL_ACTIVATION_APPLY_ALL => MCP_INSTALL_ACTIVATION_APPLY_ALL,
         MCP_INSTALL_ACTIVATION_DISABLE_ALL => MCP_INSTALL_ACTIVATION_DISABLE_ALL,
-        _ => MCP_INSTALL_ACTIVATION_DISABLE_ALL,
+        _ => MCP_INSTALL_ACTIVATION_APPLY_ALL,
     }
 }
 

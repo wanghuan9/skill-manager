@@ -1384,7 +1384,7 @@ test("loads and caches MCP install config when opening marketplace detail", asyn
   fetchConfigSpy.mockRestore();
 });
 
-test("installs MCP marketplace servers into the managed MCP list without enabling tools", async () => {
+test("installs MCP marketplace servers into the managed MCP list with apps enabled by default", async () => {
   window.localStorage.clear();
   resetMcpMarketplaceRuntimeCache();
   const installSpy = vi.spyOn(skillClient, "installMcpServerFromMarketplace");
@@ -1409,6 +1409,12 @@ test("installs MCP marketplace servers into the managed MCP list without enablin
       expect.objectContaining({
         id: "playwright",
         name: "playwright",
+        enabledAppCount: expect.any(Number),
+        apps: expect.arrayContaining([
+          expect.objectContaining({
+            isEnabled: true,
+          }),
+        ]),
       }),
     ]),
   });

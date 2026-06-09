@@ -1678,6 +1678,7 @@ export async function installMcpServerFromMarketplace(
     ?? mcpMarketplaceServerFixtures.find((server) => server.id === input.server.id)?.server
     ?? {};
   const normalizedName = input.server.name.trim().toLowerCase();
+  const shouldEnableAllApps = appSettingsFixture.mcpInstallActivation === "apply-all-tools";
   const installedServer = {
     id: normalizeMcpServerId(input.server.name),
     name: normalizedName,
@@ -1686,13 +1687,13 @@ export async function installMcpServerFromMarketplace(
     description: input.server.description,
     sourceUrl: input.server.sourceUrl,
     serverJson: JSON.stringify(installedServerConfig, null, 2),
-    enabledAppCount: 0,
+    enabledAppCount: shouldEnableAllApps ? mcpWorkspaceFixture.apps.length : 0,
     apps: mcpWorkspaceFixture.apps.map((app) => ({
       appId: app.id,
       appName: app.name,
       configPath: app.configPath,
       statusLabel: app.statusLabel,
-      isEnabled: false,
+      isEnabled: shouldEnableAllApps,
     })),
     tools: [],
     toolsDiscoveredAt: "",

@@ -26,7 +26,7 @@ test("allows selecting default open tool in settings", async () => {
   const select = screen.getByLabelText("默认编辑器");
   expect(select).toBeInTheDocument();
   expect(screen.getByLabelText("新增 Skill 默认启用")).toHaveAttribute("aria-pressed", "true");
-  expect(screen.getByLabelText("新增 MCP 默认启用")).toHaveAttribute("aria-pressed", "false");
+  expect(screen.getByLabelText("新增 MCP 默认启用")).toHaveAttribute("aria-pressed", "true");
   expect(screen.getByText("工具状态")).toBeInTheDocument();
 
   expect(screen.getByRole("option", { name: "Cursor" })).toBeInTheDocument();
@@ -47,7 +47,7 @@ test("allows selecting default open tool in settings", async () => {
   expect(screen.getByLabelText("新增 Skill 默认启用")).toHaveAttribute("aria-pressed", "false");
 
   await userEvent.click(screen.getByLabelText("新增 MCP 默认启用"));
-  expect(screen.getByLabelText("新增 MCP 默认启用")).toHaveAttribute("aria-pressed", "true");
+  expect(screen.getByLabelText("新增 MCP 默认启用")).toHaveAttribute("aria-pressed", "false");
 
   await userEvent.click(screen.getByRole("button", { name: "工具状态" }));
   const toolStatusPanel = screen.getByText("展示当前支持的软件列表以及各软件的安装状态。").closest("section");

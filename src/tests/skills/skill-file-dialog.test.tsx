@@ -77,7 +77,7 @@ beforeEach(() => {
           storagePath: "",
           defaultOpenToolId: "",
           skillInstallActivation: "apply-all-tools",
-          mcpInstallActivation: "disable-all-tools",
+          mcpInstallActivation: "apply-all-tools",
           language: "zh-CN",
           languageSource: "auto",
         };
@@ -261,7 +261,7 @@ test("finishes saving immediately and refreshes only the edited skill in backgro
           storagePath: "",
           defaultOpenToolId: "",
           skillInstallActivation: "apply-all-tools",
-          mcpInstallActivation: "disable-all-tools",
+          mcpInstallActivation: "apply-all-tools",
           language: "zh-CN",
           languageSource: "auto",
         };

@@ -46,7 +46,7 @@ pub fn ensure_workspace_initialized() -> Result<PathBuf, String> {
     )?;
     ensure_workspace_file_with_default_content(
         &workspace_root.join("settings.json"),
-        "{\n  \"defaultOpenToolId\": \"\",\n  \"skillInstallActivation\": \"apply-all-tools\",\n  \"mcpInstallActivation\": \"disable-all-tools\"\n}\n",
+        "{\n  \"defaultOpenToolId\": \"\",\n  \"skillInstallActivation\": \"apply-all-tools\",\n  \"mcpInstallActivation\": \"apply-all-tools\"\n}\n",
     )?;
     ensure_workspace_file_with_default_content(
         &workspace_root.join("mcp-servers.json"),
@@ -403,7 +403,7 @@ mod tests {
                 fs::read_to_string(workspace_root.join("settings.json")).expect("read settings");
             assert!(settings_content.contains("\"defaultOpenToolId\": \"\""));
             assert!(settings_content.contains("\"skillInstallActivation\": \"apply-all-tools\""));
-            assert!(settings_content.contains("\"mcpInstallActivation\": \"disable-all-tools\""));
+            assert!(settings_content.contains("\"mcpInstallActivation\": \"apply-all-tools\""));
         });
     }
 
