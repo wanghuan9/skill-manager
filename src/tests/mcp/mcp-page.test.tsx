@@ -37,8 +37,6 @@ test("guides empty MCP library to scan import before marketplace install", async
   const workspace = await skillClient.fetchMcpWorkspace();
   const fetchSpy = vi.spyOn(skillClient, "fetchMcpWorkspace").mockResolvedValue({
     ...workspace,
-    hasStorageFile: true,
-    initialImportChecked: true,
     servers: [],
   });
 
@@ -63,66 +61,6 @@ test("guides empty MCP library to scan import before marketplace install", async
   expect(screen.getByRole("tab", { name: "MCP" })).toHaveAttribute("aria-selected", "true");
   expect(screen.getByRole("heading", { name: "安装源", level: 2 })).toBeInTheDocument();
 
-  fetchSpy.mockRestore();
-});
-
-test("auto imports MCP servers once when the initial MCP workspace is empty", async () => {
-  window.localStorage.clear();
-  const workspace = await skillClient.fetchMcpWorkspace();
-  const emptyWorkspace = {
-    ...workspace,
-    hasStorageFile: true,
-    initialImportChecked: false,
-    servers: [],
-  };
-  const fetchSpy = vi
-    .spyOn(skillClient, "fetchMcpWorkspace")
-    .mockResolvedValueOnce(emptyWorkspace)
-    .mockResolvedValue(workspace);
-  const importSpy = vi.spyOn(skillClient, "importMcpServersFromApps").mockResolvedValueOnce(2);
-  const refreshSpy = vi.spyOn(skillClient, "refreshMcpServerTools").mockResolvedValue(workspace);
-
-  render(<App />);
-
-  await userEvent.click(screen.getByRole("button", { name: "MCP" }));
-
-  await waitFor(() => {
-    expect(importSpy).toHaveBeenCalledTimes(1);
-  });
-  expect(await screen.findByText("context7")).toBeInTheDocument();
-
-  await userEvent.click(screen.getByRole("button", { name: "工具" }));
-  await userEvent.click(screen.getByRole("button", { name: "MCP" }));
-
-  await waitFor(() => {
-    expect(screen.getByText("context7")).toBeInTheDocument();
-  });
-  expect(importSpy).toHaveBeenCalledTimes(1);
-
-  refreshSpy.mockRestore();
-  importSpy.mockRestore();
-  fetchSpy.mockRestore();
-});
-
-test("does not auto import an empty MCP workspace after the initial scan state exists", async () => {
-  window.localStorage.clear();
-  const workspace = await skillClient.fetchMcpWorkspace();
-  const fetchSpy = vi.spyOn(skillClient, "fetchMcpWorkspace").mockResolvedValue({
-    ...workspace,
-    hasStorageFile: true,
-    initialImportChecked: true,
-    servers: [],
-  });
-  const importSpy = vi.spyOn(skillClient, "importMcpServersFromApps").mockResolvedValue(0);
-
-  render(<App />);
-
-  await userEvent.click(screen.getByRole("button", { name: "MCP" }));
-
-  expect(await screen.findByRole("heading", { name: "还没有安装 MCP" })).toBeInTheDocument();
-  expect(importSpy).not.toHaveBeenCalled();
-
-  importSpy.mockRestore();
   fetchSpy.mockRestore();
 });
 

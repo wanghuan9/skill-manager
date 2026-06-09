@@ -3681,57 +3681,12 @@ code {
   color: var(--accent);
 }
 
-.repo-install__result-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  min-width: 0;
-}
-
-.repo-install__search {
-  display: flex;
-  flex: 0 1 340px;
-  min-width: min(100%, 220px);
-}
-
-.repo-install__search input {
-  width: 100%;
-  height: 38px;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.84);
-  color: var(--heading);
-  font-size: 0.82rem;
-  line-height: 1.2;
-  padding: 0 12px;
-  outline: none;
-  transition:
-    border-color 120ms ease,
-    box-shadow 120ms ease,
-    background-color 120ms ease;
-}
-
-.repo-install__search input:focus {
-  border-color: rgba(47, 120, 255, 0.36);
-  background: var(--surface);
-  box-shadow: 0 0 0 3px rgba(47, 120, 255, 0.1);
-}
-
-.repo-install__empty {
-  margin: 8px 0 0;
-  padding: 18px 16px;
-  border: 1px dashed var(--line);
-  border-radius: 14px;
-  color: var(--muted);
-  font-size: 0.84rem;
-  text-align: center;
-}
-
 .repo-install__selection {
   display: grid;
-  grid-template-rows: auto auto auto;
+  grid-template-rows: auto minmax(0, 1fr) auto;
   gap: 12px;
+  min-height: min(64vh, 720px);
+  max-height: calc(100vh - 170px);
   align-content: start;
 }
 
@@ -3739,7 +3694,6 @@ code {
   display: grid;
   gap: 10px;
   min-height: 0;
-  max-height: min(64vh, 720px);
   overflow: auto;
   padding-right: 4px;
 }
@@ -3827,18 +3781,6 @@ code {
   padding-top: 12px;
   border-top: 1px solid var(--line);
   background: var(--surface);
-}
-
-@media (max-width: 760px) {
-  .repo-install__result-header {
-    align-items: stretch;
-    flex-direction: column;
-  }
-
-  .repo-install__search {
-    flex-basis: auto;
-    width: 100%;
-  }
 }
 
 .plugin-install-panel {

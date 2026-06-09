@@ -18,7 +18,7 @@ import {
 } from "@/app/routes/market";
 import { SettingsRoute } from "@/app/routes/settings";
 import { AboutRoute } from "@/app/routes/about";
-import { PluginsRoute, notifyPluginsRouteOpened } from "@/app/routes/plugins";
+import { PluginsRoute } from "@/app/routes/plugins";
 import { AppI18nProvider, tx, useTranslate } from "@/app/i18n";
 import { NotificationProvider } from "@/app/notifications";
 import { useFailureReporter } from "@/app/failure-feedback";
@@ -695,9 +695,6 @@ function AppContent() {
                     setActiveRoute(route.key);
                     if (route.key === "skills") {
                       setActiveSkillsSection("skills");
-                    }
-                    if (route.key === "plugins") {
-                      notifyPluginsRouteOpened();
                     }
                   }}
                 >

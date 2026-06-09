@@ -119,10 +119,6 @@ export function resetMcpAutoProbeRuntimeForTests() {
   mcpAutoProbeInFlightSignatures.clear();
 }
 
-function shouldRunInitialMcpAutoImport(snapshot: McpWorkspaceSnapshot | null) {
-  return Boolean(snapshot && snapshot.servers.length === 0 && snapshot.initialImportChecked !== true);
-}
-
 function buildMcpFeedbackContext(workspace: McpWorkspaceSnapshot | null) {
   return {
     route: "mcp",
@@ -721,11 +717,11 @@ export function McpRoute(props: McpRouteProps = {}) {
     return nextSnapshot;
   }
 
-  async function alignMcpWorkspaceLocalState(options: { force?: boolean } = {}) {
-    if (!options.force && localAlignInFlightRef.current) {
+  async function alignMcpWorkspaceLocalState() {
+    if (localAlignInFlightRef.current) {
       return localAlignInFlightRef.current;
     }
-    if (!options.force && Date.now() - lastLocalAlignAtRef.current < MCP_LOCAL_ALIGN_COOLDOWN_MS) {
+    if (Date.now() - lastLocalAlignAtRef.current < MCP_LOCAL_ALIGN_COOLDOWN_MS) {
       return Promise.resolve(workspaceRef.current);
     }
 
@@ -750,7 +746,7 @@ export function McpRoute(props: McpRouteProps = {}) {
 
   async function scanImportMcpServers(options: { probeUndiscoveredTools?: boolean } = {}) {
     const count = await startMcpServersImport(importMcpServersFromApps);
-    const snapshot = await alignMcpWorkspaceLocalState({ force: true });
+    const snapshot = await alignMcpWorkspaceLocalState();
     if (options.probeUndiscoveredTools ?? true) {
       await probeMcpTools(snapshot, shouldAutoRefreshMcpTools, { dedupeAutoRefresh: true });
     }
@@ -767,14 +763,7 @@ export function McpRoute(props: McpRouteProps = {}) {
           commitWorkspace(cachedWorkspace);
         }
         const snapshot = await alignMcpWorkspaceLocalState();
-        const shouldAutoImport = shouldRunInitialMcpAutoImport(snapshot);
-        if (shouldAutoImport) {
-          await scanImportMcpServers();
-        }
-        const nextSnapshot = shouldAutoImport
-          ? await alignMcpWorkspaceLocalState({ force: true })
-          : snapshot;
-        await probeMcpTools(nextSnapshot, shouldRefreshMcpToolsOnManualRefresh, {
+        await probeMcpTools(snapshot, shouldRefreshMcpToolsOnManualRefresh, {
           dedupeAutoRefresh: true,
         });
         if (active) {
@@ -895,7 +884,7 @@ export function McpRoute(props: McpRouteProps = {}) {
     setIsRefreshing(true);
     await waitForNextPaint();
     try {
-      const snapshot = await alignMcpWorkspaceLocalState({ force: true });
+      const snapshot = await alignMcpWorkspaceLocalState();
       await probeMcpTools(snapshot, shouldRefreshMcpToolsOnManualRefresh);
     } catch (error) {
       reportFailure(error, {

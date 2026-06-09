@@ -163,10 +163,6 @@ pub struct McpServerSummary {
 #[serde(rename_all = "camelCase")]
 pub struct McpWorkspaceSnapshot {
     pub storage_path: String,
-    #[serde(default)]
-    pub has_storage_file: bool,
-    #[serde(default)]
-    pub initial_import_checked: bool,
     pub apps: Vec<McpTargetApp>,
     pub servers: Vec<McpServerSummary>,
 }
@@ -188,8 +184,6 @@ pub struct McpImportProgress {
 #[derive(Clone, Debug, Deserialize, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 struct McpPersistence {
-    #[serde(default)]
-    initial_import_checked: bool,
     #[serde(default)]
     servers: Vec<McpServerRecord>,
 }
@@ -528,7 +522,6 @@ pub async fn import_mcp_servers_from_apps(app_handle: AppHandle) -> Result<usize
         }
     }
 
-    save_mcp_records_with_initial_import_checked(&records, true)?;
     Ok(added_server_ids.len())
 }
 
@@ -709,10 +702,7 @@ fn refresh_mcp_server_tools_blocking(server_id: &str) -> Result<McpWorkspaceSnap
 }
 
 fn build_mcp_workspace_snapshot() -> Result<McpWorkspaceSnapshot, String> {
-    let has_storage_file = mcp_state_file_exists();
-    let persistence = load_mcp_persistence()?;
-    let initial_import_checked = persistence.initial_import_checked;
-    let records = normalize_mcp_records(persistence.servers)?;
+    let records = load_mcp_records()?;
     let apps = target_apps()?;
     let actual_enabled_servers_by_app = actual_enabled_servers_by_app(&apps);
     let mut servers = Vec::with_capacity(records.len());
@@ -726,8 +716,6 @@ fn build_mcp_workspace_snapshot() -> Result<McpWorkspaceSnapshot, String> {
 
     Ok(McpWorkspaceSnapshot {
         storage_path: mcp_state_file()?.to_string_lossy().to_string(),
-        has_storage_file,
-        initial_import_checked,
         apps,
         servers,
     })
@@ -4207,10 +4195,6 @@ fn write_text_value(path: &Path, value: &str) -> Result<(), String> {
 }
 
 fn load_mcp_records() -> Result<Vec<McpServerRecord>, String> {
-    normalize_mcp_records(load_mcp_persistence()?.servers)
-}
-
-fn load_mcp_persistence() -> Result<McpPersistence, String> {
     let Some((_, content)) = workspace_file_candidates(MCP_STATE_FILE_NAME)
         .into_iter()
         .find_map(|path| {
@@ -4219,43 +4203,24 @@ fn load_mcp_persistence() -> Result<McpPersistence, String> {
                 .map(|content| (path, content))
         })
     else {
-        return Ok(McpPersistence::default());
+        return Ok(Vec::new());
     };
-    serde_json::from_str::<McpPersistence>(&content)
-        .map_err(|error| format!("解析 MCP 状态失败: {error}"))
-}
-
-fn normalize_mcp_records(records: Vec<McpServerRecord>) -> Result<Vec<McpServerRecord>, String> {
-    records
+    let persistence = serde_json::from_str::<McpPersistence>(&content)
+        .map_err(|error| format!("解析 MCP 状态失败: {error}"))?;
+    persistence
+        .servers
         .into_iter()
         .map(normalize_record)
         .collect()
 }
 
-fn mcp_state_file_exists() -> bool {
-    workspace_file_candidates(MCP_STATE_FILE_NAME)
-        .into_iter()
-        .any(|path| path.is_file())
-}
-
 fn save_mcp_records(records: &[McpServerRecord]) -> Result<(), String> {
-    let initial_import_checked = load_mcp_persistence()
-        .map(|persistence| persistence.initial_import_checked)
-        .unwrap_or(false);
-    save_mcp_records_with_initial_import_checked(records, initial_import_checked)
-}
-
-fn save_mcp_records_with_initial_import_checked(
-    records: &[McpServerRecord],
-    initial_import_checked: bool,
-) -> Result<(), String> {
     let state_file = mcp_state_file()?;
     let parent = state_file
         .parent()
         .ok_or_else(|| "MCP 状态目录无效".to_string())?;
     fs::create_dir_all(parent).map_err(|error| format!("创建 MCP 状态目录失败: {error}"))?;
     let persistence = McpPersistence {
-        initial_import_checked,
         servers: records.to_vec(),
     };
     let payload = serde_json::to_string_pretty(&persistence)
@@ -5261,36 +5226,6 @@ fn base64_url_decode(value: &str) -> Option<Vec<u8>> {
 mod tests {
     use super::*;
 
-    fn with_temp_home<T>(prefix: &str, run: impl FnOnce(&Path) -> T) -> T {
-        use crate::workspace::TEST_ENV_LOCK;
-
-        let _guard = TEST_ENV_LOCK
-            .lock()
-            .expect("test env lock should not be poisoned");
-        let temp_home = env::temp_dir().join(format!(
-            "skilldock-{prefix}-{}-{}",
-            std::process::id(),
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map(|duration| duration.as_nanos())
-                .unwrap_or_default()
-        ));
-        fs::create_dir_all(&temp_home).expect("create temp home");
-        let original_home = env::var_os("HOME");
-        env::set_var("HOME", &temp_home);
-
-        let result = run(&temp_home);
-
-        if let Some(home) = original_home.as_ref() {
-            env::set_var("HOME", home);
-        } else {
-            env::remove_var("HOME");
-        }
-        let _ = fs::remove_dir_all(&temp_home);
-
-        result
-    }
-
     #[test]
     fn parses_npx_scoped_package_with_version() {
         let server = json!({
@@ -5859,45 +5794,6 @@ enabled = false
             .any(|app| app.app_id == APP_CODEX && !app.is_enabled));
 
         cleanup();
-    }
-
-    #[test]
-    fn workspace_snapshot_reports_missing_mcp_state_file() {
-        with_temp_home("mcp-missing-state", |_| {
-            let snapshot =
-                build_mcp_workspace_snapshot().expect("build snapshot without state file");
-
-            assert!(!snapshot.has_storage_file);
-            assert!(!snapshot.initial_import_checked);
-            assert!(snapshot.servers.is_empty());
-        });
-    }
-
-    #[test]
-    fn workspace_snapshot_reports_existing_empty_mcp_state_file() {
-        with_temp_home("mcp-empty-state", |_| {
-            save_mcp_records(&[]).expect("save empty mcp state");
-
-            let snapshot = build_mcp_workspace_snapshot().expect("build snapshot with state file");
-
-            assert!(snapshot.has_storage_file);
-            assert!(!snapshot.initial_import_checked);
-            assert!(snapshot.servers.is_empty());
-        });
-    }
-
-    #[test]
-    fn workspace_snapshot_reports_initial_import_checked_after_scan_marker_persisted() {
-        with_temp_home("mcp-import-checked", |_| {
-            save_mcp_records_with_initial_import_checked(&[], true)
-                .expect("save initial import checked state");
-
-            let snapshot = build_mcp_workspace_snapshot().expect("build snapshot with checked state");
-
-            assert!(snapshot.has_storage_file);
-            assert!(snapshot.initial_import_checked);
-            assert!(snapshot.servers.is_empty());
-        });
     }
 
     #[test]
