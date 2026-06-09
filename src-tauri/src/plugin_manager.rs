@@ -578,17 +578,13 @@ fn install_selected_plugin_probes_blocking(
 
 #[tauri::command]
 pub fn open_plugin_in_editor(root_path: &str, editor_id: &str) -> Result<(), String> {
-    let target_root = open_target_path_for_plugin(root_path)?;
-    let target = path_to_string(&target_root);
+    let plugin_root = canonicalize_existing_dir(Path::new(root_path))?;
+    let target = path_to_string(&plugin_root);
     if editor_id == "intellij" {
         crate::commands::trust_intellij_project_path(&target)?;
+        crate::commands::prepare_intellij_plugin_project_path(&target)?;
     }
     crate::commands::open_path_with_editor(&target, editor_id)
-}
-
-fn open_target_path_for_plugin(root_path: &str) -> Result<PathBuf, String> {
-    let plugin_root = canonicalize_existing_dir(Path::new(root_path))?;
-    Ok(find_git_root(&plugin_root).unwrap_or(plugin_root))
 }
 
 #[tauri::command]
@@ -8385,13 +8381,12 @@ mod tests {
         get_plugin_component_preview, install_selected_plugin_probes_blocking,
         legacy_plugin_package_identity_path, legacy_skilldock_plugin_source_metadata_path,
         list_cli_tools, list_installed_plugins_blocking as list_installed_plugins,
-        newest_codex_plugin_root_under, open_target_path_for_plugin, paths_refer_to_same_dir,
-        plugin_git_state, plugin_probe_source_url, probe_plugin_repo,
-        probe_plugin_source_candidates_blocking, read_plugin_package_identity,
-        read_skilldock_plugin_source_metadata, resolve_shared_plugin_package_id,
-        set_plugin_enabled, shared_plugin_package_id_candidates, shared_plugin_package_repo_root,
-        write_plugin_package_identity, write_skilldock_plugin_source_metadata,
-        PLUGIN_STATUS_PENDING_PUSH,
+        newest_codex_plugin_root_under, paths_refer_to_same_dir, plugin_git_state,
+        plugin_probe_source_url, probe_plugin_repo, probe_plugin_source_candidates_blocking,
+        read_plugin_package_identity, read_skilldock_plugin_source_metadata,
+        resolve_shared_plugin_package_id, set_plugin_enabled, shared_plugin_package_id_candidates,
+        shared_plugin_package_repo_root, write_plugin_package_identity,
+        write_skilldock_plugin_source_metadata, PLUGIN_STATUS_PENDING_PUSH,
     };
     use crate::library::parse_market_source_url;
     use crate::models::{PluginComponentSummary, PluginProbeResult, PluginSummary};
@@ -12473,52 +12468,6 @@ source = "__SOURCE__"
         assert_eq!(
             codex_plugin.related_host_tools,
             vec!["claude-code".to_string()]
-        );
-
-        let _ = fs::remove_dir_all(temp_dir);
-    }
-
-    #[test]
-    fn plugin_open_target_uses_git_root_for_nested_plugin_paths() {
-        let temp_dir = temp_test_dir("plugin-open-target-git-root");
-        let repo_root = temp_dir.join("repo");
-        let plugin_root = repo_root.join("plugins/coding-tutor");
-        fs::create_dir_all(plugin_root.join(".cursor-plugin")).expect("create plugin dir");
-        fs::write(
-            plugin_root.join(".cursor-plugin/plugin.json"),
-            r#"{"name":"coding-tutor","version":"1.0.0"}"#,
-        )
-        .expect("write plugin manifest");
-        run_git_test(&repo_root, &["init", "-b", "main"]);
-
-        let target = open_target_path_for_plugin(plugin_root.to_string_lossy().as_ref())
-            .expect("resolve open target");
-
-        assert_eq!(
-            target,
-            fs::canonicalize(&repo_root).expect("canonicalize repo root")
-        );
-
-        let _ = fs::remove_dir_all(temp_dir);
-    }
-
-    #[test]
-    fn plugin_open_target_falls_back_to_plugin_path_without_git_root() {
-        let temp_dir = temp_test_dir("plugin-open-target-no-git");
-        let plugin_root = temp_dir.join("coding-tutor");
-        fs::create_dir_all(plugin_root.join(".cursor-plugin")).expect("create plugin dir");
-        fs::write(
-            plugin_root.join(".cursor-plugin/plugin.json"),
-            r#"{"name":"coding-tutor","version":"1.0.0"}"#,
-        )
-        .expect("write plugin manifest");
-
-        let target = open_target_path_for_plugin(plugin_root.to_string_lossy().as_ref())
-            .expect("resolve open target");
-
-        assert_eq!(
-            target,
-            fs::canonicalize(&plugin_root).expect("canonicalize plugin root")
         );
 
         let _ = fs::remove_dir_all(temp_dir);
