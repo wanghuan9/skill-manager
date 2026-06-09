@@ -583,7 +583,7 @@ pub fn open_plugin_in_editor(root_path: &str, editor_id: &str) -> Result<(), Str
     let target = path_to_string(&plugin_root);
     if editor_id == "intellij" {
         crate::commands::trust_intellij_project_path(&target)?;
-        crate::commands::ensure_intellij_git_project_files(&target)?;
+        crate::commands::prepare_intellij_plugin_project_path(&target)?;
     }
     crate::commands::open_path_with_editor(&target, editor_id)
 }

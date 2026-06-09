@@ -3719,6 +3719,14 @@ pub(crate) fn cleanup_intellij_workspace_state(project_path: &str) -> Result<(),
     Ok(())
 }
 
+pub(crate) fn prepare_intellij_plugin_project_path(project_path: &str) -> Result<(), String> {
+    ensure_intellij_cursor_path_not_ignored(project_path)?;
+    cleanup_intellij_recent_project_conflicts(project_path)?;
+    ensure_intellij_project_identity(project_path)?;
+    ensure_intellij_git_project_files(project_path)?;
+    cleanup_intellij_workspace_state(project_path)
+}
+
 fn open_path_with_default_text_editor(path: &str) -> Result<(), String> {
     let output = Command::new("open")
         .args(["-t", path])
@@ -3752,11 +3760,6 @@ pub(crate) fn open_path_with_editor(path: &str, editor_id: &str) -> Result<(), S
     // JetBrains' command-line launcher opens projects in a trusted headless flow.
     // Prefer it consistently so IDEA does not fall back to Finder-style open behavior.
     if editor_id == "intellij" {
-        ensure_intellij_cursor_path_not_ignored(path)?;
-        cleanup_intellij_recent_project_conflicts(path)?;
-        ensure_intellij_project_identity(path)?;
-        ensure_intellij_git_project_files(path)?;
-        cleanup_intellij_workspace_state(path)?;
         if let Some(ref cli_path) = info.cli_path {
             return open_path_with_cli(cli_path, path);
         }
