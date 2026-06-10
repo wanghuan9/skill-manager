@@ -1,6 +1,6 @@
 [package]
 name = "skill-manager"
-version = "0.1.9"
+version = "0.1.10"
 description = "macOS skill manager"
 authors = ["wanghuan"]
 license = ""
