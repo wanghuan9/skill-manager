@@ -1546,7 +1546,7 @@ test("renders component summaries as separate badges and keeps the plugin descri
   expect(badgeTexts).toEqual([
     "已启用",
     "7 skill",
-    "1 mcp",
+    "3 mcp",
     "7 agents",
     "1 command",
     "1 rule",
@@ -2243,7 +2243,7 @@ test("switches plugin list by host tab and shows cross-host relation in details"
     screen.getByRole("button", { name: /repo-scout-skill/ }).querySelector(".plugins-page__component-icon--skill svg"),
   ).toBeInTheDocument();
   expect(
-    screen.getByRole("button", { name: /mcp.json/ }).querySelector(".plugins-page__component-icon--mcp svg"),
+    screen.getByRole("button", { name: /repo-index/ }).querySelector(".plugins-page__component-icon--mcp svg"),
   ).toBeInTheDocument();
   expect(
     screen.getByRole("button", { name: /codebase-researcher/ }).querySelector(".plugins-page__component-icon--subagent svg"),
