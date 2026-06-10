@@ -1687,9 +1687,9 @@ fn delete_codex_plugin(root_path: &str) -> Result<(), String> {
         .or_else(|| managed_plugin_package_root_for_path(&target_root))
         .or_else(|| managed_plugin_package_root_from_identity(&target_root))
         .or_else(|| managed_plugin_package_root_from_source_metadata(&target_root));
-    let should_remove_managed_package = managed_package_root
-        .as_ref()
-        .is_some_and(|package_root| plugin_root_is_last_host_install(package_root, "codex"));
+    let should_remove_managed_package = managed_package_root.as_ref().is_some_and(|package_root| {
+        !managed_package_has_other_shared_host_installations(package_root, "codex")
+    });
     let config_content = if config_path.is_file() {
         Some(fs::read_to_string(&config_path).map_err(|error| {
             format!(
@@ -2071,28 +2071,87 @@ fn plugin_package_contains_cursor_plugin(
     })
 }
 
-fn plugin_root_is_last_host_install(managed_package_root: &Path, deleting_host_tool: &str) -> bool {
-    let Ok(installed_plugins) = list_installed_plugins_blocking() else {
+fn managed_package_has_other_shared_host_installations(
+    managed_package_root: &Path,
+    deleting_host_tool: &str,
+) -> bool {
+    match deleting_host_tool {
+        "codex" => claude_has_plugin_from_package(managed_package_root),
+        "claude-code" => codex_has_plugin_from_package(managed_package_root),
+        _ => false,
+    }
+}
+
+fn codex_has_plugin_from_package(managed_package_root: &Path) -> bool {
+    let Some(home_dir) = workspace::home_dir_option() else {
         return false;
     };
 
-    !installed_plugins.iter().any(|plugin| {
-        if plugin.host_tool == deleting_host_tool {
-            return false;
+    let config_path = home_dir.join(".codex/config.toml");
+    if let Ok(config_content) = fs::read_to_string(&config_path) {
+        if let Ok(config) = parse_codex_config(&config_content) {
+            let cache_root = home_dir.join(".codex/plugins/cache");
+            for (plugin_key, _) in &config.plugins {
+                let Some((plugin_name, marketplace_name)) = split_enabled_plugin_key(plugin_key)
+                else {
+                    continue;
+                };
+                let Some(marketplace_config) = config.marketplaces.get(marketplace_name) else {
+                    continue;
+                };
+                if let Some(plugin_root) = resolve_configured_codex_plugin_root(
+                    &cache_root,
+                    marketplace_name,
+                    marketplace_config,
+                    plugin_name,
+                ) {
+                    if path_belongs_to_managed_package(&plugin_root, managed_package_root) {
+                        return true;
+                    }
+                }
+            }
         }
+    }
 
-        let plugin_display_root = if plugin.display_root_path.trim().is_empty() {
-            Path::new(&plugin.root_path)
-        } else {
-            Path::new(&plugin.display_root_path)
-        };
+    [".codex/plugins/cache", ".codex/marketplaces"]
+        .iter()
+        .any(|relative_root| {
+            path_contains_plugin_from_package(&home_dir.join(relative_root), managed_package_root)
+        })
+}
 
-        managed_plugin_package_root_for_path(plugin_display_root)
-            .or_else(|| managed_plugin_package_root_for_path(Path::new(&plugin.root_path)))
-            .is_some_and(|package_root| {
-                paths_refer_to_same_dir(&package_root, managed_package_root)
-            })
-    })
+fn claude_has_plugin_from_package(managed_package_root: &Path) -> bool {
+    let Some(home_dir) = workspace::home_dir_option() else {
+        return false;
+    };
+
+    let installed_state_path = home_dir.join(".claude/plugins/installed_plugins.json");
+    if let Ok(installed_state) = read_claude_installed_plugins(&installed_state_path) {
+        for install_entries in installed_state.plugins.values() {
+            for install_entry in install_entries {
+                let install_path = install_entry.install_path.trim();
+                if install_path.is_empty() {
+                    continue;
+                }
+                if path_belongs_to_managed_package(Path::new(install_path), managed_package_root) {
+                    return true;
+                }
+            }
+        }
+    }
+
+    [".claude/plugins/marketplaces", ".claude/plugins"]
+        .iter()
+        .any(|relative_root| {
+            path_contains_plugin_from_package(&home_dir.join(relative_root), managed_package_root)
+        })
+}
+
+fn path_belongs_to_managed_package(path: &Path, managed_package_root: &Path) -> bool {
+    managed_plugin_package_root_for_path(path)
+        .or_else(|| managed_plugin_package_root_from_identity(path))
+        .or_else(|| managed_plugin_package_root_from_source_metadata(path))
+        .is_some_and(|package_root| paths_refer_to_same_dir(&package_root, managed_package_root))
 }
 
 fn managed_package_has_other_host_installations(
@@ -2254,9 +2313,9 @@ fn delete_claude_plugin(root_path: &str) -> Result<(), String> {
         .or_else(|| managed_plugin_package_root_for_path(&target_root))
         .or_else(|| managed_plugin_package_root_from_identity(&target_root))
         .or_else(|| managed_plugin_package_root_from_source_metadata(&target_root));
-    let should_remove_managed_package = managed_package_root
-        .as_ref()
-        .is_some_and(|package_root| plugin_root_is_last_host_install(package_root, "claude-code"));
+    let should_remove_managed_package = managed_package_root.as_ref().is_some_and(|package_root| {
+        !managed_package_has_other_shared_host_installations(package_root, "claude-code")
+    });
     let mut roots_to_remove = BTreeMap::<String, PathBuf>::new();
     roots_to_remove.insert(path_to_string(&requested_root), requested_root.clone());
     if should_remove_managed_package {
@@ -12231,6 +12290,176 @@ source = "__SOURCE__"
         assert!(config_content.contains("marketplaces.openai-bundled"));
         assert!(plugins.iter().all(|plugin| plugin.name != "Browser"));
         assert!(plugins.iter().any(|plugin| plugin.name == "Chrome"));
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[cfg(unix)]
+    fn create_shared_claude_codex_plugin_fixture(home_dir: &Path) -> (PathBuf, PathBuf, PathBuf) {
+        let shared_package_root = home_dir.join(".skilldock/plugins/coding-tutor");
+        let shared_plugin_root = shared_package_root.join("plugins/coding-tutor");
+        let claude_install_root =
+            home_dir.join(".claude/plugins/marketplaces/skilldock/plugins/coding-tutor");
+        let codex_marketplace_root = home_dir.join(".codex/marketplaces/skilldock");
+        let codex_install_root = codex_marketplace_root.join("plugins/coding-tutor");
+
+        fs::create_dir_all(shared_plugin_root.join(".claude-plugin"))
+            .expect("create shared claude manifest dir");
+        fs::create_dir_all(shared_plugin_root.join(".codex-plugin"))
+            .expect("create shared codex manifest dir");
+        fs::write(
+            shared_plugin_root.join(".claude-plugin/plugin.json"),
+            r#"{"name":"coding-tutor","version":"1.0.0","repository":"https://github.com/everyinc/compound-engineering-plugin","interface":{"displayName":"Coding Tutor"}}"#,
+        )
+        .expect("write shared claude manifest");
+        fs::write(
+            shared_plugin_root.join(".codex-plugin/plugin.json"),
+            r#"{"name":"coding-tutor","version":"1.0.0","repository":"https://github.com/everyinc/compound-engineering-plugin","interface":{"displayName":"Coding Tutor"}}"#,
+        )
+        .expect("write shared codex manifest");
+        write_plugin_package_identity(
+            &shared_package_root,
+            "https://github.com/everyinc/compound-engineering-plugin.git",
+            Path::new("plugins/coding-tutor"),
+        )
+        .expect("write shared package identity");
+
+        fs::create_dir_all(claude_install_root.parent().expect("claude parent"))
+            .expect("create claude parent");
+        std::os::unix::fs::symlink(&shared_plugin_root, &claude_install_root)
+            .expect("link claude install to shared plugin");
+        fs::create_dir_all(codex_install_root.parent().expect("codex parent"))
+            .expect("create codex parent");
+        std::os::unix::fs::symlink(&shared_plugin_root, &codex_install_root)
+            .expect("link codex install to shared plugin");
+
+        fs::create_dir_all(home_dir.join(".claude/plugins")).expect("create claude plugins dir");
+        fs::write(
+            home_dir.join(".claude/plugins/installed_plugins.json"),
+            r#"{
+  "version": 2,
+  "plugins": {
+    "coding-tutor@skilldock": [
+      {
+        "scope": "user",
+        "installPath": "__INSTALL_PATH__",
+        "version": "1.0.0",
+        "installedAt": "2026-03-25T14:47:45.632Z",
+        "lastUpdated": "2026-04-20T15:35:07.019Z",
+        "gitCommitSha": "abc123"
+      }
+    ]
+  }
+}"#
+            .replace("__INSTALL_PATH__", &claude_install_root.to_string_lossy()),
+        )
+        .expect("write claude installed plugins state");
+        fs::write(
+            home_dir.join(".claude/settings.json"),
+            r#"{
+  "enabledPlugins": {
+    "coding-tutor@skilldock": true
+  }
+}"#,
+        )
+        .expect("write claude settings");
+
+        fs::create_dir_all(codex_marketplace_root.join(".agents/plugins"))
+            .expect("create codex marketplace dir");
+        fs::write(
+            codex_marketplace_root.join(".agents/plugins/marketplace.json"),
+            r#"{
+  "plugins": [
+    {
+      "name": "coding-tutor",
+      "source": { "path": "./plugins/coding-tutor" }
+    }
+  ]
+}"#,
+        )
+        .expect("write codex marketplace manifest");
+        fs::create_dir_all(home_dir.join(".codex")).expect("create codex dir");
+        fs::write(
+            home_dir.join(".codex/config.toml"),
+            r#"[plugins."coding-tutor@skilldock"]
+enabled = true
+
+[marketplaces.skilldock]
+source = "__SOURCE__"
+"#
+            .replace("__SOURCE__", &codex_marketplace_root.to_string_lossy()),
+        )
+        .expect("write codex config");
+
+        (shared_package_root, claude_install_root, codex_install_root)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn deleting_shared_claude_then_codex_plugin_removes_managed_package() {
+        let _guard = TEST_ENV_LOCK.lock().expect("lock test env");
+        let temp_dir = temp_test_dir("delete-shared-claude-then-codex");
+        let home_dir = temp_dir.join("home");
+        let (shared_package_root, claude_install_root, codex_install_root) =
+            create_shared_claude_codex_plugin_fixture(&home_dir);
+
+        let previous_home = env::var_os("HOME");
+        env::set_var("HOME", &home_dir);
+
+        delete_plugin(
+            "claude-code".to_string(),
+            claude_install_root.to_string_lossy().into_owned(),
+        )
+        .expect("delete shared claude plugin");
+        assert!(shared_package_root.exists());
+
+        delete_plugin(
+            "codex".to_string(),
+            codex_install_root.to_string_lossy().into_owned(),
+        )
+        .expect("delete shared codex plugin");
+
+        match previous_home {
+            Some(value) => env::set_var("HOME", value),
+            None => env::remove_var("HOME"),
+        }
+
+        assert!(!shared_package_root.exists());
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn deleting_shared_codex_then_claude_plugin_removes_managed_package() {
+        let _guard = TEST_ENV_LOCK.lock().expect("lock test env");
+        let temp_dir = temp_test_dir("delete-shared-codex-then-claude");
+        let home_dir = temp_dir.join("home");
+        let (shared_package_root, claude_install_root, codex_install_root) =
+            create_shared_claude_codex_plugin_fixture(&home_dir);
+
+        let previous_home = env::var_os("HOME");
+        env::set_var("HOME", &home_dir);
+
+        delete_plugin(
+            "codex".to_string(),
+            codex_install_root.to_string_lossy().into_owned(),
+        )
+        .expect("delete shared codex plugin");
+        assert!(shared_package_root.exists());
+
+        delete_plugin(
+            "claude-code".to_string(),
+            claude_install_root.to_string_lossy().into_owned(),
+        )
+        .expect("delete shared claude plugin");
+
+        match previous_home {
+            Some(value) => env::set_var("HOME", value),
+            None => env::remove_var("HOME"),
+        }
+
+        assert!(!shared_package_root.exists());
 
         let _ = fs::remove_dir_all(temp_dir);
     }
