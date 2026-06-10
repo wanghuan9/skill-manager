@@ -1564,9 +1564,7 @@ export function PluginsRoute() {
         console.warn("Failed to refresh plugin states in background", error);
       } finally {
         lastPluginAutoRefreshAtRef.current = Date.now();
-        if (pluginStateRefreshInFlightRef.current === refreshPromise) {
-          pluginStateRefreshInFlightRef.current = null;
-        }
+        pluginStateRefreshInFlightRef.current = null;
       }
     })();
 
@@ -1619,19 +1617,16 @@ export function PluginsRoute() {
     const syncPromise = fetchStartupInstalledPlugins()
       .then((nextPlugins) => {
         if (!isActive()) {
-          return nextPlugins;
+          return;
         }
         commitPlugins(nextPlugins);
         setErrorMessage("");
-        return nextPlugins;
       })
       .catch((error) => {
         console.warn("Failed to align installed plugins from startup scan", error);
       })
       .finally(() => {
-        if (startupPluginSyncInFlightRef.current === syncPromise) {
-          startupPluginSyncInFlightRef.current = null;
-        }
+        startupPluginSyncInFlightRef.current = null;
       });
 
     startupPluginSyncInFlightRef.current = syncPromise;

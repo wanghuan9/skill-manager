@@ -1131,11 +1131,11 @@ test("shows plugin update status and updates from the list action", async () => 
 });
 
 test("shows the same spinning update icon state as skills while a plugin update is pending", async () => {
-  let resolveUpdate: ((plugin: PluginSummary) => void) | null = null;
+  const deferredUpdate: { resolve?: (plugin: PluginSummary) => void } = {};
   const updateSpy = vi.spyOn(skillClient, "updatePlugin").mockImplementation(
     () =>
       new Promise<PluginSummary>((resolve) => {
-        resolveUpdate = resolve;
+        deferredUpdate.resolve = resolve;
       }),
   );
 
@@ -1156,11 +1156,11 @@ test("shows the same spinning update icon state as skills while a plugin update 
     expect(updateSpy).toHaveBeenCalledTimes(1);
   });
 
-  if (!resolveUpdate) {
+  if (!deferredUpdate.resolve) {
     updateSpy.mockRestore();
     throw new Error("missing plugin update resolver");
   }
-  resolveUpdate({
+  deferredUpdate.resolve({
     ...pluginFixtures[0],
     collabStatus: "clean",
     updateAvailable: false,
@@ -1175,11 +1175,11 @@ test("shows the same spinning update icon state as skills while a plugin update 
 });
 
 test("shows a spinning update icon for merged all-tab plugins while update is pending", async () => {
-  let resolveUpdate: ((plugin: PluginSummary) => void) | null = null;
+  const deferredUpdate: { resolve?: (plugin: PluginSummary) => void } = {};
   const updateSpy = vi.spyOn(skillClient, "updatePlugin").mockImplementation(
     () =>
       new Promise<PluginSummary>((resolve) => {
-        resolveUpdate = resolve;
+        deferredUpdate.resolve = resolve;
       }),
   );
   const refreshSpy = vi.spyOn(skillClient, "refreshLocalPluginState").mockImplementation(
@@ -1231,12 +1231,12 @@ test("shows a spinning update icon for merged all-tab plugins while update is pe
     expect(updateSpy).toHaveBeenCalledTimes(1);
   });
 
-  if (!resolveUpdate) {
+  if (!deferredUpdate.resolve) {
     updateSpy.mockRestore();
     refreshSpy.mockRestore();
     throw new Error("missing plugin update resolver");
   }
-  resolveUpdate({
+  deferredUpdate.resolve({
     ...pluginFixtures[0],
     id: "codex:repo-scout",
     hostTool: "codex",
@@ -1259,11 +1259,11 @@ test("shows a spinning update icon for merged all-tab plugins while update is pe
 });
 
 test("keeps the toggle button available and not spinning while plugin update is pending", async () => {
-  let resolveUpdate: ((plugin: PluginSummary) => void) | null = null;
+  const deferredUpdate: { resolve?: (plugin: PluginSummary) => void } = {};
   const updateSpy = vi.spyOn(skillClient, "updatePlugin").mockImplementation(
     () =>
       new Promise<PluginSummary>((resolve) => {
-        resolveUpdate = resolve;
+        deferredUpdate.resolve = resolve;
       }),
   );
 
@@ -1282,12 +1282,12 @@ test("keeps the toggle button available and not spinning while plugin update is 
     expect(toggleButton.querySelector(".plugins-page__power-icon.is-spinning")).not.toBeInTheDocument();
   });
 
-  if (!resolveUpdate) {
+  if (!deferredUpdate.resolve) {
     updateSpy.mockRestore();
     throw new Error("missing plugin update resolver");
   }
   await act(async () => {
-    resolveUpdate?.({
+    deferredUpdate.resolve?.({
       ...pluginFixtures[0],
       collabStatus: "clean",
       updateAvailable: false,
@@ -1455,9 +1455,9 @@ test("refreshes plugin states after plugin library changes", async () => {
     statusText: "插件目录存在本地未提交改动。",
   };
   const refreshSpy = vi.spyOn(skillClient, "refreshLocalPluginState").mockResolvedValueOnce(refreshedPlugin);
-  let changeHandler: ((payload: { changedPaths: string[] }) => void) | null = null;
+  const pluginLibraryChange: { handler?: (payload: { changedPaths: string[] }) => void } = {};
   vi.spyOn(skillClient, "subscribePluginLibraryChanges").mockImplementation(async (handler) => {
-    changeHandler = handler;
+    pluginLibraryChange.handler = handler;
     return () => undefined;
   });
   vi.spyOn(skillClient, "fetchStartupInstalledPlugins").mockResolvedValueOnce([refreshedPlugin]);
@@ -1465,11 +1465,10 @@ test("refreshes plugin states after plugin library changes", async () => {
   renderWithI18n(<PluginsRoute />);
 
   await screen.findByRole("tab", { name: /全部/ });
-  if (!changeHandler) {
+  if (!pluginLibraryChange.handler) {
     throw new Error("plugin library change handler was not registered");
   }
-  const registeredChangeHandler: NonNullable<typeof changeHandler> = changeHandler;
-  registeredChangeHandler({ changedPaths: ["/Users/demo/.skilldock/plugins/repo-scout/plugins/repo-scout/SKILL.md"] });
+  pluginLibraryChange.handler({ changedPaths: ["/Users/demo/.skilldock/plugins/repo-scout/plugins/repo-scout/SKILL.md"] });
 
   await waitFor(() => {
     expect(refreshSpy).toHaveBeenCalledTimes(1);
