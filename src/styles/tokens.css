@@ -3849,6 +3849,11 @@ code {
   padding-top: 0;
 }
 
+.repo-install__selection.plugin-install-preview .repo-install__list {
+  overflow: visible;
+  padding-right: 0;
+}
+
 @media (max-width: 760px) {
   .repo-install__summary-row {
     align-items: stretch;
@@ -3997,34 +4002,36 @@ code {
   display: none;
   top: calc(100% + 8px);
   bottom: auto;
-  left: 50%;
+  right: 0;
+  left: auto;
   max-width: min(180px, calc(100vw - 48px));
   text-align: center;
   white-space: normal;
-  transform: translate(-50%, -2px);
+  transform: translateY(-2px);
 }
 
 .plugin-install-preview__host-toggle[data-tooltip]::after {
   display: none;
   top: calc(100% + 3px);
   bottom: auto;
-  left: 50%;
+  right: 14px;
+  left: auto;
   border: 0;
   border-top: 1px solid var(--tooltip-border);
   border-left: 1px solid var(--tooltip-border);
-  transform: translate(-50%, -2px) rotate(45deg);
+  transform: translateY(-2px) rotate(45deg);
 }
 
 .plugin-install-preview__host-toggle[data-tooltip]:hover::before,
 .plugin-install-preview__host-toggle[data-tooltip]:focus-visible::before {
   display: block;
-  transform: translate(-50%, 0);
+  transform: translateY(0);
 }
 
 .plugin-install-preview__host-toggle[data-tooltip]:hover::after,
 .plugin-install-preview__host-toggle[data-tooltip]:focus-visible::after {
   display: block;
-  transform: translate(-50%, 0) rotate(45deg);
+  transform: translateY(0) rotate(45deg);
 }
 
 .plugin-install-preview__host-toggle:focus-visible {
