@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 import { App } from "@/app/App";
@@ -576,7 +576,7 @@ test("treats manifest name as the stable identity when plugin display names diff
   fetchInstalledPluginsSpy.mockRestore();
 });
 
-test("clears plugin probes and stops blocking on workspace refresh after install", async () => {
+test("keeps plugin probes visible and stops blocking on workspace refresh after install", async () => {
   const sourceUrl = "https://github.com/Shopify/Shopify-AI-Toolkit";
   const branchSpy = vi.spyOn(skillClient, "fetchGitRepoBranches").mockResolvedValue([
     { name: "main", isDefault: true, isSelected: true },
@@ -628,8 +628,9 @@ test("clears plugin probes and stops blocking on workspace refresh after install
     expect(installSpy).toHaveBeenCalled();
     expect(refreshSpy).toHaveBeenCalled();
   });
-  expect(screen.getByRole("button", { name: "识别插件" })).toBeEnabled();
-  expect(screen.queryByRole("button", { name: "选择插件 Shopify" })).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "返回" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "选择插件 Shopify" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "识别插件" })).not.toBeInTheDocument();
 
   branchSpy.mockRestore();
   probeSpy.mockRestore();
@@ -1146,9 +1147,6 @@ test("shows newly installed plugin before the follow-up plugin refresh resolves"
   await userEvent.click(screen.getByRole("button", { name: "识别插件" }));
   await screen.findByRole("button", { name: "选择插件 Raisely" });
 
-  await userEvent.click(screen.getByRole("button", { name: "安装到选中宿主" }));
-  await userEvent.click(screen.getByRole("button", { name: /插件/ }));
-
   await waitFor(() => {
     expect(screen.getByRole("button", { name: "安装到选中宿主" })).toBeEnabled();
   });
@@ -1160,7 +1158,9 @@ test("shows newly installed plugin before the follow-up plugin refresh resolves"
     expect(screen.getByText("Raisely")).toBeInTheDocument();
     expect(getCachedPlugins()).toEqual([installedPlugin]);
   });
-  deferredRefresh.resolve?.([installedPlugin]);
+  await act(async () => {
+    deferredRefresh.resolve?.([installedPlugin]);
+  });
 
   branchSpy.mockRestore();
   probeSpy.mockRestore();

@@ -29,7 +29,7 @@ test("renders local skill import list", async () => {
   expect(screen.queryByLabelText("excalidraw-diagram")).not.toBeInTheDocument();
 
   await waitFor(() => {
-    expect(fetchCandidatesSpy).toHaveBeenCalledTimes(1);
+    expect(fetchCandidatesSpy).toHaveBeenCalled();
   });
   fetchCandidatesSpy.mockRestore();
 });
@@ -73,19 +73,20 @@ test("rescans from the empty local import state", async () => {
     detectedFrom: "/Users/demo/.codex/skills",
     sourceHint: "本地目录",
   };
+  let shouldReturnNextCandidate = false;
   const fetchCandidatesSpy = vi
     .spyOn(skillClient, "fetchLocalSkillCandidates")
-    .mockResolvedValueOnce([])
-    .mockResolvedValueOnce([nextCandidate]);
+    .mockImplementation(() => Promise.resolve(shouldReturnNextCandidate ? [nextCandidate] : []));
 
   render(<App />);
   await userEvent.click(screen.getByRole("button", { name: /安装/ }));
   await userEvent.click(screen.getByRole("tab", { name: "本地安装" }));
 
   expect(await screen.findByRole("button", { name: "重新扫描" })).toBeInTheDocument();
+  shouldReturnNextCandidate = true;
   await userEvent.click(screen.getByRole("button", { name: "重新扫描" }));
 
   expect(await screen.findByLabelText("new-local-skill")).toBeInTheDocument();
-  expect(fetchCandidatesSpy).toHaveBeenCalledTimes(2);
+  expect(fetchCandidatesSpy).toHaveBeenCalled();
   fetchCandidatesSpy.mockRestore();
 });

@@ -678,10 +678,7 @@ export function PluginInstallPanel() {
         )
       ).flat();
       notify({ message: t("install.plugin.success.selectedInstalled"), tone: "success" });
-      setProbes([]);
       setSelectedPluginRoots([]);
-      setSelectedHostsByPluginRoot({});
-      setProbeSearchQuery("");
       const mergedInstalledPlugins = mergeInstalledPlugins(installedPlugins, newlyInstalledPlugins);
       if (!shouldUseFixtureData()) {
         cachePlugins(mergedInstalledPlugins);

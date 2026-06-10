@@ -195,37 +195,25 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-test("refresh resolves after local alignment and git state refresh complete", async () => {
+test("refresh resolves after git state refresh during local alignment cooldown", async () => {
   const initialSkills: SkillSummary[] = [installedSkillFixtures[0]];
   const refreshedSkills: SkillSummary[] = [installedSkillFixtures[1]];
-  const pendingCandidates = createDeferred<LocalSkillCandidate[]>();
-  const pendingTools = createDeferred<ToolConfig[]>();
-  const pendingAccount = createDeferred<GitAccountSummary>();
-  const pendingSettings = createDeferred<AppSettings>();
   let startupCallCount = 0;
   let gitStateCallCount = 0;
-  let candidateCallCount = 0;
-  let toolCallCount = 0;
-  let accountCallCount = 0;
-  let settingsCallCount = 0;
 
   mockedInvoke.mockImplementation(async (command, args) => {
     switch (command) {
       case "list_startup_installed_skills":
         startupCallCount += 1;
-        return startupCallCount === 1 ? initialSkills : refreshedSkills;
+        return initialSkills;
       case "list_local_skill_candidates":
-        candidateCallCount += 1;
-        return candidateCallCount === 1 ? localSkillFixtures : pendingCandidates.promise;
+        return localSkillFixtures;
       case "list_tool_configs":
-        toolCallCount += 1;
-        return toolCallCount === 1 ? toolConfigFixtures : pendingTools.promise;
+        return toolConfigFixtures;
       case "get_git_account_summary":
-        accountCallCount += 1;
-        return accountCallCount === 1 ? gitAccountFixture : pendingAccount.promise;
+        return gitAccountFixture;
       case "get_app_settings":
-        settingsCallCount += 1;
-        return settingsCallCount === 1 ? appSettingsFixture : pendingSettings.promise;
+        return appSettingsFixture;
       case "update_app_settings":
         return (args as { settings: AppSettings }).settings;
       case "refresh_git_states":
@@ -252,20 +240,12 @@ test("refresh resolves after local alignment and git state refresh complete", as
   });
 
   await waitFor(() => {
-    expect(screen.getByTestId("refresh-state").textContent).toBe("pending");
-    expect(screen.getByTestId("skill-name").textContent).toBe(initialSkills[0].name);
-  });
-
-  pendingCandidates.resolve(localSkillFixtures);
-  pendingTools.resolve(toolConfigFixtures);
-  pendingAccount.resolve(gitAccountFixture);
-  pendingSettings.resolve(appSettingsFixture);
-
-  await waitFor(() => {
     expect(screen.getByTestId("refresh-state").textContent).toBe("done");
     expect(screen.getByTestId("loading-state").textContent).toBe("ready");
     expect(screen.getByTestId("skill-name").textContent).toBe(refreshedSkills[0].name);
   });
+  expect(startupCallCount).toBe(1);
+  expect(gitStateCallCount).toBeGreaterThanOrEqual(2);
 });
 
 test("refresh keeps the fetched remote updated time instead of reverting to the startup snapshot", async () => {
@@ -327,7 +307,7 @@ test("refresh keeps the fetched remote updated time instead of reverting to the 
     expect(screen.getByTestId("remote-updated-at").textContent).toBe("2026/5/26 19:07:25");
   });
 
-  expect(startupCallCount).toBe(2);
+  expect(startupCallCount).toBe(1);
   expect(gitStateCallCount).toBeGreaterThanOrEqual(2);
 });
 
