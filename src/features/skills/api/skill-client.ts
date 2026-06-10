@@ -705,6 +705,7 @@ function normalizePluginProbeResult(probe: LegacyPluginProbeResult): PluginProbe
       ? probe.sourceType
       : "local",
     sourceUrl: probe.sourceUrl ?? "",
+    sourceRef: probe.sourceRef ?? "",
     isGitRepo: probe.isGitRepo ?? false,
     gitRoot: probe.gitRoot ?? "",
     confidence: probe.confidence === "high" || probe.confidence === "medium" || probe.confidence === "low"

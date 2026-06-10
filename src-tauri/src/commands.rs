@@ -18,13 +18,14 @@ use crate::git_state::{
     enrich_skill_with_local_git_state,
 };
 use crate::library::{
-    clone_repo_skill, create_skill_symlink, ensure_repo_skill_with_ref_and_sparse_paths,
-    get_tool_skills_path, install_market_skill_from_source, parse_market_source_url,
-    reconcile_tool_skill_symlinks, remove_reserved_workspace_entries,
+    clone_repo_skill, create_skill_symlink, ensure_repo_skill_with_resolved_ref_and_sparse_paths,
+    get_tool_skills_path, install_market_skill_from_source, is_ssh_git_url, parse_market_source_url,
+    remote_clone_candidates, reconcile_tool_skill_symlinks, remove_reserved_workspace_entries,
     remove_reserved_workspace_symlinks_from_all_tools, remove_skill_symlink,
-    remove_skill_symlinks_from_all_tools, resolve_git_clone_url_with_instead_of,
-    sanitize_storage_name, skill_directory, tree_relative_path_for_branch,
-    with_temporary_discovery_repo,
+    remove_skill_symlinks_from_all_tools, resolve_clone_url_http_first,
+    resolve_git_clone_url_with_instead_of, sanitize_storage_name, skill_directory,
+    summarize_git_error, tree_relative_path_for_branch, with_temporary_discovery_repo_resolved,
+    configure_git_network_command, RemoteCloneCandidate,
 };
 use crate::models::{
     AppSettings, GitAccountSummary, GitBranchOption, GitChangeFile, LocalInstallSkillCandidate,
@@ -48,6 +49,9 @@ fn default_installed_skills() -> Vec<SkillSummary> {
 }
 
 const GIT_COMMAND_TIMEOUT_SECS: u64 = 45;
+static REPO_RESOLVED_CLONE_URL_CACHE: OnceLock<Mutex<HashMap<String, (String, Instant)>>> =
+    OnceLock::new();
+const REPO_RESOLVED_CLONE_URL_CACHE_TTL: Duration = Duration::from_secs(300);
 
 fn sync_trace_enabled() -> bool {
     env::var("SKILLM_TRACE_SYNC").ok().as_deref() == Some("1")
@@ -2629,7 +2633,7 @@ struct RepoNameParts {
 enum GitBranchProbeSource {
     Local(PathBuf),
     Remote {
-        clone_url: String,
+        clone_candidates: Vec<RemoteCloneCandidate>,
         selected_ref: Option<String>,
         tree_segments: Vec<String>,
     },
@@ -2685,7 +2689,9 @@ fn run_git_command_with_allowed_codes(
     args: &[&str],
     allowed_codes: &[i32],
 ) -> Result<String, String> {
-    let mut child = Command::new(GIT_BINARY)
+    let mut command = Command::new(GIT_BINARY);
+    configure_git_network_command(&mut command);
+    let mut child = command
         .args(["-C", skill_path])
         .args(args)
         .stdout(Stdio::piped())
@@ -2730,13 +2736,18 @@ fn run_git_command(skill_path: &str, args: &[&str]) -> Result<String, String> {
 }
 
 fn run_git_remote_command(args: &[&str]) -> Result<String, String> {
-    let mut child = Command::new(GIT_BINARY)
+    run_git_remote_command_with_timeout(args, Duration::from_secs(GIT_COMMAND_TIMEOUT_SECS))
+}
+
+fn run_git_remote_command_with_timeout(args: &[&str], timeout: Duration) -> Result<String, String> {
+    let mut command = Command::new(GIT_BINARY);
+    configure_git_network_command(&mut command);
+    let mut child = command
         .args(args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|error| format!("执行 git 命令失败: {error}"))?;
-    let timeout = Duration::from_secs(GIT_COMMAND_TIMEOUT_SECS);
     let started_at = Instant::now();
     loop {
         match child.try_wait() {
@@ -3639,7 +3650,8 @@ fn parse_repo_install_spec(repo_input: &str) -> Result<RepoInstallSpec, String> 
         return Err("仓库地址不能为空".into());
     }
 
-    let normalized = if trimmed.contains("://") {
+    let likely_ssh_url = is_ssh_git_url(trimmed);
+    let normalized = if trimmed.contains("://") || likely_ssh_url {
         trimmed.to_string()
     } else {
         let segments = trimmed
@@ -3653,24 +3665,19 @@ fn parse_repo_install_spec(repo_input: &str) -> Result<RepoInstallSpec, String> 
         }
     };
 
-    let url = url::Url::parse(&normalized).map_err(|error| format!("仓库地址解析失败: {error}"))?;
-    let host = url
-        .host_str()
-        .ok_or_else(|| "仓库地址缺少主机名".to_string())?;
-    let segments = url
-        .path_segments()
-        .map(|items| items.filter(|item| !item.is_empty()).collect::<Vec<_>>())
-        .unwrap_or_default();
+    let source_spec = parse_market_source_url(&normalized)
+        .map_err(|error| format!("仓库地址解析失败: {error}"))?;
+    let (host, segments) = repo_host_and_segments(&normalized)?;
     if segments.len() < 2 {
         return Err("仓库地址缺少 owner/repo".into());
     }
 
-    let owner = segments[0];
+    let owner = segments[0].as_str();
     let repo_name = segments[1].trim_end_matches(".git");
-    let tree_index = if segments.get(2) == Some(&"tree") && segments.len() > 3 {
+    let tree_index = if segments.get(2).map(String::as_str) == Some("tree") && segments.len() > 3 {
         Some(2)
-    } else if segments.get(2) == Some(&"-")
-        && segments.get(3) == Some(&"tree")
+    } else if segments.get(2).map(String::as_str) == Some("-")
+        && segments.get(3).map(String::as_str) == Some("tree")
         && segments.len() > 4
     {
         Some(3)
@@ -3691,7 +3698,6 @@ fn parse_repo_install_spec(repo_input: &str) -> Result<RepoInstallSpec, String> 
     } else {
         None
     };
-    let clone_url = format!("https://{host}/{owner}/{repo_name}.git");
     let source_type = if tree_index.is_some_and(|index| segments[index - 1] == "-") {
         "gitlab".to_string()
     } else {
@@ -3699,6 +3705,7 @@ fn parse_repo_install_spec(repo_input: &str) -> Result<RepoInstallSpec, String> 
     };
     let repo_key = sanitize_storage_name(&format!("{host}-{owner}-{repo_name}"));
     let repository_url = format!("https://{host}/{owner}/{repo_name}");
+    let clone_url = source_spec.clone_url;
 
     Ok(RepoInstallSpec {
         clone_url,
@@ -3712,6 +3719,38 @@ fn parse_repo_install_spec(repo_input: &str) -> Result<RepoInstallSpec, String> 
     })
 }
 
+fn repo_host_and_segments(source: &str) -> Result<(String, Vec<String>), String> {
+    if let Ok(url) = url::Url::parse(source) {
+        let host = url
+            .host_str()
+            .ok_or_else(|| "仓库地址缺少主机名".to_string())?
+            .to_string();
+        let segments = url
+            .path_segments()
+            .map(|items| {
+                items
+                    .filter(|item| !item.is_empty())
+                    .map(ToOwned::to_owned)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        return Ok((host, segments));
+    }
+
+    let Some((_, rest)) = source.split_once('@') else {
+        return Err("仓库地址解析失败: 无法识别 SSH 地址".into());
+    };
+    let Some((host, path)) = rest.split_once(':') else {
+        return Err("仓库地址解析失败: SSH 地址缺少仓库路径".into());
+    };
+    let segments = path
+        .split('/')
+        .filter(|item| !item.is_empty())
+        .map(ToOwned::to_owned)
+        .collect::<Vec<_>>();
+    Ok((host.to_string(), segments))
+}
+
 fn parse_git_branch_probe_source(repo_input: &str) -> Result<GitBranchProbeSource, String> {
     let trimmed = repo_input.trim();
     if trimmed.is_empty() {
@@ -3723,23 +3762,48 @@ fn parse_git_branch_probe_source(repo_input: &str) -> Result<GitBranchProbeSourc
         return Ok(GitBranchProbeSource::Local(source_path));
     }
 
-    let likely_ssh_url = trimmed.contains('@') && trimmed.contains(':') && !trimmed.contains("://");
-    if !likely_ssh_url {
-        if let Ok(spec) = parse_repo_install_spec(trimmed) {
-            return Ok(GitBranchProbeSource::Remote {
-                clone_url: spec.clone_url,
-                selected_ref: spec.branch_hint,
-                tree_segments: spec.tree_segments,
-            });
+    let spec = parse_repo_install_spec(trimmed)?;
+    let clone_candidates = repo_clone_candidates(&spec);
+    Ok(GitBranchProbeSource::Remote {
+        clone_candidates,
+        selected_ref: spec.branch_hint,
+        tree_segments: spec.tree_segments,
+    })
+}
+
+fn repo_clone_candidates(spec: &RepoInstallSpec) -> Vec<RemoteCloneCandidate> {
+    remote_clone_candidates(&spec.clone_url, &spec.repository_url)
+}
+
+fn repo_clone_cache_key(spec: &RepoInstallSpec, git_ref: Option<&str>) -> String {
+    format!(
+        "{}#{}#{}#{}",
+        spec.repo_key,
+        git_ref.unwrap_or_default(),
+        spec.branch_hint.as_deref().unwrap_or_default(),
+        spec.path_hint.as_deref().unwrap_or_default()
+    )
+}
+
+fn resolve_repo_clone_url_for_network(
+    spec: &RepoInstallSpec,
+    git_ref: Option<&str>,
+) -> Result<String, String> {
+    let cache_key = repo_clone_cache_key(spec, git_ref);
+    let cache = REPO_RESOLVED_CLONE_URL_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Ok(mut guard) = cache.lock() {
+        let now = Instant::now();
+        guard.retain(|_, (_, cached_at)| now.duration_since(*cached_at) <= REPO_RESOLVED_CLONE_URL_CACHE_TTL);
+        if let Some((clone_url, _)) = guard.get(&cache_key) {
+            return Ok(clone_url.clone());
         }
     }
 
-    let source_spec = parse_market_source_url(trimmed)?;
-    Ok(GitBranchProbeSource::Remote {
-        clone_url: source_spec.clone_url,
-        selected_ref: source_spec.branch,
-        tree_segments: source_spec.tree_segments,
-    })
+    let clone_url = resolve_clone_url_http_first(&spec.clone_url, &spec.repository_url)?;
+    if let Ok(mut guard) = cache.lock() {
+        guard.insert(cache_key, (clone_url.clone(), Instant::now()));
+    }
+    Ok(clone_url)
 }
 
 fn list_local_git_branches(repo_path: &Path) -> Result<Vec<GitBranchOption>, String> {
@@ -3850,6 +3914,30 @@ fn list_remote_git_branches(
             name,
         })
         .collect())
+}
+
+fn list_remote_git_branches_with_fallback(
+    clone_candidates: &[RemoteCloneCandidate],
+    selected_ref: Option<&str>,
+    tree_segments: &[String],
+) -> Result<Vec<GitBranchOption>, String> {
+    let mut failures = Vec::new();
+    for candidate in clone_candidates {
+        match list_remote_git_branches(&candidate.url, selected_ref, tree_segments) {
+            Ok(branches) => return Ok(branches),
+            Err(error) => failures.push(format!(
+                "{} {}: {}",
+                candidate.label,
+                candidate.url,
+                summarize_git_error(&error)
+            )),
+        }
+    }
+
+    Err(format!(
+        "无法识别远端 Git 分支。已先尝试 HTTP，失败后尝试 SSH，均未成功。\n{}",
+        failures.join("\n")
+    ))
 }
 
 #[cfg(test)]
@@ -4009,13 +4097,17 @@ fn short_package_hash(value: &str) -> String {
         .collect()
 }
 
-fn selected_repo_branch(spec: &RepoInstallSpec, git_ref: Option<&str>) -> Option<String> {
+fn selected_repo_branch(
+    spec: &RepoInstallSpec,
+    clone_url: &str,
+    git_ref: Option<&str>,
+) -> Option<String> {
     if let Some(explicit_ref) = git_ref.and_then(normalize_optional_git_ref) {
         return Some(explicit_ref);
     }
 
     if !spec.tree_segments.is_empty() {
-        if let Ok((_, branches)) = remote_git_branch_refs(&spec.clone_url) {
+        if let Ok((_, branches)) = remote_git_branch_refs(clone_url) {
             if let Some(branch) = branch_from_tree_segments(&spec.tree_segments, &branches) {
                 return Some(branch);
             }
@@ -4615,17 +4707,18 @@ pub async fn discover_repo_skills(
 ) -> Result<Vec<RepoSkillCandidate>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let spec = parse_repo_install_spec(&repo_url)?;
-        let selected_branch = selected_repo_branch(&spec, git_ref.as_deref());
+        let clone_url = resolve_repo_clone_url_for_network(&spec, git_ref.as_deref())?;
+        let selected_branch = selected_repo_branch(&spec, &clone_url, git_ref.as_deref());
         let path_hint = selected_repo_path_hint(&spec, selected_branch.as_deref());
         let sparse_paths = path_hint
             .as_ref()
             .map(|path| vec![path.clone()])
             .unwrap_or_default();
         let candidates = if sparse_paths.is_empty() {
-            discover_repo_skills_without_path_hint(&spec, selected_branch.as_deref())?
+            discover_repo_skills_without_path_hint(&spec, &clone_url, selected_branch.as_deref())?
         } else {
-            with_temporary_discovery_repo(
-                &spec.clone_url,
+            with_temporary_discovery_repo_resolved(
+                &clone_url,
                 selected_branch.as_deref(),
                 &spec.repo_key,
                 &sparse_paths,
@@ -4646,10 +4739,14 @@ pub async fn list_git_repo_branches(repo_url: String) -> Result<Vec<GitBranchOpt
     tauri::async_runtime::spawn_blocking(move || match parse_git_branch_probe_source(&repo_url)? {
         GitBranchProbeSource::Local(repo_path) => list_local_git_branches(&repo_path),
         GitBranchProbeSource::Remote {
-            clone_url,
+            clone_candidates,
             selected_ref,
             tree_segments,
-        } => list_remote_git_branches(&clone_url, selected_ref.as_deref(), &tree_segments),
+        } => list_remote_git_branches_with_fallback(
+            &clone_candidates,
+            selected_ref.as_deref(),
+            &tree_segments,
+        ),
     })
     .await
     .map_err(|error| format!("后台识别仓库分支失败: {error}"))?
@@ -4657,10 +4754,11 @@ pub async fn list_git_repo_branches(repo_url: String) -> Result<Vec<GitBranchOpt
 
 fn discover_repo_skills_without_path_hint(
     spec: &RepoInstallSpec,
+    clone_url: &str,
     git_ref: Option<&str>,
 ) -> Result<Vec<RepoSkillCandidate>, String> {
-    if let Ok(candidates) = with_temporary_discovery_repo(
-        &spec.clone_url,
+    if let Ok(candidates) = with_temporary_discovery_repo_resolved(
+        clone_url,
         git_ref,
         &spec.repo_key,
         &["skills".to_string()],
@@ -4671,9 +4769,13 @@ fn discover_repo_skills_without_path_hint(
         }
     }
 
-    with_temporary_discovery_repo(&spec.clone_url, git_ref, &spec.repo_key, &[], |repo_root| {
-        scan_repo_skill_candidates(repo_root, None)
-    })
+    with_temporary_discovery_repo_resolved(
+        clone_url,
+        git_ref,
+        &spec.repo_key,
+        &[],
+        |repo_root| scan_repo_skill_candidates(repo_root, None),
+    )
 }
 
 #[tauri::command]
@@ -4699,7 +4801,8 @@ fn install_selected_repo_skills_blocking(
     }
 
     let spec = parse_repo_install_spec(&repo_url)?;
-    let selected_branch = selected_repo_branch(&spec, git_ref.as_deref());
+    let clone_url = resolve_repo_clone_url_for_network(&spec, git_ref.as_deref())?;
+    let selected_branch = selected_repo_branch(&spec, &clone_url, git_ref.as_deref());
     let installed_at = now_timestamp_label();
     let mut installed_skills = load_installed_skills(&default_installed_skills());
     let mut installed_results = Vec::new();
@@ -4754,16 +4857,16 @@ fn install_selected_repo_skills_blocking(
         }
 
         let local_path = if normalized_path.is_empty() {
-            ensure_repo_skill_with_ref_and_sparse_paths(
-                &spec.clone_url,
+            ensure_repo_skill_with_resolved_ref_and_sparse_paths(
+                &clone_url,
                 selected_branch.as_deref(),
                 &install_name,
                 &[],
             )?
         } else {
             let sparse_paths = vec![normalized_path.clone()];
-            ensure_repo_skill_with_ref_and_sparse_paths(
-                &spec.clone_url,
+            ensure_repo_skill_with_resolved_ref_and_sparse_paths(
+                &clone_url,
                 selected_branch.as_deref(),
                 &install_name,
                 &sparse_paths,
@@ -5860,10 +5963,11 @@ mod tests {
         map_skillsmp_items_to_marketplace, normalize_installed_skill_source_url,
         normalize_skill_tools, open_target_path_for_skill, parse_apple_languages_output,
         parse_repo_install_spec, parse_skills_sh_homepage_items, refresh_installed_skill_git_state,
-        remove_trusted_project_paths, resolve_skill_install_name, resolve_startup_installed_skills,
-        run_git_command, save_marketplace_cache, scan_local_install_skill_candidates,
-        scan_repo_skill_candidates, selected_repo_path_hint, should_use_skills_sh_homepage_page,
-        tool_name_to_id, update_skill_repo, REFRESH_GIT_STATES_CONCURRENCY,
+        remove_trusted_project_paths, repo_clone_candidates, resolve_skill_install_name,
+        resolve_startup_installed_skills, run_git_command, save_marketplace_cache,
+        scan_local_install_skill_candidates, scan_repo_skill_candidates, selected_repo_path_hint,
+        should_use_skills_sh_homepage_page, tool_name_to_id, update_skill_repo,
+        REFRESH_GIT_STATES_CONCURRENCY,
     };
     use crate::models::{MarketplaceSkill, SkillSummary, WorkspacePersistence};
     use crate::workspace::TEST_ENV_LOCK;
@@ -7002,6 +7106,67 @@ mod tests {
         assert_eq!(
             build_repo_skill_source_url(&spec, "skills/planning-with-files-zh"),
             "https://github.com/OthmanAdi/planning-with-files/tree/master/skills/planning-with-files-zh"
+        );
+    }
+
+    #[test]
+    fn repo_install_spec_preserves_ssh_clone_url() {
+        let spec = parse_repo_install_spec("git@git.example.com:example-org/example-repo.git")
+            .expect("parse ssh repo install spec");
+
+        assert_eq!(
+            spec.clone_url,
+            "git@git.example.com:example-org/example-repo.git"
+        );
+        assert_eq!(
+            spec.repository_url,
+            "https://git.example.com/example-org/example-repo"
+        );
+        assert_eq!(spec.repo_key, "code-example-com-example-org-example-repo");
+    }
+
+    #[test]
+    fn repo_install_https_candidates_try_http_before_ssh() {
+        let spec =
+            parse_repo_install_spec("https://git.example.com/example-org/example-repo")
+                .expect("parse https repo install spec");
+
+        let candidates = repo_clone_candidates(&spec)
+            .into_iter()
+            .map(|candidate| (candidate.label, candidate.url))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            candidates,
+            vec![
+                (
+                    "HTTP",
+                    "https://git.example.com/example-org/example-repo.git".to_string()
+                ),
+                (
+                    "SSH",
+                    "git@git.example.com:example-org/example-repo.git".to_string()
+                )
+            ]
+        );
+    }
+
+    #[test]
+    fn repo_install_ssh_candidates_do_not_add_http_fallback() {
+        let spec = parse_repo_install_spec("git@git.example.com:example-org/example-repo.git")
+            .expect("parse ssh repo install spec");
+
+        let candidates = repo_clone_candidates(&spec)
+            .into_iter()
+            .map(|candidate| (candidate.label, candidate.url))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            candidates,
+            vec![(
+                "SSH",
+                "git@git.example.com:example-org/example-repo.git".to_string()
+            )]
         );
     }
 

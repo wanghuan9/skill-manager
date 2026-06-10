@@ -34,9 +34,13 @@ function normalizeRepoInput(repoInput: string) {
 }
 
 function isValidRepoUrl(repoUrl: string) {
-  try {
-    new URL(repoUrl);
+  if (/^[^@\s]+@[^:\s]+:[^\s]+\/[^\s]+(?:\.git)?$/i.test(repoUrl)) {
     return true;
+  }
+
+  try {
+    const parsed = new URL(repoUrl);
+    return parsed.protocol === "http:" || parsed.protocol === "https:" || parsed.protocol === "ssh:";
   } catch {
     return false;
   }

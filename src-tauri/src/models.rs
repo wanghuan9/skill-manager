@@ -132,6 +132,8 @@ pub struct PluginProbeResult {
     pub components: Vec<PluginComponentSummary>,
     pub source_type: String,
     pub source_url: String,
+    #[serde(default)]
+    pub source_ref: String,
     pub is_git_repo: bool,
     pub git_root: String,
     pub confidence: String,

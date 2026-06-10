@@ -15,8 +15,9 @@ use sha2::{Digest, Sha256};
 use toml_edit::{DocumentMut, Item, Table};
 
 use crate::library::{
-    parse_market_source_url, resolve_git_clone_url_with_instead_of, sanitize_storage_name,
-    tree_relative_path_for_branch, with_temporary_discovery_repo,
+    configure_git_network_command, parse_market_source_url, resolve_clone_url_http_first,
+    resolve_git_clone_url_with_instead_of, sanitize_storage_name, tree_relative_path_for_branch,
+    with_temporary_discovery_repo_resolved,
 };
 use crate::models::{
     CliToolSummary, PluginComponentPreview, PluginComponentSummary, PluginProbeResult,
@@ -2853,11 +2854,11 @@ fn update_hash_plugin_root(
             plugin.source_url, plugin.source_ref, plugin_relative_path
         ))
     );
-    let sparse_paths = if plugin_relative_path.is_empty() {
-        Vec::new()
-    } else {
-        vec![plugin_relative_path.clone()]
-    };
+    let (clone_url, source_ref, sparse_paths) = plugin_remote_clone_parts(
+        &plugin.source_url,
+        &plugin.source_ref,
+        &plugin_relative_path,
+    )?;
     let parent_dir = update_root
         .parent()
         .ok_or_else(|| "无法确定插件目录父路径".to_string())?;
@@ -2868,9 +2869,9 @@ fn update_hash_plugin_root(
     if temp_target.exists() || fs::symlink_metadata(&temp_target).is_ok() {
         remove_path(&temp_target)?;
     }
-    with_temporary_discovery_repo(
-        &plugin.source_url,
-        non_empty_trimmed_string(&plugin.source_ref).as_deref(),
+    with_temporary_discovery_repo_resolved(
+        &clone_url,
+        source_ref.as_deref(),
         &repo_key,
         &sparse_paths,
         |repo_root| {
@@ -3012,6 +3013,7 @@ fn ensure_shared_plugin_package(probe: &PluginProbeResult) -> Result<SharedPlugi
                 source_spec.branch.as_deref(),
                 &repo_root,
                 &plugin_relative_path,
+                false,
             )?;
             ensure_host_manifests_for_probe(&plugin_root, probe)?;
             return Ok(SharedPluginPackage { plugin_root });
@@ -3096,6 +3098,7 @@ fn ensure_shared_plugin_package(probe: &PluginProbeResult) -> Result<SharedPlugi
                 source_spec.branch.as_deref(),
                 &repo_root,
                 &plugin_relative_path,
+                false,
             )?;
             cleanup_duplicate_plugin_package_roots(
                 &repo_root,
@@ -3606,6 +3609,7 @@ fn ensure_shared_plugin_repo(
     git_ref: Option<&str>,
     repo_root: &Path,
     plugin_relative_path: &Path,
+    apply_instead_of: bool,
 ) -> Result<(), String> {
     if repo_root.join(".git").is_dir() {
         ensure_managed_plugin_repo_git_excludes(repo_root)?;
@@ -3631,11 +3635,13 @@ fn ensure_shared_plugin_repo(
     if let Some(branch) = git_ref.and_then(non_empty_trimmed_string) {
         args.extend(["--branch".to_string(), branch]);
     }
-    args.extend([
-        resolve_git_clone_url_with_instead_of(clone_url),
-        repo_root.to_string_lossy().to_string(),
-    ]);
-    run_git_dynamic_at(Path::new("."), &args)?;
+    let clone_url = if apply_instead_of {
+        resolve_git_clone_url_with_instead_of(clone_url)
+    } else {
+        clone_url.trim().to_string()
+    };
+    args.extend([clone_url, repo_root.to_string_lossy().to_string()]);
+    run_git_network_dynamic_at(Path::new("."), &args)?;
     ensure_managed_plugin_repo_git_excludes(repo_root)?;
     configure_plugin_sparse_checkout(repo_root, plugin_relative_path)?;
     Ok(())
@@ -3817,7 +3823,9 @@ fn collect_plugin_files_for_hash(
 }
 
 fn run_git_at(path: &Path, args: &[&str]) -> Result<String, String> {
-    let output = Command::new(GIT_BINARY)
+    let mut command = Command::new(GIT_BINARY);
+    configure_git_network_command(&mut command);
+    let output = command
         .current_dir(path)
         .args(args)
         .output()
@@ -4482,7 +4490,7 @@ fn write_skilldock_plugin_source_metadata(
     let metadata = SkillDockPluginSourceMetadata {
         source_url: probe.source_url.trim().to_string(),
         source_type: resolved_source_type,
-        source_ref: String::new(),
+        source_ref: probe.source_ref.trim().to_string(),
         source_revision: probe_source_revision(probe),
     };
     if metadata.source_url.is_empty()
@@ -5059,6 +5067,7 @@ fn sync_cursor_local_git_copy(source_root: &Path, target_root: &Path) -> Result<
             components: Vec::new(),
             source_type: metadata.source_type,
             source_url: metadata.source_url,
+            source_ref: metadata.source_ref,
             is_git_repo: false,
             git_root: String::new(),
             confidence: "high".to_string(),
@@ -5780,14 +5789,11 @@ fn remote_plugin_hash(
         "plugin-update-{}",
         short_stable_hash(&format!("{source_url}#{source_ref}#{plugin_relative_path}"))
     );
-    let sparse_paths = if plugin_relative_path.trim().is_empty() {
-        Vec::new()
-    } else {
-        vec![plugin_relative_path.to_string()]
-    };
-    with_temporary_discovery_repo(
-        source_url,
-        non_empty_trimmed_string(source_ref).as_deref(),
+    let (clone_url, source_ref, sparse_paths) =
+        plugin_remote_clone_parts(source_url, source_ref, plugin_relative_path)?;
+    with_temporary_discovery_repo_resolved(
+        &clone_url,
+        source_ref.as_deref(),
         &repo_key,
         &sparse_paths,
         |repo_root| {
@@ -6729,6 +6735,10 @@ fn run_git_dynamic_at(repo_root: &Path, args: &[String]) -> Result<String, Strin
     run_git_at(repo_root, &arg_refs)
 }
 
+fn run_git_network_dynamic_at(repo_root: &Path, args: &[String]) -> Result<String, String> {
+    run_git_dynamic_at(repo_root, args)
+}
+
 fn source_url_from_manifest(manifest: &PluginManifest) -> String {
     if !manifest.repository.trim().is_empty() {
         return manifest.repository.trim().to_string();
@@ -6844,6 +6854,9 @@ fn probe_plugin_source_blocking(
         source_spec.relative_path = explicit_sparse_path.map(PathBuf::from);
     }
 
+    let repository_url = repository_url_from_clone_url(&source_spec.clone_url);
+    let resolved_clone_url = resolve_clone_url_http_first(&source_spec.clone_url, &repository_url)?;
+    source_spec.clone_url = resolved_clone_url;
     let resolved_source_url = plugin_probe_source_url(&source_spec);
     if let Ok(Some(mut probes)) = detect_remote_github_plugin_candidates(
         &resolved_source_url,
@@ -6865,7 +6878,7 @@ fn probe_plugin_source_blocking(
         .as_ref()
         .map(|path| vec![normalize_relative_path(path)])
         .unwrap_or_default();
-    with_temporary_discovery_repo(
+    with_temporary_discovery_repo_resolved(
         &source_spec.clone_url,
         source_spec.branch.as_deref(),
         &repo_key,
@@ -6918,6 +6931,9 @@ fn probe_plugin_source_candidates_blocking(
         source_spec.relative_path = explicit_sparse_path.map(PathBuf::from);
     }
 
+    let repository_url = repository_url_from_clone_url(&source_spec.clone_url);
+    let resolved_clone_url = resolve_clone_url_http_first(&source_spec.clone_url, &repository_url)?;
+    source_spec.clone_url = resolved_clone_url;
     let resolved_source_url = plugin_probe_source_url(&source_spec);
     if let Ok(Some(probes)) = detect_remote_github_plugin_candidates(
         &resolved_source_url,
@@ -6937,7 +6953,7 @@ fn probe_plugin_source_candidates_blocking(
         .as_ref()
         .map(|path| vec![normalize_relative_path(path)])
         .unwrap_or_default();
-    with_temporary_discovery_repo(
+    with_temporary_discovery_repo_resolved(
         &source_spec.clone_url,
         source_spec.branch.as_deref(),
         &repo_key,
@@ -7053,6 +7069,27 @@ fn normalized_optional_path(value: &str) -> Option<String> {
     }
 }
 
+fn plugin_remote_clone_parts(
+    source_url: &str,
+    source_ref: &str,
+    plugin_relative_path: &str,
+) -> Result<(String, Option<String>, Vec<String>), String> {
+    let mut source_spec = parse_market_source_url(source_url)?;
+    if let Some(explicit_ref) = non_empty_trimmed_string(source_ref) {
+        source_spec.branch = Some(explicit_ref);
+    }
+    let sparse_paths = if plugin_relative_path.trim().is_empty() {
+        source_spec
+            .relative_path
+            .as_ref()
+            .map(|path| vec![normalize_relative_path(path)])
+            .unwrap_or_default()
+    } else {
+        vec![plugin_relative_path.to_string()]
+    };
+    Ok((source_spec.clone_url, source_spec.branch, sparse_paths))
+}
+
 fn plugin_discovery_repo_key(
     clone_url: &str,
     git_ref: Option<&str>,
@@ -7067,6 +7104,45 @@ fn plugin_discovery_repo_key(
         git_ref.unwrap_or_default(),
         path_key
     ))
+}
+
+fn repository_url_from_clone_url(clone_url: &str) -> String {
+    let trimmed = clone_url.trim().trim_end_matches(".git");
+    if let Ok(parsed) = url::Url::parse(trimmed) {
+        if let Some(host) = parsed.host_str() {
+            let segments = parsed
+                .path_segments()
+                .map(|items| items.filter(|item| !item.is_empty()).collect::<Vec<_>>())
+                .unwrap_or_default();
+            if segments.len() >= 2 {
+                return format!(
+                    "https://{}/{}/{}",
+                    host,
+                    segments[0],
+                    segments[1].trim_end_matches(".git")
+                );
+            }
+        }
+    }
+
+    if let Some((_, rest)) = trimmed.split_once('@') {
+        if let Some((host, path)) = rest.split_once(':') {
+            let segments = path
+                .split('/')
+                .filter(|segment| !segment.is_empty())
+                .collect::<Vec<_>>();
+            if segments.len() >= 2 {
+                return format!(
+                    "https://{}/{}/{}",
+                    host,
+                    segments[0],
+                    segments[1].trim_end_matches(".git")
+                );
+            }
+        }
+    }
+
+    trimmed.to_string()
 }
 
 fn plugin_probe_source_url(source_spec: &crate::library::MarketSourceSpec) -> String {
@@ -7392,6 +7468,7 @@ fn build_remote_plugin_probe(
         )?,
         source_type: "git".to_string(),
         source_url: source_url.trim().to_string(),
+        source_ref: git_ref.unwrap_or_default().to_string(),
         is_git_repo: true,
         git_root: String::new(),
         confidence: "high".to_string(),
@@ -7639,6 +7716,7 @@ fn build_probe_result(args: ProbeBuildArgs<'_>) -> PluginProbeResult {
             "local".to_string()
         },
         source_url: String::new(),
+        source_ref: String::new(),
         is_git_repo: args.git_root.is_some(),
         git_root: args.git_root.map(path_to_string).unwrap_or_default(),
         confidence: args.confidence.to_string(),
@@ -8809,6 +8887,7 @@ exit 0
             components: Vec::new(),
             source_type: "git".to_string(),
             source_url: source.to_string(),
+            source_ref: "main".to_string(),
             is_git_repo: true,
             git_root: repo_root.to_string_lossy().to_string(),
             confidence: "high".to_string(),
@@ -8831,6 +8910,12 @@ exit 0
                 .expect("read source metadata")
                 .source_url,
             source
+        );
+        assert_eq!(
+            read_skilldock_plugin_source_metadata(&plugin_root)
+                .expect("read source metadata")
+                .source_ref,
+            "main"
         );
         assert!(!plugin_root.join(".skilldock").exists());
         assert!(!plugin_root.join("plugin-source.json").exists());
@@ -8883,6 +8968,7 @@ exit 0
             components: Vec::new(),
             source_type: "git".to_string(),
             source_url: source.to_string(),
+            source_ref: String::new(),
             is_git_repo: true,
             git_root: repo_root.to_string_lossy().to_string(),
             confidence: "high".to_string(),
@@ -9207,6 +9293,7 @@ exit 0
                 components: Vec::new(),
                 source_type: "git".to_string(),
                 source_url: "https://git.example.com/example-org/example-repo".to_string(),
+                source_ref: String::new(),
                 is_git_repo: true,
                 repo_root: temp_dir.join("repo").to_string_lossy().into_owned(),
                 plugin_relative_path: "plugins/example-plugin".to_string(),
@@ -9305,6 +9392,7 @@ exit 0
                 components: Vec::new(),
                 source_type: "git".to_string(),
                 source_url: "https://git.example.com/example-org/example-repo".to_string(),
+                source_ref: String::new(),
                 is_git_repo: true,
                 repo_root: temp_dir.join("repo").to_string_lossy().into_owned(),
                 plugin_relative_path: "plugins/example-plugin".to_string(),
@@ -9516,6 +9604,7 @@ exit 0
                 components: Vec::new(),
                 source_type: "git".to_string(),
                 source_url: "https://github.com/openai/role-specific-plugins.git".to_string(),
+                source_ref: String::new(),
                 is_git_repo: true,
                 repo_root: temp_dir.join("repo").to_string_lossy().into_owned(),
                 plugin_relative_path: "plugins/product-design".to_string(),
@@ -9646,6 +9735,7 @@ exit 0
                 components: Vec::new(),
                 source_type: "git".to_string(),
                 source_url: "https://github.com/Shopify/Shopify-AI-Toolkit".to_string(),
+                source_ref: String::new(),
                 is_git_repo: true,
                 repo_root: source_root.to_string_lossy().into_owned(),
                 plugin_relative_path: String::new(),
@@ -9843,6 +9933,7 @@ exit 0
             components: Vec::new(),
             source_type: "git".to_string(),
             source_url: "https://github.com/example/product-design.git".to_string(),
+            source_ref: String::new(),
             is_git_repo: true,
             repo_root: repo_root.to_string_lossy().into_owned(),
             plugin_relative_path: "plugins/product-design".to_string(),
@@ -10644,6 +10735,7 @@ source = "__SOURCE__"
                 components: Vec::new(),
                 source_type: "git".to_string(),
                 source_url: "https://github.com/example/example-plugin".to_string(),
+                source_ref: String::new(),
                 is_git_repo: true,
                 repo_root: repo_root.to_string_lossy().into_owned(),
                 plugin_relative_path: "plugins/example-plugin".to_string(),
@@ -10772,6 +10864,7 @@ source = "__SOURCE__"
                 components: Vec::new(),
                 source_type: "git".to_string(),
                 source_url: "https://github.com/cloudflare/skills".to_string(),
+                source_ref: String::new(),
                 is_git_repo: true,
                 repo_root: source_root.to_string_lossy().into_owned(),
                 plugin_relative_path: String::new(),
@@ -10837,6 +10930,7 @@ source = "__SOURCE__"
                 components: Vec::new(),
                 source_type: "git".to_string(),
                 source_url: "https://github.com/cloudflare/skills".to_string(),
+                source_ref: String::new(),
                 is_git_repo: true,
                 repo_root: repo_root.to_string_lossy().into_owned(),
                 plugin_relative_path: "skills".to_string(),
@@ -10909,6 +11003,7 @@ source = "__SOURCE__"
                 source_type: "git".to_string(),
                 source_url: "https://github.com/everyinc/compound-engineering-plugin/tree/main"
                     .to_string(),
+                source_ref: "main".to_string(),
                 is_git_repo: true,
                 repo_root: temp_dir.join("repo").to_string_lossy().into_owned(),
                 plugin_relative_path: "plugins/coding-tutor".to_string(),
@@ -10986,6 +11081,7 @@ source = "__SOURCE__"
                 components: Vec::new(),
                 source_type: "git".to_string(),
                 source_url: "https://github.com/Shopify/Shopify-AI-Toolkit".to_string(),
+                source_ref: String::new(),
                 is_git_repo: true,
                 repo_root: repo_root.to_string_lossy().into_owned(),
                 plugin_relative_path: "plugins/shopify-plugin".to_string(),
@@ -11064,6 +11160,7 @@ source = "__SOURCE__"
                 components: Vec::new(),
                 source_type: "git".to_string(),
                 source_url: "https://github.com/everyinc/compound-engineering-plugin".to_string(),
+                source_ref: String::new(),
                 is_git_repo: true,
                 repo_root: repo_root.to_string_lossy().into_owned(),
                 plugin_relative_path: "plugins/coding-tutor".to_string(),
@@ -11232,6 +11329,7 @@ source = "__SOURCE__"
                 components: Vec::new(),
                 source_type: "git".to_string(),
                 source_url: "https://github.com/everyinc/compound-engineering-plugin".to_string(),
+                source_ref: String::new(),
                 is_git_repo: true,
                 git_root: home_dir
                     .join(".skilldock/plugins/coding-tutor")
@@ -11355,6 +11453,7 @@ source = "__SOURCE__"
                 source_type: "git".to_string(),
                 source_url: "https://github.com/everyinc/compound-engineering-plugin.git"
                     .to_string(),
+                source_ref: String::new(),
                 is_git_repo: true,
                 repo_root: managed_package_root.to_string_lossy().into_owned(),
                 plugin_relative_path: "plugins/coding-tutor".to_string(),
@@ -11488,6 +11587,7 @@ source = "__SOURCE__"
                 components: Vec::new(),
                 source_type: "git".to_string(),
                 source_url: "https://github.com/Shopify/Shopify-AI-Toolkit".to_string(),
+                source_ref: String::new(),
                 is_git_repo: true,
                 repo_root: managed_package_root.to_string_lossy().into_owned(),
                 plugin_relative_path: "plugins/shopify-plugin".to_string(),
@@ -11638,6 +11738,7 @@ source = "__SOURCE__"
                 components: Vec::new(),
                 source_type: "marketplace".to_string(),
                 source_url: remote_repo.to_string_lossy().into_owned(),
+                source_ref: String::new(),
                 is_git_repo: false,
                 git_root: String::new(),
                 confidence: "high".to_string(),

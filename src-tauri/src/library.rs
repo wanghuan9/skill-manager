@@ -20,7 +20,28 @@ const RESERVED_WORKSPACE_LINK_NAMES: [&str; 5] =
 const GIT_CLONE_HISTORY_DEPTH: &str = "20";
 const GIT_NETWORK_TIMEOUT: Duration = Duration::from_secs(120);
 const GIT_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
+const GIT_REMOTE_PROBE_TIMEOUT: Duration = Duration::from_secs(8);
 static REPO_CACHE_LOCKS: OnceLock<Mutex<HashMap<String, Arc<Mutex<()>>>>> = OnceLock::new();
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RemoteCloneCandidate {
+    pub label: &'static str,
+    pub url: String,
+}
+
+pub fn configure_git_network_command(command: &mut Command) {
+    command
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GCM_INTERACTIVE", "never")
+        .env("GIT_ASKPASS", "")
+        .env("SSH_ASKPASS", "");
+    if env::var_os("GIT_SSH_COMMAND").is_none() {
+        command.env(
+            "GIT_SSH_COMMAND",
+            "ssh -o BatchMode=yes -o NumberOfPasswordPrompts=0",
+        );
+    }
+}
 
 fn repo_cache_lock(repo_key: &str) -> Arc<Mutex<()>> {
     let lock_map = REPO_CACHE_LOCKS.get_or_init(|| Mutex::new(HashMap::new()));
@@ -771,6 +792,37 @@ pub fn clone_repo_for_discovery_with_ref_and_sparse_paths(
     repo_key: &str,
     sparse_paths: &[String],
 ) -> Result<PathBuf, String> {
+    clone_repo_for_discovery_with_ref_and_sparse_paths_internal(
+        repo_url,
+        git_ref,
+        repo_key,
+        sparse_paths,
+        true,
+    )
+}
+
+pub fn clone_repo_for_discovery_resolved_with_ref_and_sparse_paths(
+    clone_url: &str,
+    git_ref: Option<&str>,
+    repo_key: &str,
+    sparse_paths: &[String],
+) -> Result<PathBuf, String> {
+    clone_repo_for_discovery_with_ref_and_sparse_paths_internal(
+        clone_url,
+        git_ref,
+        repo_key,
+        sparse_paths,
+        false,
+    )
+}
+
+fn clone_repo_for_discovery_with_ref_and_sparse_paths_internal(
+    repo_url: &str,
+    git_ref: Option<&str>,
+    repo_key: &str,
+    sparse_paths: &[String],
+    apply_instead_of: bool,
+) -> Result<PathBuf, String> {
     let repo_lock = repo_cache_lock(repo_key);
     let _repo_guard = repo_lock.lock().unwrap_or_else(|error| error.into_inner());
     let repo_dir = repo_cache_directory(repo_key)?;
@@ -784,10 +836,16 @@ pub fn clone_repo_for_discovery_with_ref_and_sparse_paths(
     fs::create_dir_all(parent_dir).map_err(|error| format!("创建仓库缓存目录失败: {error}"))?;
 
     let clone_result = if sparse_paths.is_empty() {
-        clone_repo_with_optional_branch(repo_url, git_ref, &repo_dir)
+        clone_repo_with_optional_branch_internal(repo_url, git_ref, &repo_dir, apply_instead_of)
     } else {
         let sparse_paths = sparse_paths.iter().map(PathBuf::from).collect::<Vec<_>>();
-        clone_repo_with_sparse_paths(repo_url, git_ref, &repo_dir, &sparse_paths)
+        clone_repo_with_sparse_paths_internal(
+            repo_url,
+            git_ref,
+            &repo_dir,
+            &sparse_paths,
+            apply_instead_of,
+        )
     };
     if let Err(error) = clone_result {
         let _ = fs::remove_dir_all(&repo_dir);
@@ -796,6 +854,7 @@ pub fn clone_repo_for_discovery_with_ref_and_sparse_paths(
     Ok(repo_dir)
 }
 
+#[allow(dead_code)]
 pub fn with_temporary_discovery_repo<T, F>(
     repo_url: &str,
     git_ref: Option<&str>,
@@ -808,6 +867,27 @@ where
 {
     let repo_root = clone_repo_for_discovery_with_ref_and_sparse_paths(
         repo_url,
+        git_ref,
+        repo_key,
+        sparse_paths,
+    )?;
+    let result = callback(&repo_root);
+    let _ = fs::remove_dir_all(&repo_root);
+    result
+}
+
+pub fn with_temporary_discovery_repo_resolved<T, F>(
+    clone_url: &str,
+    git_ref: Option<&str>,
+    repo_key: &str,
+    sparse_paths: &[String],
+    callback: F,
+) -> Result<T, String>
+where
+    F: FnOnce(&Path) -> Result<T, String>,
+{
+    let repo_root = clone_repo_for_discovery_resolved_with_ref_and_sparse_paths(
+        clone_url,
         git_ref,
         repo_key,
         sparse_paths,
@@ -831,6 +911,37 @@ pub fn ensure_repo_skill_with_ref_and_sparse_paths(
     git_ref: Option<&str>,
     install_key: &str,
     sparse_paths: &[String],
+) -> Result<String, String> {
+    ensure_repo_skill_with_ref_and_sparse_paths_internal(
+        repo_url,
+        git_ref,
+        install_key,
+        sparse_paths,
+        true,
+    )
+}
+
+pub fn ensure_repo_skill_with_resolved_ref_and_sparse_paths(
+    clone_url: &str,
+    git_ref: Option<&str>,
+    install_key: &str,
+    sparse_paths: &[String],
+) -> Result<String, String> {
+    ensure_repo_skill_with_ref_and_sparse_paths_internal(
+        clone_url,
+        git_ref,
+        install_key,
+        sparse_paths,
+        false,
+    )
+}
+
+fn ensure_repo_skill_with_ref_and_sparse_paths_internal(
+    repo_url: &str,
+    git_ref: Option<&str>,
+    install_key: &str,
+    sparse_paths: &[String],
+    apply_instead_of: bool,
 ) -> Result<String, String> {
     let skill_dir = skill_directory(install_key)?;
     if skill_dir.exists() {
@@ -859,10 +970,16 @@ pub fn ensure_repo_skill_with_ref_and_sparse_paths(
         .map_err(|error| format!("创建 skill library 目录失败: {error}"))?;
 
     if sparse_paths.is_empty() {
-        clone_repo_with_optional_branch(repo_url, git_ref, &skill_dir)?;
+        clone_repo_with_optional_branch_internal(repo_url, git_ref, &skill_dir, apply_instead_of)?;
     } else {
         let path_bufs = sparse_paths.iter().map(PathBuf::from).collect::<Vec<_>>();
-        clone_repo_with_sparse_paths(repo_url, git_ref, &skill_dir, &path_bufs)?;
+        clone_repo_with_sparse_paths_internal(
+            repo_url,
+            git_ref,
+            &skill_dir,
+            &path_bufs,
+            apply_instead_of,
+        )?;
     }
     // 忽略非必要文件
     ignore_unnecessary_files(&skill_dir)?;
@@ -893,10 +1010,9 @@ pub fn resolve_git_clone_url_with_instead_of(clone_url: &str) -> String {
         return String::new();
     }
 
-    let Ok(output) = Command::new("git")
-        .args(["config", "--get-regexp", "^url\\."])
-        .output()
-    else {
+    let mut command = Command::new("git");
+    command.args(["config", "--get-regexp", "^url\\."]);
+    let Ok(output) = command.output() else {
         return trimmed.to_string();
     };
     if !output.status.success() {
@@ -907,6 +1023,111 @@ pub fn resolve_git_clone_url_with_instead_of(clone_url: &str) -> String {
     let rules = parse_git_url_instead_of_rules(&config_output);
     rewrite_git_clone_url_with_instead_of_rules(trimmed, &rules)
         .unwrap_or_else(|| trimmed.to_string())
+}
+
+pub fn is_ssh_git_url(value: &str) -> bool {
+    let trimmed = value.trim();
+    trimmed.starts_with("ssh://")
+        || (trimmed.contains('@') && trimmed.contains(':') && !trimmed.contains("://"))
+}
+
+pub fn remote_clone_candidates(clone_url: &str, repository_url: &str) -> Vec<RemoteCloneCandidate> {
+    let clone_url = clone_url.trim();
+    if clone_url.is_empty() {
+        return Vec::new();
+    }
+    let mut candidates = vec![RemoteCloneCandidate {
+        label: "HTTP",
+        url: clone_url.to_string(),
+    }];
+
+    if is_ssh_git_url(clone_url) {
+        candidates[0].label = "SSH";
+        return candidates;
+    }
+
+    if let Some(ssh_url) = ssh_clone_url_for_repository_url(repository_url) {
+        if ssh_url != clone_url {
+            candidates.push(RemoteCloneCandidate {
+                label: "SSH",
+                url: ssh_url,
+            });
+        }
+    }
+
+    candidates
+}
+
+pub fn ssh_clone_url_for_repository_url(repository_url: &str) -> Option<String> {
+    let parsed = url::Url::parse(repository_url).ok()?;
+    let host = parsed.host_str()?;
+    let segments = parsed
+        .path_segments()
+        .map(|items| items.filter(|item| !item.is_empty()).collect::<Vec<_>>())
+        .unwrap_or_default();
+    if segments.len() < 2 {
+        return None;
+    }
+    let owner = segments[0];
+    let repo = segments[1].trim_end_matches(".git");
+    Some(format!("git@{host}:{owner}/{repo}.git"))
+}
+
+pub fn resolve_clone_url_http_first(clone_url: &str, repository_url: &str) -> Result<String, String> {
+    let candidates = remote_clone_candidates(clone_url, repository_url);
+    if candidates.is_empty() {
+        return Err("仓库地址解析失败: clone URL 为空".into());
+    }
+    if candidates.len() == 1 && candidates[0].label == "SSH" {
+        return Ok(candidates[0].url.clone());
+    }
+
+    let mut failures = Vec::new();
+    for candidate in candidates {
+        match probe_remote_clone_url(&candidate.url) {
+            Ok(()) => return Ok(candidate.url),
+            Err(error) => failures.push(format!(
+                "{} {}: {}",
+                candidate.label,
+                candidate.url,
+                summarize_git_error(&error)
+            )),
+        }
+    }
+
+    Err(format!(
+        "无法访问远端仓库。已先尝试 HTTP，失败后尝试 SSH，均未成功。\n{}",
+        failures.join("\n")
+    ))
+}
+
+pub fn probe_remote_clone_url(clone_url: &str) -> Result<(), String> {
+    let mut command = Command::new("git");
+    command.args(["ls-remote", clone_url, "HEAD"]);
+    configure_git_network_command(&mut command);
+    let output = output_with_timeout(command, GIT_REMOTE_PROBE_TIMEOUT, "git ls-remote")?;
+    if output.status.success() {
+        return Ok(());
+    }
+    Err(format!(
+        "git ls-remote 失败: {}",
+        String::from_utf8_lossy(&output.stderr).trim()
+    ))
+}
+
+pub fn summarize_git_error(error: &str) -> String {
+    let summary = error
+        .lines()
+        .rev()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or(error)
+        .to_string();
+    if summary.chars().count() <= 240 {
+        summary
+    } else {
+        summary.chars().take(240).collect::<String>()
+    }
 }
 
 fn parse_git_url_instead_of_rules(output: &str) -> Vec<GitUrlInsteadOfRule> {
@@ -979,8 +1200,22 @@ fn clone_repo_with_optional_branch(
     branch: Option<&str>,
     target_dir: &Path,
 ) -> Result<(), String> {
-    let clone_url = resolve_git_clone_url_with_instead_of(source);
+    clone_repo_with_optional_branch_internal(source, branch, target_dir, true)
+}
+
+fn clone_repo_with_optional_branch_internal(
+    source: &str,
+    branch: Option<&str>,
+    target_dir: &Path,
+    apply_instead_of: bool,
+) -> Result<(), String> {
+    let clone_url = if apply_instead_of {
+        resolve_git_clone_url_with_instead_of(source)
+    } else {
+        source.trim().to_string()
+    };
     let mut command = Command::new("git");
+    configure_git_network_command(&mut command);
     command.arg("clone");
     command.arg("--depth").arg(GIT_CLONE_HISTORY_DEPTH);
     command.arg("--single-branch");
@@ -1009,8 +1244,23 @@ fn clone_repo_with_sparse_paths(
     target_dir: &Path,
     sparse_paths: &[PathBuf],
 ) -> Result<(), String> {
-    let clone_url = resolve_git_clone_url_with_instead_of(source);
+    clone_repo_with_sparse_paths_internal(source, branch, target_dir, sparse_paths, true)
+}
+
+fn clone_repo_with_sparse_paths_internal(
+    source: &str,
+    branch: Option<&str>,
+    target_dir: &Path,
+    sparse_paths: &[PathBuf],
+    apply_instead_of: bool,
+) -> Result<(), String> {
+    let clone_url = if apply_instead_of {
+        resolve_git_clone_url_with_instead_of(source)
+    } else {
+        source.trim().to_string()
+    };
     let mut clone_command = Command::new("git");
+    configure_git_network_command(&mut clone_command);
     clone_command
         .arg("clone")
         .arg("--filter=blob:none")
@@ -2015,9 +2265,10 @@ mod tests {
         clone_branch_for_resolved_path, create_skill_symlink, get_tool_skills_path,
         ignore_unnecessary_files, migrate_legacy_skill_symlinks, parse_git_url_instead_of_rules,
         parse_market_source_url, reconcile_tool_skill_symlinks, remove_reserved_workspace_entries,
-        repo_cache_lock, rewrite_git_clone_url_with_instead_of_rules, run_git_in_dir,
-        run_git_output, skill_dir_match_score, tree_relative_path_for_branch, MarketSourceSpec,
-        ResolvedRemoteSkillPath,
+        remote_clone_candidates, repo_cache_lock, rewrite_git_clone_url_with_instead_of_rules,
+        run_git_in_dir, run_git_output, skill_dir_match_score, ssh_clone_url_for_repository_url,
+        summarize_git_error, tree_relative_path_for_branch, MarketSourceSpec,
+        RemoteCloneCandidate, ResolvedRemoteSkillPath,
     };
     use crate::models::SkillSummary;
     use crate::workspace::TEST_ENV_LOCK;
@@ -2127,6 +2378,56 @@ url.git@git.example.com:example-org/.insteadof https://git.example.com/example-o
                 &rules
             ),
             None
+        );
+    }
+
+    #[test]
+    fn derives_ssh_clone_url_from_https_repository_url() {
+        assert_eq!(
+            ssh_clone_url_for_repository_url("https://git.example.com/example-org/example-repo"),
+            Some("git@git.example.com:example-org/example-repo.git".to_string())
+        );
+    }
+
+    #[test]
+    fn remote_clone_candidates_try_http_before_ssh() {
+        assert_eq!(
+            remote_clone_candidates(
+                "https://git.example.com/example-org/example-repo.git",
+                "https://git.example.com/example-org/example-repo",
+            ),
+            vec![
+                RemoteCloneCandidate {
+                    label: "HTTP",
+                    url: "https://git.example.com/example-org/example-repo.git".to_string(),
+                },
+                RemoteCloneCandidate {
+                    label: "SSH",
+                    url: "git@git.example.com:example-org/example-repo.git".to_string(),
+                }
+            ]
+        );
+    }
+
+    #[test]
+    fn remote_clone_candidates_keep_ssh_only_for_ssh_input() {
+        assert_eq!(
+            remote_clone_candidates(
+                "git@git.example.com:example-org/example-repo.git",
+                "https://git.example.com/example-org/example-repo",
+            ),
+            vec![RemoteCloneCandidate {
+                label: "SSH",
+                url: "git@git.example.com:example-org/example-repo.git".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn git_error_summary_keeps_last_non_empty_line() {
+        assert_eq!(
+            summarize_git_error("git ls-remote 失败: first\nfatal: auth failed\n"),
+            "fatal: auth failed"
         );
     }
 

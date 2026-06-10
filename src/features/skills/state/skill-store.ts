@@ -117,6 +117,7 @@ export type PluginProbeResult = {
   components: PluginComponentSummary[];
   sourceType: PluginSourceType;
   sourceUrl: string;
+  sourceRef?: string;
   isGitRepo: boolean;
   gitRoot: string;
   confidence: PluginProbeConfidence;

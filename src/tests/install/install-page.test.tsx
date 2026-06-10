@@ -1903,6 +1903,31 @@ test("shows install errors in the global notification stack", async () => {
   expect(screen.getByRole("alert")).toHaveTextContent("请输入有效的 Git 仓库地址。");
 });
 
+test("accepts scp-like SSH repository urls for skill git install", async () => {
+  const sourceUrl = "git@git.example.com:example-org/example-repo.git";
+  const branchSpy = vi.spyOn(skillClient, "fetchGitRepoBranches").mockResolvedValue([
+    { name: "main", isDefault: true, isSelected: true },
+  ]);
+  const discoverSpy = vi.spyOn(skillClient, "installSkillFromRepo").mockResolvedValue([]);
+
+  render(<App />);
+  await userEvent.click(screen.getByRole("button", { name: /安装/ }));
+  await userEvent.click(screen.getByRole("tab", { name: "Git 安装" }));
+
+  await userEvent.type(screen.getByRole("textbox", { name: "Git 仓库地址" }), sourceUrl);
+  await waitFor(() => {
+    expect(branchSpy).toHaveBeenCalledWith({ repoUrl: sourceUrl });
+  });
+  await userEvent.click(screen.getByRole("button", { name: "识别仓库技能" }));
+
+  await waitFor(() => {
+    expect(discoverSpy).toHaveBeenCalledWith({ repoUrl: sourceUrl, gitRef: "main" });
+  });
+  expect(screen.queryByText("请输入有效的 Git 仓库地址。")).not.toBeInTheDocument();
+  branchSpy.mockRestore();
+  discoverSpy.mockRestore();
+});
+
 test("marks already installed repo skills as unavailable", async () => {
   render(<App />);
   await userEvent.click(screen.getByRole("button", { name: /安装/ }));
