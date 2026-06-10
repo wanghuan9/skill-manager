@@ -1682,7 +1682,10 @@ fn delete_codex_plugin(root_path: &str) -> Result<(), String> {
     let requested_root = PathBuf::from(root_path);
     let target_root = canonicalize_existing_dir(Path::new(root_path))?;
     ensure_plugin_manifest_for_host("codex", &target_root)?;
-    let managed_package_root = managed_plugin_package_root_for_requested_path(&requested_root);
+    let managed_package_root = managed_plugin_package_root_for_requested_path(&requested_root)
+        .or_else(|| managed_plugin_package_root_for_path(&target_root))
+        .or_else(|| managed_plugin_package_root_from_identity(&target_root))
+        .or_else(|| managed_plugin_package_root_from_source_metadata(&target_root));
     let should_remove_managed_package = managed_package_root
         .as_ref()
         .is_some_and(|package_root| plugin_root_is_last_host_install(package_root, "codex"));
@@ -2246,7 +2249,10 @@ fn delete_claude_plugin(root_path: &str) -> Result<(), String> {
     let plugin_key = installed_state
         .as_ref()
         .and_then(|state| find_claude_plugin_key_for_root(state, &target_root).ok());
-    let managed_package_root = managed_plugin_package_root_for_requested_path(&requested_root);
+    let managed_package_root = managed_plugin_package_root_for_requested_path(&requested_root)
+        .or_else(|| managed_plugin_package_root_for_path(&target_root))
+        .or_else(|| managed_plugin_package_root_from_identity(&target_root))
+        .or_else(|| managed_plugin_package_root_from_source_metadata(&target_root));
     let should_remove_managed_package = managed_package_root
         .as_ref()
         .is_some_and(|package_root| plugin_root_is_last_host_install(package_root, "claude-code"));
@@ -3929,28 +3935,12 @@ fn install_codex_plugin_probe(
     let manifest = read_plugin_manifest(&source_root.join(CODEX_PLUGIN_MANIFEST))?;
     let plugin_name = plugin_install_name(&manifest, source_root);
     let marketplace_root = ensure_skilldock_codex_marketplace(home_dir, source_root, &plugin_name)?;
-    if register_and_install_codex_plugin_via_cli(
+    ensure_skilldock_codex_cache_link(
         home_dir,
+        source_root,
         SKILLDOCK_MARKETPLACE_NAME,
         &plugin_name,
-        &marketplace_root,
-    )
-    .is_ok()
-    {
-        let installed_root = home_dir
-            .join(".codex/plugins/cache")
-            .join(SKILLDOCK_MARKETPLACE_NAME)
-            .join(&plugin_name);
-        if let Some(root) = newest_codex_plugin_root_under(&installed_root) {
-            return Ok(root);
-        }
-    }
-
-    let target_root = home_dir
-        .join(".codex/plugins/cache")
-        .join(SKILLDOCK_MARKETPLACE_NAME)
-        .join(&plugin_name);
-    link_or_copy_plugin_dir(source_root, &target_root)?;
+    )?;
     write_codex_plugin_install_config(
         home_dir,
         SKILLDOCK_MARKETPLACE_NAME,
@@ -3958,6 +3948,20 @@ fn install_codex_plugin_probe(
         &marketplace_root,
     )?;
     Ok(marketplace_root.join("plugins").join(&plugin_name))
+}
+
+fn ensure_skilldock_codex_cache_link(
+    home_dir: &Path,
+    source_root: &Path,
+    marketplace_name: &str,
+    plugin_name: &str,
+) -> Result<PathBuf, String> {
+    let target_root = home_dir
+        .join(".codex/plugins/cache")
+        .join(marketplace_name)
+        .join(plugin_name);
+    link_or_copy_plugin_dir(source_root, &target_root)?;
+    Ok(target_root)
 }
 
 fn ensure_skilldock_codex_marketplace(
@@ -4114,71 +4118,6 @@ fn json_contains_placeholder_value(value: &JsonValue) -> bool {
         JsonValue::Object(entries) => entries.values().any(json_contains_placeholder_value),
         _ => false,
     }
-}
-
-fn codex_cli_path() -> PathBuf {
-    env::var_os("SKILLDOCK_CODEX_CLI")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("/Applications/Codex.app/Contents/Resources/codex"))
-}
-
-fn register_and_install_codex_plugin_via_cli(
-    home_dir: &Path,
-    marketplace_name: &str,
-    plugin_name: &str,
-    marketplace_root: &Path,
-) -> Result<(), String> {
-    let codex_cli = codex_cli_path();
-    if !codex_cli.is_file() {
-        return Err(format!("Codex CLI 不存在: {}", codex_cli.display()));
-    }
-
-    run_codex_cli(
-        home_dir,
-        &codex_cli,
-        &[
-            "plugin",
-            "marketplace",
-            "add",
-            marketplace_root.to_string_lossy().as_ref(),
-        ],
-    )?;
-    run_codex_cli(
-        home_dir,
-        &codex_cli,
-        &[
-            "plugin",
-            "add",
-            &format!("{plugin_name}@{marketplace_name}"),
-        ],
-    )?;
-    Ok(())
-}
-
-fn run_codex_cli(home_dir: &Path, codex_cli: &Path, args: &[&str]) -> Result<(), String> {
-    let output = Command::new(codex_cli)
-        .args(args)
-        .env("HOME", home_dir)
-        .output()
-        .map_err(|error| {
-            format!(
-                "执行 Codex CLI 失败（{} {}）: {error}",
-                codex_cli.display(),
-                args.join(" ")
-            )
-        })?;
-    if output.status.success() {
-        return Ok(());
-    }
-
-    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    Err(format!(
-        "Codex CLI 执行失败（{} {}）: {}",
-        codex_cli.display(),
-        args.join(" "),
-        if !stderr.is_empty() { stderr } else { stdout }
-    ))
 }
 
 fn write_codex_plugin_install_config(
@@ -8381,12 +8320,12 @@ mod tests {
         get_plugin_component_preview, install_selected_plugin_probes_blocking,
         legacy_plugin_package_identity_path, legacy_skilldock_plugin_source_metadata_path,
         list_cli_tools, list_installed_plugins_blocking as list_installed_plugins,
-        newest_codex_plugin_root_under, paths_refer_to_same_dir, plugin_git_state,
-        plugin_probe_source_url, probe_plugin_repo, probe_plugin_source_candidates_blocking,
-        read_plugin_package_identity, read_skilldock_plugin_source_metadata,
-        resolve_shared_plugin_package_id, set_plugin_enabled, shared_plugin_package_id_candidates,
-        shared_plugin_package_repo_root, write_plugin_package_identity,
-        write_skilldock_plugin_source_metadata, PLUGIN_STATUS_PENDING_PUSH,
+        paths_refer_to_same_dir, plugin_git_state, plugin_probe_source_url, probe_plugin_repo,
+        probe_plugin_source_candidates_blocking, read_plugin_package_identity,
+        read_skilldock_plugin_source_metadata, resolve_shared_plugin_package_id,
+        set_plugin_enabled, shared_plugin_package_id_candidates, shared_plugin_package_repo_root,
+        write_plugin_package_identity, write_skilldock_plugin_source_metadata,
+        PLUGIN_STATUS_PENDING_PUSH,
     };
     use crate::library::parse_market_source_url;
     use crate::models::{PluginComponentSummary, PluginProbeResult, PluginSummary};
@@ -8442,6 +8381,22 @@ mod tests {
         }
         run_git_test(repo_root, &["add", "."]);
         run_git_test(repo_root, &["commit", "-m", "Initial plugin"]);
+    }
+
+    fn write_cli_logging_script(cli_path: &Path, log_path: &Path) {
+        fs::write(
+            cli_path,
+            format!(
+                "#!/bin/sh\nprintf '%s\n' \"$@\" >> \"{}\"\n",
+                log_path.to_string_lossy()
+            ),
+        )
+        .expect("write cli script");
+        let mut permissions = fs::metadata(cli_path)
+            .expect("read cli metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(cli_path, permissions).expect("set cli permissions");
     }
 
     #[test]
@@ -9285,8 +9240,7 @@ exit 0
         assert_eq!(installed.len(), 1);
         assert_eq!(installed[0].host_tool, "claude-code");
         assert_eq!(installed[0].name, "example-plugin");
-        let managed_plugin_root =
-            home_dir.join(".skilldock/plugins/example-plugin/plugins/example-plugin");
+        let managed_plugin_root = home_dir.join(".skilldock/plugins/example-plugin");
         assert!(paths_refer_to_same_dir(
             Path::new(&installed[0].root_path),
             &managed_plugin_root
@@ -9332,15 +9286,7 @@ exit 0
         .expect("write claude manifest");
 
         let previous_home = env::var_os("HOME");
-        let previous_codex_cli = env::var_os("SKILLDOCK_CODEX_CLI");
         env::set_var("HOME", &home_dir);
-        env::set_var(
-            "SKILLDOCK_CODEX_CLI",
-            temp_dir
-                .join("missing-codex-cli")
-                .to_string_lossy()
-                .into_owned(),
-        );
 
         let installed = install_selected_plugin_probes_blocking(
             vec![PluginProbeResult {
@@ -9374,10 +9320,6 @@ exit 0
         match previous_home {
             Some(value) => env::set_var("HOME", value),
             None => env::remove_var("HOME"),
-        }
-        match previous_codex_cli {
-            Some(value) => env::set_var("SKILLDOCK_CODEX_CLI", value),
-            None => env::remove_var("SKILLDOCK_CODEX_CLI"),
         }
 
         assert!(installed.is_empty());
@@ -9549,17 +9491,14 @@ exit 0
         .expect("write codex manifest");
         fs::write(source_root.join("skills/prototype/SKILL.md"), "# Prototype")
             .expect("write skill");
+        let cli_path = temp_dir.join("codex-cli");
+        let log_path = temp_dir.join("codex-cli.log");
+        write_cli_logging_script(&cli_path, &log_path);
 
         let previous_home = env::var_os("HOME");
         let previous_codex_cli = env::var_os("SKILLDOCK_CODEX_CLI");
         env::set_var("HOME", &home_dir);
-        env::set_var(
-            "SKILLDOCK_CODEX_CLI",
-            temp_dir
-                .join("missing-codex-cli")
-                .to_string_lossy()
-                .into_owned(),
-        );
+        env::set_var("SKILLDOCK_CODEX_CLI", &cli_path);
         let installed = install_selected_plugin_probes_blocking(
             vec![PluginProbeResult {
                 tool: "codex".to_string(),
@@ -9599,6 +9538,8 @@ exit 0
         }
 
         let installed_root = home_dir.join(".codex/plugins/cache/skilldock/product-design");
+        let marketplace_plugin_root =
+            home_dir.join(".codex/marketplaces/skilldock/plugins/product-design");
         let config_content =
             fs::read_to_string(home_dir.join(".codex/config.toml")).expect("read codex config");
         let manifest_content = fs::read_to_string(
@@ -9611,8 +9552,7 @@ exit 0
         assert_eq!(installed[0].name, "Product Design");
         assert_eq!(installed[0].enabled_state, "enabled");
         assert_eq!(installed[0].install_state, "installed");
-        let managed_plugin_root =
-            home_dir.join(".skilldock/plugins/product-design/plugins/product-design");
+        let managed_plugin_root = home_dir.join(".skilldock/plugins/product-design");
         assert!(paths_refer_to_same_dir(
             Path::new(&installed[0].root_path),
             &managed_plugin_root
@@ -9637,10 +9577,28 @@ exit 0
         assert!(manifest_content.contains("\"path\": \"./plugins/product-design\""));
         assert!(manifest_content.contains("\"installation\": \"AVAILABLE\""));
         assert!(manifest_content.contains("\"authentication\": \"ON_INSTALL\""));
-        assert!(home_dir
-            .join(".codex/marketplaces/skilldock/plugins/product-design/.codex-plugin/plugin.json")
+        assert!(marketplace_plugin_root
+            .join(".codex-plugin/plugin.json")
             .is_file());
-        assert!(newest_codex_plugin_root_under(&installed_root).is_some());
+        assert!(installed_root.join(".codex-plugin/plugin.json").is_file());
+        assert!(paths_refer_to_same_dir(
+            &marketplace_plugin_root,
+            &managed_plugin_root
+        ));
+        assert!(paths_refer_to_same_dir(
+            &installed_root,
+            &managed_plugin_root
+        ));
+        assert!(fs::symlink_metadata(&marketplace_plugin_root)
+            .expect("read marketplace plugin metadata")
+            .file_type()
+            .is_symlink());
+        assert!(fs::symlink_metadata(&installed_root)
+            .expect("read codex cache metadata")
+            .file_type()
+            .is_symlink());
+        assert!(!installed_root.join("0.1.41").exists());
+        assert!(!log_path.exists());
 
         let _ = fs::remove_dir_all(temp_dir);
     }
@@ -9659,17 +9617,14 @@ exit 0
         .expect("write generic manifest");
         fs::write(source_root.join("skills/shopify/SKILL.md"), "# Shopify").expect("write skill");
         fs::write(source_root.join(".mcp.json"), r#"{"mcpServers":{}}"#).expect("write mcp config");
+        let cli_path = temp_dir.join("codex-cli");
+        let log_path = temp_dir.join("codex-cli.log");
+        write_cli_logging_script(&cli_path, &log_path);
 
         let previous_home = env::var_os("HOME");
         let previous_codex_cli = env::var_os("SKILLDOCK_CODEX_CLI");
         env::set_var("HOME", &home_dir);
-        env::set_var(
-            "SKILLDOCK_CODEX_CLI",
-            temp_dir
-                .join("missing-codex-cli")
-                .to_string_lossy()
-                .into_owned(),
-        );
+        env::set_var("SKILLDOCK_CODEX_CLI", &cli_path);
         let installed = install_selected_plugin_probes_blocking(
             vec![PluginProbeResult {
                 tool: "codex".to_string(),
@@ -9726,9 +9681,22 @@ exit 0
         assert!(managed_plugin_root
             .join(".cursor-plugin/plugin.json")
             .is_file());
-        assert!(home_dir
-            .join(".codex/marketplaces/skilldock/plugins/shopify-plugin/.codex-plugin/plugin.json")
+        let marketplace_plugin_root =
+            home_dir.join(".codex/marketplaces/skilldock/plugins/shopify-plugin");
+        let installed_root = home_dir.join(".codex/plugins/cache/skilldock/shopify-plugin");
+        assert!(marketplace_plugin_root
+            .join(".codex-plugin/plugin.json")
             .is_file());
+        assert!(installed_root.join(".codex-plugin/plugin.json").is_file());
+        assert!(paths_refer_to_same_dir(
+            &marketplace_plugin_root,
+            &managed_plugin_root
+        ));
+        assert!(paths_refer_to_same_dir(
+            &installed_root,
+            &managed_plugin_root
+        ));
+        assert!(!log_path.exists());
 
         let _ = fs::remove_dir_all(temp_dir);
     }
@@ -10921,15 +10889,7 @@ source = "__SOURCE__"
         fs::write(source_root.join("commands/teach-me.md"), "# Teach me").expect("write command");
 
         let previous_home = env::var_os("HOME");
-        let previous_codex_cli = env::var_os("SKILLDOCK_CODEX_CLI");
         env::set_var("HOME", &home_dir);
-        env::set_var(
-            "SKILLDOCK_CODEX_CLI",
-            temp_dir
-                .join("missing-codex-cli")
-                .to_string_lossy()
-                .into_owned(),
-        );
 
         let installed = install_selected_plugin_probes_blocking(
             vec![PluginProbeResult {
@@ -10966,10 +10926,6 @@ source = "__SOURCE__"
         match previous_home {
             Some(value) => env::set_var("HOME", value),
             None => env::remove_var("HOME"),
-        }
-        match previous_codex_cli {
-            Some(value) => env::set_var("SKILLDOCK_CODEX_CLI", value),
-            None => env::remove_var("SKILLDOCK_CODEX_CLI"),
         }
 
         assert_eq!(installed.len(), 2);
