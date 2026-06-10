@@ -12,7 +12,6 @@ import {
   refreshMcpServerTools,
 } from "@/features/skills/api/skill-client";
 import type { McpMarketplaceServer } from "@/features/skills/state/skill-store";
-import { useSkillWorkspace } from "@/features/skills/state/skill-workspace";
 import {
   cacheInstalledServerIds,
   getCachedInstalledServerIds,
@@ -296,7 +295,6 @@ export function McpMarketplacePanel(props: McpMarketplacePanelProps) {
   const { searchQuery, onSearchQueryChange } = props;
   const { notify } = useNotifications();
   const reportFailure = useFailureReporter();
-  const { appSettings } = useSkillWorkspace();
   const configCacheRef = useRef<Map<string, Record<string, unknown> | null>>(new Map());
   const resolvedSourceUrlCacheRef = useRef<Map<string, string>>(new Map());
   const resolvedSourceUrlPromiseCacheRef = useRef<Map<string, Promise<string>>>(new Map());
@@ -319,10 +317,6 @@ export function McpMarketplacePanel(props: McpMarketplacePanelProps) {
   const normalizedQuery = debouncedQuery.trim();
   const isSearching = normalizedQuery.length > 0;
   const showLoadingPlaceholder = isLoading && servers.length === 0;
-  const installHint =
-    appSettings.mcpInstallActivation === "apply-all-tools"
-      ? t("install.mcp.hint.applyAll")
-      : "";
 
   const applyCachedServerConfig = useCallback((server: McpMarketplaceServer) => {
     if (!configCacheRef.current.has(server.id)) {
@@ -662,7 +656,6 @@ export function McpMarketplacePanel(props: McpMarketplacePanelProps) {
       <div className="market-source-bar">
         <div className="panel-header">
           <h2>{t("install.mcp.sources.title")}</h2>
-          <p>{installHint}</p>
         </div>
         <label className="market-search-field">
           <span className="sr-only">{t("install.mcp.searchAria")}</span>
@@ -745,7 +738,6 @@ export function McpMarketplacePanel(props: McpMarketplacePanelProps) {
                       </button>
                     </div>
                     <div className="install-card__chips">
-                      <span className="install-card__chip">{t("install.market.source")}: {server.sourceSite.toLowerCase()}</span>
                       <span className="install-card__chip">{t("install.market.author")}: {server.publisher}</span>
                       <span className="install-card__chip">{t("install.mcp.downloads")}: {server.popularityLabel}</span>
                       <span className="install-card__chip">{t("install.mcp.category")}: {server.category}</span>
@@ -911,7 +903,6 @@ function McpServerDetailModal(props: McpServerDetailModalProps) {
           </div>
         </header>
         <div className="skill-detail-modal__meta">
-          <span className="install-card__chip">{t("install.market.source")}: {server.sourceSite.toLowerCase()}</span>
           <span className="install-card__chip">{t("install.market.author")}: {server.publisher}</span>
           <span className="install-card__chip">{t("install.mcp.downloads")}: {server.popularityLabel}</span>
           <span className="install-card__chip">{t("install.mcp.category")}: {server.category}</span>

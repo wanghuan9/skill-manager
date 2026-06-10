@@ -881,6 +881,74 @@ pub fn repo_cache_directory(repo_key: &str) -> Result<PathBuf, String> {
         .join(repo_key))
 }
 
+#[derive(Debug, Eq, PartialEq)]
+struct GitUrlInsteadOfRule {
+    replacement: String,
+    instead_of: String,
+}
+
+pub fn resolve_git_clone_url_with_instead_of(clone_url: &str) -> String {
+    let trimmed = clone_url.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+
+    let Ok(output) = Command::new("git")
+        .args(["config", "--get-regexp", "^url\\."])
+        .output()
+    else {
+        return trimmed.to_string();
+    };
+    if !output.status.success() {
+        return trimmed.to_string();
+    }
+
+    let config_output = String::from_utf8_lossy(&output.stdout);
+    let rules = parse_git_url_instead_of_rules(&config_output);
+    rewrite_git_clone_url_with_instead_of_rules(trimmed, &rules)
+        .unwrap_or_else(|| trimmed.to_string())
+}
+
+fn parse_git_url_instead_of_rules(output: &str) -> Vec<GitUrlInsteadOfRule> {
+    output
+        .lines()
+        .filter_map(|line| {
+            let trimmed = line.trim();
+            let (key, instead_of) = trimmed.split_once(char::is_whitespace)?;
+            let normalized_key = key.to_ascii_lowercase();
+            let replacement = normalized_key
+                .strip_prefix("url.")?
+                .strip_suffix(".insteadof")?;
+            let instead_of = instead_of.trim();
+            if replacement.is_empty() || instead_of.is_empty() {
+                return None;
+            }
+            let replacement = key[4..key.len() - ".insteadOf".len()].to_string();
+            Some(GitUrlInsteadOfRule {
+                replacement,
+                instead_of: instead_of.to_string(),
+            })
+        })
+        .collect()
+}
+
+fn rewrite_git_clone_url_with_instead_of_rules(
+    clone_url: &str,
+    rules: &[GitUrlInsteadOfRule],
+) -> Option<String> {
+    rules
+        .iter()
+        .filter(|rule| clone_url.starts_with(&rule.instead_of))
+        .max_by_key(|rule| rule.instead_of.len())
+        .map(|rule| {
+            format!(
+                "{}{}",
+                rule.replacement,
+                clone_url.strip_prefix(&rule.instead_of).unwrap_or_default()
+            )
+        })
+}
+
 pub fn sanitize_storage_name(name: &str) -> String {
     let mut sanitized = String::with_capacity(name.len());
     let mut last_was_separator = false;
@@ -911,6 +979,7 @@ fn clone_repo_with_optional_branch(
     branch: Option<&str>,
     target_dir: &Path,
 ) -> Result<(), String> {
+    let clone_url = resolve_git_clone_url_with_instead_of(source);
     let mut command = Command::new("git");
     command.arg("clone");
     command.arg("--depth").arg(GIT_CLONE_HISTORY_DEPTH);
@@ -920,7 +989,7 @@ fn clone_repo_with_optional_branch(
         command.arg("--branch").arg(branch_name);
     }
     command
-        .arg(source)
+        .arg(&clone_url)
         .arg(target_dir.to_string_lossy().as_ref());
     let output = output_with_timeout(command, GIT_NETWORK_TIMEOUT, "git clone")?;
 
@@ -940,6 +1009,7 @@ fn clone_repo_with_sparse_paths(
     target_dir: &Path,
     sparse_paths: &[PathBuf],
 ) -> Result<(), String> {
+    let clone_url = resolve_git_clone_url_with_instead_of(source);
     let mut clone_command = Command::new("git");
     clone_command
         .arg("clone")
@@ -954,7 +1024,7 @@ fn clone_repo_with_sparse_paths(
         clone_command.arg("--branch").arg(branch_name);
     }
     clone_command
-        .arg(source)
+        .arg(&clone_url)
         .arg(target_dir.to_string_lossy().as_ref());
     let clone_output = output_with_timeout(clone_command, GIT_NETWORK_TIMEOUT, "git sparse clone")?;
     if !clone_output.status.success() {
@@ -1943,10 +2013,11 @@ fn git_worktree_root(path: &Path) -> Option<PathBuf> {
 mod tests {
     use super::{
         clone_branch_for_resolved_path, create_skill_symlink, get_tool_skills_path,
-        ignore_unnecessary_files, migrate_legacy_skill_symlinks, parse_market_source_url,
-        reconcile_tool_skill_symlinks, remove_reserved_workspace_entries, repo_cache_lock,
-        run_git_in_dir, run_git_output, skill_dir_match_score, tree_relative_path_for_branch,
-        MarketSourceSpec, ResolvedRemoteSkillPath,
+        ignore_unnecessary_files, migrate_legacy_skill_symlinks, parse_git_url_instead_of_rules,
+        parse_market_source_url, reconcile_tool_skill_symlinks, remove_reserved_workspace_entries,
+        repo_cache_lock, rewrite_git_clone_url_with_instead_of_rules, run_git_in_dir,
+        run_git_output, skill_dir_match_score, tree_relative_path_for_branch, MarketSourceSpec,
+        ResolvedRemoteSkillPath,
     };
     use crate::models::SkillSummary;
     use crate::workspace::TEST_ENV_LOCK;
@@ -2010,6 +2081,53 @@ mod tests {
         first.join().expect("first thread should finish");
         second.join().expect("second thread should finish");
         assert!(!second_entered_during_first_hold.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn rewrites_https_clone_url_with_git_instead_of_rule() {
+        let rules = parse_git_url_instead_of_rules(
+            "url.git@git.example.com:.insteadof https://git.example.com/\n",
+        );
+
+        assert_eq!(
+            rewrite_git_clone_url_with_instead_of_rules(
+                "https://git.example.com/example-org/example-repo.git",
+                &rules
+            ),
+            Some("git@git.example.com:example-org/example-repo.git".to_string())
+        );
+    }
+
+    #[test]
+    fn rewrites_clone_url_with_longest_git_instead_of_prefix() {
+        let rules = parse_git_url_instead_of_rules(
+            "\
+url.git@git.example.com:.insteadof https://git.example.com/
+url.git@git.example.com:example-org/.insteadof https://git.example.com/example-org/
+",
+        );
+
+        assert_eq!(
+            rewrite_git_clone_url_with_instead_of_rules(
+                "https://git.example.com/example-org/example-repo.git",
+                &rules
+            ),
+            Some("git@git.example.com:example-org/example-repo.git".to_string())
+        );
+    }
+
+    #[test]
+    fn leaves_clone_url_unchanged_without_git_instead_of_match() {
+        let rules =
+            parse_git_url_instead_of_rules("url.git@example.com:.insteadof https://example.com/\n");
+
+        assert_eq!(
+            rewrite_git_clone_url_with_instead_of_rules(
+                "https://git.example.com/example-org/example-repo.git",
+                &rules
+            ),
+            None
+        );
     }
 
     #[test]

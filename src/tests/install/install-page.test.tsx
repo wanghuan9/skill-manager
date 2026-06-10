@@ -1214,7 +1214,7 @@ test("keeps MCP marketplace card and detail metadata consistent", async () => {
     throw new Error("context7 marketplace card was not rendered");
   }
 
-  expect(within(context7Card).getByText("来源: mcp.directory")).toBeInTheDocument();
+  expect(within(context7Card).queryByText("来源: mcp.directory")).not.toBeInTheDocument();
   expect(within(context7Card).getByText("作者: upstash")).toBeInTheDocument();
   expect(within(context7Card).getByText("下载量: 36.7K")).toBeInTheDocument();
   expect(within(context7Card).getByText("分类: AI/ML")).toBeInTheDocument();
@@ -1224,7 +1224,7 @@ test("keeps MCP marketplace card and detail metadata consistent", async () => {
   const detailDialog = screen.getByRole("dialog", { name: "context7 详情" });
   expect(within(detailDialog).getByRole("link", { name: "查看商店" })).toBeInTheDocument();
   expect(within(detailDialog).getByRole("link", { name: "打开仓库" })).toBeInTheDocument();
-  expect(within(detailDialog).getByText("来源: mcp.directory")).toBeInTheDocument();
+  expect(within(detailDialog).queryByText("来源: mcp.directory")).not.toBeInTheDocument();
   expect(within(detailDialog).getByText("作者: upstash")).toBeInTheDocument();
   expect(within(detailDialog).getByText("下载量: 36.7K")).toBeInTheDocument();
   expect(within(detailDialog).getByText("分类: AI/ML")).toBeInTheDocument();

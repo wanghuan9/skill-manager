@@ -22,8 +22,9 @@ use crate::library::{
     get_tool_skills_path, install_market_skill_from_source, parse_market_source_url,
     reconcile_tool_skill_symlinks, remove_reserved_workspace_entries,
     remove_reserved_workspace_symlinks_from_all_tools, remove_skill_symlink,
-    remove_skill_symlinks_from_all_tools, sanitize_storage_name, skill_directory,
-    tree_relative_path_for_branch, with_temporary_discovery_repo,
+    remove_skill_symlinks_from_all_tools, resolve_git_clone_url_with_instead_of,
+    sanitize_storage_name, skill_directory, tree_relative_path_for_branch,
+    with_temporary_discovery_repo,
 };
 use crate::models::{
     AppSettings, GitAccountSummary, GitBranchOption, GitChangeFile, LocalInstallSkillCandidate,
@@ -3771,8 +3772,14 @@ fn list_local_git_branches(repo_path: &Path) -> Result<Vec<GitBranchOption>, Str
 }
 
 fn remote_git_branch_refs(clone_url: &str) -> Result<(String, BTreeSet<String>), String> {
-    let output =
-        run_git_remote_command(&["ls-remote", "--symref", clone_url, "HEAD", "refs/heads/*"])?;
+    let resolved_clone_url = resolve_git_clone_url_with_instead_of(clone_url);
+    let output = run_git_remote_command(&[
+        "ls-remote",
+        "--symref",
+        &resolved_clone_url,
+        "HEAD",
+        "refs/heads/*",
+    ])?;
     let mut default_branch = String::new();
     let mut branches = BTreeSet::new();
 

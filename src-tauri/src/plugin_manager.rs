@@ -15,8 +15,8 @@ use sha2::{Digest, Sha256};
 use toml_edit::{DocumentMut, Item, Table};
 
 use crate::library::{
-    parse_market_source_url, sanitize_storage_name, tree_relative_path_for_branch,
-    with_temporary_discovery_repo,
+    parse_market_source_url, resolve_git_clone_url_with_instead_of, sanitize_storage_name,
+    tree_relative_path_for_branch, with_temporary_discovery_repo,
 };
 use crate::models::{
     CliToolSummary, PluginComponentPreview, PluginComponentSummary, PluginProbeResult,
@@ -3626,7 +3626,7 @@ fn ensure_shared_plugin_repo(
         args.extend(["--branch".to_string(), branch]);
     }
     args.extend([
-        clone_url.to_string(),
+        resolve_git_clone_url_with_instead_of(clone_url),
         repo_root.to_string_lossy().to_string(),
     ]);
     run_git_dynamic_at(Path::new("."), &args)?;
