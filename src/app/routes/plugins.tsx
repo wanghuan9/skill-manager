@@ -1053,6 +1053,28 @@ function getPluginDirectoryPath(
   activeHost: PluginTabKey,
   allPlugins: PluginSummary[],
 ) {
+  if (plugin.installSource === "skilldock" && plugin.repoRootPath.includes("/.skilldock/")) {
+    return plugin.repoRootPath.trim();
+  }
+
+  return getPluginOpenRootPath(plugin, activeHost, allPlugins);
+}
+
+function getPluginDisplayDirectoryPath(
+  plugin: PluginSummary,
+  activeHost: PluginTabKey,
+  allPlugins: PluginSummary[],
+) {
+  const displayRootPath = plugin.displayRootPath?.trim();
+  if (displayRootPath) {
+    return displayRootPath;
+  }
+
+  const rootPath = plugin.rootPath.trim();
+  if (rootPath && !rootPath.includes("/.skilldock/")) {
+    return rootPath;
+  }
+
   return getPluginOpenRootPath(plugin, activeHost, allPlugins);
 }
 
@@ -2517,6 +2539,7 @@ export function PluginsRoute() {
     const pluginKey = getPluginInstanceKey(plugin);
     const expandedSections = expandedComponentSections[pluginKey] ?? {};
     const pluginDirectoryPath = getPluginDirectoryPath(plugin, activeHost, plugins);
+    const pluginDisplayDirectoryPath = getPluginDisplayDirectoryPath(plugin, activeHost, plugins);
     const isAllTabAggregate = activeHost === "all";
     const showRemoteUpdateInfo = shouldShowPluginRemoteUpdateInfo(plugin);
     const relatedHostCoverageEntries = getPluginHostCoverageEntriesForSummary(
@@ -2588,9 +2611,9 @@ export function PluginsRoute() {
                   <dd className="plugins-page__directory-value">
                     <span
                       className="plugins-page__directory-path"
-                      title={pluginDirectoryPath}
+                      title={pluginDisplayDirectoryPath}
                     >
-                      {pluginDirectoryPath}
+                      {pluginDisplayDirectoryPath}
                     </span>
                     <button
                       type="button"

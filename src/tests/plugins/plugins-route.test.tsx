@@ -2003,7 +2003,7 @@ test("opens a plugin folder from the detail directory row", async () => {
   openPluginSpy.mockRestore();
 });
 
-test("shows and opens the original plugin directory instead of the symlink target", async () => {
+test("shows the host plugin directory and opens the real SkillDock source directory", async () => {
   const openFinderSpy = vi.spyOn(skillClient, "openPathInFinder").mockResolvedValue(undefined);
   const plugins: PluginSummary[] = [
     {
@@ -2012,10 +2012,10 @@ test("shows and opens the original plugin directory instead of the symlink targe
       packageId: "skilldock-plugin",
       name: "SkillDock Plugin",
       hostTool: "codex",
-      rootPath: "/Users/demo/.codex/plugins/cache/skilldock-plugin/1.0.0",
-      displayRootPath: "/Users/demo/.codex/marketplaces/skilldock/plugins/skilldock-plugin",
+      rootPath: "/Users/demo/.skilldock/plugins/skilldock-plugin/plugins/skilldock-plugin",
+      displayRootPath: "/Users/demo/.codex/plugins/cache/skilldock/skilldock-plugin",
       repoRootPath: "/Users/demo/.skilldock/plugins/skilldock-plugin",
-      manifestPath: "/Users/demo/.codex/plugins/cache/skilldock-plugin/1.0.0/plugin.json",
+      manifestPath: "/Users/demo/.codex/plugins/cache/skilldock/skilldock-plugin/plugin.json",
       sourceType: "git",
       sourceUrl: "https://github.com/example/skilldock-plugin",
       installSource: "skilldock",
@@ -2031,13 +2031,14 @@ test("shows and opens the original plugin directory instead of the symlink targe
   await userEvent.click(screen.getByRole("button", { name: /展开 SkillDock Plugin/ }));
 
   expect(
-    screen.getByText("/Users/demo/.codex/plugins/cache/skilldock-plugin/1.0.0"),
+    screen.getByText("/Users/demo/.codex/plugins/cache/skilldock/skilldock-plugin"),
   ).toBeInTheDocument();
+  expect(screen.queryByText("/Users/demo/.skilldock/plugins/skilldock-plugin")).not.toBeInTheDocument();
 
   await userEvent.click(screen.getByRole("button", { name: "在访达中打开 SkillDock Plugin 插件目录" }));
 
   expect(openFinderSpy).toHaveBeenCalledWith({
-    path: "/Users/demo/.codex/plugins/cache/skilldock-plugin/1.0.0",
+    path: "/Users/demo/.skilldock/plugins/skilldock-plugin",
   });
 
   openFinderSpy.mockRestore();
