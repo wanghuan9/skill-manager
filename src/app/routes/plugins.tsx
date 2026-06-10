@@ -525,6 +525,14 @@ function buildPluginPackageMap(plugins: PluginSummary[]) {
   return packageMap;
 }
 
+function getPluginComponentIdentityKey(component: PluginComponentSummary) {
+  if (component.assetType === "mcp") {
+    return `${component.assetType}:${component.id}`;
+  }
+
+  return `${component.assetType}:${component.packageItemId || component.id}`;
+}
+
 function buildAllTabPlugins(plugins: PluginSummary[]): PluginSummary[] {
   const packageMap = buildPluginPackageMap(plugins);
 
@@ -564,9 +572,9 @@ function buildAllTabPlugins(plugins: PluginSummary[]): PluginSummary[] {
 
     const mergedComponents = sortedGroup.flatMap((plugin) => plugin.components);
     const uniqueComponents = mergedComponents.filter((component, index) => {
-      const componentKey = `${component.assetType}:${component.packageItemId || component.id}`;
+      const componentKey = getPluginComponentIdentityKey(component);
       return mergedComponents.findIndex((candidate) => (
-        `${candidate.assetType}:${candidate.packageItemId || candidate.id}` === componentKey
+        getPluginComponentIdentityKey(candidate) === componentKey
       )) === index;
     });
     const mergedScopes = sortedGroup.flatMap((plugin) => plugin.scopes);
