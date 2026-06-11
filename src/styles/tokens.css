@@ -7825,7 +7825,7 @@ button.settings-form-item:disabled {
   font-size: 0.82rem;
 }
 
-.mcp-tool-logo {
+.mcp-server-card__tool-chip .mcp-tool-logo {
   width: 100%;
   height: 100%;
   border-radius: inherit;
