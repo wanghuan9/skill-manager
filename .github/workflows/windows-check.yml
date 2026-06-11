@@ -24,6 +24,8 @@ jobs:
 
       - run: npm ci
 
+      - run: cargo install tauri-cli --locked
+
       - run: npm test
 
       - run: npm run build
