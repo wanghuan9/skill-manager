@@ -14,13 +14,28 @@ const CONFLICT_SUFFIX: &str = ".migrated-from-skillm";
 pub static TEST_ENV_LOCK: Mutex<()> = Mutex::new(());
 
 pub fn home_dir() -> Result<PathBuf, String> {
-    env::var("HOME")
-        .map(PathBuf::from)
-        .map_err(|_| "无法读取 HOME 环境变量".to_string())
+    home_dir_option().ok_or_else(|| "无法读取用户主目录（HOME/USERPROFILE）".to_string())
 }
 
 pub fn home_dir_option() -> Option<PathBuf> {
-    env::var("HOME").ok().map(PathBuf::from)
+    home_dir_from_env()
+}
+
+pub fn home_dir_from_env() -> Option<PathBuf> {
+    env::var_os("HOME")
+        .filter(|value| !value.is_empty())
+        .or_else(|| env::var_os("USERPROFILE").filter(|value| !value.is_empty()))
+        .map(PathBuf::from)
+}
+
+#[allow(dead_code)]
+pub fn config_home_dir() -> Result<PathBuf, String> {
+    if cfg!(windows) {
+        if let Some(appdata) = env::var_os("APPDATA").filter(|value| !value.is_empty()) {
+            return Ok(PathBuf::from(appdata));
+        }
+    }
+    home_dir()
 }
 
 pub fn managed_workspace_root() -> Result<PathBuf, String> {
@@ -326,8 +341,10 @@ mod tests {
             .unwrap_or_else(|error| error.into_inner());
         let temp_home = unique_temp_home(label);
         let original_home = env::var_os("HOME");
+        let original_userprofile = env::var_os("USERPROFILE");
         unsafe {
             env::set_var("HOME", &temp_home);
+            env::remove_var("USERPROFILE");
         }
         let result = callback(temp_home.clone());
         match original_home {
@@ -338,8 +355,58 @@ mod tests {
                 env::remove_var("HOME");
             },
         }
+        match original_userprofile {
+            Some(value) => unsafe {
+                env::set_var("USERPROFILE", value);
+            },
+            None => unsafe {
+                env::remove_var("USERPROFILE");
+            },
+        }
         let _ = fs::remove_dir_all(&temp_home);
         result
+    }
+
+    #[test]
+    fn home_dir_uses_home_when_available() {
+        run_with_temp_home("home-priority", |temp_home| {
+            assert_eq!(super::home_dir().expect("home dir"), temp_home);
+        });
+    }
+
+    #[test]
+    fn home_dir_falls_back_to_userprofile_when_home_missing() {
+        let _guard = TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let temp_home = unique_temp_home("userprofile");
+        let original_home = env::var_os("HOME");
+        let original_userprofile = env::var_os("USERPROFILE");
+
+        unsafe {
+            env::remove_var("HOME");
+            env::set_var("USERPROFILE", &temp_home);
+        }
+
+        assert_eq!(super::home_dir().expect("home dir"), temp_home);
+
+        match original_home {
+            Some(value) => unsafe {
+                env::set_var("HOME", value);
+            },
+            None => unsafe {
+                env::remove_var("HOME");
+            },
+        }
+        match original_userprofile {
+            Some(value) => unsafe {
+                env::set_var("USERPROFILE", value);
+            },
+            None => unsafe {
+                env::remove_var("USERPROFILE");
+            },
+        }
+        let _ = fs::remove_dir_all(temp_home);
     }
 
     #[test]

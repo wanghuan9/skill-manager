@@ -18,14 +18,15 @@ use crate::git_state::{
     enrich_skill_with_local_git_state,
 };
 use crate::library::{
-    clone_repo_skill, create_skill_symlink, ensure_repo_skill_with_resolved_ref_and_sparse_paths,
-    get_tool_skills_path, install_market_skill_from_source, is_ssh_git_url, parse_market_source_url,
-    remote_clone_candidates, reconcile_tool_skill_symlinks, remove_reserved_workspace_entries,
+    clone_repo_skill, configure_git_network_command, create_skill_symlink,
+    ensure_repo_skill_with_resolved_ref_and_sparse_paths, get_tool_skills_path,
+    install_market_skill_from_source, is_ssh_git_url, parse_market_source_url,
+    reconcile_tool_skill_symlinks, remote_clone_candidates, remove_reserved_workspace_entries,
     remove_reserved_workspace_symlinks_from_all_tools, remove_skill_symlink,
     remove_skill_symlinks_from_all_tools, resolve_clone_url_http_first,
     resolve_git_clone_url_with_instead_of, sanitize_storage_name, skill_directory,
     summarize_git_error, tree_relative_path_for_branch, with_temporary_discovery_repo_resolved,
-    configure_git_network_command, RemoteCloneCandidate,
+    RemoteCloneCandidate,
 };
 use crate::models::{
     AppSettings, GitAccountSummary, GitBranchOption, GitChangeFile, LocalInstallSkillCandidate,
@@ -541,11 +542,10 @@ fn load_skills_manager_cached_items_page(page: usize, limit: usize) -> Option<Ve
 }
 
 fn load_skills_manager_cached_items() -> Vec<SkillsManagerCachedSkill> {
-    let home_dir = match env::var("HOME") {
-        Ok(value) => value,
-        Err(_) => return Vec::new(),
+    let Some(home_dir) = workspace::home_dir_option() else {
+        return Vec::new();
     };
-    let cache_path = PathBuf::from(home_dir)
+    let cache_path = home_dir
         .join(".skills-manager")
         .join("cache")
         .join("marketplace-skills.json");
@@ -919,11 +919,10 @@ fn normalize_repo_key_from_source(source: &str) -> String {
 
 fn load_skills_sh_description_cache() -> HashMap<String, String> {
     let mut result = HashMap::new();
-    let home_dir = match env::var("HOME") {
-        Ok(value) => value,
-        Err(_) => return result,
+    let Some(home_dir) = workspace::home_dir_option() else {
+        return result;
     };
-    let cache_path = PathBuf::from(home_dir)
+    let cache_path = home_dir
         .join(".skills-manager")
         .join("cache")
         .join("marketplace-skills.json");
@@ -1031,21 +1030,14 @@ fn now_timestamp_label() -> String {
 }
 
 fn format_system_time_label(value: SystemTime) -> Option<String> {
-    let seconds = value.duration_since(UNIX_EPOCH).ok()?.as_secs().to_string();
-    let output = Command::new("date")
-        .args(["-r", &seconds, "+%Y/%-m/%-d %H:%M:%S"])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-
-    let formatted = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if formatted.is_empty() {
-        None
-    } else {
-        Some(formatted)
-    }
+    let datetime: chrono::DateTime<chrono::Utc> = value.into();
+    Some(format!(
+        "{}/{}/{} {}",
+        datetime.format("%Y"),
+        datetime.format("%m").to_string().trim_start_matches('0'),
+        datetime.format("%d").to_string().trim_start_matches('0'),
+        datetime.format("%H:%M:%S")
+    ))
 }
 
 async fn fetch_skillsmp_marketplace(
@@ -1585,8 +1577,7 @@ fn supports_mcp_for_tool(tool_id: &str) -> bool {
 }
 
 fn build_tool_configs() -> Vec<ToolConfig> {
-    let home_dir = env::var("HOME").unwrap_or_else(|_| "~".to_string());
-    let home_path = PathBuf::from(&home_dir);
+    let home_path = workspace::home_dir().unwrap_or_else(|_| PathBuf::from("~"));
     let tool_specs = [
         (
             "claude-code",
@@ -1696,7 +1687,11 @@ fn build_tool_configs() -> Vec<ToolConfig> {
             true,
             vec![],
             software_spec(
-                &["Visual Studio Code", "Visual Studio Code - Insiders", "VS Code"],
+                &[
+                    "Visual Studio Code",
+                    "Visual Studio Code - Insiders",
+                    "VS Code",
+                ],
                 &["code"],
             ),
         ),
@@ -2507,8 +2502,8 @@ struct EditorOpenInfo {
 /// Scan common macOS application directories for .app bundles whose name matches a candidate.
 fn find_app_bundle(app_name_candidates: &[&str]) -> Option<String> {
     let mut app_dirs = vec![PathBuf::from("/Applications")];
-    if let Some(home_dir) = env::var_os("HOME") {
-        app_dirs.push(PathBuf::from(home_dir).join("Applications"));
+    if let Some(home_dir) = workspace::home_dir_option() {
+        app_dirs.push(home_dir.join("Applications"));
     }
 
     for apps_dir in app_dirs {
@@ -2576,7 +2571,11 @@ fn editor_app_name_candidates(editor_id: &str) -> &[&str] {
             "IntelliJ IDEA CE",
             "IntelliJ IDEA Ultimate",
         ],
-        "vscode" => &["Visual Studio Code", "Visual Studio Code - Insiders", "VS Code"],
+        "vscode" => &[
+            "Visual Studio Code",
+            "Visual Studio Code - Insiders",
+            "VS Code",
+        ],
         _ => &[],
     }
 }
@@ -3211,18 +3210,60 @@ fn open_target_path_for_skill(skill_path: &str) -> String {
     repository_root_path(skill_path).unwrap_or_else(|_| skill_path.to_string())
 }
 
-fn open_path_with_finder(path: &str) -> Result<(), String> {
-    let output = Command::new("open")
-        .arg(path)
+#[derive(Debug, PartialEq, Eq)]
+struct OpenCommandSpec {
+    program: String,
+    args: Vec<String>,
+}
+
+fn default_open_command_for_platform(target: &str) -> OpenCommandSpec {
+    if cfg!(windows) {
+        return OpenCommandSpec {
+            program: "cmd".to_string(),
+            args: vec![
+                "/C".to_string(),
+                "start".to_string(),
+                String::new(),
+                target.to_string(),
+            ],
+        };
+    }
+    if cfg!(target_os = "macos") {
+        return OpenCommandSpec {
+            program: "open".to_string(),
+            args: vec![target.to_string()],
+        };
+    }
+    OpenCommandSpec {
+        program: "xdg-open".to_string(),
+        args: vec![target.to_string()],
+    }
+}
+
+fn run_open_command(spec: OpenCommandSpec, error_prefix: &str) -> Result<(), String> {
+    let output = Command::new(&spec.program)
+        .args(&spec.args)
         .output()
-        .map_err(|error| format!("打开 Finder 失败: {error}"))?;
+        .map_err(|error| format!("{error_prefix}: {error}"))?;
 
     if output.status.success() {
         return Ok(());
     }
 
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-    Err(format!("打开 Finder 失败: {stderr}"))
+    Err(format!("{error_prefix}: {stderr}"))
+}
+
+fn open_path_cross_platform(path: &str) -> Result<(), String> {
+    run_open_command(default_open_command_for_platform(path), "打开路径失败")
+}
+
+fn open_url_cross_platform(url: &str) -> Result<(), String> {
+    run_open_command(default_open_command_for_platform(url), "打开链接失败")
+}
+
+fn open_path_with_finder(path: &str) -> Result<(), String> {
+    open_path_cross_platform(path)
 }
 
 /// Open a directory path using the editor's CLI binary.
@@ -3238,6 +3279,10 @@ fn open_path_with_cli(cli_path: &str, path: &str) -> Result<(), String> {
 
 /// Fallback: open a directory using `open -a AppName path`.
 fn open_path_with_open_a(app_name: &str, path: &str) -> Result<(), String> {
+    if !cfg!(target_os = "macos") {
+        return open_path_cross_platform(path);
+    }
+
     let output = Command::new("open")
         .args(["-a", app_name, path])
         .output()
@@ -3252,8 +3297,7 @@ fn open_path_with_open_a(app_name: &str, path: &str) -> Result<(), String> {
 }
 
 fn path_to_jetbrains_macro(path: &Path) -> String {
-    if let Some(home_dir) = env::var_os("HOME") {
-        let home_path = PathBuf::from(home_dir);
+    if let Some(home_path) = workspace::home_dir_option() {
         if let Ok(relative_path) = path.strip_prefix(&home_path) {
             let relative = relative_path.to_string_lossy();
             if relative.is_empty() {
@@ -3391,8 +3435,7 @@ fn intellij_trusted_locations_for_project(project_path: &Path) -> Vec<PathBuf> {
 }
 
 fn intellij_config_dirs() -> Result<Vec<PathBuf>, String> {
-    let home_dir = env::var_os("HOME").ok_or_else(|| "无法读取 HOME 环境变量".to_string())?;
-    let jetbrains_dir = PathBuf::from(home_dir).join("Library/Application Support/JetBrains");
+    let jetbrains_dir = workspace::home_dir()?.join("Library/Application Support/JetBrains");
     if !jetbrains_dir.exists() {
         return Ok(Vec::new());
     }
@@ -3536,6 +3579,10 @@ fn intellij_vcs_mapping_directory(project_root: &Path, git_root: &Path) -> Strin
 }
 
 fn open_path_with_default_text_editor(path: &str) -> Result<(), String> {
+    if !cfg!(target_os = "macos") {
+        return open_path_cross_platform(path);
+    }
+
     let output = Command::new("open")
         .args(["-t", path])
         .output()
@@ -3551,6 +3598,10 @@ fn open_path_with_default_text_editor(path: &str) -> Result<(), String> {
 
 /// Check whether an editor app is currently running by looking for its process.
 fn is_editor_running(app_display_name: &str) -> bool {
+    if !cfg!(target_os = "macos") {
+        return false;
+    }
+
     Command::new("pgrep")
         .args(["-x", app_display_name])
         .output()
@@ -3573,11 +3624,13 @@ pub(crate) fn open_path_with_editor(path: &str, editor_id: &str) -> Result<(), S
         }
     }
 
-    // If we have a display name, check if the app is already running
-    if let Some(ref app_name) = info.app_display_name {
-        if is_editor_running(app_name) {
-            // App is running: use `open -a` to open in existing instance (no flicker)
-            return open_path_with_open_a(app_name, path);
+    // On macOS, reuse a running GUI app when possible. Other platforms prefer CLI/default opener.
+    if cfg!(target_os = "macos") {
+        if let Some(ref app_name) = info.app_display_name {
+            if is_editor_running(app_name) {
+                // App is running: use `open -a` to open in existing instance (no flicker)
+                return open_path_with_open_a(app_name, path);
+            }
         }
     }
 
@@ -3586,7 +3639,7 @@ pub(crate) fn open_path_with_editor(path: &str, editor_id: &str) -> Result<(), S
         return open_path_with_cli(cli_path, path);
     }
 
-    // Fallback to `open -a` using the display name
+    // Fallback to `open -a` using the display name on macOS, or the system opener elsewhere.
     if let Some(ref app_name) = info.app_display_name {
         return open_path_with_open_a(app_name, path);
     }
@@ -3814,7 +3867,9 @@ fn resolve_repo_clone_url_for_network(
     let cache = REPO_RESOLVED_CLONE_URL_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     if let Ok(mut guard) = cache.lock() {
         let now = Instant::now();
-        guard.retain(|_, (_, cached_at)| now.duration_since(*cached_at) <= REPO_RESOLVED_CLONE_URL_CACHE_TTL);
+        guard.retain(|_, (_, cached_at)| {
+            now.duration_since(*cached_at) <= REPO_RESOLVED_CLONE_URL_CACHE_TTL
+        });
         if let Some((clone_url, _)) = guard.get(&cache_key) {
             return Ok(clone_url.clone());
         }
@@ -4790,13 +4845,9 @@ fn discover_repo_skills_without_path_hint(
         }
     }
 
-    with_temporary_discovery_repo_resolved(
-        clone_url,
-        git_ref,
-        &spec.repo_key,
-        &[],
-        |repo_root| scan_repo_skill_candidates(repo_root, None),
-    )
+    with_temporary_discovery_repo_resolved(clone_url, git_ref, &spec.repo_key, &[], |repo_root| {
+        scan_repo_skill_candidates(repo_root, None)
+    })
 }
 
 #[tauri::command]
@@ -5565,17 +5616,7 @@ pub fn open_skill_repository(skill_name: &str) -> Result<(), String> {
     let (installed_skills, skill_index) = find_skill_by_name(skill_name)?;
     let skill = &installed_skills[skill_index];
     let repository_path = repository_root_path(&skill.local_path)?;
-    let output = Command::new("open")
-        .arg(&repository_path)
-        .output()
-        .map_err(|error| format!("打开仓库目录失败: {error}"))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return Err(format!("打开仓库目录失败: {stderr}"));
-    }
-
-    Ok(())
+    open_path_cross_platform(&repository_path).map_err(|error| format!("打开仓库目录失败: {error}"))
 }
 
 #[tauri::command]
@@ -5585,15 +5626,7 @@ pub fn open_external_link(url: &str) -> Result<(), String> {
         return Err("仅支持打开 http(s) 链接".into());
     }
 
-    let output = Command::new("open")
-        .arg(target)
-        .output()
-        .map_err(|error| format!("打开链接失败: {error}"))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return Err(format!("打开链接失败: {stderr}"));
-    }
-    Ok(())
+    open_url_cross_platform(target)
 }
 
 #[tauri::command]
@@ -5614,8 +5647,8 @@ pub fn open_path_in_finder(path: &str) -> Result<(), String> {
 
 #[tauri::command]
 pub fn open_tool_mcp_config(tool_id: &str, editor_id: Option<String>) -> Result<(), String> {
-    let home_dir = env::var("HOME").map_err(|error| format!("读取 HOME 失败: {error}"))?;
-    let config_path = mcp_config_path_for_tool(tool_id, &PathBuf::from(home_dir));
+    let home_dir = workspace::home_dir()?;
+    let config_path = mcp_config_path_for_tool(tool_id, &home_dir);
     if config_path.as_os_str().is_empty() {
         return Err("暂未识别该工具的 MCP 配置文件。".into());
     }
@@ -5994,7 +6027,7 @@ mod tests {
     use crate::workspace::TEST_ENV_LOCK;
     use std::env;
     use std::fs;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::process::Command;
     use std::sync::{
         atomic::{AtomicUsize, Ordering},
@@ -7148,9 +7181,8 @@ mod tests {
 
     #[test]
     fn repo_install_https_candidates_try_http_before_ssh() {
-        let spec =
-            parse_repo_install_spec("https://git.example.com/example-org/example-repo")
-                .expect("parse https repo install spec");
+        let spec = parse_repo_install_spec("https://git.example.com/example-org/example-repo")
+            .expect("parse https repo install spec");
 
         let candidates = repo_clone_candidates(&spec)
             .into_iter()
@@ -7658,8 +7690,60 @@ mod tests {
     fn supports_vscode_as_open_only_editor() {
         assert_eq!(
             super::editor_app_name_candidates("vscode"),
-            &["Visual Studio Code", "Visual Studio Code - Insiders", "VS Code"]
+            &[
+                "Visual Studio Code",
+                "Visual Studio Code - Insiders",
+                "VS Code"
+            ]
         );
         assert_eq!(super::editor_cli_name_candidates("vscode"), &["code"]);
+    }
+
+    #[test]
+    fn cursor_mcp_path_stays_under_home() {
+        let home = PathBuf::from(if cfg!(windows) {
+            r"C:\Users\demo"
+        } else {
+            "/Users/demo"
+        });
+        let path = super::mcp_config_path_for_tool("cursor", &home);
+        assert!(path.ends_with(Path::new(".cursor").join("mcp.json")));
+    }
+
+    #[test]
+    fn default_open_command_uses_windows_start_on_windows() {
+        let command = super::default_open_command_for_platform("C:\\Users\\demo\\repo");
+        if cfg!(windows) {
+            assert_eq!(command.program, "cmd");
+            assert_eq!(
+                command.args,
+                vec!["/C", "start", "", "C:\\Users\\demo\\repo"]
+            );
+        }
+    }
+
+    #[test]
+    fn default_open_command_uses_open_on_macos() {
+        let command = super::default_open_command_for_platform("/Users/demo/repo");
+        if cfg!(target_os = "macos") {
+            assert_eq!(command.program, "open");
+            assert_eq!(command.args, vec!["/Users/demo/repo"]);
+        }
+    }
+
+    #[test]
+    fn default_open_command_uses_xdg_open_elsewhere() {
+        let command = super::default_open_command_for_platform("/home/demo/repo");
+        if !cfg!(windows) && !cfg!(target_os = "macos") {
+            assert_eq!(command.program, "xdg-open");
+            assert_eq!(command.args, vec!["/home/demo/repo"]);
+        }
+    }
+
+    #[test]
+    fn format_system_time_label_formats_epoch_without_shelling_out() {
+        let label = super::format_system_time_label(UNIX_EPOCH).expect("label");
+        assert!(label.contains("1970") || label.contains("1969"));
+        assert!(label.contains(':'));
     }
 }

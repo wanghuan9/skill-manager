@@ -3968,8 +3968,8 @@ fn find_plugin_host_executable_path(executable_name: &str) -> Option<PathBuf> {
 
 fn find_plugin_host_app_bundle(app_name_candidates: &[&str]) -> Option<PathBuf> {
     let mut app_dirs = vec![PathBuf::from("/Applications")];
-    if let Some(home_dir) = env::var_os("HOME") {
-        app_dirs.push(PathBuf::from(home_dir).join("Applications"));
+    if let Some(home_dir) = workspace::home_dir_option() {
+        app_dirs.push(home_dir.join("Applications"));
     }
 
     for apps_dir in app_dirs {
@@ -8400,16 +8400,8 @@ fn current_timestamp_millis() -> String {
 }
 
 fn current_timestamp_rfc3339() -> String {
-    let output = Command::new("date")
-        .arg("-u")
-        .arg("+%Y-%m-%dT%H:%M:%SZ")
-        .output();
-    match output {
-        Ok(output) if output.status.success() => {
-            String::from_utf8_lossy(&output.stdout).trim().to_string()
-        }
-        _ => "1970-01-01T00:00:00Z".to_string(),
-    }
+    let now: chrono::DateTime<chrono::Utc> = SystemTime::now().into();
+    now.format("%Y-%m-%dT%H:%M:%SZ").to_string()
 }
 
 fn slugify(value: &str) -> String {
@@ -8452,12 +8444,13 @@ struct ProbeBuildArgs<'a> {
 mod tests {
     use super::{
         build_plugin_scope_summary, cleanup_duplicate_plugin_package_roots,
-        configure_plugin_sparse_checkout, copy_plugin_dir, dedupe_and_sort_plugins, delete_plugin,
-        ensure_skilldock_claude_marketplace, ensure_skilldock_codex_marketplace,
-        get_plugin_component_preview, install_selected_plugin_probes_blocking,
-        legacy_plugin_package_identity_path, legacy_skilldock_plugin_source_metadata_path,
-        list_cli_tools, list_installed_plugins_blocking as list_installed_plugins,
-        paths_refer_to_same_dir, plugin_git_state, plugin_probe_source_url, probe_plugin_repo,
+        configure_plugin_sparse_checkout, copy_plugin_dir, current_timestamp_rfc3339,
+        dedupe_and_sort_plugins, delete_plugin, ensure_skilldock_claude_marketplace,
+        ensure_skilldock_codex_marketplace, get_plugin_component_preview,
+        install_selected_plugin_probes_blocking, legacy_plugin_package_identity_path,
+        legacy_skilldock_plugin_source_metadata_path, list_cli_tools,
+        list_installed_plugins_blocking as list_installed_plugins, paths_refer_to_same_dir,
+        plugin_git_state, plugin_probe_source_url, probe_plugin_repo,
         probe_plugin_source_candidates_blocking, read_plugin_package_identity,
         read_skilldock_plugin_source_metadata, resolve_shared_plugin_package_id,
         set_plugin_enabled, shared_plugin_package_id_candidates, shared_plugin_package_repo_root,
@@ -8485,6 +8478,13 @@ mod tests {
         }
         fs::create_dir_all(&path).expect("create temp test dir");
         path
+    }
+
+    #[test]
+    fn current_timestamp_rfc3339_has_utc_suffix() {
+        let value = current_timestamp_rfc3339();
+        assert!(value.ends_with('Z'));
+        assert!(value.contains('T'));
     }
 
     fn run_git_test(current_dir: &Path, args: &[&str]) {

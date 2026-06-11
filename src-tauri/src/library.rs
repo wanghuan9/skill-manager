@@ -1073,7 +1073,10 @@ pub fn ssh_clone_url_for_repository_url(repository_url: &str) -> Option<String> 
     Some(format!("git@{host}:{owner}/{repo}.git"))
 }
 
-pub fn resolve_clone_url_http_first(clone_url: &str, repository_url: &str) -> Result<String, String> {
+pub fn resolve_clone_url_http_first(
+    clone_url: &str,
+    repository_url: &str,
+) -> Result<String, String> {
     let candidates = remote_clone_candidates(clone_url, repository_url);
     if candidates.is_empty() {
         return Err("仓库地址解析失败: clone URL 为空".into());
@@ -1816,17 +1819,27 @@ pub fn create_skill_symlink(
         }
     }
 
-    // 创建符号链接
+    create_skill_directory_link(&skill_path, &symlink_path)
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
+fn windows_symlink_error_message(error: &str) -> String {
+    format!(
+        "创建符号链接失败: {error}。Windows 可能需要开启开发者模式或使用管理员权限运行 SkillDock。"
+    )
+}
+
+fn create_skill_directory_link(skill_path: &Path, symlink_path: &Path) -> Result<(), String> {
     #[cfg(unix)]
     {
-        std::os::unix::fs::symlink(&skill_path, &symlink_path)
+        std::os::unix::fs::symlink(skill_path, symlink_path)
             .map_err(|error| format!("创建符号链接失败: {error}"))?;
     }
 
     #[cfg(windows)]
     {
-        std::os::windows::fs::symlink_dir(&skill_path, &symlink_path)
-            .map_err(|error| format!("创建符号链接失败: {error}"))?;
+        std::os::windows::fs::symlink_dir(skill_path, symlink_path)
+            .map_err(|error| windows_symlink_error_message(&error.to_string()))?;
     }
 
     Ok(())
@@ -1907,17 +1920,8 @@ fn migrate_legacy_skill_symlink(entry_path: &Path) -> Result<bool, String> {
 
     fs::remove_file(entry_path).map_err(|error| format!("删除旧技能链接失败: {error}"))?;
 
-    #[cfg(unix)]
-    {
-        std::os::unix::fs::symlink(&replacement_target, entry_path)
-            .map_err(|error| format!("迁移旧技能链接失败: {error}"))?;
-    }
-
-    #[cfg(windows)]
-    {
-        std::os::windows::fs::symlink_dir(&replacement_target, entry_path)
-            .map_err(|error| format!("迁移旧技能链接失败: {error}"))?;
-    }
+    create_skill_directory_link(&replacement_target, entry_path)
+        .map_err(|error| format!("迁移旧技能链接失败: {error}"))?;
 
     Ok(true)
 }
@@ -2072,14 +2076,19 @@ pub fn reconcile_tool_skill_symlinks(
 }
 
 pub fn get_tool_skills_path(tool_id: &str) -> Result<String, String> {
-    let home_dir = env::var("HOME").map_err(|_| "无法读取 HOME 环境变量".to_string())?;
-    let home_path = PathBuf::from(&home_dir);
+    let home_path = workspace::home_dir()?;
+    Ok(tool_skills_path_for_home(tool_id, &home_path)?
+        .to_string_lossy()
+        .to_string())
+}
 
+fn tool_skills_path_for_home(tool_id: &str, home_path: &Path) -> Result<PathBuf, String> {
     let skills_path = match tool_id {
         "claude-code" => home_path.join(".claude/skills"),
         "codex" => home_path.join(".codex/skills"),
         "opencode" => home_path.join(".config/opencode/skills"),
         "cursor" => home_path.join(".cursor/skills"),
+        "vscode" => home_path.join(".vscode/skills"),
         "gemini" => home_path.join(".gemini/skills"),
         "antigravity" => home_path.join(".gemini/config/skills"),
         "windsurf" => home_path.join(".codeium/windsurf/skills"),
@@ -2108,15 +2117,16 @@ pub fn get_tool_skills_path(tool_id: &str) -> Result<String, String> {
         _ => return Err(format!("未知的工具 ID: {tool_id}")),
     };
 
-    Ok(skills_path.to_string_lossy().to_string())
+    Ok(skills_path)
 }
 
-fn tool_ids() -> [&'static str; 29] {
+fn tool_ids() -> [&'static str; 30] {
     [
         "claude-code",
         "codex",
         "opencode",
         "cursor",
+        "vscode",
         "gemini",
         "antigravity",
         "windsurf",
@@ -2264,16 +2274,17 @@ mod tests {
     use super::{
         clone_branch_for_resolved_path, create_skill_symlink, get_tool_skills_path,
         ignore_unnecessary_files, migrate_legacy_skill_symlinks, parse_git_url_instead_of_rules,
-        parse_market_source_url, reconcile_tool_skill_symlinks, remove_reserved_workspace_entries,
-        remote_clone_candidates, repo_cache_lock, rewrite_git_clone_url_with_instead_of_rules,
-        run_git_in_dir, run_git_output, skill_dir_match_score, ssh_clone_url_for_repository_url,
-        summarize_git_error, tree_relative_path_for_branch, MarketSourceSpec,
+        parse_market_source_url, reconcile_tool_skill_symlinks, remote_clone_candidates,
+        remove_reserved_workspace_entries, repo_cache_lock,
+        rewrite_git_clone_url_with_instead_of_rules, run_git_in_dir, run_git_output,
+        skill_dir_match_score, ssh_clone_url_for_repository_url, summarize_git_error,
+        tool_skills_path_for_home, tree_relative_path_for_branch, MarketSourceSpec,
         RemoteCloneCandidate, ResolvedRemoteSkillPath,
     };
     use crate::models::SkillSummary;
     use crate::workspace::TEST_ENV_LOCK;
     use std::fs;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Barrier};
     use std::thread;
@@ -2539,6 +2550,13 @@ url.git@git.example.com:example-org/.insteadof https://git.example.com/example-o
     }
 
     #[test]
+    fn windows_symlink_error_message_mentions_developer_mode() {
+        let message = super::windows_symlink_error_message("拒绝访问");
+        assert!(message.contains("开发者模式"));
+        assert!(message.contains("管理员权限"));
+    }
+
+    #[test]
     fn remove_reserved_workspace_symlinks_drops_managed_workspace_links() {
         let _guard = TEST_ENV_LOCK
             .lock()
@@ -2772,6 +2790,28 @@ url.git@git.example.com:example-org/.insteadof https://git.example.com/example-o
             }
         }
         let _ = fs::remove_dir_all(home_dir);
+    }
+
+    #[test]
+    fn codex_tool_skills_path_stays_under_home() {
+        let home = PathBuf::from(if cfg!(windows) {
+            r"C:\Users\demo"
+        } else {
+            "/Users/demo"
+        });
+        let path = tool_skills_path_for_home("codex", &home).expect("codex path");
+        assert!(path.ends_with(Path::new(".codex").join("skills")));
+    }
+
+    #[test]
+    fn vscode_tool_skills_path_stays_under_home() {
+        let home = PathBuf::from(if cfg!(windows) {
+            r"C:\Users\demo"
+        } else {
+            "/Users/demo"
+        });
+        let path = tool_skills_path_for_home("vscode", &home).expect("vscode path");
+        assert!(path.ends_with(Path::new(".vscode").join("skills")));
     }
 
     #[test]

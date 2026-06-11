@@ -1,0 +1,41 @@
+name: Windows Check
+
+on:
+  push:
+    branches:
+      - "feature/**"
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  windows-check:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - run: npm ci
+
+      - run: npm test
+
+      - run: npm run build
+
+      - run: cd src-tauri && cargo check --target x86_64-pc-windows-msvc
+
+      - name: Build Windows installer probe
+        run: npm run desktop:build -- --target x86_64-pc-windows-msvc --config src-tauri/tauri.windows.conf.json
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: skilldock-windows-tauri-bundle
+          path: src-tauri/target/x86_64-pc-windows-msvc/release/bundle/**
+          retention-days: 14

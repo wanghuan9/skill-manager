@@ -4,7 +4,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{mpsc, Condvar, Mutex, MutexGuard, OnceLock};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime};
 
 use crate::models::SkillSummary;
 use crate::workspace::{
@@ -894,21 +894,14 @@ fn max_system_time(left: Option<SystemTime>, right: Option<SystemTime>) -> Optio
 }
 
 fn format_system_time(value: SystemTime) -> Option<String> {
-    let seconds = value.duration_since(UNIX_EPOCH).ok()?.as_secs().to_string();
-    let output = Command::new("date")
-        .args(["-r", &seconds, "+%Y/%-m/%-d %H:%M:%S"])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-
-    let formatted = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if formatted.is_empty() {
-        None
-    } else {
-        Some(formatted)
-    }
+    let datetime: chrono::DateTime<chrono::Utc> = value.into();
+    Some(format!(
+        "{}/{}/{} {}",
+        datetime.format("%Y"),
+        datetime.format("%m").to_string().trim_start_matches('0'),
+        datetime.format("%d").to_string().trim_start_matches('0'),
+        datetime.format("%H:%M:%S")
+    ))
 }
 
 fn prefer_newer_local_updated_at(
@@ -953,6 +946,7 @@ fn parse_skill_time_label(value: &str) -> Option<(u32, u32, u32, u32, u32, u32)>
 mod tests {
     use super::*;
     use std::env;
+    use std::time::UNIX_EPOCH;
 
     fn skill_summary(name: &str, local_path: &Path) -> SkillSummary {
         SkillSummary {
@@ -1565,6 +1559,13 @@ mod tests {
             &entry, &skill, "main", "def456"
         ));
         assert!(!update_cache_entry_matches(&entry, &skill, "dev", "abc123"));
+    }
+
+    #[test]
+    fn format_system_time_formats_epoch_without_shelling_out() {
+        let label = format_system_time(UNIX_EPOCH).expect("label");
+        assert!(label.contains("1970") || label.contains("1969"));
+        assert!(label.contains(':'));
     }
 
     #[test]

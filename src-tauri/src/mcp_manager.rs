@@ -4289,21 +4289,14 @@ fn parse_mcp_time_label(value: &str) -> i64 {
 }
 
 fn format_system_time_label(value: SystemTime) -> Option<String> {
-    let seconds = value.duration_since(UNIX_EPOCH).ok()?.as_secs().to_string();
-    let output = Command::new("date")
-        .args(["-r", &seconds, "+%Y/%-m/%-d %H:%M:%S"])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-
-    let formatted = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if formatted.is_empty() {
-        None
-    } else {
-        Some(formatted)
-    }
+    let datetime: chrono::DateTime<chrono::Utc> = value.into();
+    Some(format!(
+        "{}/{}/{} {}",
+        datetime.format("%Y"),
+        datetime.format("%m").to_string().trim_start_matches('0'),
+        datetime.format("%d").to_string().trim_start_matches('0'),
+        datetime.format("%H:%M:%S")
+    ))
 }
 
 fn json_string_map_to_toml_table(map: &Map<String, Value>) -> toml_edit::Table {
@@ -5485,6 +5478,13 @@ A comprehensive GitLab MCP server for AI clients. Manage projects, merge request
             parse_mcp_description_from_readme(readme).as_deref(),
             Some("Lightweight server for internal automation workflows.")
         );
+    }
+
+    #[test]
+    fn format_system_time_label_formats_epoch_without_shelling_out() {
+        let label = format_system_time_label(UNIX_EPOCH).expect("label");
+        assert!(label.contains("1970") || label.contains("1969"));
+        assert!(label.contains(':'));
     }
 
     #[test]
