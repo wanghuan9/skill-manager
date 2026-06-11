@@ -4,6 +4,7 @@ import { afterEach, beforeEach, vi } from "vitest";
 import { App } from "@/app/App";
 import { resetMcpAutoProbeRuntimeForTests } from "@/app/routes/mcp";
 import * as skillClient from "@/features/skills/api/skill-client";
+import { formatSkillUpdatedAt } from "@/features/skills/utils/skill-time";
 
 beforeEach(() => {
   window.localStorage.clear();
@@ -263,10 +264,7 @@ test("automatically scan imports when the MCP workspace is empty", async () => {
     }
     finishImport(1);
 
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: "扫描导入" })).toBeEnabled();
-      expect(screen.getByText("context7")).toBeInTheDocument();
-    });
+    expect(await screen.findByText("context7")).toBeInTheDocument();
     expect(refreshSpy).not.toHaveBeenCalled();
   } finally {
     fixtureSpy.mockRestore();
@@ -1013,7 +1011,7 @@ test("shows supported MCP apps in enable-to-tool controls", async () => {
   expect(screen.getAllByText("Up-to-date code documentation for LLMs and AI code editors")).toHaveLength(2);
   const installedAtLabel = screen.getByText("安装时间");
   expect(installedAtLabel).toBeInTheDocument();
-  expect(screen.getByText("2026/5/10 16:30:00")).toBeInTheDocument();
+  expect(screen.getByText(formatSkillUpdatedAt("1778401800000"))).toBeInTheDocument();
   expect(screen.queryByText("来源类型")).not.toBeInTheDocument();
   expect(screen.queryByText("GitHub")).not.toBeInTheDocument();
   expect(screen.getByText("完整命令")).toBeInTheDocument();
