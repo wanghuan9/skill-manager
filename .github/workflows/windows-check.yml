@@ -24,8 +24,6 @@ jobs:
 
       - run: npm ci
 
-      - run: cargo install tauri-cli --locked
-
       - run: npm test
 
       - run: npm run build
@@ -33,7 +31,7 @@ jobs:
       - run: cd src-tauri && cargo check --target x86_64-pc-windows-msvc
 
       - name: Build Windows installer probe
-        run: npm run desktop:build -- --target x86_64-pc-windows-msvc --config src-tauri/tauri.windows.conf.json
+        run: npx tauri build --target x86_64-pc-windows-msvc --config src-tauri/tauri.windows.conf.json
 
       - uses: actions/upload-artifact@v4
         if: always()
