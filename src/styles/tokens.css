@@ -3703,6 +3703,10 @@ code {
   flex: 0 1 360px;
 }
 
+.repo-install__select-toggle {
+  flex: 0 0 auto;
+}
+
 .repo-install__empty {
   display: grid;
   place-content: center;
@@ -3863,6 +3867,10 @@ code {
   .repo-install__search-field {
     margin-left: 0;
     flex-basis: auto;
+  }
+
+  .repo-install__select-toggle {
+    align-self: flex-start;
   }
 }
 

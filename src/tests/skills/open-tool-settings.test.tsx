@@ -30,6 +30,7 @@ test("allows selecting default open tool in settings", async () => {
   expect(screen.getByText("工具状态")).toBeInTheDocument();
 
   expect(screen.getByRole("option", { name: "Cursor" })).toBeInTheDocument();
+  expect(screen.getByRole("option", { name: "VS Code" })).toBeInTheDocument();
   expect(screen.getByRole("option", { name: "IntelliJ IDEA" })).toBeInTheDocument();
   expect(screen.getByRole("option", { name: "访达" })).toBeInTheDocument();
   expect(screen.queryByRole("option", { name: "Claude Code" })).not.toBeInTheDocument();
@@ -57,6 +58,7 @@ test("allows selecting default open tool in settings", async () => {
 
   expect(screen.getByText("CodeBuddy")).toBeInTheDocument();
   expect(within(toolStatusPanel).queryByText("IntelliJ IDEA")).not.toBeInTheDocument();
+  expect(within(toolStatusPanel).queryByText("VS Code")).not.toBeInTheDocument();
   expect(screen.getAllByText("未安装").length).toBeGreaterThan(0);
   expect(screen.getAllByText("Claude Code").length).toBeGreaterThan(0);
   expect(screen.getAllByText("已安装").length).toBeGreaterThan(0);

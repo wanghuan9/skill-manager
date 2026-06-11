@@ -26,6 +26,14 @@ test("adds Finder as a selectable default open tool", () => {
   const options = buildOpenToolOptions([
     buildToolConfig({ id: "cursor", name: "Cursor" }),
     buildToolConfig({
+      id: "vscode",
+      name: "VS Code",
+      skillsPath: "",
+      mcpConfigPath: "",
+      supportsMcp: false,
+      mcpConfigPathRecognized: false,
+    }),
+    buildToolConfig({
       id: "intellij",
       name: "IntelliJ IDEA",
       skillsPath: "/Users/demo/.junie/skills",
@@ -34,7 +42,7 @@ test("adds Finder as a selectable default open tool", () => {
     }),
   ], "zh-CN");
 
-  expect(options.map((tool) => tool.id)).toEqual(["cursor", "intellij", "finder"]);
+  expect(options.map((tool) => tool.id)).toEqual(["cursor", "vscode", "intellij", "finder"]);
 });
 
 test("falls back to Finder when no editor can open directories directly", () => {
@@ -90,10 +98,20 @@ test("resolves default open tool by preferred editor priority", () => {
     buildToolConfig({ id: "qoder", name: "Qoder", supportsDirectOpen: true, statusLabel: "已安装" }),
     buildToolConfig({ id: "trae-cn", name: "Trae CN", supportsDirectOpen: true, statusLabel: "已安装" }),
     buildToolConfig({ id: "windsurf", name: "Devin", supportsDirectOpen: true, statusLabel: "已安装" }),
+    buildToolConfig({ id: "vscode", name: "VS Code", supportsDirectOpen: true, statusLabel: "已安装" }),
     buildToolConfig({ id: "cursor", name: "Cursor", supportsDirectOpen: true, statusLabel: "已安装" }),
   ]);
 
   expect(editorId).toBe("cursor");
+});
+
+test("falls back to VS Code after Cursor for default open tool", () => {
+  const editorId = resolveDefaultOpenToolId([
+    buildToolConfig({ id: "windsurf", name: "Devin", supportsDirectOpen: true, statusLabel: "已安装" }),
+    buildToolConfig({ id: "vscode", name: "VS Code", supportsDirectOpen: true, statusLabel: "已安装" }),
+  ]);
+
+  expect(editorId).toBe("vscode");
 });
 
 test("falls back through preferred editors when cursor is missing", () => {

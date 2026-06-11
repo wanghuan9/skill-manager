@@ -497,6 +497,15 @@ export function PluginInstallPanel() {
     () => buildInstalledPluginHostsByProbeRoot(selectableProbes, installedPlugins),
     [installedPlugins, selectableProbes],
   );
+  const selectableFilteredProbes = useMemo(
+    () => filteredProbes.filter((probe) =>
+      probe.kind === "plugin-repo" && !isProbeFullyInstalled(probe, installedPluginHostsByProbeRoot)
+    ),
+    [filteredProbes, installedPluginHostsByProbeRoot],
+  );
+  const hasSelectableFilteredProbes = selectableFilteredProbes.length > 0;
+  const allFilteredProbesSelected = hasSelectableFilteredProbes
+    && selectableFilteredProbes.every((probe) => selectedPluginRoots.includes(probe.pluginRoot));
   const selectedProbes = useMemo(
     () => selectableProbes.filter((probe) => selectedPluginRoots.includes(probe.pluginRoot)),
     [selectableProbes, selectedPluginRoots],
@@ -769,6 +778,39 @@ export function PluginInstallPanel() {
     });
   }
 
+  function handleToggleFilteredProbes() {
+    if (!hasSelectableFilteredProbes) {
+      return;
+    }
+
+    const filteredProbeRoots = selectableFilteredProbes.map((probe) => probe.pluginRoot);
+    if (allFilteredProbesSelected) {
+      setSelectedPluginRoots((current) => current.filter((root) => !filteredProbeRoots.includes(root)));
+      setSelectedHostsByPluginRoot((currentHostsByRoot) => {
+        const nextHostsByRoot = { ...currentHostsByRoot };
+        for (const probeRoot of filteredProbeRoots) {
+          delete nextHostsByRoot[probeRoot];
+        }
+        return nextHostsByRoot;
+      });
+      return;
+    }
+
+    setSelectedPluginRoots((current) => Array.from(new Set([...current, ...filteredProbeRoots])));
+    setSelectedHostsByPluginRoot((currentHostsByRoot) => {
+      const nextHostsByRoot = { ...currentHostsByRoot };
+      for (const probe of selectableFilteredProbes) {
+        if ((nextHostsByRoot[probe.pluginRoot] ?? []).length > 0) {
+          continue;
+        }
+        nextHostsByRoot[probe.pluginRoot] = defaultSelectedHosts(
+          selectableCompatibleHostTools(probe, installedPluginHostsByProbeRoot, installedHostApps),
+        );
+      }
+      return nextHostsByRoot;
+    });
+  }
+
   return (
     <section className="panel-card market-panel plugin-install-panel">
       {probes.length === 0 ? (
@@ -843,6 +885,14 @@ export function PluginInstallPanel() {
                 />
               </div>
             </label>
+            <button
+              className="secondary-button secondary-button--compact repo-install__select-toggle"
+              type="button"
+              disabled={!hasSelectableFilteredProbes}
+              onClick={handleToggleFilteredProbes}
+            >
+              {allFilteredProbesSelected ? t("install.plugin.deselectAll") : t("install.plugin.selectAll")}
+            </button>
           </div>
           {filteredProbes.length > 0 ? (
             <div className="repo-install__list">

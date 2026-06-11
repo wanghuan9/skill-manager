@@ -1687,6 +1687,20 @@ fn build_tool_configs() -> Vec<ToolConfig> {
             ),
         ),
         (
+            "vscode",
+            "VS Code",
+            PathBuf::new(),
+            false,
+            "editor",
+            vec!["editor"],
+            true,
+            vec![],
+            software_spec(
+                &["Visual Studio Code", "Visual Studio Code - Insiders", "VS Code"],
+                &["code"],
+            ),
+        ),
+        (
             "openclaw",
             "OpenClaw",
             home_path.join(".openclaw/skills"),
@@ -2522,15 +2536,20 @@ fn find_app_bundle(app_name_candidates: &[&str]) -> Option<String> {
 fn discover_cli_in_bundle(app_bundle_path: &str) -> Option<String> {
     let bundle = PathBuf::from(app_bundle_path);
     let stem = bundle.file_stem()?.to_str()?.to_string();
+    let normalized_stem = stem.to_lowercase();
     // Common CLI locations in Electron / JetBrains apps
-    let mut candidate_paths = vec![
+    let mut candidate_paths = Vec::new();
+    if normalized_stem.starts_with("visual studio code") || normalized_stem.starts_with("vs code") {
+        candidate_paths.push(bundle.join("Contents/Resources/app/bin/code"));
+    }
+    candidate_paths.extend([
         bundle.join("Contents/Resources/app/bin").join(&stem),
         bundle
             .join("Contents/Resources/app/bin")
             .join(&stem.to_lowercase()),
         bundle.join("Contents/MacOS").join(&stem),
-    ];
-    if stem.to_lowercase().starts_with("intellij idea") {
+    ]);
+    if normalized_stem.starts_with("intellij idea") {
         candidate_paths.push(bundle.join("Contents/MacOS/idea"));
     }
 
@@ -2557,6 +2576,7 @@ fn editor_app_name_candidates(editor_id: &str) -> &[&str] {
             "IntelliJ IDEA CE",
             "IntelliJ IDEA Ultimate",
         ],
+        "vscode" => &["Visual Studio Code", "Visual Studio Code - Insiders", "VS Code"],
         _ => &[],
     }
 }
@@ -2570,6 +2590,7 @@ fn editor_cli_name_candidates(editor_id: &str) -> &[&str] {
         "trae-cn" => &["trae-cn", "trae"],
         "qoder" => &["qoder"],
         "intellij" => &["idea"],
+        "vscode" => &["code"],
         _ => &[],
     }
 }
@@ -7631,5 +7652,14 @@ mod tests {
             tool_name_to_id("Devin").expect("resolve devin tool id"),
             "windsurf"
         );
+    }
+
+    #[test]
+    fn supports_vscode_as_open_only_editor() {
+        assert_eq!(
+            super::editor_app_name_candidates("vscode"),
+            &["Visual Studio Code", "Visual Studio Code - Insiders", "VS Code"]
+        );
+        assert_eq!(super::editor_cli_name_candidates("vscode"), &["code"]);
     }
 }

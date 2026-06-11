@@ -95,6 +95,15 @@ export function RepoInstallPanel() {
     () => candidates.filter((candidate) => matchesRepoSkillCandidate(candidate, normalizedCandidateSearchQuery)),
     [candidates, normalizedCandidateSearchQuery],
   );
+  const selectableFilteredCandidatePaths = useMemo(
+    () => filteredCandidates
+      .filter((candidate) => !installedSkillNames.has(candidate.name))
+      .map((candidate) => candidate.relativePath),
+    [filteredCandidates, installedSkillNames],
+  );
+  const hasSelectableFilteredCandidates = selectableFilteredCandidatePaths.length > 0;
+  const allFilteredCandidatesSelected = hasSelectableFilteredCandidates
+    && selectableFilteredCandidatePaths.every((relativePath) => selectedPaths.includes(relativePath));
 
   useEffect(() => {
     setBranches([]);
@@ -193,6 +202,20 @@ export function RepoInstallPanel() {
     }
   }
 
+  function handleToggleFilteredCandidates() {
+    if (!hasSelectableFilteredCandidates) {
+      return;
+    }
+
+    setSelectedPaths((current) => {
+      if (allFilteredCandidatesSelected) {
+        return current.filter((selectedPath) => !selectableFilteredCandidatePaths.includes(selectedPath));
+      }
+
+      return Array.from(new Set([...current, ...selectableFilteredCandidatePaths]));
+    });
+  }
+
   return (
     <section className="panel-card market-panel">
       {candidates.length === 0 ? (
@@ -264,6 +287,14 @@ export function RepoInstallPanel() {
                 />
               </div>
             </label>
+            <button
+              className="secondary-button secondary-button--compact repo-install__select-toggle"
+              type="button"
+              disabled={!hasSelectableFilteredCandidates}
+              onClick={handleToggleFilteredCandidates}
+            >
+              {allFilteredCandidatesSelected ? t("install.repo.deselectAll") : t("install.repo.selectAll")}
+            </button>
           </div>
           {filteredCandidates.length > 0 ? (
             <div className="repo-install__list">

@@ -847,6 +847,45 @@ test("filters discovered plugin candidates by name and description", async () =>
   fetchInstalledPluginsSpy.mockRestore();
 });
 
+test("selects and deselects visible plugin candidates from git install search results", async () => {
+  const sourceUrl = "https://git.example.com/example-org/example-repo";
+  const fetchInstalledPluginsSpy = vi.spyOn(skillClient, "fetchInstalledPlugins").mockResolvedValue([]);
+
+  render(<App />);
+  await userEvent.click(screen.getByRole("button", { name: /安装/ }));
+  await userEvent.click(screen.getByRole("tab", { name: "Plugin" }));
+  await userEvent.type(screen.getByRole("textbox", { name: "Git 仓库地址" }), sourceUrl);
+
+  await waitFor(() => {
+    expect(screen.getByRole("combobox", { name: "Git 分支" })).toBeInTheDocument();
+  });
+  await userEvent.click(screen.getByRole("button", { name: "识别插件" }));
+
+  expect(await screen.findByText("example-plugin")).toBeInTheDocument();
+  expect(await screen.findByText("example-plugin")).toBeInTheDocument();
+  const searchInput = screen.getByRole("searchbox", { name: "搜索仓库插件" });
+  await userEvent.type(searchInput, "workflow");
+
+  await userEvent.click(screen.getByRole("button", { name: "全选" }));
+  expect(screen.getByRole("button", { name: "取消全选" })).toBeInTheDocument();
+  expect(screen.getByText("example-plugin").closest(".plugin-install-preview__item")).toHaveClass("is-selected");
+
+  await userEvent.clear(searchInput);
+  expect(screen.getByRole("button", { name: "全选" })).toBeInTheDocument();
+  expect(screen.getByText("example-plugin").closest(".plugin-install-preview__item")).toHaveClass("is-selected");
+  expect(screen.getByText("example-plugin").closest(".plugin-install-preview__item")).not.toHaveClass("is-selected");
+
+  await userEvent.click(screen.getByRole("button", { name: "全选" }));
+  expect(screen.getByRole("button", { name: "取消全选" })).toBeInTheDocument();
+  expect(screen.getByText("example-plugin").closest(".plugin-install-preview__item")).toHaveClass("is-selected");
+
+  await userEvent.click(screen.getByRole("button", { name: "取消全选" }));
+  expect(screen.getByText("example-plugin").closest(".plugin-install-preview__item")).not.toHaveClass("is-selected");
+  expect(screen.getByText("example-plugin").closest(".plugin-install-preview__item")).not.toHaveClass("is-selected");
+
+  fetchInstalledPluginsSpy.mockRestore();
+});
+
 test("keeps the plugin install result page open after installing selected hosts", async () => {
   const sourceUrl = "https://git.example.com/example-org/example-repo";
   const branchSpy = vi.spyOn(skillClient, "fetchGitRepoBranches").mockResolvedValue([
@@ -1800,6 +1839,36 @@ test("filters discovered repo skills by name and description", async () => {
   await userEvent.type(searchInput, "missing");
   expect(screen.getByText("暂无匹配的技能")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "返回" })).toBeInTheDocument();
+});
+
+test("selects and deselects visible repo skills from git install search results", async () => {
+  render(<App />);
+  await userEvent.click(screen.getByRole("button", { name: /安装/ }));
+  await userEvent.click(screen.getByRole("tab", { name: "Git 安装" }));
+
+  await userEvent.type(screen.getByRole("textbox", { name: "Git 仓库地址" }), "https://github.com/team/skill-repo");
+  await userEvent.click(screen.getByRole("button", { name: "识别仓库技能" }));
+
+  expect(await screen.findByText("发现 2 个技能，请选择要安装的技能")).toBeInTheDocument();
+  const searchInput = screen.getByRole("searchbox", { name: "搜索仓库技能" });
+  await userEvent.type(searchInput, "service");
+
+  await userEvent.click(screen.getByRole("button", { name: "全选" }));
+  expect(screen.getByRole("button", { name: "取消全选" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /service-observer/i })).toHaveClass("is-selected");
+
+  await userEvent.clear(searchInput);
+  expect(screen.getByRole("button", { name: "全选" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /service-observer/i })).toHaveClass("is-selected");
+  expect(screen.getByRole("button", { name: /release-scribe/i })).not.toHaveClass("is-selected");
+
+  await userEvent.click(screen.getByRole("button", { name: "全选" }));
+  expect(screen.getByRole("button", { name: "取消全选" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /release-scribe/i })).toHaveClass("is-selected");
+
+  await userEvent.click(screen.getByRole("button", { name: "取消全选" }));
+  expect(screen.getByRole("button", { name: /service-observer/i })).not.toHaveClass("is-selected");
+  expect(screen.getByRole("button", { name: /release-scribe/i })).not.toHaveClass("is-selected");
 });
 
 test("keeps the git install selection page open after installing selected repo skills", async () => {
