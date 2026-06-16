@@ -216,7 +216,6 @@ pub fn scan_local_skill_candidates(installed_skills: &[SkillSummary]) -> Vec<(St
         home_dir.join(".qoder/skills"),
         home_dir.join(".qwen/skills"),
         home_dir.join(".roo/skills"),
-        home_dir.join(".agents/skills"),
         home_dir.join(".config/goose/skills"),
         home_dir.join(".openclaw/skills"),
         home_dir.join(".augment/skills"),
@@ -1126,7 +1125,7 @@ mod tests {
     }
 
     #[test]
-    fn local_candidate_scan_prefers_goose_agents_directory_and_keeps_legacy_compatibility() {
+    fn local_candidate_scan_ignores_agents_directory_and_keeps_legacy_compatibility() {
         with_temp_home(|temp_home| {
             let agents_skill_dir = temp_home.join(".agents/skills/goose-modern");
             let legacy_skill_dir = temp_home.join(".config/goose/skills/goose-legacy");
@@ -1142,22 +1141,13 @@ mod tests {
 
             assert_eq!(
                 candidates,
-                vec![
-                    (
-                        "goose-legacy".to_string(),
-                        temp_home
-                            .join(".config/goose/skills")
-                            .to_string_lossy()
-                            .to_string()
-                    ),
-                    (
-                        "goose-modern".to_string(),
-                        temp_home
-                            .join(".agents/skills")
-                            .to_string_lossy()
-                            .to_string()
-                    ),
-                ]
+                vec![(
+                    "goose-legacy".to_string(),
+                    temp_home
+                        .join(".config/goose/skills")
+                        .to_string_lossy()
+                        .to_string()
+                )]
             );
         });
     }
