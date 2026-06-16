@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useTranslate } from "@/app/i18n";
+import { ToolbarGoInstallButton } from "@/app/components/ToolbarGoInstallButton";
 import { useNotifications } from "@/app/notifications";
 import { formatSkillLastEditor } from "@/features/skills/utils/skill-editor";
 import { formatSkillUpdatedAt } from "@/features/skills/utils/skill-time";
@@ -1424,7 +1425,7 @@ function isGitSourceValue(value: string) {
   }
 }
 
-export function PluginsRoute() {
+export function PluginsRoute(props: { onGoInstall?: () => void } = {}) {
   const { t } = useTranslate();
   const { defaultOpenToolId, language, toolConfigs } = useSkillWorkspace();
   const { notify } = useNotifications();
@@ -2058,7 +2059,7 @@ export function PluginsRoute() {
       className="plugins-page__toolbar-primary skills-header-bar__tools"
       aria-label={t("plugins.toolbar.aria")}
     >
-      <label className="search-field search-field--header skill-search-field">
+      <label className="search-field search-field--header skill-search-field plugins-page__search">
         <span className="sr-only">{t("plugins.toolbar.searchLabel")}</span>
         <input
           type="search"
@@ -2067,6 +2068,7 @@ export function PluginsRoute() {
           onChange={(event) => setQuery(event.target.value)}
         />
       </label>
+      {props.onGoInstall ? <ToolbarGoInstallButton onClick={props.onGoInstall} /> : null}
       <div className="plugins-page__toolbar-actions">
         <label className="skill-status-filter plugins-page__toolbar-filter">
           <span className="sr-only">{t("plugins.toolbar.filterLabel")}</span>

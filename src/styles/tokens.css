@@ -1356,12 +1356,12 @@ code {
 }
 
 .search-field--header {
-  flex: 0 1 300px;
+  flex: 0 1 230px;
   display: flex;
   align-items: center;
   height: 36px;
   min-height: 36px;
-  min-width: 220px;
+  min-width: 180px;
   border: 1px solid var(--line);
   border-radius: 14px;
   padding: 0 12px;
@@ -1371,8 +1371,8 @@ code {
 }
 
 .skill-search-field {
-  flex: 0 0 300px;
-  width: 300px;
+  flex: 0 0 230px;
+  width: 230px;
 }
 
 .search-field--header input {
@@ -6846,8 +6846,31 @@ button.settings-form-item:disabled {
   flex-wrap: nowrap;
 }
 
+.skills-toolbar-button--go-install {
+  flex-shrink: 0;
+  background: rgba(47, 120, 255, 0.07);
+  border-color: rgba(47, 120, 255, 0.2);
+  color: #2f78ff;
+  box-shadow: none;
+}
+
+.skills-toolbar-button--go-install:hover:not(:disabled) {
+  background: rgba(47, 120, 255, 0.11);
+  border-color: rgba(47, 120, 255, 0.28);
+  color: #2563eb;
+  box-shadow: 0 4px 10px rgba(47, 120, 255, 0.08);
+  transform: translateY(-1px);
+}
+
+.skills-toolbar-button--go-install:active:not(:disabled) {
+  background: rgba(47, 120, 255, 0.13);
+  border-color: rgba(47, 120, 255, 0.32);
+  box-shadow: none;
+  transform: translateY(1px);
+}
+
 .mcp-toolbar__search {
-  flex: 0 0 320px;
+  flex: 0 0 230px;
   width: auto;
 }
 
@@ -6882,8 +6905,8 @@ button.settings-form-item:disabled {
 }
 
 .plugins-page__search {
-  flex: 0 1 360px;
-  min-width: 260px;
+  flex: 0 1 230px;
+  min-width: 180px;
 }
 
 .plugins-page__host-tabs {
@@ -8137,7 +8160,7 @@ button.settings-form-item:disabled {
 
 @media (max-width: 1180px) {
   .skill-search-field {
-    flex: 0 1 300px;
+    flex: 0 1 230px;
     width: auto;
   }
 
@@ -8158,7 +8181,7 @@ button.settings-form-item:disabled {
   }
 
   .mcp-toolbar__search {
-    flex-basis: min(320px, 100%);
+    flex-basis: min(230px, 100%);
   }
 
   .plugins-page__toolbar-primary,
@@ -8168,7 +8191,7 @@ button.settings-form-item:disabled {
   }
 
   .plugins-page__search {
-    flex-basis: min(100%, 420px);
+    flex-basis: min(100%, 230px);
   }
 
   .plugins-page__toolbar-secondary {

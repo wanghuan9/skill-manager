@@ -30,6 +30,19 @@ test("renders MCP toolbar in the page header and hides the app matrix", async ()
   expect(toolbar).not.toHaveTextContent("工具可同步");
   expect(screen.getByRole("searchbox", { name: "搜索 MCP" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "刷新" })).toBeInTheDocument();
+  expect(within(toolbar).getByRole("button", { name: "去安装" })).toHaveClass("skills-toolbar-button--go-install");
+});
+
+test("opens MCP install page from the toolbar go-install action", async () => {
+  render(<App />);
+
+  await userEvent.click(screen.getByRole("button", { name: "MCP" }));
+  const toolbar = await screen.findByLabelText("MCP 工具栏");
+  await userEvent.click(within(toolbar).getByRole("button", { name: "去安装" }));
+
+  expect(screen.getByRole("heading", { name: "安装", level: 1 })).toBeInTheDocument();
+  expect(screen.getByRole("tab", { name: "MCP" })).toHaveAttribute("aria-selected", "true");
+  expect(screen.getByRole("heading", { name: "安装源", level: 2 })).toBeInTheDocument();
 });
 
 test("guides empty MCP library to scan import before marketplace install", async () => {
@@ -1069,10 +1082,10 @@ test("shows supported MCP apps in enable-to-tool controls", async () => {
   expect(screen.getAllByText("Antigravity").length).toBeGreaterThan(0);
   expect(screen.queryByText("CodeBuddy")).not.toBeInTheDocument();
 
-  await userEvent.click(screen.getByRole("button", { name: "新增 MCP" }));
+  await userEvent.click(screen.getByRole("button", { name: "手动添加" }));
 
   await waitFor(() => {
-    expect(screen.getByRole("dialog", { name: "新增 MCP" })).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "手动添加 MCP" })).toBeInTheDocument();
   });
   expect((screen.getByLabelText("JSON 配置") as HTMLTextAreaElement).value).not.toContain("\"type\": \"stdio\"");
   expect(screen.getAllByText("Antigravity").length).toBeGreaterThan(0);
@@ -1120,10 +1133,10 @@ test("hides uninstalled MCP target apps from the add dialog", async () => {
 
   expect(screen.queryByRole("button", { name: "Cursor" })).not.toBeInTheDocument();
 
-  await userEvent.click(screen.getByRole("button", { name: "新增 MCP" }));
+  await userEvent.click(screen.getByRole("button", { name: "手动添加" }));
 
   await waitFor(() => {
-    expect(screen.getByRole("dialog", { name: "新增 MCP" })).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "手动添加 MCP" })).toBeInTheDocument();
   });
   expect(screen.queryByRole("checkbox", { name: /Cursor/ })).not.toBeInTheDocument();
 });
@@ -1133,16 +1146,16 @@ test("creates MCP without asking the user for an ID", async () => {
   render(<App />);
 
   await userEvent.click(screen.getByRole("button", { name: "MCP" }));
-  await userEvent.click(await screen.findByRole("button", { name: "新增 MCP" }));
+  await userEvent.click(await screen.findByRole("button", { name: "手动添加" }));
 
-  const dialog = await screen.findByRole("dialog", { name: "新增 MCP" });
+  const dialog = await screen.findByRole("dialog", { name: "手动添加 MCP" });
   expect(dialog).not.toHaveTextContent("MCP ID");
 
   await userEvent.type(screen.getByLabelText("名称"), "Playwright Tools");
   await userEvent.click(screen.getByRole("button", { name: "保存" }));
 
   await waitFor(() => {
-    expect(screen.queryByRole("dialog", { name: "新增 MCP" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "手动添加 MCP" })).not.toBeInTheDocument();
   });
   expect(screen.getByText("playwright tools")).toBeInTheDocument();
 });
@@ -1192,7 +1205,7 @@ test("probes tools right after manually creating an MCP server", async () => {
     await screen.findByText("context7");
     refreshSpy.mockClear();
 
-    await userEvent.click(screen.getByRole("button", { name: "新增 MCP" }));
+    await userEvent.click(screen.getByRole("button", { name: "手动添加" }));
     await userEvent.type(await screen.findByLabelText("名称"), "Playwright Tools");
     await userEvent.click(screen.getByRole("button", { name: "保存" }));
 

@@ -650,6 +650,19 @@ test("keeps plugin scan import action in the toolbar", async () => {
   expect(screen.getByRole("button", { name: "扫描导入" })).toBeInTheDocument();
 });
 
+test("renders go-install action in the plugin toolbar", async () => {
+  const onGoInstall = vi.fn();
+
+  renderWithI18n(<PluginsRoute onGoInstall={onGoInstall} />);
+
+  await screen.findByRole("tab", { name: /全部/ });
+
+  const goInstallButton = screen.getByRole("button", { name: "去安装" });
+  expect(goInstallButton).toHaveClass("skills-toolbar-button--go-install");
+  await userEvent.click(goInstallButton);
+  expect(onGoInstall).toHaveBeenCalledOnce();
+});
+
 test("refreshes the plugin list from the toolbar", async () => {
   const deferredFetch: {
     resolve?: (value: PluginSummary[]) => void;

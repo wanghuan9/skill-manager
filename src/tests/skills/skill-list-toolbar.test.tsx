@@ -88,6 +88,37 @@ test("starts update-all from the toolbar", () => {
   expect(updateAllSkills).toHaveBeenCalledOnce();
 });
 
+test("renders go-install action when handler is provided", () => {
+  const onGoInstall = vi.fn();
+
+  mockedUseSkillWorkspace.mockReturnValue({
+    language: "zh-CN",
+    installedSkills: installedSkillFixtures,
+    isLoading: false,
+    refreshWorkspace: vi.fn(),
+    updateAllSkills: vi.fn(),
+  } as unknown as ReturnType<typeof useSkillWorkspace>);
+
+  renderWithI18n(
+    <NotificationProvider>
+      <SkillListToolbar
+        query=""
+        statusFilter="all"
+        onQueryChange={vi.fn()}
+        onStatusFilterChange={vi.fn()}
+        showGroupView
+        onShowGroupViewChange={vi.fn()}
+        onGoInstall={onGoInstall}
+      />
+    </NotificationProvider>,
+  );
+
+  const goInstallButton = screen.getByRole("button", { name: "去安装" });
+  expect(goInstallButton).toHaveClass("skills-toolbar-button--go-install");
+  fireEvent.click(goInstallButton);
+  expect(onGoInstall).toHaveBeenCalledOnce();
+});
+
 test("notifies status filter changes", () => {
   const onStatusFilterChange = vi.fn();
 
