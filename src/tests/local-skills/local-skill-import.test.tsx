@@ -3,11 +3,12 @@ import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 import { App } from "@/app/App";
 import * as skillClient from "@/features/skills/api/skill-client";
+import { clickNavInstall } from "@/tests/helpers/nav";
 
 test("renders local skill import list", async () => {
   const fetchCandidatesSpy = vi.spyOn(skillClient, "fetchLocalSkillCandidates");
   render(<App />);
-  await userEvent.click(screen.getByRole("button", { name: /安装/ }));
+  await clickNavInstall();
   await userEvent.click(screen.getByRole("tab", { name: "本地安装" }));
   expect(screen.getByRole("heading", { name: "安装", level: 1 })).toBeInTheDocument();
   expect(screen.getByRole("tab", { name: "扫描导入" })).toHaveAttribute("aria-selected", "true");
@@ -36,7 +37,7 @@ test("renders local skill import list", async () => {
 
 test("switches local install to the manual install form without opening a dialog", async () => {
   render(<App />);
-  await userEvent.click(screen.getByRole("button", { name: /安装/ }));
+  await clickNavInstall();
   await userEvent.click(screen.getByRole("tab", { name: "本地安装" }));
   await userEvent.click(screen.getByRole("tab", { name: "手动安装" }));
 
@@ -50,7 +51,7 @@ test("switches local install to the manual install form without opening a dialog
 test("imports local skills once per skill group", async () => {
   const importSpy = vi.spyOn(skillClient, "importLocalSkill");
   render(<App />);
-  await userEvent.click(screen.getByRole("button", { name: /安装/ }));
+  await clickNavInstall();
   await userEvent.click(screen.getByRole("tab", { name: "本地安装" }));
 
   await userEvent.click(screen.getByRole("button", { name: "全部导入" }));
@@ -79,7 +80,7 @@ test("rescans from the empty local import state", async () => {
     .mockImplementation(() => Promise.resolve(shouldReturnNextCandidate ? [nextCandidate] : []));
 
   render(<App />);
-  await userEvent.click(screen.getByRole("button", { name: /安装/ }));
+  await clickNavInstall();
   await userEvent.click(screen.getByRole("tab", { name: "本地安装" }));
 
   expect(await screen.findByRole("button", { name: "重新扫描" })).toBeInTheDocument();
