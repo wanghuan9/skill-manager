@@ -1988,10 +1988,14 @@ fn canonical_tool_display_name(tool_name: &str) -> String {
     }
 }
 
+fn supports_skill_sync_for_tool(tool_id: &str) -> bool {
+    !matches!(tool_id, "intellij" | "vscode")
+}
+
 fn installed_tool_sync_entries_from_configs(tool_configs: &[ToolConfig]) -> Vec<ToolSyncStatus> {
     tool_configs
         .iter()
-        .filter(|tool| tool.status_label == "已安装" && tool.id != "intellij")
+        .filter(|tool| tool.status_label == "已安装" && supports_skill_sync_for_tool(&tool.id))
         .map(|tool| ToolSyncStatus {
             name: canonical_tool_display_name(&tool.name),
             status_label: "未启用".into(),
@@ -2034,7 +2038,7 @@ fn installed_tool_sync_entries_for_skill(
 ) -> Vec<ToolSyncStatus> {
     tool_configs
         .iter()
-        .filter(|tool| tool.status_label == "已安装" && tool.id != "intellij")
+        .filter(|tool| tool.status_label == "已安装" && supports_skill_sync_for_tool(&tool.id))
         .map(|tool| ToolSyncStatus {
             name: canonical_tool_display_name(&tool.name),
             status_label: inspect_skill_tool_status(skill, &tool.name),
@@ -2269,7 +2273,7 @@ fn enable_skill_for_all_installed_tools(
 ) -> Result<SkillSummary, String> {
     let installed_tool_configs = build_tool_configs()
         .into_iter()
-        .filter(|tool| tool.status_label == "已安装" && tool.id != "intellij")
+        .filter(|tool| tool.status_label == "已安装" && supports_skill_sync_for_tool(&tool.id))
         .collect::<Vec<_>>();
     if installed_tool_configs.is_empty() {
         return Ok(skill);
@@ -5990,7 +5994,7 @@ mod tests {
         should_use_skills_sh_homepage_page, tool_name_to_id, update_skill_repo,
         REFRESH_GIT_STATES_CONCURRENCY,
     };
-    use crate::models::{MarketplaceSkill, SkillSummary, WorkspacePersistence};
+    use crate::models::{MarketplaceSkill, SkillSummary, ToolConfig, WorkspacePersistence};
     use crate::workspace::TEST_ENV_LOCK;
     use std::env;
     use std::fs;
@@ -7658,8 +7662,56 @@ mod tests {
     fn supports_vscode_as_open_only_editor() {
         assert_eq!(
             super::editor_app_name_candidates("vscode"),
-            &["Visual Studio Code", "Visual Studio Code - Insiders", "VS Code"]
+            &[
+                "Visual Studio Code",
+                "Visual Studio Code - Insiders",
+                "VS Code",
+            ]
         );
         assert_eq!(super::editor_cli_name_candidates("vscode"), &["code"]);
+    }
+
+    #[test]
+    fn skips_open_only_editors_from_skill_sync_targets() {
+        assert!(!super::supports_skill_sync_for_tool("vscode"));
+        assert!(!super::supports_skill_sync_for_tool("intellij"));
+        assert!(super::supports_skill_sync_for_tool("cursor"));
+    }
+
+    #[test]
+    fn excludes_open_only_editors_from_installed_tool_sync_entries() {
+        let tool_configs = vec![
+            ToolConfig {
+                id: "cursor".into(),
+                name: "Cursor".into(),
+                skills_path: "/Users/demo/.cursor/skills".into(),
+                mcp_config_path: String::new(),
+                supports_mcp: false,
+                mcp_config_path_recognized: false,
+                status_label: "已安装".into(),
+                is_enabled: true,
+                primary_type: "editor".into(),
+                surface_types: vec!["editor".into()],
+                supports_direct_open: true,
+            },
+            ToolConfig {
+                id: "vscode".into(),
+                name: "VS Code".into(),
+                skills_path: String::new(),
+                mcp_config_path: String::new(),
+                supports_mcp: false,
+                mcp_config_path_recognized: false,
+                status_label: "已安装".into(),
+                is_enabled: true,
+                primary_type: "editor".into(),
+                surface_types: vec!["editor".into()],
+                supports_direct_open: true,
+            },
+        ];
+
+        let entries = super::installed_tool_sync_entries_from_configs(&tool_configs);
+
+        assert!(entries.iter().any(|tool| tool.name == "Cursor"));
+        assert!(!entries.iter().any(|tool| tool.name == "VS Code"));
     }
 }
