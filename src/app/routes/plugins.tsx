@@ -900,7 +900,10 @@ function getPluginCollabBadge(
 }
 
 function canTogglePlugin(plugin: PluginSummary) {
-  return plugin.hostTool === "codex" || plugin.hostTool === "claude-code";
+  return (
+    plugin.enabledState !== "unknown"
+    && (plugin.hostTool === "codex" || plugin.hostTool === "claude-code")
+  );
 }
 
 function getPluginToggleActionLabel(

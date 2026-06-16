@@ -1791,6 +1791,37 @@ test("toggles plugin enabled state from the plugin list", async () => {
   expect(screen.getAllByText("已启用").length).toBeGreaterThan(0);
 });
 
+test("keeps unknown plugins disabled from toggle actions", async () => {
+  const setPluginEnabledSpy = vi.spyOn(skillClient, "setPluginEnabled");
+  const unknownPlugin: PluginSummary = {
+    ...pluginFixtures[1],
+    enabledState: "unknown",
+    scopes: [
+      {
+        ...pluginFixtures[1].scopes[0],
+        enabledState: "unknown",
+      },
+    ],
+  };
+  vi.spyOn(skillClient, "fetchStartupInstalledPlugins").mockResolvedValueOnce([unknownPlugin]);
+
+  renderWithI18n(<PluginsRoute />);
+
+  await screen.findByRole("tab", { name: /全部/ });
+  await userEvent.click(screen.getByRole("tab", { name: /Claude Code/ }));
+
+  const toggleButton = screen.getByRole("button", {
+    name: /暂不支持在 SkillDock 内切换/,
+  });
+  expect(toggleButton).toBeDisabled();
+  expect(toggleButton).toHaveClass("is-unknown");
+
+  await userEvent.click(toggleButton);
+
+  expect(setPluginEnabledSpy).not.toHaveBeenCalled();
+  setPluginEnabledSpy.mockRestore();
+});
+
 test("toggles every installed host from the all-tab plugin row", async () => {
   const setPluginEnabledSpy = vi.spyOn(skillClient, "setPluginEnabled")
     .mockImplementation(async (input) => ({

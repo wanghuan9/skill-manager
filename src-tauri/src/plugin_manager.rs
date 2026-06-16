@@ -1023,6 +1023,9 @@ fn scan_codex_cached_plugins(
             config_path,
             &source_label,
         );
+        if install_state == "detected" {
+            continue;
+        }
         let source_type = if find_git_root(&canonical_root).is_some() {
             "git".to_string()
         } else {
@@ -10317,7 +10320,7 @@ source = "__SOURCE__"
     }
 
     #[test]
-    fn lists_codex_cached_plugins_when_config_source_is_remote() {
+    fn skips_unconfigured_codex_cached_plugins_when_config_source_is_remote() {
         let _guard = TEST_ENV_LOCK.lock().expect("lock test env");
         let temp_dir = temp_test_dir("codex-cache-scan");
         let home_dir = temp_dir.join("home");
@@ -10386,13 +10389,10 @@ source = "https://example.com/example-org.git"
         assert_eq!(configured.enabled_state, "enabled");
         assert_eq!(configured.install_state, "installed");
 
-        let detected = plugins
-            .iter()
-            .find(|plugin| plugin.name == "Documents")
-            .expect("cache-only plugin should be detected");
-        assert_eq!(detected.host_tool, "codex");
-        assert_eq!(detected.enabled_state, "unknown");
-        assert_eq!(detected.install_state, "detected");
+        assert!(
+            plugins.iter().all(|plugin| plugin.name != "Documents"),
+            "cache-only plugin should not be listed"
+        );
 
         let _ = fs::remove_dir_all(temp_dir);
     }
