@@ -66,6 +66,52 @@ test("imports local skills once per skill group", async () => {
   importSpy.mockRestore();
 });
 
+test("removes imported local candidate when installed skill name differs from source folder", async () => {
+  const candidate = {
+    name: "example-prd-writing",
+    description: "示例 PRD 编写规范。",
+    localPath: "/Users/demo/.claude/skills/example-prd-writing",
+    detectedFrom: "/Users/demo/.claude/skills",
+    sourceHint: "本地文件",
+  };
+  const fetchCandidatesSpy = vi
+    .spyOn(skillClient, "fetchLocalSkillCandidates")
+    .mockResolvedValue([candidate]);
+  const importSpy = vi.spyOn(skillClient, "importLocalSkill").mockResolvedValue({
+    name: "示例PRD编写",
+    sourceLabel: "本地导入",
+    sourceType: "local",
+    sourceUrl: candidate.localPath,
+    description: candidate.description,
+    localPath: "/Users/demo/.skilldock/skills/示例PRD编写",
+    branch: "local",
+    collabStatus: "clean",
+    statusText: "已纳入管理，建议同步到目标工具。",
+    remoteUpdatedAt: "",
+    localUpdatedAt: "刚刚",
+    lastCheckedAt: "刚刚",
+    syncedToolCount: 0,
+    lastEditor: "",
+    commitLabel: "local-only",
+    gitLinked: false,
+    tools: [],
+  });
+
+  render(<App />);
+  await clickNavInstall();
+  await userEvent.click(screen.getByRole("tab", { name: "本地安装" }));
+
+  expect(await screen.findByLabelText("example-prd-writing")).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "导入 example-prd-writing" }));
+
+  await waitFor(() => {
+    expect(screen.queryByLabelText("example-prd-writing")).not.toBeInTheDocument();
+  });
+  expect(importSpy).toHaveBeenCalledWith(candidate.localPath);
+  fetchCandidatesSpy.mockRestore();
+  importSpy.mockRestore();
+});
+
 test("rescans from the empty local import state", async () => {
   const nextCandidate = {
     name: "new-local-skill",

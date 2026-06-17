@@ -1073,7 +1073,10 @@ pub fn ssh_clone_url_for_repository_url(repository_url: &str) -> Option<String> 
     Some(format!("git@{host}:{owner}/{repo}.git"))
 }
 
-pub fn resolve_clone_url_http_first(clone_url: &str, repository_url: &str) -> Result<String, String> {
+pub fn resolve_clone_url_http_first(
+    clone_url: &str,
+    repository_url: &str,
+) -> Result<String, String> {
     let candidates = remote_clone_candidates(clone_url, repository_url);
     if candidates.is_empty() {
         return Err("仓库地址解析失败: clone URL 为空".into());
@@ -1175,16 +1178,16 @@ pub fn sanitize_storage_name(name: &str) -> String {
     let mut last_was_separator = false;
 
     for character in name.chars() {
-        let normalized = if character.is_ascii_alphanumeric() {
+        let normalized = if character.is_alphanumeric() {
             last_was_separator = false;
-            character.to_ascii_lowercase()
+            character.to_lowercase().to_string()
         } else if !last_was_separator {
             last_was_separator = true;
-            '-'
+            "-".to_string()
         } else {
             continue;
         };
-        sanitized.push(normalized);
+        sanitized.push_str(&normalized);
     }
 
     let trimmed = sanitized.trim_matches('-').to_string();
@@ -2264,11 +2267,12 @@ mod tests {
     use super::{
         clone_branch_for_resolved_path, create_skill_symlink, get_tool_skills_path,
         ignore_unnecessary_files, migrate_legacy_skill_symlinks, parse_git_url_instead_of_rules,
-        parse_market_source_url, reconcile_tool_skill_symlinks, remove_reserved_workspace_entries,
-        remote_clone_candidates, repo_cache_lock, rewrite_git_clone_url_with_instead_of_rules,
-        run_git_in_dir, run_git_output, skill_dir_match_score, ssh_clone_url_for_repository_url,
-        summarize_git_error, tree_relative_path_for_branch, MarketSourceSpec,
-        RemoteCloneCandidate, ResolvedRemoteSkillPath,
+        parse_market_source_url, reconcile_tool_skill_symlinks, remote_clone_candidates,
+        remove_reserved_workspace_entries, repo_cache_lock,
+        rewrite_git_clone_url_with_instead_of_rules, run_git_in_dir, run_git_output,
+        sanitize_storage_name, skill_dir_match_score, ssh_clone_url_for_repository_url,
+        summarize_git_error, tree_relative_path_for_branch, MarketSourceSpec, RemoteCloneCandidate,
+        ResolvedRemoteSkillPath,
     };
     use crate::models::SkillSummary;
     use crate::workspace::TEST_ENV_LOCK;
@@ -2291,6 +2295,13 @@ mod tests {
         ));
         fs::create_dir_all(&temp_dir).expect("create temp test dir");
         temp_dir
+    }
+
+    #[test]
+    fn sanitize_storage_name_preserves_unicode_skill_names() {
+        assert_eq!(sanitize_storage_name("更新周报skill"), "更新周报skill");
+        assert_eq!(sanitize_storage_name("Local Skill"), "local-skill");
+        assert_eq!(sanitize_storage_name("!!!"), "skill");
     }
 
     #[test]

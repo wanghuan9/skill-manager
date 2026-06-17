@@ -278,14 +278,29 @@ pub fn scan_local_skill_candidates(installed_skills: &[SkillSummary]) -> Vec<(St
 fn installed_skill_path_keys(installed_skills: &[SkillSummary]) -> Vec<String> {
     let mut paths = installed_skills
         .iter()
-        .flat_map(|skill| {
-            let path = PathBuf::from(&skill.local_path);
-            [skill.local_path.clone(), path_key(&path)]
-        })
+        .flat_map(installed_skill_path_key_candidates)
         .collect::<Vec<_>>();
     paths.sort();
     paths.dedup();
     paths
+}
+
+fn installed_skill_path_key_candidates(skill: &SkillSummary) -> Vec<String> {
+    let mut paths = Vec::new();
+    push_installed_skill_path_key(&mut paths, &skill.local_path);
+    push_installed_skill_path_key(&mut paths, &skill.source_url);
+    paths
+}
+
+fn push_installed_skill_path_key(paths: &mut Vec<String>, value: &str) {
+    let trimmed = value.trim();
+    if trimmed.is_empty() || trimmed.contains("://") {
+        return;
+    }
+
+    let path = PathBuf::from(trimmed);
+    paths.push(trimmed.to_string());
+    paths.push(path_key(&path));
 }
 
 fn is_synced_managed_skill_link(path: &Path, managed_skills_root: &Path) -> bool {
@@ -1075,6 +1090,27 @@ mod tests {
 
             let installed_skills = vec![test_skill_summary("example-migration", &managed_skill_dir)];
             let candidates = scan_local_skill_candidates(&installed_skills);
+
+            assert!(candidates.is_empty());
+        });
+    }
+
+    #[test]
+    fn local_candidate_scan_skips_imported_source_path_when_installed_name_differs() {
+        with_temp_home(|temp_home| {
+            let managed_skill_dir = temp_home.join(".skilldock/skills/示例PRD编写");
+            let source_skill_dir = temp_home.join(".claude/skills/example-prd-writing");
+            fs::create_dir_all(&managed_skill_dir).expect("create managed skill dir");
+            fs::create_dir_all(&source_skill_dir).expect("create source skill dir");
+            fs::write(managed_skill_dir.join("SKILL.md"), "# 示例PRD编写")
+                .expect("write managed skill file");
+            fs::write(source_skill_dir.join("SKILL.md"), "# 示例PRD编写")
+                .expect("write source skill file");
+
+            let mut installed_skill = test_skill_summary("示例PRD编写", &managed_skill_dir);
+            installed_skill.source_type = "local".into();
+            installed_skill.source_url = source_skill_dir.to_string_lossy().to_string();
+            let candidates = scan_local_skill_candidates(&[installed_skill]);
 
             assert!(candidates.is_empty());
         });

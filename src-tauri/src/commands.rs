@@ -18,14 +18,15 @@ use crate::git_state::{
     enrich_skill_with_local_git_state,
 };
 use crate::library::{
-    clone_repo_skill, create_skill_symlink, ensure_repo_skill_with_resolved_ref_and_sparse_paths,
-    get_tool_skills_path, install_market_skill_from_source, is_ssh_git_url, parse_market_source_url,
-    remote_clone_candidates, reconcile_tool_skill_symlinks, remove_reserved_workspace_entries,
+    clone_repo_skill, configure_git_network_command, create_skill_symlink,
+    ensure_repo_skill_with_resolved_ref_and_sparse_paths, get_tool_skills_path,
+    install_market_skill_from_source, is_ssh_git_url, parse_market_source_url,
+    reconcile_tool_skill_symlinks, remote_clone_candidates, remove_reserved_workspace_entries,
     remove_reserved_workspace_symlinks_from_all_tools, remove_skill_symlink,
     remove_skill_symlinks_from_all_tools, resolve_clone_url_http_first,
     resolve_git_clone_url_with_instead_of, sanitize_storage_name, skill_directory,
     summarize_git_error, tree_relative_path_for_branch, with_temporary_discovery_repo_resolved,
-    configure_git_network_command, RemoteCloneCandidate,
+    RemoteCloneCandidate,
 };
 use crate::models::{
     AppSettings, GitAccountSummary, GitBranchOption, GitChangeFile, LocalInstallSkillCandidate,
@@ -1696,7 +1697,11 @@ fn build_tool_configs() -> Vec<ToolConfig> {
             true,
             vec![],
             software_spec(
-                &["Visual Studio Code", "Visual Studio Code - Insiders", "VS Code"],
+                &[
+                    "Visual Studio Code",
+                    "Visual Studio Code - Insiders",
+                    "VS Code",
+                ],
                 &["code"],
             ),
         ),
@@ -2580,7 +2585,11 @@ fn editor_app_name_candidates(editor_id: &str) -> &[&str] {
             "IntelliJ IDEA CE",
             "IntelliJ IDEA Ultimate",
         ],
-        "vscode" => &["Visual Studio Code", "Visual Studio Code - Insiders", "VS Code"],
+        "vscode" => &[
+            "Visual Studio Code",
+            "Visual Studio Code - Insiders",
+            "VS Code",
+        ],
         _ => &[],
     }
 }
@@ -3818,7 +3827,9 @@ fn resolve_repo_clone_url_for_network(
     let cache = REPO_RESOLVED_CLONE_URL_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     if let Ok(mut guard) = cache.lock() {
         let now = Instant::now();
-        guard.retain(|_, (_, cached_at)| now.duration_since(*cached_at) <= REPO_RESOLVED_CLONE_URL_CACHE_TTL);
+        guard.retain(|_, (_, cached_at)| {
+            now.duration_since(*cached_at) <= REPO_RESOLVED_CLONE_URL_CACHE_TTL
+        });
         if let Some((clone_url, _)) = guard.get(&cache_key) {
             return Ok(clone_url.clone());
         }
@@ -4794,13 +4805,9 @@ fn discover_repo_skills_without_path_hint(
         }
     }
 
-    with_temporary_discovery_repo_resolved(
-        clone_url,
-        git_ref,
-        &spec.repo_key,
-        &[],
-        |repo_root| scan_repo_skill_candidates(repo_root, None),
-    )
+    with_temporary_discovery_repo_resolved(clone_url, git_ref, &spec.repo_key, &[], |repo_root| {
+        scan_repo_skill_candidates(repo_root, None)
+    })
 }
 
 #[tauri::command]
@@ -7033,6 +7040,47 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn local_import_preserves_unicode_skill_name() {
+        let _guard = TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let temp_dir = temp_test_dir("local-import-unicode-name");
+        let home_dir = temp_dir.join("home");
+        let source_skill_dir = home_dir.join(".claude/skills/更新周报skill");
+        fs::create_dir_all(&source_skill_dir).expect("create source skill dir");
+        fs::write(
+            source_skill_dir.join("SKILL.md"),
+            "---\nname: 更新周报skill\ndescription: 更新周报\n---",
+        )
+        .expect("write source skill file");
+
+        let original_home = env::var_os("HOME");
+        let original_path = prepend_fake_executable_to_path(&temp_dir, "codex");
+        // SAFETY: this test holds ENV_LOCK and restores HOME before returning.
+        unsafe {
+            env::set_var("HOME", &home_dir);
+        }
+
+        let imported =
+            import_local_skill(source_skill_dir.to_string_lossy().as_ref()).expect("import skill");
+
+        restore_env_var("HOME", original_home);
+        restore_env_var("PATH", original_path);
+
+        let managed_skill_dir = home_dir.join(".skilldock/skills/更新周报skill");
+        assert_eq!(imported.name, "更新周报skill");
+        assert_eq!(
+            imported.local_path,
+            managed_skill_dir.to_string_lossy().to_string()
+        );
+        assert!(managed_skill_dir.join("SKILL.md").is_file());
+        assert!(!home_dir.join(".skilldock/skills/skill").exists());
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn local_import_replaces_existing_tool_directory_with_symlink() {
         let _guard = TEST_ENV_LOCK
             .lock()
@@ -7152,9 +7200,8 @@ mod tests {
 
     #[test]
     fn repo_install_https_candidates_try_http_before_ssh() {
-        let spec =
-            parse_repo_install_spec("https://git.example.com/example-org/example-repo")
-                .expect("parse https repo install spec");
+        let spec = parse_repo_install_spec("https://git.example.com/example-org/example-repo")
+            .expect("parse https repo install spec");
 
         let candidates = repo_clone_candidates(&spec)
             .into_iter()

@@ -262,7 +262,9 @@ function removeImportedCandidate(
   importedSkill: SkillSummary,
 ) {
   return candidates.filter((candidate) =>
-    candidate.localPath !== importedSkill.localPath && candidate.name !== importedSkill.name
+    candidate.localPath !== importedSkill.localPath
+      && candidate.localPath !== importedSkill.sourceUrl
+      && candidate.name !== importedSkill.name
   );
 }
 
