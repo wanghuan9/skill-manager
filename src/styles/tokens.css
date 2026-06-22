@@ -3657,6 +3657,17 @@ code {
   border-color: #7a7a7a;
 }
 
+.repo-form__clone-progress {
+  margin: 6px 0 0;
+  font-size: 11px;
+  color: var(--color-text-tertiary, #888);
+  font-family: var(--font-mono, monospace);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
 .loading-button-content {
   display: inline-flex;
   align-items: center;

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
+import { listen } from "@tauri-apps/api/event";
 import { useTranslate } from "@/app/i18n";
 import { useNotifications } from "@/app/notifications";
 import { useFailureReporter } from "@/app/failure-feedback";
@@ -106,12 +107,38 @@ export function RepoInstallPanel() {
   const [isLoadingBranches, setIsLoadingBranches] = useState(false);
   const [isDiscovering, setIsDiscovering] = useState(false);
   const [isInstalling, setIsInstalling] = useState(false);
+  const [cloneProgressMessage, setCloneProgressMessage] = useState<string | null>(null);
   const prevRepoInputRef = useRef(initial.repoInput);
 
   // 同步状态到 module-level 缓存，下次 mount 恢复
   useEffect(() => {
     repoPanelCache = { repoInput, branches, selectedBranch, candidates, selectedPaths, candidateSearchQuery };
   });
+
+  // 监听 git clone 进度事件
+  useEffect(() => {
+    if (!isDiscovering && !isInstalling) {
+      setCloneProgressMessage(null);
+      return;
+    }
+    let unlisten: (() => void) | undefined;
+    let mounted = true;
+    listen<{ phase: string; message: string }>("repo-clone-progress", (event) => {
+      if (mounted) {
+        setCloneProgressMessage(event.payload.message);
+      }
+    }).then((fn) => {
+      if (mounted) {
+        unlisten = fn;
+      } else {
+        fn();
+      }
+    }).catch(() => undefined);
+    return () => {
+      mounted = false;
+      unlisten?.();
+    };
+  }, [isDiscovering, isInstalling]);
 
   const normalizedRepoUrl = useMemo(() => normalizeRepoInput(repoInput), [repoInput]);
   const isValid = isValidRepoUrl(normalizedRepoUrl);
@@ -314,6 +341,9 @@ export function RepoInstallPanel() {
               {isDiscovering ? t("install.repo.discovering") : t("install.repo.discover")}
             </button>
           </div>
+          {isDiscovering && cloneProgressMessage ? (
+            <p className="repo-form__clone-progress">{cloneProgressMessage}</p>
+          ) : null}
         </form>
       ) : null}
       {candidates.length > 0 ? (
@@ -400,6 +430,9 @@ export function RepoInstallPanel() {
               {isInstalling ? t("install.repo.installing") : t("install.repo.installSelected")}
             </button>
           </div>
+          {isInstalling && cloneProgressMessage ? (
+            <p className="repo-form__clone-progress">{cloneProgressMessage}</p>
+          ) : null}
         </div>
       ) : null}
     </section>

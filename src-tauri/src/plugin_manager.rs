@@ -2936,6 +2936,7 @@ fn update_hash_plugin_root(
         source_ref.as_deref(),
         &repo_key,
         &sparse_paths,
+        None,
         |repo_root| {
             let remote_plugin_root = if plugin_relative_path.is_empty() {
                 repo_root.to_path_buf()
@@ -5858,6 +5859,7 @@ fn remote_plugin_hash(
         source_ref.as_deref(),
         &repo_key,
         &sparse_paths,
+        None,
         |repo_root| {
             let target_root = if plugin_relative_path.trim().is_empty() {
                 repo_root.to_path_buf()
@@ -6945,6 +6947,7 @@ fn probe_plugin_source_blocking(
         source_spec.branch.as_deref(),
         &repo_key,
         &sparse_paths,
+        None,
         |repo_root| {
             let probe_root = source_spec
                 .relative_path
@@ -7020,6 +7023,7 @@ fn probe_plugin_source_candidates_blocking(
         source_spec.branch.as_deref(),
         &repo_key,
         &sparse_paths,
+        None,
         |repo_root| {
             let probe_root = source_spec
                 .relative_path

@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::io::{BufRead, BufReader};
 use std::process::{Command, Output, Stdio};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::thread;
@@ -12,6 +13,9 @@ use crate::workspace;
 use crate::workspace::normalize_workspace_path;
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
+
+/// 进度回调：接收来自 git clone stderr 的实时输出行。
+pub type CloneProgressCallback = Arc<dyn Fn(&str) + Send + Sync + 'static>;
 
 const SKILL_LIBRARY_DIR: &str = "skills";
 const REPO_CACHE_DIR: &str = "repo-cache";
@@ -798,6 +802,7 @@ pub fn clone_repo_for_discovery_with_ref_and_sparse_paths(
         repo_key,
         sparse_paths,
         true,
+        None,
     )
 }
 
@@ -806,6 +811,7 @@ pub fn clone_repo_for_discovery_resolved_with_ref_and_sparse_paths(
     git_ref: Option<&str>,
     repo_key: &str,
     sparse_paths: &[String],
+    on_progress: Option<&CloneProgressCallback>,
 ) -> Result<PathBuf, String> {
     clone_repo_for_discovery_with_ref_and_sparse_paths_internal(
         clone_url,
@@ -813,6 +819,7 @@ pub fn clone_repo_for_discovery_resolved_with_ref_and_sparse_paths(
         repo_key,
         sparse_paths,
         false,
+        on_progress,
     )
 }
 
@@ -822,6 +829,7 @@ fn clone_repo_for_discovery_with_ref_and_sparse_paths_internal(
     repo_key: &str,
     sparse_paths: &[String],
     apply_instead_of: bool,
+    on_progress: Option<&CloneProgressCallback>,
 ) -> Result<PathBuf, String> {
     let repo_lock = repo_cache_lock(repo_key);
     let _repo_guard = repo_lock.lock().unwrap_or_else(|error| error.into_inner());
@@ -836,7 +844,7 @@ fn clone_repo_for_discovery_with_ref_and_sparse_paths_internal(
     fs::create_dir_all(parent_dir).map_err(|error| format!("创建仓库缓存目录失败: {error}"))?;
 
     let clone_result = if sparse_paths.is_empty() {
-        clone_repo_with_optional_branch_internal(repo_url, git_ref, &repo_dir, apply_instead_of)
+        clone_repo_with_optional_branch_internal(repo_url, git_ref, &repo_dir, apply_instead_of, on_progress)
     } else {
         let sparse_paths = sparse_paths.iter().map(PathBuf::from).collect::<Vec<_>>();
         clone_repo_with_sparse_paths_internal(
@@ -845,6 +853,7 @@ fn clone_repo_for_discovery_with_ref_and_sparse_paths_internal(
             &repo_dir,
             &sparse_paths,
             apply_instead_of,
+            on_progress,
         )
     };
     if let Err(error) = clone_result {
@@ -881,6 +890,7 @@ pub fn with_temporary_discovery_repo_resolved<T, F>(
     git_ref: Option<&str>,
     repo_key: &str,
     sparse_paths: &[String],
+    on_progress: Option<&CloneProgressCallback>,
     callback: F,
 ) -> Result<T, String>
 where
@@ -891,6 +901,7 @@ where
         git_ref,
         repo_key,
         sparse_paths,
+        on_progress,
     )?;
     let result = callback(&repo_root);
     let _ = fs::remove_dir_all(&repo_root);
@@ -918,6 +929,7 @@ pub fn ensure_repo_skill_with_ref_and_sparse_paths(
         install_key,
         sparse_paths,
         true,
+        None,
     )
 }
 
@@ -926,6 +938,7 @@ pub fn ensure_repo_skill_with_resolved_ref_and_sparse_paths(
     git_ref: Option<&str>,
     install_key: &str,
     sparse_paths: &[String],
+    on_progress: Option<&CloneProgressCallback>,
 ) -> Result<String, String> {
     ensure_repo_skill_with_ref_and_sparse_paths_internal(
         clone_url,
@@ -933,6 +946,7 @@ pub fn ensure_repo_skill_with_resolved_ref_and_sparse_paths(
         install_key,
         sparse_paths,
         false,
+        on_progress,
     )
 }
 
@@ -942,6 +956,7 @@ fn ensure_repo_skill_with_ref_and_sparse_paths_internal(
     install_key: &str,
     sparse_paths: &[String],
     apply_instead_of: bool,
+    on_progress: Option<&CloneProgressCallback>,
 ) -> Result<String, String> {
     let skill_dir = skill_directory(install_key)?;
     if skill_dir.exists() {
@@ -955,7 +970,6 @@ fn ensure_repo_skill_with_ref_and_sparse_paths_internal(
             if !sparse_paths.is_empty() {
                 configure_sparse_checkout(&skill_dir, sparse_paths, true)?;
             }
-            // 忽略非必要文件
             ignore_unnecessary_files(&skill_dir)?;
             return Ok(skill_dir.to_string_lossy().to_string());
         }
@@ -970,7 +984,7 @@ fn ensure_repo_skill_with_ref_and_sparse_paths_internal(
         .map_err(|error| format!("创建 skill library 目录失败: {error}"))?;
 
     if sparse_paths.is_empty() {
-        clone_repo_with_optional_branch_internal(repo_url, git_ref, &skill_dir, apply_instead_of)?;
+        clone_repo_with_optional_branch_internal(repo_url, git_ref, &skill_dir, apply_instead_of, on_progress)?;
     } else {
         let path_bufs = sparse_paths.iter().map(PathBuf::from).collect::<Vec<_>>();
         clone_repo_with_sparse_paths_internal(
@@ -979,9 +993,9 @@ fn ensure_repo_skill_with_ref_and_sparse_paths_internal(
             &skill_dir,
             &path_bufs,
             apply_instead_of,
+            on_progress,
         )?;
     }
-    // 忽略非必要文件
     ignore_unnecessary_files(&skill_dir)?;
     Ok(skill_dir.to_string_lossy().to_string())
 }
@@ -991,6 +1005,7 @@ pub fn clone_shared_install_batch_repo(
     git_ref: Option<&str>,
     batch_cache_key: &str,
     sparse_paths: &[String],
+    on_progress: Option<&CloneProgressCallback>,
 ) -> Result<PathBuf, String> {
     let repo_lock = repo_cache_lock(batch_cache_key);
     let _repo_guard = repo_lock.lock().unwrap_or_else(|error| error.into_inner());
@@ -1007,10 +1022,10 @@ pub fn clone_shared_install_batch_repo(
         .map_err(|error| format!("创建共享安装缓存目录失败: {error}"))?;
 
     let clone_result = if sparse_paths.is_empty() {
-        clone_repo_with_optional_branch_internal(clone_url, git_ref, &batch_dir, false)
+        clone_repo_with_optional_branch_internal(clone_url, git_ref, &batch_dir, false, on_progress)
     } else {
         let path_bufs = sparse_paths.iter().map(PathBuf::from).collect::<Vec<_>>();
-        clone_repo_with_sparse_paths_internal(clone_url, git_ref, &batch_dir, &path_bufs, false)
+        clone_repo_with_sparse_paths_internal(clone_url, git_ref, &batch_dir, &path_bufs, false, on_progress)
     };
     if let Err(error) = clone_result {
         let _ = fs::remove_dir_all(&batch_dir);
@@ -1278,7 +1293,7 @@ fn clone_repo_with_optional_branch(
     branch: Option<&str>,
     target_dir: &Path,
 ) -> Result<(), String> {
-    clone_repo_with_optional_branch_internal(source, branch, target_dir, true)
+    clone_repo_with_optional_branch_internal(source, branch, target_dir, true, None)
 }
 
 fn clone_repo_with_optional_branch_internal(
@@ -1286,6 +1301,7 @@ fn clone_repo_with_optional_branch_internal(
     branch: Option<&str>,
     target_dir: &Path,
     apply_instead_of: bool,
+    on_progress: Option<&CloneProgressCallback>,
 ) -> Result<(), String> {
     let clone_url = if apply_instead_of {
         resolve_git_clone_url_with_instead_of(source)
@@ -1298,22 +1314,16 @@ fn clone_repo_with_optional_branch_internal(
     command.arg("--depth").arg(GIT_CLONE_HISTORY_DEPTH);
     command.arg("--single-branch");
     command.arg("--no-tags");
+    if on_progress.is_some() {
+        command.arg("--progress");
+    }
     if let Some(branch_name) = branch.filter(|value| !value.trim().is_empty()) {
         command.arg("--branch").arg(branch_name);
     }
     command
         .arg(&clone_url)
         .arg(target_dir.to_string_lossy().as_ref());
-    let output = output_with_timeout(command, GIT_NETWORK_TIMEOUT, "git clone")?;
-
-    if !output.status.success() {
-        return Err(format!(
-            "仓库克隆失败: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
-    }
-
-    Ok(())
+    run_git_clone_with_progress(&mut command, on_progress, "git clone")
 }
 
 fn clone_repo_with_sparse_paths(
@@ -1322,7 +1332,7 @@ fn clone_repo_with_sparse_paths(
     target_dir: &Path,
     sparse_paths: &[PathBuf],
 ) -> Result<(), String> {
-    clone_repo_with_sparse_paths_internal(source, branch, target_dir, sparse_paths, true)
+    clone_repo_with_sparse_paths_internal(source, branch, target_dir, sparse_paths, true, None)
 }
 
 fn clone_repo_with_sparse_paths_internal(
@@ -1331,6 +1341,7 @@ fn clone_repo_with_sparse_paths_internal(
     target_dir: &Path,
     sparse_paths: &[PathBuf],
     apply_instead_of: bool,
+    on_progress: Option<&CloneProgressCallback>,
 ) -> Result<(), String> {
     let clone_url = if apply_instead_of {
         resolve_git_clone_url_with_instead_of(source)
@@ -1348,19 +1359,16 @@ fn clone_repo_with_sparse_paths_internal(
         .arg("--no-tags")
         .arg("--sparse")
         .arg("--no-checkout");
+    if on_progress.is_some() {
+        clone_command.arg("--progress");
+    }
     if let Some(branch_name) = branch.filter(|value| !value.trim().is_empty()) {
         clone_command.arg("--branch").arg(branch_name);
     }
     clone_command
         .arg(&clone_url)
         .arg(target_dir.to_string_lossy().as_ref());
-    let clone_output = output_with_timeout(clone_command, GIT_NETWORK_TIMEOUT, "git sparse clone")?;
-    if !clone_output.status.success() {
-        return Err(format!(
-            "仓库克隆失败: {}",
-            String::from_utf8_lossy(&clone_output.stderr).trim()
-        ));
-    }
+    run_git_clone_with_progress(&mut clone_command, on_progress, "git sparse clone")?;
 
     let sparse_strings = sparse_paths
         .iter()
@@ -1558,6 +1566,89 @@ fn output_with_timeout(
             }
             Ok(None) => {
                 if started_at.elapsed() >= timeout {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(format!("{label} 超时，请检查网络后重试"));
+                }
+                thread::sleep(Duration::from_millis(100));
+            }
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!("等待 {label} 失败: {error}"));
+            }
+        }
+    }
+}
+
+/// 以流式方式运行 git clone，将 stderr 逐行转发给 `on_progress`，并在超时或失败时返回错误。
+/// 成功时返回 Ok(())，失败时返回包含 stderr 内容的 Err。
+fn run_git_clone_with_progress(
+    command: &mut Command,
+    on_progress: Option<&CloneProgressCallback>,
+    label: &str,
+) -> Result<(), String> {
+    command.stdout(Stdio::null()).stderr(Stdio::piped());
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("执行 {label} 失败: {error}"))?;
+
+    let stderr = child.stderr.take();
+    let has_progress = on_progress.is_some();
+    let (stderr_tx, stderr_rx) = mpsc::channel::<String>();
+
+    let stderr_thread = thread::spawn(move || {
+        let mut collected = String::new();
+        let Some(stderr) = stderr else {
+            return collected;
+        };
+        let reader = BufReader::new(stderr);
+        for line in reader.split(b'\r').flat_map(|r| {
+            r.ok().into_iter().flat_map(|buf| {
+                buf.split(|&b| b == b'\n')
+                    .map(|l| l.to_vec())
+                    .collect::<Vec<_>>()
+            })
+        }) {
+            if line.is_empty() {
+                continue;
+            }
+            let text = String::from_utf8_lossy(&line).to_string();
+            collected.push_str(&text);
+            collected.push('\n');
+            if has_progress {
+                let _ = stderr_tx.send(text);
+            }
+        }
+        collected
+    });
+
+    let deadline = Instant::now() + GIT_NETWORK_TIMEOUT;
+    loop {
+        if let Some(cb) = on_progress {
+            while let Ok(line) = stderr_rx.try_recv() {
+                if !line.trim().is_empty() {
+                    cb(&line);
+                }
+            }
+        }
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let collected = stderr_thread.join().unwrap_or_default();
+                if on_progress.is_some() {
+                    while let Ok(line) = stderr_rx.try_recv() {
+                        if !line.trim().is_empty() {
+                            on_progress.unwrap()(line.as_str());
+                        }
+                    }
+                }
+                if status.success() {
+                    return Ok(());
+                }
+                return Err(format!("仓库克隆失败: {}", collected.trim()));
+            }
+            Ok(None) => {
+                if Instant::now() >= deadline {
                     let _ = child.kill();
                     let _ = child.wait();
                     return Err(format!("{label} 超时，请检查网络后重试"));

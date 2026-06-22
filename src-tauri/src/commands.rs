@@ -28,7 +28,7 @@ use crate::library::{
     remove_skill_symlinks_from_all_tools, resolve_clone_url_http_first,
     resolve_git_clone_url_with_instead_of, sanitize_storage_name, skill_directory,
     summarize_git_error, tree_relative_path_for_branch, with_temporary_discovery_repo_resolved,
-    RemoteCloneCandidate,
+    CloneProgressCallback, RemoteCloneCandidate,
 };
 use crate::models::{
     AppSettings, GitAccountSummary, GitBranchOption, GitChangeFile, LocalInstallSkillCandidate,
@@ -1031,6 +1031,19 @@ fn persist_skill_timestamps(_skill: &SkillSummary) {
 
 fn now_timestamp_label() -> String {
     format_system_time_label(SystemTime::now()).unwrap_or_else(|| "刚刚".into())
+}
+
+/// 创建一个 Clone 进度回调，将 git stderr 行通过 Tauri 事件推送到前端。
+/// `phase` 取 "discovering" 或 "installing"。
+fn make_clone_progress_emitter(app_handle: &tauri::AppHandle, phase: &'static str) -> CloneProgressCallback {
+    use tauri::Emitter;
+    let handle = app_handle.clone();
+    Arc::new(move |message: &str| {
+        let _ = handle.emit(
+            "repo-clone-progress",
+            serde_json::json!({ "phase": phase, "message": message }),
+        );
+    })
 }
 
 fn format_system_time_label(value: SystemTime) -> Option<String> {
@@ -4051,10 +4064,10 @@ fn resolve_skill_install_name(
     let base_name = sanitize_storage_name(base_name);
     let candidates = package_name_candidates(&base_name, source, relative_path);
     for candidate in candidates {
-        let skill_dir =
-            skill_directory(&candidate).map_err(|error| format!("无法确定 skill 目录: {error}"))?;
         let name_used = installed_skills.iter().any(|skill| skill.name == candidate);
-        if !name_used && !skill_dir.exists() {
+        // 目录存在但 state.json 中没有记录，说明是未完成的安装（如超时中断），
+        // 调用方（install_selected_repo_skills_blocking）会负责清理并重新克隆。
+        if !name_used {
             return Ok(candidate);
         }
     }
@@ -4062,10 +4075,8 @@ fn resolve_skill_install_name(
     let mut index = 2;
     loop {
         let candidate = format!("{base_name}-{index}");
-        let skill_dir =
-            skill_directory(&candidate).map_err(|error| format!("无法确定 skill 目录: {error}"))?;
         let name_used = installed_skills.iter().any(|skill| skill.name == candidate);
-        if !name_used && !skill_dir.exists() {
+        if !name_used {
             return Ok(candidate);
         }
         index += 1;
@@ -4742,8 +4753,10 @@ pub fn install_skill_from_repo(repo_url: &str) -> Result<SkillSummary, String> {
 pub async fn discover_repo_skills(
     repo_url: String,
     git_ref: Option<String>,
+    app_handle: tauri::AppHandle,
 ) -> Result<Vec<RepoSkillCandidate>, String> {
     tauri::async_runtime::spawn_blocking(move || {
+        let progress = make_clone_progress_emitter(&app_handle, "discovering");
         let spec = parse_repo_install_spec(&repo_url)?;
         let clone_url = resolve_repo_clone_url_for_network(&spec, git_ref.as_deref())?;
         let selected_branch = selected_repo_branch(&spec, &clone_url, git_ref.as_deref());
@@ -4753,13 +4766,14 @@ pub async fn discover_repo_skills(
             .map(|path| vec![path.clone()])
             .unwrap_or_default();
         let candidates = if sparse_paths.is_empty() {
-            discover_repo_skills_without_path_hint(&spec, &clone_url, selected_branch.as_deref())?
+            discover_repo_skills_without_path_hint(&spec, &clone_url, selected_branch.as_deref(), Some(&progress))?
         } else {
             with_temporary_discovery_repo_resolved(
                 &clone_url,
                 selected_branch.as_deref(),
                 &spec.repo_key,
                 &sparse_paths,
+                Some(&progress),
                 |repo_root| scan_repo_skill_candidates(repo_root, path_hint.as_deref()),
             )?
         };
@@ -4794,12 +4808,14 @@ fn discover_repo_skills_without_path_hint(
     spec: &RepoInstallSpec,
     clone_url: &str,
     git_ref: Option<&str>,
+    on_progress: Option<&CloneProgressCallback>,
 ) -> Result<Vec<RepoSkillCandidate>, String> {
     if let Ok(candidates) = with_temporary_discovery_repo_resolved(
         clone_url,
         git_ref,
         &spec.repo_key,
         &["skills".to_string()],
+        on_progress,
         |repo_root| Ok(scan_repo_skill_candidates(repo_root, None).unwrap_or_default()),
     ) {
         if !candidates.is_empty() {
@@ -4807,7 +4823,7 @@ fn discover_repo_skills_without_path_hint(
         }
     }
 
-    with_temporary_discovery_repo_resolved(clone_url, git_ref, &spec.repo_key, &[], |repo_root| {
+    with_temporary_discovery_repo_resolved(clone_url, git_ref, &spec.repo_key, &[], on_progress, |repo_root| {
         scan_repo_skill_candidates(repo_root, None)
     })
 }
@@ -4817,9 +4833,10 @@ pub async fn install_selected_repo_skills(
     repo_url: String,
     selected_paths: Vec<String>,
     git_ref: Option<String>,
+    app_handle: tauri::AppHandle,
 ) -> Result<Vec<SkillSummary>, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        install_selected_repo_skills_blocking(repo_url, selected_paths, git_ref)
+        install_selected_repo_skills_blocking(repo_url, selected_paths, git_ref, app_handle)
     })
     .await
     .map_err(|error| format!("后台安装仓库技能失败: {error}"))?
@@ -4848,6 +4865,7 @@ fn materialize_skill_from_batch_or_clone(
     clone_url: &str,
     selected_branch: &Option<String>,
     item: &PendingSkillInstall,
+    on_progress: Option<&CloneProgressCallback>,
 ) -> Result<String, String> {
     if let Some(batch) = batch_root.as_deref() {
         if item.normalized_path.is_empty() {
@@ -4867,6 +4885,7 @@ fn materialize_skill_from_batch_or_clone(
             selected_branch.as_deref(),
             &item.install_name,
             &[],
+            on_progress,
         )
     } else {
         let sparse = vec![item.normalized_path.clone()];
@@ -4875,6 +4894,7 @@ fn materialize_skill_from_batch_or_clone(
             selected_branch.as_deref(),
             &item.install_name,
             &sparse,
+            on_progress,
         )?;
         let subdir = item.skill_dir.join(&item.normalized_path);
         if !subdir.is_dir() || !subdir.join("SKILL.md").is_file() {
@@ -4888,6 +4908,7 @@ fn install_selected_repo_skills_blocking(
     repo_url: String,
     selected_paths: Vec<String>,
     git_ref: Option<String>,
+    app_handle: tauri::AppHandle,
 ) -> Result<Vec<SkillSummary>, String> {
     if selected_paths.is_empty() {
         return Err("请至少选择一个技能再安装。".into());
@@ -4966,6 +4987,8 @@ fn install_selected_repo_skills_blocking(
         });
     }
 
+    let install_progress = make_clone_progress_emitter(&app_handle, "installing");
+
     // 多个待安装时一次性 clone，否则各自走独立 clone
     let shared_batch_root = if pending_installs.len() > 1 {
         let batch_cache_key = format!(
@@ -4983,6 +5006,7 @@ fn install_selected_repo_skills_blocking(
             selected_branch.as_deref(),
             &batch_cache_key,
             &sparse_paths,
+            Some(&install_progress),
         )?)
     } else {
         None
@@ -4992,6 +5016,8 @@ fn install_selected_repo_skills_blocking(
     let batch_arc: Option<Arc<PathBuf>> = shared_batch_root.as_ref().map(|p| Arc::new(p.clone()));
     let clone_url_arc = Arc::new(clone_url);
     let selected_branch_arc = Arc::new(selected_branch);
+    // 单个安装时（batch_root == None）在并发线程中传入 progress；多个安装时共享 batch 不需要网络 progress
+    let single_progress_arc = install_progress.clone();
 
     let (tx, rx) = mpsc::channel::<SkillInstallOutcome>();
     let mut active = 0usize;
@@ -5012,9 +5038,19 @@ fn install_selected_repo_skills_blocking(
         let batch_opt = batch_arc.clone();
         let clone_url_ref = Arc::clone(&clone_url_arc);
         let branch_ref = Arc::clone(&selected_branch_arc);
+        let progress_for_thread = if batch_opt.is_none() {
+            Some(Arc::clone(&single_progress_arc))
+        } else {
+            None
+        };
         thread::spawn(move || {
-            let local_path =
-                materialize_skill_from_batch_or_clone(&batch_opt, &clone_url_ref, &branch_ref, &item);
+            let local_path = materialize_skill_from_batch_or_clone(
+                &batch_opt,
+                &clone_url_ref,
+                &branch_ref,
+                &item,
+                progress_for_thread.as_ref(),
+            );
             tx_clone
                 .send(SkillInstallOutcome {
                     index: item.index,
@@ -6300,6 +6336,37 @@ mod tests {
 
         restore_env_var("HOME", previous_home);
         assert_eq!(resolved, "coding-tutor-other-plugin");
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn skill_install_name_reuses_canonical_name_for_stale_partial_install_dir() {
+        let _guard = TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let temp_dir = temp_test_dir("skill-install-name-stale-dir");
+        let home_dir = temp_dir.join("home");
+        let previous_home = env::var_os("HOME");
+        // SAFETY: this test holds ENV_LOCK and restores HOME before returning.
+        unsafe {
+            env::set_var("HOME", &home_dir);
+        }
+        // 模拟安装中断留下的残留目录：目录存在但 state.json 没有记录
+        let stale_dir = home_dir.join(".skilldock/skills/coding-tutor");
+        fs::create_dir_all(&stale_dir).expect("create stale skill dir");
+        let installed: Vec<SkillSummary> = vec![];
+
+        let resolved = resolve_skill_install_name(
+            "coding-tutor",
+            "https://github.com/everyinc/compound-engineering-plugin/tree/main/plugins/coding-tutor",
+            "plugins/coding-tutor",
+            &installed,
+        )
+        .expect("resolve install name");
+
+        restore_env_var("HOME", previous_home);
+        // 应复用正规名称，由调用方负责清理残留目录后重新安装
+        assert_eq!(resolved, "coding-tutor");
         let _ = fs::remove_dir_all(temp_dir);
     }
 
