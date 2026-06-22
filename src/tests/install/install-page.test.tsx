@@ -1811,6 +1811,8 @@ test("discovers repo skills and allows multi-select install", async () => {
   expect(screen.getByRole("button", { name: "安装选中技能" })).toBeInTheDocument();
   expect(screen.getByText("service-observer")).toBeInTheDocument();
   expect(screen.getByText("release-scribe")).toBeInTheDocument();
+  expect(screen.queryByText("skills/service-observer")).not.toBeInTheDocument();
+  expect(screen.queryByText("skills/release-scribe")).not.toBeInTheDocument();
 
   await userEvent.click(screen.getByRole("button", { name: "返回" }));
   expect(screen.getByRole("textbox", { name: "Git 仓库地址" })).toBeInTheDocument();

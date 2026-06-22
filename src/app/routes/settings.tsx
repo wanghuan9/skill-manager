@@ -56,19 +56,20 @@ function TrashIcon() {
   return (
     <svg className="settings-update-button__svg" viewBox="0 0 20 20" fill="none" aria-hidden="true">
       <path
-        d="M4.2 6.8h11.6M8.2 6.8V5.4a.9.9 0 0 1 .9-.9h1.8a.9.9 0 0 1 .9.9v1.4"
+        d="M4.75 6.65h10.5M8.15 6.65V5.5c0-.5.4-.9.9-.9h1.9c.5 0 .9.4.9.9v1.15"
         stroke="currentColor"
-        strokeWidth="1.7"
+        strokeWidth="1.55"
         strokeLinecap="round"
         strokeLinejoin="round"
       />
       <path
-        d="M7.4 6.8l.65 9.1a.95.95 0 0 0 .94.85h2.02a.95.95 0 0 0 .94-.85l.65-9.1"
+        d="M6.65 8.6l.48 5.9c.07.75.69 1.32 1.44 1.32h2.86c.75 0 1.37-.57 1.44-1.32l.48-5.9"
         stroke="currentColor"
-        strokeWidth="1.7"
+        strokeWidth="1.55"
         strokeLinecap="round"
         strokeLinejoin="round"
       />
+      <path d="M8.85 9.75v3.7M11.15 9.75v3.7" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round" />
     </svg>
   );
 }

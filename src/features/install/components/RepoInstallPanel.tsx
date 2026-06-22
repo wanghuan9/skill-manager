@@ -400,8 +400,9 @@ export function RepoInstallPanel() {
                           <span className="repo-install__option-badge">{t("install.repo.badgeInstalled")}</span>
                         ) : null}
                       </div>
-                      <p>{formatSkillDescription(candidate.description) || t("skills.description.empty")}</p>
-                      <span>{candidate.relativePath}</span>
+                      <p className="repo-install__option-description">
+                        {formatSkillDescription(candidate.description) || t("skills.description.empty")}
+                      </p>
                     </div>
                   </button>
                 );
