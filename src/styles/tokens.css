@@ -1197,6 +1197,8 @@ code {
 }
 
 .skill-card,
+.mcp-server-card,
+.tool-list-row,
 .tool-card {
   transition:
     border-color 140ms ease,
@@ -1205,12 +1207,16 @@ code {
 
 .skill-card:hover,
 .skill-card:focus-within,
+.mcp-server-card:hover,
+.mcp-server-card:focus-within,
+.tool-list-row:hover,
+.tool-list-row:focus-within,
 .tool-card:hover,
 .tool-card:focus-within {
-  border-color: #b9ccff;
+  border-color: #c6d7ff;
   box-shadow:
-    0 0 0 1px rgba(59, 130, 246, 0.18),
-    0 8px 20px rgba(23, 35, 63, 0.1);
+    0 0 0 0.75px rgba(59, 130, 246, 0.13),
+    0 7px 18px rgba(23, 35, 63, 0.085);
 }
 
 .panel-card,
@@ -1845,8 +1851,8 @@ code {
 .skill-group-section__list .skill-card:focus-within {
   border-color: #c6d7ff;
   box-shadow:
-    0 0 0 1px rgba(59, 130, 246, 0.13),
-    0 7px 16px rgba(23, 35, 63, 0.09);
+    0 0 0 0.75px rgba(59, 130, 246, 0.13),
+    0 7px 18px rgba(23, 35, 63, 0.085);
 }
 
 .skills-page .status-badge,
@@ -1868,6 +1874,14 @@ code {
   border-color: var(--line);
   background: var(--surface);
   box-shadow: var(--shadow);
+}
+
+.skills-page .skill-card:hover,
+.skills-page .skill-card:focus-within {
+  border-color: #c6d7ff;
+  box-shadow:
+    0 0 0 0.75px rgba(59, 130, 246, 0.13),
+    0 7px 18px rgba(23, 35, 63, 0.085);
 }
 
 .skill-card__header,
