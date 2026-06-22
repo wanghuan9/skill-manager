@@ -3657,15 +3657,23 @@ code {
   border-color: #7a7a7a;
 }
 
-.repo-form__clone-progress {
-  margin: 6px 0 0;
+.repo-clone-progress-bar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  padding: 5px 12px;
+  background: var(--color-surface-secondary, #f0f0f0);
+  border-bottom: 1px solid var(--color-border, #ddd);
+}
+
+.repo-clone-progress-bar__text {
+  display: block;
   font-size: 11px;
   color: var(--color-text-tertiary, #888);
   font-family: var(--font-mono, monospace);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 100%;
 }
 
 .loading-button-content {

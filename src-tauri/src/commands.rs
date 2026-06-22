@@ -1034,7 +1034,6 @@ fn now_timestamp_label() -> String {
 }
 
 /// 创建一个 Clone 进度回调，将 git stderr 行通过 Tauri 事件推送到前端。
-/// `phase` 取 "discovering" 或 "installing"。
 fn make_clone_progress_emitter(app_handle: &tauri::AppHandle, phase: &'static str) -> CloneProgressCallback {
     use tauri::Emitter;
     let handle = app_handle.clone();
@@ -1044,6 +1043,15 @@ fn make_clone_progress_emitter(app_handle: &tauri::AppHandle, phase: &'static st
             serde_json::json!({ "phase": phase, "message": message }),
         );
     })
+}
+
+/// 直接 emit 一条状态消息（生命周期节点，如 preparing / finalizing）。
+fn emit_repo_status(app_handle: &tauri::AppHandle, phase: &str, message: &str) {
+    use tauri::Emitter;
+    let _ = app_handle.emit(
+        "repo-clone-progress",
+        serde_json::json!({ "phase": phase, "message": message }),
+    );
 }
 
 fn format_system_time_label(value: SystemTime) -> Option<String> {
@@ -4756,6 +4764,7 @@ pub async fn discover_repo_skills(
     app_handle: tauri::AppHandle,
 ) -> Result<Vec<RepoSkillCandidate>, String> {
     tauri::async_runtime::spawn_blocking(move || {
+        emit_repo_status(&app_handle, "preparing", "正在连接仓库...");
         let progress = make_clone_progress_emitter(&app_handle, "discovering");
         let spec = parse_repo_install_spec(&repo_url)?;
         let clone_url = resolve_repo_clone_url_for_network(&spec, git_ref.as_deref())?;
@@ -4765,6 +4774,7 @@ pub async fn discover_repo_skills(
             .as_ref()
             .map(|path| vec![path.clone()])
             .unwrap_or_default();
+        emit_repo_status(&app_handle, "finalizing", "正在扫描技能目录...");
         let candidates = if sparse_paths.is_empty() {
             discover_repo_skills_without_path_hint(&spec, &clone_url, selected_branch.as_deref(), Some(&progress))?
         } else {
@@ -4987,6 +4997,7 @@ fn install_selected_repo_skills_blocking(
         });
     }
 
+    emit_repo_status(&app_handle, "preparing", "正在准备安装...");
     let install_progress = make_clone_progress_emitter(&app_handle, "installing");
 
     // 多个待安装时一次性 clone，否则各自走独立 clone
@@ -5072,6 +5083,8 @@ fn install_selected_repo_skills_blocking(
             Err(_) => break,
         }
     }
+
+    emit_repo_status(&app_handle, "finalizing", "正在完成安装...");
 
     // 清理临时 batch clone
     if let Some(batch_root) = shared_batch_root {

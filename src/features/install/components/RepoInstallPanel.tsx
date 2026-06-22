@@ -115,16 +115,15 @@ export function RepoInstallPanel() {
     repoPanelCache = { repoInput, branches, selectedBranch, candidates, selectedPaths, candidateSearchQuery };
   });
 
-  // 监听 git clone 进度事件
+  // 监听 git clone 进度事件（仅在 discovering/installing 期间注册）
   useEffect(() => {
     if (!isDiscovering && !isInstalling) {
-      setCloneProgressMessage(null);
       return;
     }
     let unlisten: (() => void) | undefined;
     let mounted = true;
     listen<{ phase: string; message: string }>("repo-clone-progress", (event) => {
-      if (mounted) {
+      if (mounted && event.payload.message) {
         setCloneProgressMessage(event.payload.message);
       }
     }).then((fn) => {
@@ -230,6 +229,7 @@ export function RepoInstallPanel() {
 
     flushSync(() => {
       setIsDiscovering(true);
+      setCloneProgressMessage("正在连接仓库...");
     });
     setCandidateSearchQuery("");
 
@@ -251,6 +251,7 @@ export function RepoInstallPanel() {
       });
     } finally {
       setIsDiscovering(false);
+      setCloneProgressMessage(null);
     }
   }
 
@@ -260,6 +261,7 @@ export function RepoInstallPanel() {
     }
 
     setIsInstalling(true);
+    setCloneProgressMessage("正在准备安装...");
     try {
       await installFromRepo(normalizedRepoUrl, selectedPaths, selectedGitRef);
       notify({ message: t("install.repo.success.selectedInstalled"), tone: "success" });
@@ -271,6 +273,7 @@ export function RepoInstallPanel() {
       });
     } finally {
       setIsInstalling(false);
+      setCloneProgressMessage(null);
     }
   }
 
@@ -290,6 +293,11 @@ export function RepoInstallPanel() {
 
   return (
     <section className="panel-card market-panel">
+      {(isDiscovering || isInstalling) && cloneProgressMessage ? (
+        <div className="repo-clone-progress-bar">
+          <span className="repo-clone-progress-bar__text">{cloneProgressMessage}</span>
+        </div>
+      ) : null}
       {candidates.length === 0 ? (
         <form className="repo-form" onSubmit={(event) => void handleDiscover(event)}>
           <div className="repo-form__section">
@@ -341,9 +349,6 @@ export function RepoInstallPanel() {
               {isDiscovering ? t("install.repo.discovering") : t("install.repo.discover")}
             </button>
           </div>
-          {isDiscovering && cloneProgressMessage ? (
-            <p className="repo-form__clone-progress">{cloneProgressMessage}</p>
-          ) : null}
         </form>
       ) : null}
       {candidates.length > 0 ? (
@@ -430,9 +435,6 @@ export function RepoInstallPanel() {
               {isInstalling ? t("install.repo.installing") : t("install.repo.installSelected")}
             </button>
           </div>
-          {isInstalling && cloneProgressMessage ? (
-            <p className="repo-form__clone-progress">{cloneProgressMessage}</p>
-          ) : null}
         </div>
       ) : null}
     </section>
