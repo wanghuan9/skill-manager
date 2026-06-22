@@ -1163,6 +1163,15 @@ pub fn ssh_clone_url_for_repository_url(repository_url: &str) -> Option<String> 
     Some(format!("git@{host}:{owner}/{repo}.git"))
 }
 
+/// 对于公网知名 HTTPS 托管平台，直接信任 HTTPS 无需 ls-remote 探测。
+/// 网络不通时 git clone 本身会给出清晰的错误，无需双重往返。
+fn is_trusted_https_host(url: &str) -> bool {
+    let lower = url.to_lowercase();
+    lower.starts_with("https://github.com/")
+        || lower.starts_with("https://gitlab.com/")
+        || lower.starts_with("https://bitbucket.org/")
+}
+
 pub fn resolve_clone_url_http_first(
     clone_url: &str,
     repository_url: &str,
@@ -1171,7 +1180,12 @@ pub fn resolve_clone_url_http_first(
     if candidates.is_empty() {
         return Err("仓库地址解析失败: clone URL 为空".into());
     }
+    // SSH-only: no probe needed
     if candidates.len() == 1 && candidates[0].label == "SSH" {
+        return Ok(candidates[0].url.clone());
+    }
+    // Trusted public HTTPS hosts: skip ls-remote probe, let clone fail naturally
+    if candidates[0].label == "HTTP" && is_trusted_https_host(&candidates[0].url) {
         return Ok(candidates[0].url.clone());
     }
 

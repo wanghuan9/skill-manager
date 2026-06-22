@@ -6962,12 +6962,10 @@ fn probe_plugin_source_blocking(
         source_spec.relative_path = explicit_sparse_path.map(PathBuf::from);
     }
 
-    let repository_url = repository_url_from_clone_url(&source_spec.clone_url);
-    let resolved_clone_url = resolve_clone_url_http_first(&source_spec.clone_url, &repository_url)?;
-    source_spec.clone_url = resolved_clone_url;
-    let resolved_source_url = plugin_probe_source_url(&source_spec);
+    // 先尝试 GitHub API 快速路径
+    let early_source_url = plugin_probe_source_url(&source_spec);
     if let Ok(Some(mut probes)) = detect_remote_github_plugin_candidates(
-        &resolved_source_url,
+        &early_source_url,
         &source_spec,
         hint_host_tool.clone(),
     ) {
@@ -6975,6 +6973,11 @@ fn probe_plugin_source_blocking(
             return Ok(probe);
         }
     }
+
+    let repository_url = repository_url_from_clone_url(&source_spec.clone_url);
+    let resolved_clone_url = resolve_clone_url_http_first(&source_spec.clone_url, &repository_url)?;
+    source_spec.clone_url = resolved_clone_url;
+    let resolved_source_url = plugin_probe_source_url(&source_spec);
 
     let repo_key = plugin_discovery_repo_key(
         &source_spec.clone_url,
@@ -7041,17 +7044,21 @@ fn probe_plugin_source_candidates_blocking(
         source_spec.relative_path = explicit_sparse_path.map(PathBuf::from);
     }
 
-    let repository_url = repository_url_from_clone_url(&source_spec.clone_url);
-    let resolved_clone_url = resolve_clone_url_http_first(&source_spec.clone_url, &repository_url)?;
-    source_spec.clone_url = resolved_clone_url;
-    let resolved_source_url = plugin_probe_source_url(&source_spec);
+    // 先尝试 GitHub API 快速路径（无需 git ls-remote，纯 HTTP API）
+    let early_source_url = plugin_probe_source_url(&source_spec);
     if let Ok(Some(probes)) = detect_remote_github_plugin_candidates(
-        &resolved_source_url,
+        &early_source_url,
         &source_spec,
         hint_host_tool.clone(),
     ) {
         return Ok(probes);
     }
+
+    // GitHub API 未命中时才解析/探测 clone URL，再做 git clone
+    let repository_url = repository_url_from_clone_url(&source_spec.clone_url);
+    let resolved_clone_url = resolve_clone_url_http_first(&source_spec.clone_url, &repository_url)?;
+    source_spec.clone_url = resolved_clone_url;
+    let resolved_source_url = plugin_probe_source_url(&source_spec);
 
     let repo_key = plugin_discovery_repo_key(
         &source_spec.clone_url,
