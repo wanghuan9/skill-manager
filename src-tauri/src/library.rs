@@ -17,7 +17,7 @@ const SKILL_LIBRARY_DIR: &str = "skills";
 const REPO_CACHE_DIR: &str = "repo-cache";
 const RESERVED_WORKSPACE_LINK_NAMES: [&str; 5] =
     ["state.json", "skills", "repo-cache", "cache", "imports"];
-const GIT_CLONE_HISTORY_DEPTH: &str = "20";
+const GIT_CLONE_HISTORY_DEPTH: &str = "10";
 const GIT_NETWORK_TIMEOUT: Duration = Duration::from_secs(120);
 const GIT_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 const GIT_REMOTE_PROBE_TIMEOUT: Duration = Duration::from_secs(8);
