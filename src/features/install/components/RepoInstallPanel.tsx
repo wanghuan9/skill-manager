@@ -37,6 +37,10 @@ function clearCache() {
   repoPanelCache = null;
 }
 
+export function resetRepoInstallPanelState() {
+  clearCache();
+}
+
 function wait(duration: number) {
   return new Promise((resolve) => setTimeout(resolve, duration));
 }

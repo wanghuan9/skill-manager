@@ -57,6 +57,10 @@ function clearPluginCache() {
   pluginPanelCache = null;
 }
 
+export function resetPluginInstallPanelState() {
+  clearPluginCache();
+}
+
 const pluginHostOptions: { key: PluginHostTool; label: string }[] = [
   { key: "codex", label: "Codex" },
   { key: "claude-code", label: "Claude Code" },
