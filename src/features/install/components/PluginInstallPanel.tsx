@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { useFailureReporter } from "@/app/failure-feedback";
 import { useTranslate } from "@/app/i18n";
@@ -12,7 +12,7 @@ import {
   shouldUseFixtureData,
 } from "@/features/skills/api/skill-client";
 import { useSkillWorkspace } from "@/features/skills/state/skill-workspace";
-import { cachePlugins } from "@/features/skills/utils/plugin-cache";
+import { cachePlugins, getCachedPlugins } from "@/features/skills/utils/plugin-cache";
 import { formatSkillDescription } from "@/features/skills/utils/skill-description";
 import { getToolLogoUrl } from "@/features/skills/utils/tool-logo";
 import { isToolInstalledStatus } from "@/features/skills/utils/tool-status";
@@ -27,6 +27,34 @@ import type {
 } from "@/features/skills/state/skill-store";
 
 const PROBING_MIN_DURATION_MS = 450;
+
+type PluginPanelCache = {
+  source: string;
+  branches: GitBranchOption[];
+  gitRef: string;
+  probes: PluginProbeResult[];
+  selectedPluginRoots: string[];
+  selectedHostsByPluginRoot: Record<string, PluginHostTool[]>;
+  probeSearchQuery: string;
+};
+
+let pluginPanelCache: PluginPanelCache | null = null;
+
+function readPluginCache(): PluginPanelCache {
+  return pluginPanelCache ?? {
+    source: "",
+    branches: [],
+    gitRef: "",
+    probes: [],
+    selectedPluginRoots: [],
+    selectedHostsByPluginRoot: {},
+    probeSearchQuery: "",
+  };
+}
+
+function clearPluginCache() {
+  pluginPanelCache = null;
+}
 
 const pluginHostOptions: { key: PluginHostTool; label: string }[] = [
   { key: "codex", label: "Codex" },
@@ -472,17 +500,25 @@ export function PluginInstallPanel() {
   const { notify } = useNotifications();
   const reportFailure = useFailureReporter();
   const { refreshWorkspace, toolConfigs } = useSkillWorkspace();
-  const [source, setSource] = useState("");
-  const [branches, setBranches] = useState<GitBranchOption[]>([]);
-  const [gitRef, setGitRef] = useState("");
-  const [probes, setProbes] = useState<PluginProbeResult[]>([]);
-  const [selectedPluginRoots, setSelectedPluginRoots] = useState<string[]>([]);
-  const [selectedHostsByPluginRoot, setSelectedHostsByPluginRoot] = useState<Record<string, PluginHostTool[]>>({});
-  const [probeSearchQuery, setProbeSearchQuery] = useState("");
-  const [installedPlugins, setInstalledPlugins] = useState<PluginSummary[]>([]);
+  const initial = readPluginCache();
+  const [source, setSource] = useState(initial.source);
+  const [branches, setBranches] = useState<GitBranchOption[]>(initial.branches);
+  const [gitRef, setGitRef] = useState(initial.gitRef);
+  const [probes, setProbes] = useState<PluginProbeResult[]>(initial.probes);
+  const [selectedPluginRoots, setSelectedPluginRoots] = useState<string[]>(initial.selectedPluginRoots);
+  const [selectedHostsByPluginRoot, setSelectedHostsByPluginRoot] = useState<Record<string, PluginHostTool[]>>(initial.selectedHostsByPluginRoot);
+  const [probeSearchQuery, setProbeSearchQuery] = useState(initial.probeSearchQuery);
+  const [installedPlugins, setInstalledPlugins] = useState<PluginSummary[]>(() => getCachedPlugins() ?? []);
   const [isLoadingBranches, setIsLoadingBranches] = useState(false);
   const [isProbing, setIsProbing] = useState(false);
   const [isInstalling, setIsInstalling] = useState(false);
+  const prevSourceRef = useRef(initial.source);
+
+  // 同步状态到 module-level 缓存
+  useEffect(() => {
+    pluginPanelCache = { source, branches, gitRef, probes, selectedPluginRoots, selectedHostsByPluginRoot, probeSearchQuery };
+  });
+
   const installedHostApps = useMemo(() => buildInstalledPluginHostSet(toolConfigs), [toolConfigs]);
   const selectableProbes = useMemo(
     () => probes.filter((probe) => probe.kind === "plugin-repo"),
@@ -546,15 +582,25 @@ export function PluginInstallPanel() {
   }, []);
 
   useEffect(() => {
+    const sourceChanged = prevSourceRef.current !== source;
+    prevSourceRef.current = source;
+
+    if (sourceChanged) {
+      setBranches([]);
+      setGitRef("");
+      setProbes([]);
+      setSelectedPluginRoots([]);
+      setSelectedHostsByPluginRoot({});
+      setProbeSearchQuery("");
+    }
+
     const normalizedSource = source.trim();
-    setBranches([]);
-    setGitRef("");
-    setProbes([]);
-    setSelectedPluginRoots([]);
-    setSelectedHostsByPluginRoot({});
-    setProbeSearchQuery("");
     if (!normalizedSource || normalizedSource.length < 5) {
       setIsLoadingBranches(false);
+      return;
+    }
+    // 缓存恢复且 source 未变时，跳过重复拉取
+    if (!sourceChanged && branches.length > 0) {
       return;
     }
 
@@ -1012,6 +1058,7 @@ export function PluginInstallPanel() {
                 setSelectedPluginRoots([]);
                 setSelectedHostsByPluginRoot({});
                 setProbeSearchQuery("");
+                clearPluginCache();
               }}
             >
               {t("install.repo.back")}

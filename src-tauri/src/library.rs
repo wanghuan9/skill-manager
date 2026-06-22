@@ -986,6 +986,81 @@ fn ensure_repo_skill_with_ref_and_sparse_paths_internal(
     Ok(skill_dir.to_string_lossy().to_string())
 }
 
+pub fn clone_shared_install_batch_repo(
+    clone_url: &str,
+    git_ref: Option<&str>,
+    batch_cache_key: &str,
+    sparse_paths: &[String],
+) -> Result<PathBuf, String> {
+    let repo_lock = repo_cache_lock(batch_cache_key);
+    let _repo_guard = repo_lock.lock().unwrap_or_else(|error| error.into_inner());
+    let batch_dir = repo_cache_directory(batch_cache_key)?;
+    if batch_dir.exists() {
+        fs::remove_dir_all(&batch_dir)
+            .map_err(|error| format!("清理共享安装缓存失败: {error}"))?;
+    }
+
+    let parent_dir = batch_dir
+        .parent()
+        .ok_or_else(|| "无法确定共享安装缓存的父目录".to_string())?;
+    fs::create_dir_all(parent_dir)
+        .map_err(|error| format!("创建共享安装缓存目录失败: {error}"))?;
+
+    let clone_result = if sparse_paths.is_empty() {
+        clone_repo_with_optional_branch_internal(clone_url, git_ref, &batch_dir, false)
+    } else {
+        let path_bufs = sparse_paths.iter().map(PathBuf::from).collect::<Vec<_>>();
+        clone_repo_with_sparse_paths_internal(clone_url, git_ref, &batch_dir, &path_bufs, false)
+    };
+    if let Err(error) = clone_result {
+        let _ = fs::remove_dir_all(&batch_dir);
+        return Err(error);
+    }
+
+    Ok(batch_dir)
+}
+
+pub fn ensure_repo_skill_from_local_batch_source(
+    local_batch_dir: &Path,
+    remote_clone_url: &str,
+    install_key: &str,
+    sparse_paths: &[String],
+) -> Result<String, String> {
+    let skill_dir = skill_directory(install_key)?;
+    if skill_dir.exists() {
+        if !skill_dir.is_dir() {
+            return Err(format!(
+                "目标 skill 工作区已存在且不是目录: {}",
+                skill_dir.to_string_lossy()
+            ));
+        }
+        if skill_dir.join(".git").is_dir() {
+            if !sparse_paths.is_empty() {
+                configure_sparse_checkout(&skill_dir, sparse_paths, true)?;
+            }
+            ignore_unnecessary_files(&skill_dir)?;
+            return Ok(skill_dir.to_string_lossy().to_string());
+        }
+        fs::remove_dir_all(&skill_dir)
+            .map_err(|error| format!("清理旧 skill 目录失败: {error}"))?;
+    }
+
+    let parent_dir = skill_dir
+        .parent()
+        .ok_or_else(|| "无法确定 skill 目录的父目录".to_string())?;
+    fs::create_dir_all(parent_dir)
+        .map_err(|error| format!("创建 skill library 目录失败: {error}"))?;
+
+    let path_bufs = sparse_paths.iter().map(PathBuf::from).collect::<Vec<_>>();
+    materialize_repo_from_local_batch_internal(local_batch_dir, &skill_dir, &path_bufs)?;
+    run_git_in_dir(
+        &skill_dir,
+        &["remote", "set-url", "origin", remote_clone_url],
+    )?;
+    ignore_unnecessary_files(&skill_dir)?;
+    Ok(skill_dir.to_string_lossy().to_string())
+}
+
 pub fn skill_directory(skill_name: &str) -> Result<PathBuf, String> {
     Ok(workspace::managed_workspace_root()?
         .join(SKILL_LIBRARY_DIR)
@@ -1293,6 +1368,93 @@ fn clone_repo_with_sparse_paths_internal(
         .collect::<Vec<_>>();
     configure_sparse_checkout(target_dir, &sparse_strings, false)?;
     run_git_in_dir(target_dir, &["checkout", "--quiet"])?;
+    Ok(())
+}
+
+fn materialize_repo_from_local_batch_internal(
+    local_source_dir: &Path,
+    target_dir: &Path,
+    sparse_paths: &[PathBuf],
+) -> Result<(), String> {
+    copy_skill_repo_dir_all(local_source_dir, target_dir)?;
+
+    if sparse_paths.is_empty() {
+        return Ok(());
+    }
+
+    let sparse_strings = sparse_paths
+        .iter()
+        .map(|path| path.to_string_lossy().to_string())
+        .collect::<Vec<_>>();
+    configure_sparse_checkout(target_dir, &sparse_strings, false)?;
+    run_git_in_dir(target_dir, &["checkout", "--quiet", "--force"])?;
+    Ok(())
+}
+
+fn copy_skill_repo_dir_all(source: &Path, target: &Path) -> Result<(), String> {
+    fs::create_dir_all(target).map_err(|error| {
+        format!(
+            "创建 skill 目录失败（{}）: {error}",
+            target.display()
+        )
+    })?;
+    let entries = fs::read_dir(source).map_err(|error| {
+        format!(
+            "读取 skill 源目录失败（{}）: {error}",
+            source.display()
+        )
+    })?;
+    for entry in entries {
+        let entry = entry.map_err(|error| {
+            format!(
+                "读取 skill 源目录条目失败（{}）: {error}",
+                source.display()
+            )
+        })?;
+        let source_path = entry.path();
+        let target_path = target.join(entry.file_name());
+        let metadata = fs::symlink_metadata(&source_path).map_err(|error| {
+            format!(
+                "读取 skill 源目录条目元数据失败（{}）: {error}",
+                source_path.display()
+            )
+        })?;
+        if metadata.file_type().is_symlink() {
+            let link_target = fs::read_link(&source_path).map_err(|error| {
+                format!(
+                    "读取 skill 源符号链接失败（{}）: {error}",
+                    source_path.display()
+                )
+            })?;
+            #[cfg(unix)]
+            {
+                std::os::unix::fs::symlink(&link_target, &target_path).map_err(|error| {
+                    format!(
+                        "创建 skill 符号链接失败（{} -> {}）: {error}",
+                        target_path.display(),
+                        link_target.display()
+                    )
+                })?;
+            }
+            #[cfg(not(unix))]
+            {
+                return Err(format!(
+                    "当前平台不支持复制 skill 符号链接: {}",
+                    source_path.display()
+                ));
+            }
+        } else if metadata.is_dir() {
+            copy_skill_repo_dir_all(&source_path, &target_path)?;
+        } else {
+            fs::copy(&source_path, &target_path).map_err(|error| {
+                format!(
+                    "复制 skill 文件失败（{} -> {}）: {error}",
+                    source_path.display(),
+                    target_path.display()
+                )
+            })?;
+        }
+    }
     Ok(())
 }
 

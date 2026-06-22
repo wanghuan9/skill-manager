@@ -3,7 +3,8 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -18,7 +19,8 @@ use crate::git_state::{
     enrich_skill_with_local_git_state,
 };
 use crate::library::{
-    clone_repo_skill, configure_git_network_command, create_skill_symlink,
+    clone_repo_skill, clone_shared_install_batch_repo, configure_git_network_command,
+    create_skill_symlink, ensure_repo_skill_from_local_batch_source,
     ensure_repo_skill_with_resolved_ref_and_sparse_paths, get_tool_skills_path,
     install_market_skill_from_source, is_ssh_git_url, parse_market_source_url,
     reconcile_tool_skill_symlinks, remote_clone_candidates, remove_reserved_workspace_entries,
@@ -4823,6 +4825,65 @@ pub async fn install_selected_repo_skills(
     .map_err(|error| format!("后台安装仓库技能失败: {error}"))?
 }
 
+const BATCH_INSTALL_CONCURRENCY: usize = 10;
+
+struct PendingSkillInstall {
+    index: usize,
+    install_name: String,
+    source_url: String,
+    normalized_path: String,
+    skill_dir: PathBuf,
+    selected_path: String,
+}
+
+struct SkillInstallOutcome {
+    index: usize,
+    install_name: String,
+    source_url: String,
+    local_path: Result<String, String>,
+}
+
+fn materialize_skill_from_batch_or_clone(
+    batch_root: &Option<Arc<PathBuf>>,
+    clone_url: &str,
+    selected_branch: &Option<String>,
+    item: &PendingSkillInstall,
+) -> Result<String, String> {
+    if let Some(batch) = batch_root.as_deref() {
+        if item.normalized_path.is_empty() {
+            ensure_repo_skill_from_local_batch_source(batch, clone_url, &item.install_name, &[])
+        } else {
+            let sparse = vec![item.normalized_path.clone()];
+            ensure_repo_skill_from_local_batch_source(batch, clone_url, &item.install_name, &sparse)?;
+            let subdir = item.skill_dir.join(&item.normalized_path);
+            if !subdir.is_dir() || !subdir.join("SKILL.md").is_file() {
+                return Err(format!("未找到待安装技能路径: {}", item.selected_path));
+            }
+            Ok(subdir.to_string_lossy().to_string())
+        }
+    } else if item.normalized_path.is_empty() {
+        ensure_repo_skill_with_resolved_ref_and_sparse_paths(
+            clone_url,
+            selected_branch.as_deref(),
+            &item.install_name,
+            &[],
+        )
+    } else {
+        let sparse = vec![item.normalized_path.clone()];
+        ensure_repo_skill_with_resolved_ref_and_sparse_paths(
+            clone_url,
+            selected_branch.as_deref(),
+            &item.install_name,
+            &sparse,
+        )?;
+        let subdir = item.skill_dir.join(&item.normalized_path);
+        if !subdir.is_dir() || !subdir.join("SKILL.md").is_file() {
+            return Err(format!("未找到待安装技能路径: {}", item.selected_path));
+        }
+        Ok(subdir.to_string_lossy().to_string())
+    }
+}
+
 fn install_selected_repo_skills_blocking(
     repo_url: String,
     selected_paths: Vec<String>,
@@ -4837,9 +4898,14 @@ fn install_selected_repo_skills_blocking(
     let selected_branch = selected_repo_branch(&spec, &clone_url, git_ref.as_deref());
     let installed_at = now_timestamp_label();
     let mut installed_skills = load_installed_skills(&default_installed_skills());
-    let mut installed_results = Vec::new();
+    let mut installed_results: Vec<SkillSummary> = Vec::new();
 
-    for selected_path in &selected_paths {
+    // 阶段 A（串行）：解析安装名称、准备目录，收集待安装任务
+    let mut pending_installs: Vec<PendingSkillInstall> = Vec::new();
+    let mut batch_sparse_paths = BTreeSet::new();
+    let mut batch_needs_full_repo = false;
+
+    for (index, selected_path) in selected_paths.iter().enumerate() {
         let normalized_path = selected_path.trim_matches('/').to_string();
         let skill_name = Path::new(&normalized_path)
             .file_name()
@@ -4869,10 +4935,7 @@ fn install_selected_repo_skills_blocking(
             &normalized_path,
             &installed_skills,
         )?;
-        if let Some(existing_skill) = installed_skills
-            .iter()
-            .find(|skill| skill.name == install_name)
-        {
+        if let Some(existing_skill) = installed_skills.iter().find(|s| s.name == install_name) {
             installed_results.push(existing_skill.clone());
             continue;
         }
@@ -4880,36 +4943,109 @@ fn install_selected_repo_skills_blocking(
         let skill_dir = skill_directory(&install_name)
             .map_err(|error| format!("无法确定 skill 目录: {error}"))?;
         if skill_dir.exists() {
-            std::fs::remove_dir_all(&skill_dir)
+            fs::remove_dir_all(&skill_dir)
                 .map_err(|error| format!("清理旧 skill 目录失败: {error}"))?;
         }
         if let Some(parent) = skill_dir.parent() {
-            std::fs::create_dir_all(parent)
+            fs::create_dir_all(parent)
                 .map_err(|error| format!("创建 skill 目录失败: {error}"))?;
         }
 
-        let local_path = if normalized_path.is_empty() {
-            ensure_repo_skill_with_resolved_ref_and_sparse_paths(
-                &clone_url,
-                selected_branch.as_deref(),
-                &install_name,
-                &[],
-            )?
+        if normalized_path.is_empty() {
+            batch_needs_full_repo = true;
         } else {
-            let sparse_paths = vec![normalized_path.clone()];
-            ensure_repo_skill_with_resolved_ref_and_sparse_paths(
-                &clone_url,
-                selected_branch.as_deref(),
-                &install_name,
-                &sparse_paths,
-            )?;
-            // 不移动文件，直接返回子目录路径，保持 git 索引正确
-            let subdir = skill_dir.join(&normalized_path);
-            if !subdir.is_dir() || !subdir.join("SKILL.md").is_file() {
-                return Err(format!("未找到待安装技能路径: {selected_path}"));
-            }
-            subdir.to_string_lossy().to_string()
+            batch_sparse_paths.insert(normalized_path.clone());
+        }
+        pending_installs.push(PendingSkillInstall {
+            index,
+            install_name,
+            source_url,
+            normalized_path,
+            skill_dir,
+            selected_path: selected_path.clone(),
+        });
+    }
+
+    // 多个待安装时一次性 clone，否则各自走独立 clone
+    let shared_batch_root = if pending_installs.len() > 1 {
+        let batch_cache_key = format!(
+            "install-batch-{}-{}",
+            spec.repo_key,
+            sanitize_storage_name(selected_branch.as_deref().unwrap_or("default"))
+        );
+        let sparse_paths = if batch_needs_full_repo {
+            Vec::new()
+        } else {
+            batch_sparse_paths.into_iter().collect::<Vec<_>>()
         };
+        Some(clone_shared_install_batch_repo(
+            &clone_url,
+            selected_branch.as_deref(),
+            &batch_cache_key,
+            &sparse_paths,
+        )?)
+    } else {
+        None
+    };
+
+    // 阶段 B（并发）：并发 materialize，最多 BATCH_INSTALL_CONCURRENCY 个线程同时运行
+    let batch_arc: Option<Arc<PathBuf>> = shared_batch_root.as_ref().map(|p| Arc::new(p.clone()));
+    let clone_url_arc = Arc::new(clone_url);
+    let selected_branch_arc = Arc::new(selected_branch);
+
+    let (tx, rx) = mpsc::channel::<SkillInstallOutcome>();
+    let mut active = 0usize;
+    let mut outcomes: Vec<SkillInstallOutcome> = Vec::new();
+
+    for item in pending_installs {
+        // 已达并发上限时等一个完成再继续
+        while active >= BATCH_INSTALL_CONCURRENCY {
+            match rx.recv() {
+                Ok(outcome) => {
+                    outcomes.push(outcome);
+                    active -= 1;
+                }
+                Err(_) => break,
+            }
+        }
+        let tx_clone = tx.clone();
+        let batch_opt = batch_arc.clone();
+        let clone_url_ref = Arc::clone(&clone_url_arc);
+        let branch_ref = Arc::clone(&selected_branch_arc);
+        thread::spawn(move || {
+            let local_path =
+                materialize_skill_from_batch_or_clone(&batch_opt, &clone_url_ref, &branch_ref, &item);
+            tx_clone
+                .send(SkillInstallOutcome {
+                    index: item.index,
+                    install_name: item.install_name,
+                    source_url: item.source_url,
+                    local_path,
+                })
+                .ok();
+        });
+        active += 1;
+    }
+    drop(tx); // 关闭发送端，drain 阶段依赖计数而非通道关闭
+    while active > 0 {
+        match rx.recv() {
+            Ok(outcome) => {
+                outcomes.push(outcome);
+                active -= 1;
+            }
+            Err(_) => break,
+        }
+    }
+
+    // 清理临时 batch clone
+    if let Some(batch_root) = shared_batch_root {
+        let _ = fs::remove_dir_all(batch_root);
+    }
+
+    // 阶段 C（串行）：按原始顺序排序、enrich、持久化
+    outcomes.sort_by_key(|o| o.index);
+    for outcome in outcomes {
+        let local_path = outcome.local_path?;
         let skill_file = Path::new(&local_path).join("SKILL.md");
         let description = if skill_file.is_file() {
             read_skill_description(&skill_file)
@@ -4917,10 +5053,10 @@ fn install_selected_repo_skills_blocking(
             "从仓库导入的 skill，后续可继续同步和检查更新。".into()
         };
         let installed_skill = SkillSummary {
-            name: install_name,
+            name: outcome.install_name,
             source_label: source_label_for_type(&spec.source_type).into(),
             source_type: spec.source_type.clone(),
-            source_url,
+            source_url: outcome.source_url,
             description,
             local_path,
             branch: "main".into(),
