@@ -6132,7 +6132,7 @@ button.settings-form-item {
   text-align: left;
 }
 
-.settings-form-item:hover {
+.settings-form-item--action:hover {
   background: rgba(244, 247, 252, 0.88);
 }
 
@@ -6476,10 +6476,6 @@ button.settings-form-item:disabled {
   height: 18px;
 }
 
-.settings-open-button--static {
-  pointer-events: none;
-}
-
 .settings-form-item--readonly .settings-form-item__value {
   background: #f7f9fd;
 }
@@ -6494,12 +6490,18 @@ button.settings-form-item:disabled {
 }
 
 .settings-panel--tool-status {
-  padding-top: 2px;
-  padding-bottom: 10px;
+  padding: 0;
+  transition:
+    border-color 140ms ease,
+    box-shadow 140ms ease;
 }
 
-.settings-panel--tool-status.is-clickable {
-  cursor: pointer;
+.settings-panel--tool-status:hover,
+.settings-panel--tool-status:focus-within {
+  border-color: #c6d7ff;
+  box-shadow:
+    0 0 0 0.75px rgba(59, 130, 246, 0.13),
+    0 12px 24px rgba(23, 35, 63, 0.095);
 }
 
 .settings-tool-card {
@@ -6701,10 +6703,11 @@ button.settings-form-item:disabled {
 
 .settings-section-toggle {
   display: flex;
-  align-items: stretch;
+  align-items: center;
   justify-content: space-between;
   width: 100%;
-  padding: 12px 20px 8px;
+  min-height: 76px;
+  padding: 14px 20px;
   border: 0;
   background: transparent;
   color: var(--heading);
@@ -6724,7 +6727,7 @@ button.settings-form-item:disabled {
 }
 
 .settings-section-toggle__chevron {
-  align-self: flex-start;
+  align-self: center;
   color: var(--muted);
   font-size: 0.92rem;
 }

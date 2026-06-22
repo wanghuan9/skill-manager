@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useTranslate } from "@/app/i18n";
 import { useFailureReporter } from "@/app/failure-feedback";
+import { alignExpandedRowIntoView } from "@/app/utils/align-expanded-row";
 import {
   type AppUpdateCheckResult,
   type AppUpdateProgress,
@@ -147,10 +148,9 @@ export function SettingsRoute() {
   const [isAppUpdateReleaseNotesOpen, setIsAppUpdateReleaseNotesOpen] = useState(false);
   const [appUpdateMessage, setAppUpdateMessage] = useState(t("settings.update.status.idle"));
   const [appUpdateProgress, setAppUpdateProgress] = useState<AppUpdateProgress | null>(null);
+  const toolStatusGroupRef = useRef<HTMLElement | null>(null);
   const reportFailure = useFailureReporter();
-  const toolStatusPanelClassName = `panel-card placeholder-panel settings-panel settings-panel--tool-status${
-    isToolStatusExpanded ? "" : " is-clickable"
-  }`;
+  const toolStatusPanelClassName = "panel-card placeholder-panel settings-panel settings-panel--tool-status";
   const storageDirectoryPath = getDirectoryPath(appSettings.storagePath);
   const isCheckingAppUpdate = appUpdateStatus === "checking";
   const isInstallingAppUpdate = appUpdateStatus === "installing";
@@ -308,6 +308,14 @@ export function SettingsRoute() {
     }
   }
 
+  async function handleToggleToolStatus() {
+    const shouldExpand = !isToolStatusExpanded;
+    setIsToolStatusExpanded((current) => !current);
+    if (shouldExpand) {
+      await alignExpandedRowIntoView(toolStatusGroupRef.current);
+    }
+  }
+
   const generalSettingsItems: SettingsFormItem[] = [
     {
       label: t("settings.storage.label"),
@@ -317,16 +325,19 @@ export function SettingsRoute() {
           <div className="settings-form-item__value settings-form-item__value--path">
             {storageDirectoryPath || t("settings.storage.empty")}
           </div>
-          <span className="secondary-button secondary-button--compact settings-open-button settings-open-button--static">
+          <button
+            className="secondary-button secondary-button--compact settings-open-button"
+            type="button"
+            aria-label={t("settings.storage.action")}
+            disabled={!storageDirectoryPath || isOpeningStoragePath}
+            onClick={() => void handleOpenStoragePath()}
+          >
             <FolderOpenIcon />
             {t("settings.storage.open")}
-          </span>
+          </button>
         </div>
       ),
       readonly: true,
-      actionLabel: t("settings.storage.action"),
-      disabled: !storageDirectoryPath || isOpeningStoragePath,
-      onActivate: handleOpenStoragePath,
     },
     {
       label: t("settings.language.label"),
@@ -597,23 +608,16 @@ export function SettingsRoute() {
         </div>
       </section>
 
-      <section className="settings-group">
+      <section ref={toolStatusGroupRef} className="settings-group">
         <div className="settings-group__heading">
           <span className="settings-group__bar" aria-hidden="true" />
           <h2 className="settings-group__title">{t("settings.group.toolStatus")}</h2>
         </div>
-        <section
-          className={toolStatusPanelClassName}
-          onClick={() => {
-            if (!isToolStatusExpanded) {
-              setIsToolStatusExpanded(true);
-            }
-          }}
-        >
+        <section className={toolStatusPanelClassName}>
           <button
             className="settings-section-toggle"
             type="button"
-            onClick={() => setIsToolStatusExpanded((current) => !current)}
+            onClick={() => void handleToggleToolStatus()}
             aria-expanded={isToolStatusExpanded}
             aria-label={t("settings.group.toolStatus")}
           >
