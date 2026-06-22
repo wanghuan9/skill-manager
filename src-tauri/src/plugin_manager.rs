@@ -394,7 +394,7 @@ pub async fn probe_plugin_source_candidates(
     app_handle: tauri::AppHandle,
 ) -> Result<Vec<PluginProbeResult>, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        emit_plugin_status(&app_handle, "preparing", "正在连接仓库...");
+        emit_plugin_status(&app_handle, "preparing", "正在查询插件信息...");
         let progress = make_plugin_progress_emitter(&app_handle);
         let result = probe_plugin_source_candidates_blocking(
             &source,
@@ -3711,6 +3711,20 @@ fn ensure_shared_plugin_repo(
     on_progress: Option<&CloneProgressCallback>,
 ) -> Result<(), String> {
     if repo_root.join(".git").is_dir() {
+        // 已有缓存：用 fetch 拉最新内容，避免重新 clone
+        if let Some(cb) = on_progress {
+            cb("正在更新插件缓存...");
+        }
+        let mut fetch_args = vec!["fetch", "origin", "--no-tags", "--quiet"];
+        let branch_arg;
+        if let Some(r) = git_ref.and_then(non_empty_trimmed_string) {
+            branch_arg = r.to_string();
+            fetch_args.push(&branch_arg);
+        }
+        if run_git_at(repo_root, &fetch_args).is_ok() {
+            let _ = run_git_at(repo_root, &["reset", "--hard", "FETCH_HEAD"]);
+        }
+        // fetch 失败也继续（使用现有内容），不阻断安装
         ensure_managed_plugin_repo_git_excludes(repo_root)?;
         configure_plugin_sparse_checkout(repo_root, plugin_relative_path)?;
         return Ok(());

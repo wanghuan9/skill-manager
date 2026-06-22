@@ -1907,3 +1907,13 @@ function omitDefaultStdioType(server: Record<string, unknown>) {
   const { type: _type, ...serverWithoutDefaultType } = server;
   return serverWithoutDefaultType;
 }
+
+export async function getRepoCacheSize(): Promise<number> {
+  if (!isTauriRuntime()) return 0;
+  return invoke<number>("get_repo_cache_size");
+}
+
+export async function clearRepoCache(): Promise<void> {
+  if (!isTauriRuntime()) return;
+  return invoke<void>("clear_repo_cache");
+}

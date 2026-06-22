@@ -673,7 +673,7 @@ export function PluginInstallPanel() {
 
     flushSync(() => {
       setIsProbing(true);
-      setCloneProgressMessage("正在连接仓库...");
+      setCloneProgressMessage("正在查询插件信息...");
     });
     setProbeSearchQuery("");
     await waitForNextPaint();

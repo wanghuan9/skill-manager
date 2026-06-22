@@ -19,6 +19,7 @@ import {
   sortToolCards,
 } from "@/features/skills/utils/open-tools";
 import { getToolLogoUrl } from "@/features/skills/utils/tool-logo";
+import { clearRepoCache, getRepoCacheSize } from "@/features/skills/api/skill-client";
 
 function FolderOpenIcon() {
   return (
@@ -47,6 +48,27 @@ function RefreshIcon({ isSpinning = false }: { isSpinning?: boolean }) {
       <path d="M3.7 3.9v3.7h3.7" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
       <path d="M3.8 10.9a6.2 6.2 0 0 0 10.7 3.6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
       <path d="M16.3 16.1v-3.7h-3.7" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function TrashIcon() {
+  return (
+    <svg className="settings-update-button__svg" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+      <path
+        d="M4.2 6.8h11.6M8.2 6.8V5.4a.9.9 0 0 1 .9-.9h1.8a.9.9 0 0 1 .9.9v1.4"
+        stroke="currentColor"
+        strokeWidth="1.7"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M7.4 6.8l.65 9.1a.95.95 0 0 0 .94.85h2.02a.95.95 0 0 0 .94-.85l.65-9.1"
+        stroke="currentColor"
+        strokeWidth="1.7"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
     </svg>
   );
 }
@@ -114,6 +136,8 @@ export function SettingsRoute() {
     : openToolOptions[0]?.id ?? "";
   const [isToolStatusExpanded, setIsToolStatusExpanded] = useState(false);
   const [isOpeningStoragePath, setIsOpeningStoragePath] = useState(false);
+  const [repoCacheSize, setRepoCacheSize] = useState<number | null>(null);
+  const [isClearingCache, setIsClearingCache] = useState(false);
   const [currentAppVersion, setCurrentAppVersion] = useState("");
   const [appUpdate, setAppUpdate] = useState<AppUpdateCheckResult | null>(null);
   const [appUpdateStatus, setAppUpdateStatus] = useState<
@@ -141,6 +165,13 @@ export function SettingsRoute() {
   const appUpdateActionClassName = shouldShowInstallAppUpdate
     ? "primary-button primary-button--compact settings-update-button settings-update-button--install"
     : "secondary-button secondary-button--compact settings-update-button";
+  const repoCacheSizeLabel =
+    repoCacheSize === null
+      ? t("settings.cache.loading")
+      : repoCacheSize === 0
+        ? t("settings.cache.empty")
+        : formatBytes(repoCacheSize);
+  const canClearRepoCache = !isClearingCache && repoCacheSize !== null && repoCacheSize > 0;
 
   useEffect(() => {
     if (!shouldShowAppUpdateReleaseNotes && isAppUpdateReleaseNotesOpen) {
@@ -176,6 +207,21 @@ export function SettingsRoute() {
       shouldIgnore = true;
     };
   }, []);
+
+  useEffect(() => {
+    void getRepoCacheSize().then(setRepoCacheSize).catch(() => setRepoCacheSize(0));
+  }, []);
+
+  async function handleClearCache() {
+    if (isClearingCache) return;
+    setIsClearingCache(true);
+    try {
+      await clearRepoCache();
+      setRepoCacheSize(0);
+    } finally {
+      setIsClearingCache(false);
+    }
+  }
 
   async function handleOpenStoragePath() {
     if (!storageDirectoryPath || isOpeningStoragePath) {
@@ -513,6 +559,39 @@ export function SettingsRoute() {
                 {item.value}
               </div>
             ))}
+          </div>
+        </div>
+      </section>
+
+      <section className="settings-group">
+        <div className="settings-group__heading">
+          <span className="settings-group__bar" aria-hidden="true" />
+          <h2 className="settings-group__title">{t("settings.group.cache")}</h2>
+        </div>
+        <div className="panel-card placeholder-panel settings-panel settings-panel--module">
+          <div className="settings-form-list">
+            <div className="settings-form-item">
+              <div className="settings-form-item__copy">
+                <span className="settings-form-item__title">{t("settings.cache.repoCache.label")}</span>
+                <p>{t("settings.cache.repoCache.description")}</p>
+                <p className="settings-cache-meta">
+                  {t("settings.cache.sizeUsed", { size: repoCacheSizeLabel })}
+                </p>
+              </div>
+              <div className="settings-form-item__control settings-update-actions">
+                <button
+                  className="secondary-button secondary-button--compact settings-update-button settings-update-button--cache"
+                  type="button"
+                  disabled={!canClearRepoCache}
+                  onClick={() => void handleClearCache()}
+                >
+                  <span aria-hidden="true" className="settings-update-button__icon">
+                    <TrashIcon />
+                  </span>
+                  <span>{isClearingCache ? t("settings.cache.clearing") : t("settings.cache.clear")}</span>
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       </section>

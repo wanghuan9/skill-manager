@@ -6136,6 +6136,29 @@ button.settings-form-item:disabled {
   min-width: 104px;
 }
 
+.settings-update-button--cache {
+  min-width: 0;
+  gap: 4px;
+  padding: 0 8px;
+}
+
+.settings-update-button--cache .settings-update-button__icon {
+  width: 14px;
+  height: 14px;
+}
+
+.settings-update-button--cache .settings-update-button__icon svg {
+  width: 14px;
+  height: 14px;
+}
+
+.settings-cache-meta {
+  margin: 0;
+  font-size: 0.74rem;
+  color: #98a2b3;
+  line-height: 1.35;
+}
+
 .settings-update-button--install {
   background: linear-gradient(180deg, #7ca8ff 0%, #5b8ff9 100%);
   border-color: rgba(91, 143, 249, 0.56);

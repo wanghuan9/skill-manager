@@ -27,9 +27,9 @@ use crate::library::{
     reconcile_tool_skill_symlinks, remote_clone_candidates, remove_reserved_workspace_entries,
     remove_reserved_workspace_symlinks_from_all_tools, remove_skill_symlink,
     remove_skill_symlinks_from_all_tools, resolve_clone_url_http_first,
-    resolve_git_clone_url_with_instead_of, sanitize_storage_name, skill_directory,
-    summarize_git_error, tree_relative_path_for_branch, with_temporary_discovery_repo_resolved,
-    CloneProgressCallback, RemoteCloneCandidate,
+    repo_cache_directory_root, resolve_git_clone_url_with_instead_of, sanitize_storage_name,
+    skill_directory, summarize_git_error, tree_relative_path_for_branch,
+    with_temporary_discovery_repo_resolved, CloneProgressCallback, RemoteCloneCandidate,
 };
 use crate::models::{
     AppSettings, GitAccountSummary, GitBranchOption, GitChangeFile, LocalInstallSkillCandidate,
@@ -4775,7 +4775,7 @@ pub async fn discover_repo_skills(
             .as_ref()
             .map(|path| vec![path.clone()])
             .unwrap_or_default();
-        emit_repo_status(&app_handle, "finalizing", "正在扫描技能目录...");
+        let scan_progress = progress.clone();
         let candidates = if sparse_paths.is_empty() {
             discover_repo_skills_without_path_hint(&spec, &clone_url, selected_branch.as_deref(), Some(&progress))?
         } else {
@@ -4785,7 +4785,10 @@ pub async fn discover_repo_skills(
                 &spec.repo_key,
                 &sparse_paths,
                 Some(&progress),
-                |repo_root| scan_repo_skill_candidates(repo_root, path_hint.as_deref()),
+                |repo_root| {
+                    scan_progress("正在扫描技能目录...");
+                    scan_repo_skill_candidates(repo_root, path_hint.as_deref())
+                },
             )?
         };
         if candidates.is_empty() {
@@ -4821,20 +4824,11 @@ fn discover_repo_skills_without_path_hint(
     git_ref: Option<&str>,
     on_progress: Option<&CloneProgressCallback>,
 ) -> Result<Vec<RepoSkillCandidate>, String> {
-    if let Ok(candidates) = with_temporary_discovery_repo_resolved(
-        clone_url,
-        git_ref,
-        &spec.repo_key,
-        &["skills".to_string()],
-        on_progress,
-        |repo_root| Ok(scan_repo_skill_candidates(repo_root, None).unwrap_or_default()),
-    ) {
-        if !candidates.is_empty() {
-            return Ok(candidates);
-        }
-    }
-
+    // 直接做完整 clone，避免先 sparse["skills"] 探测失败再 fallback 导致双倍网络请求
     with_temporary_discovery_repo_resolved(clone_url, git_ref, &spec.repo_key, &[], on_progress, |repo_root| {
+        if let Some(cb) = on_progress {
+            cb("正在扫描技能目录...");
+        }
         scan_repo_skill_candidates(repo_root, None)
     })
 }
@@ -5809,6 +5803,38 @@ pub fn open_path_in_finder(path: &str) -> Result<(), String> {
     }
 
     open_path_with_finder(normalized_path)
+}
+
+#[tauri::command]
+pub fn get_repo_cache_size() -> Result<u64, String> {
+    let cache_dir = repo_cache_directory_root()?;
+    if !cache_dir.exists() {
+        return Ok(0);
+    }
+    fn dir_size(path: &std::path::Path) -> u64 {
+        let Ok(entries) = std::fs::read_dir(path) else {
+            return 0;
+        };
+        entries.flatten().map(|entry| {
+            let p = entry.path();
+            if p.is_dir() {
+                dir_size(&p)
+            } else {
+                entry.metadata().map(|m| m.len()).unwrap_or(0)
+            }
+        }).sum()
+    }
+    Ok(dir_size(&cache_dir))
+}
+
+#[tauri::command]
+pub fn clear_repo_cache() -> Result<(), String> {
+    let cache_dir = repo_cache_directory_root()?;
+    if cache_dir.exists() {
+        fs::remove_dir_all(&cache_dir)
+            .map_err(|error| format!("清理缓存失败: {error}"))?;
+    }
+    Ok(())
 }
 
 #[tauri::command]

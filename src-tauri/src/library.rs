@@ -834,8 +834,14 @@ fn clone_repo_for_discovery_with_ref_and_sparse_paths_internal(
     let repo_lock = repo_cache_lock(repo_key);
     let _repo_guard = repo_lock.lock().unwrap_or_else(|error| error.into_inner());
     let repo_dir = repo_cache_directory(repo_key)?;
-    if repo_dir.exists() {
-        fs::remove_dir_all(&repo_dir).map_err(|error| format!("清理旧仓库缓存失败: {error}"))?;
+
+    // 尝试复用缓存：cache 存在时用 git fetch 更新，避免重新 clone
+    if repo_dir.exists() && repo_dir.join(".git").is_dir() {
+        if try_update_discovery_cache(&repo_dir, git_ref, sparse_paths, on_progress).is_ok() {
+            return Ok(repo_dir);
+        }
+        // fetch 失败则清理缓存后重新 clone
+        let _ = fs::remove_dir_all(&repo_dir);
     }
 
     let parent_dir = repo_dir
@@ -844,7 +850,7 @@ fn clone_repo_for_discovery_with_ref_and_sparse_paths_internal(
     fs::create_dir_all(parent_dir).map_err(|error| format!("创建仓库缓存目录失败: {error}"))?;
 
     let clone_result = if sparse_paths.is_empty() {
-        clone_repo_with_optional_branch_internal(repo_url, git_ref, &repo_dir, apply_instead_of, on_progress)
+        clone_repo_with_optional_branch_internal(repo_url, git_ref, &repo_dir, apply_instead_of, false, on_progress)
     } else {
         let sparse_paths = sparse_paths.iter().map(PathBuf::from).collect::<Vec<_>>();
         clone_repo_with_sparse_paths_internal(
@@ -853,6 +859,7 @@ fn clone_repo_for_discovery_with_ref_and_sparse_paths_internal(
             &repo_dir,
             &sparse_paths,
             apply_instead_of,
+            false,
             on_progress,
         )
     };
@@ -861,6 +868,40 @@ fn clone_repo_for_discovery_with_ref_and_sparse_paths_internal(
         return Err(error);
     }
     Ok(repo_dir)
+}
+
+/// 复用已有的发现缓存：fetch 最新内容并更新工作区。
+fn try_update_discovery_cache(
+    repo_dir: &Path,
+    git_ref: Option<&str>,
+    sparse_paths: &[String],
+    on_progress: Option<&CloneProgressCallback>,
+) -> Result<(), String> {
+    if let Some(cb) = on_progress {
+        cb("正在更新本地缓存...");
+    }
+    // 拉取指定分支（或 HEAD）的最新浅层提交
+    let mut fetch_args = vec![
+        "fetch",
+        "origin",
+        "--depth",
+        GIT_CLONE_HISTORY_DEPTH,
+        "--no-tags",
+        "--quiet",
+    ];
+    let branch_arg;
+    if let Some(r) = git_ref.filter(|s| !s.trim().is_empty()) {
+        branch_arg = r.to_string();
+        fetch_args.push(&branch_arg);
+    }
+    run_git_in_dir(repo_dir, &fetch_args)?;
+    run_git_in_dir(repo_dir, &["reset", "--hard", "FETCH_HEAD"])?;
+    // 稀疏检出：重新应用路径过滤
+    if !sparse_paths.is_empty() {
+        let _ = configure_sparse_checkout(repo_dir, sparse_paths, false);
+        let _ = run_git_in_dir(repo_dir, &["checkout", "--quiet"]);
+    }
+    Ok(())
 }
 
 #[allow(dead_code)]
@@ -881,7 +922,7 @@ where
         sparse_paths,
     )?;
     let result = callback(&repo_root);
-    let _ = fs::remove_dir_all(&repo_root);
+    // 保留缓存目录供下次复用，不删除
     result
 }
 
@@ -904,7 +945,7 @@ where
         on_progress,
     )?;
     let result = callback(&repo_root);
-    let _ = fs::remove_dir_all(&repo_root);
+    // 保留缓存目录供下次复用，不删除
     result
 }
 
@@ -984,7 +1025,7 @@ fn ensure_repo_skill_with_ref_and_sparse_paths_internal(
         .map_err(|error| format!("创建 skill library 目录失败: {error}"))?;
 
     if sparse_paths.is_empty() {
-        clone_repo_with_optional_branch_internal(repo_url, git_ref, &skill_dir, apply_instead_of, on_progress)?;
+        clone_repo_with_optional_branch_internal(repo_url, git_ref, &skill_dir, apply_instead_of, true, on_progress)?;
     } else {
         let path_bufs = sparse_paths.iter().map(PathBuf::from).collect::<Vec<_>>();
         clone_repo_with_sparse_paths_internal(
@@ -993,6 +1034,7 @@ fn ensure_repo_skill_with_ref_and_sparse_paths_internal(
             &skill_dir,
             &path_bufs,
             apply_instead_of,
+            true,
             on_progress,
         )?;
     }
@@ -1022,10 +1064,10 @@ pub fn clone_shared_install_batch_repo(
         .map_err(|error| format!("创建共享安装缓存目录失败: {error}"))?;
 
     let clone_result = if sparse_paths.is_empty() {
-        clone_repo_with_optional_branch_internal(clone_url, git_ref, &batch_dir, false, on_progress)
+        clone_repo_with_optional_branch_internal(clone_url, git_ref, &batch_dir, false, true, on_progress)
     } else {
         let path_bufs = sparse_paths.iter().map(PathBuf::from).collect::<Vec<_>>();
-        clone_repo_with_sparse_paths_internal(clone_url, git_ref, &batch_dir, &path_bufs, false, on_progress)
+        clone_repo_with_sparse_paths_internal(clone_url, git_ref, &batch_dir, &path_bufs, false, true, on_progress)
     };
     if let Err(error) = clone_result {
         let _ = fs::remove_dir_all(&batch_dir);
@@ -1086,6 +1128,10 @@ pub fn repo_cache_directory(repo_key: &str) -> Result<PathBuf, String> {
     Ok(workspace::managed_workspace_root()?
         .join(REPO_CACHE_DIR)
         .join(repo_key))
+}
+
+pub fn repo_cache_directory_root() -> Result<PathBuf, String> {
+    Ok(workspace::managed_workspace_root()?.join(REPO_CACHE_DIR))
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -1307,7 +1353,7 @@ fn clone_repo_with_optional_branch(
     branch: Option<&str>,
     target_dir: &Path,
 ) -> Result<(), String> {
-    clone_repo_with_optional_branch_internal(source, branch, target_dir, true, None)
+    clone_repo_with_optional_branch_internal(source, branch, target_dir, true, false, None)
 }
 
 fn clone_repo_with_optional_branch_internal(
@@ -1315,6 +1361,7 @@ fn clone_repo_with_optional_branch_internal(
     branch: Option<&str>,
     target_dir: &Path,
     apply_instead_of: bool,
+    no_single_branch: bool,
     on_progress: Option<&CloneProgressCallback>,
 ) -> Result<(), String> {
     let clone_url = if apply_instead_of {
@@ -1327,6 +1374,10 @@ fn clone_repo_with_optional_branch_internal(
     command.arg("clone");
     command.arg("--depth").arg(GIT_CLONE_HISTORY_DEPTH);
     command.arg("--no-tags");
+    // --depth 隐式开启 --single-branch；永久安装的 skill 需要 --no-single-branch 保留所有远端分支
+    if no_single_branch {
+        command.arg("--no-single-branch");
+    }
     if on_progress.is_some() {
         command.arg("--progress");
     }
@@ -1345,7 +1396,7 @@ fn clone_repo_with_sparse_paths(
     target_dir: &Path,
     sparse_paths: &[PathBuf],
 ) -> Result<(), String> {
-    clone_repo_with_sparse_paths_internal(source, branch, target_dir, sparse_paths, true, None)
+    clone_repo_with_sparse_paths_internal(source, branch, target_dir, sparse_paths, true, false, None)
 }
 
 fn clone_repo_with_sparse_paths_internal(
@@ -1354,6 +1405,7 @@ fn clone_repo_with_sparse_paths_internal(
     target_dir: &Path,
     sparse_paths: &[PathBuf],
     apply_instead_of: bool,
+    no_single_branch: bool,
     on_progress: Option<&CloneProgressCallback>,
 ) -> Result<(), String> {
     let clone_url = if apply_instead_of {
@@ -1371,6 +1423,9 @@ fn clone_repo_with_sparse_paths_internal(
         .arg("--no-tags")
         .arg("--sparse")
         .arg("--no-checkout");
+    if no_single_branch {
+        clone_command.arg("--no-single-branch");
+    }
     if on_progress.is_some() {
         clone_command.arg("--progress");
     }
