@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
+import { listen } from "@tauri-apps/api/event";
 import { useFailureReporter } from "@/app/failure-feedback";
 import { useTranslate } from "@/app/i18n";
 import { useNotifications } from "@/app/notifications";
@@ -512,12 +513,37 @@ export function PluginInstallPanel() {
   const [isLoadingBranches, setIsLoadingBranches] = useState(false);
   const [isProbing, setIsProbing] = useState(false);
   const [isInstalling, setIsInstalling] = useState(false);
+  const [cloneProgressMessage, setCloneProgressMessage] = useState<string | null>(null);
   const prevSourceRef = useRef(initial.source);
 
   // 同步状态到 module-level 缓存
   useEffect(() => {
     pluginPanelCache = { source, branches, gitRef, probes, selectedPluginRoots, selectedHostsByPluginRoot, probeSearchQuery };
   });
+
+  // 监听 clone 进度事件（仅在 probing/installing 期间注册）
+  useEffect(() => {
+    if (!isProbing && !isInstalling) {
+      return;
+    }
+    let unlisten: (() => void) | undefined;
+    let mounted = true;
+    listen<{ phase: string; message: string }>("repo-clone-progress", (event) => {
+      if (mounted && event.payload.message) {
+        setCloneProgressMessage(event.payload.message);
+      }
+    }).then((fn) => {
+      if (mounted) {
+        unlisten = fn;
+      } else {
+        fn();
+      }
+    }).catch(() => undefined);
+    return () => {
+      mounted = false;
+      unlisten?.();
+    };
+  }, [isProbing, isInstalling]);
 
   const installedHostApps = useMemo(() => buildInstalledPluginHostSet(toolConfigs), [toolConfigs]);
   const selectableProbes = useMemo(
@@ -647,6 +673,7 @@ export function PluginInstallPanel() {
 
     flushSync(() => {
       setIsProbing(true);
+      setCloneProgressMessage("正在连接仓库...");
     });
     setProbeSearchQuery("");
     await waitForNextPaint();
@@ -685,6 +712,7 @@ export function PluginInstallPanel() {
       });
     } finally {
       setIsProbing(false);
+      setCloneProgressMessage(null);
     }
   }
 
@@ -721,6 +749,7 @@ export function PluginInstallPanel() {
     }
 
     setIsInstalling(true);
+    setCloneProgressMessage("正在准备安装...");
     try {
       const newlyInstalledPlugins = (
         await Promise.all(
@@ -757,6 +786,7 @@ export function PluginInstallPanel() {
       });
     } finally {
       setIsInstalling(false);
+      setCloneProgressMessage(null);
     }
   }
 
@@ -859,6 +889,11 @@ export function PluginInstallPanel() {
 
   return (
     <section className="panel-card market-panel plugin-install-panel">
+      {(isProbing || isInstalling) && cloneProgressMessage ? (
+        <div className="repo-clone-progress-bar">
+          <span className="repo-clone-progress-bar__text">{cloneProgressMessage}</span>
+        </div>
+      ) : null}
       {probes.length === 0 ? (
         <form className="repo-form plugin-install-form" onSubmit={(event) => void handleProbe(event)}>
           <div className="repo-form__section">

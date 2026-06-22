@@ -16,8 +16,8 @@ use toml_edit::{DocumentMut, Item, Table};
 
 use crate::library::{
     configure_git_network_command, parse_market_source_url, resolve_clone_url_http_first,
-    resolve_git_clone_url_with_instead_of, sanitize_storage_name, tree_relative_path_for_branch,
-    with_temporary_discovery_repo_resolved,
+    resolve_git_clone_url_with_instead_of, run_git_clone_with_progress, sanitize_storage_name,
+    tree_relative_path_for_branch, with_temporary_discovery_repo_resolved, CloneProgressCallback,
 };
 use crate::models::{
     CliToolSummary, PluginComponentPreview, PluginComponentSummary, PluginProbeResult,
@@ -378,6 +378,7 @@ pub async fn probe_plugin_source(
             git_ref.as_deref(),
             sparse_path.as_deref(),
             hint_host_tool,
+            None,
         )
     })
     .await
@@ -390,17 +391,43 @@ pub async fn probe_plugin_source_candidates(
     git_ref: Option<String>,
     sparse_path: Option<String>,
     hint_host_tool: Option<String>,
+    app_handle: tauri::AppHandle,
 ) -> Result<Vec<PluginProbeResult>, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        probe_plugin_source_candidates_blocking(
+        emit_plugin_status(&app_handle, "preparing", "正在连接仓库...");
+        let progress = make_plugin_progress_emitter(&app_handle);
+        let result = probe_plugin_source_candidates_blocking(
             &source,
             git_ref.as_deref(),
             sparse_path.as_deref(),
             hint_host_tool,
-        )
+            Some(&progress),
+        );
+        emit_plugin_status(&app_handle, "finalizing", "正在扫描插件目录...");
+        result
     })
     .await
     .map_err(|error| format!("插件来源批量探测任务失败: {error}"))?
+}
+
+fn emit_plugin_status(app_handle: &tauri::AppHandle, phase: &str, message: &str) {
+    use tauri::Emitter;
+    let _ = app_handle.emit(
+        "repo-clone-progress",
+        serde_json::json!({ "phase": phase, "message": message }),
+    );
+}
+
+fn make_plugin_progress_emitter(app_handle: &tauri::AppHandle) -> CloneProgressCallback {
+    use std::sync::Arc;
+    use tauri::Emitter;
+    let handle = app_handle.clone();
+    Arc::new(move |message: &str| {
+        let _ = handle.emit(
+            "repo-clone-progress",
+            serde_json::json!({ "phase": "cloning", "message": message }),
+        );
+    })
 }
 
 #[tauri::command]
@@ -497,9 +524,14 @@ fn refresh_and_persist_local_plugin_state(
 pub async fn install_selected_plugin_probes(
     probes: Vec<PluginProbeResult>,
     host_tools: Vec<String>,
+    app_handle: tauri::AppHandle,
 ) -> Result<Vec<PluginSummary>, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        install_selected_plugin_probes_blocking(probes, host_tools)
+        emit_plugin_status(&app_handle, "preparing", "正在准备安装...");
+        let progress = make_plugin_progress_emitter(&app_handle);
+        let result = install_selected_plugin_probes_blocking(probes, host_tools, Some(&progress));
+        emit_plugin_status(&app_handle, "finalizing", "正在完成安装...");
+        result
     })
     .await
     .map_err(|error| format!("插件安装任务失败: {error}"))?
@@ -508,6 +540,7 @@ pub async fn install_selected_plugin_probes(
 fn install_selected_plugin_probes_blocking(
     probes: Vec<PluginProbeResult>,
     host_tools: Vec<String>,
+    on_progress: Option<&CloneProgressCallback>,
 ) -> Result<Vec<PluginSummary>, String> {
     let cleanup_roots = plugin_probe_cleanup_roots(&probes);
     let home_dir = workspace::home_dir_option().ok_or_else(|| "无法定位用户主目录".to_string())?;
@@ -526,7 +559,7 @@ fn install_selected_plugin_probes_blocking(
             for host_tool in &selected_host_tools {
                 ensure_plugin_host_tool_installed(host_tool)?;
             }
-            let package = ensure_shared_plugin_package(&probe)?;
+            let package = ensure_shared_plugin_package(&probe, on_progress)?;
             let source_root = canonicalize_existing_dir(&package.plugin_root)?;
             let package_root = managed_plugin_package_root_for_path(&source_root)
                 .unwrap_or_else(|| source_root.clone());
@@ -3014,7 +3047,7 @@ fn update_plugin_repo(plugin_root: &Path) -> Result<(), String> {
         return Err("当前插件仓库处于 detached HEAD，无法自动更新。".to_string());
     }
 
-    run_git_at(&repo_root, &["fetch", "origin", "--quiet"])?;
+    run_git_at(&repo_root, &["fetch", "origin", "--quiet", "--no-tags"])?;
     let remote_branch = format!("{REMOTE_BRANCH_PREFIX}{branch}");
     run_git_at(&repo_root, &["merge", "--ff-only", &remote_branch])?;
     Ok(())
@@ -3036,7 +3069,7 @@ fn install_plugin_probe_for_host(
     }
 }
 
-fn ensure_shared_plugin_package(probe: &PluginProbeResult) -> Result<SharedPluginPackage, String> {
+fn ensure_shared_plugin_package(probe: &PluginProbeResult, on_progress: Option<&CloneProgressCallback>) -> Result<SharedPluginPackage, String> {
     let source_root = canonicalize_existing_dir(Path::new(&probe.plugin_root))
         .ok()
         .map(|root| resolve_effective_probe_plugin_root(probe, &root));
@@ -3077,6 +3110,7 @@ fn ensure_shared_plugin_package(probe: &PluginProbeResult) -> Result<SharedPlugi
                 &repo_root,
                 &plugin_relative_path,
                 false,
+                on_progress,
             )?;
             ensure_host_manifests_for_probe(&plugin_root, probe)?;
             return Ok(SharedPluginPackage { plugin_root });
@@ -3162,6 +3196,7 @@ fn ensure_shared_plugin_package(probe: &PluginProbeResult) -> Result<SharedPlugi
                 &repo_root,
                 &plugin_relative_path,
                 false,
+                on_progress,
             )?;
             cleanup_duplicate_plugin_package_roots(
                 &repo_root,
@@ -3673,6 +3708,7 @@ fn ensure_shared_plugin_repo(
     repo_root: &Path,
     plugin_relative_path: &Path,
     apply_instead_of: bool,
+    on_progress: Option<&CloneProgressCallback>,
 ) -> Result<(), String> {
     if repo_root.join(".git").is_dir() {
         ensure_managed_plugin_repo_git_excludes(repo_root)?;
@@ -3690,21 +3726,28 @@ fn ensure_shared_plugin_repo(
         })?;
     }
 
-    let mut args = vec![
-        "clone".to_string(),
-        "--filter=blob:none".to_string(),
-        "--sparse".to_string(),
-    ];
-    if let Some(branch) = git_ref.and_then(non_empty_trimmed_string) {
-        args.extend(["--branch".to_string(), branch]);
-    }
-    let clone_url = if apply_instead_of {
+    let resolved_url = if apply_instead_of {
         resolve_git_clone_url_with_instead_of(clone_url)
     } else {
         clone_url.trim().to_string()
     };
-    args.extend([clone_url, repo_root.to_string_lossy().to_string()]);
-    run_git_network_dynamic_at(Path::new("."), &args)?;
+
+    let mut command = Command::new("git");
+    configure_git_network_command(&mut command);
+    command
+        .arg("clone")
+        .arg("--filter=blob:none")
+        .arg("--no-tags")
+        .arg("--sparse");
+    if on_progress.is_some() {
+        command.arg("--progress");
+    }
+    if let Some(branch) = git_ref.and_then(non_empty_trimmed_string) {
+        command.arg("--branch").arg(branch);
+    }
+    command.arg(&resolved_url).arg(repo_root.to_string_lossy().as_ref());
+    run_git_clone_with_progress(&mut command, on_progress, "git clone (plugin)")?;
+
     ensure_managed_plugin_repo_git_excludes(repo_root)?;
     configure_plugin_sparse_checkout(repo_root, plugin_relative_path)?;
     Ok(())
@@ -6892,6 +6935,7 @@ fn probe_plugin_source_blocking(
     git_ref: Option<&str>,
     sparse_path: Option<&str>,
     hint_host_tool: Option<String>,
+    on_progress: Option<&CloneProgressCallback>,
 ) -> Result<PluginProbeResult, String> {
     let trimmed_source = source.trim();
     if trimmed_source.is_empty() {
@@ -6947,7 +6991,7 @@ fn probe_plugin_source_blocking(
         source_spec.branch.as_deref(),
         &repo_key,
         &sparse_paths,
-        None,
+        on_progress,
         |repo_root| {
             let probe_root = source_spec
                 .relative_path
@@ -6970,6 +7014,7 @@ fn probe_plugin_source_candidates_blocking(
     git_ref: Option<&str>,
     sparse_path: Option<&str>,
     hint_host_tool: Option<String>,
+    on_progress: Option<&CloneProgressCallback>,
 ) -> Result<Vec<PluginProbeResult>, String> {
     let trimmed_source = source.trim();
     if trimmed_source.is_empty() {
@@ -7023,7 +7068,7 @@ fn probe_plugin_source_candidates_blocking(
         source_spec.branch.as_deref(),
         &repo_key,
         &sparse_paths,
-        None,
+        on_progress,
         |repo_root| {
             let probe_root = source_spec
                 .relative_path

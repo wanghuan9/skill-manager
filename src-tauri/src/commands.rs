@@ -3679,7 +3679,7 @@ fn update_skill_repo(skill: &SkillSummary) -> Result<(), String> {
         return Err("当前仓库处于 detached HEAD，无法自动更新。".into());
     }
 
-    run_git_command(&skill.local_path, &["fetch", ORIGIN_REMOTE, "--quiet"])?;
+    run_git_command(&skill.local_path, &["fetch", ORIGIN_REMOTE, "--quiet", "--no-tags"])?;
     let remote_branch = resolve_remote_branch_name(&skill.local_path, &current_branch)?;
     let (commits_to_pull, local_commits) =
         branch_divergence_counts(&skill.local_path, &remote_branch)?;
@@ -5740,7 +5740,7 @@ pub fn get_update_preview_snapshot(skill_name: &str) -> Result<UpdatePreviewSnap
     let (installed_skills, skill_index) = find_skill_by_name(skill_name)?;
     let skill = &installed_skills[skill_index];
     let current_branch = current_branch_name(&skill.local_path)?;
-    run_git_command(&skill.local_path, &["fetch", ORIGIN_REMOTE, "--quiet"])?;
+    run_git_command(&skill.local_path, &["fetch", ORIGIN_REMOTE, "--quiet", "--no-tags"])?;
     let remote_branch = resolve_remote_branch_name(&skill.local_path, &current_branch)?;
     let (commits_to_pull, _) = branch_divergence_counts(&skill.local_path, &remote_branch)?;
     let uncommitted_files = collect_working_tree_changes(&skill.local_path)?;

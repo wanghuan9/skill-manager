@@ -1312,7 +1312,6 @@ fn clone_repo_with_optional_branch_internal(
     configure_git_network_command(&mut command);
     command.arg("clone");
     command.arg("--depth").arg(GIT_CLONE_HISTORY_DEPTH);
-    command.arg("--single-branch");
     command.arg("--no-tags");
     if on_progress.is_some() {
         command.arg("--progress");
@@ -1355,7 +1354,6 @@ fn clone_repo_with_sparse_paths_internal(
         .arg("--filter=blob:none")
         .arg("--depth")
         .arg(GIT_CLONE_HISTORY_DEPTH)
-        .arg("--single-branch")
         .arg("--no-tags")
         .arg("--sparse")
         .arg("--no-checkout");
@@ -1583,7 +1581,7 @@ fn output_with_timeout(
 
 /// 以流式方式运行 git clone，将 stderr 逐行转发给 `on_progress`，并在超时或失败时返回错误。
 /// 成功时返回 Ok(())，失败时返回包含 stderr 内容的 Err。
-fn run_git_clone_with_progress(
+pub fn run_git_clone_with_progress(
     command: &mut Command,
     on_progress: Option<&CloneProgressCallback>,
     label: &str,
