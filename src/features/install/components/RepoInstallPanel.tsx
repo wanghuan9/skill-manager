@@ -7,7 +7,6 @@ import { useSkillWorkspace } from "@/features/skills/state/skill-workspace";
 import { fetchGitRepoBranches } from "@/features/skills/api/skill-client";
 import type { GitBranchOption, RepoSkillCandidate } from "@/features/skills/state/skill-store";
 import { formatSkillDescription } from "@/features/skills/utils/skill-description";
-import { isRepoSkillCandidateInstalled } from "@/features/skills/utils/repo-skill-identity";
 
 const DISCOVERING_MIN_DURATION_MS = 450;
 
@@ -117,11 +116,14 @@ export function RepoInstallPanel() {
   const normalizedRepoUrl = useMemo(() => normalizeRepoInput(repoInput), [repoInput]);
   const isValid = isValidRepoUrl(normalizedRepoUrl);
   const selectedGitRef = selectedBranch.trim() || undefined;
-  const isCandidateInstalled = (candidate: RepoSkillCandidate) =>
-    isRepoSkillCandidateInstalled(candidate.relativePath, normalizedRepoUrl, installedSkills);
+  const installedSkillNames = useMemo(
+    () => new Set(installedSkills.map((skill) => skill.name)),
+    [installedSkills],
+  );
+  const isCandidateInstalled = (candidate: RepoSkillCandidate) => installedSkillNames.has(candidate.name);
   const hasSelectableCandidates = useMemo(
-    () => candidates.some((candidate) => !isCandidateInstalled(candidate)),
-    [candidates, installedSkills, normalizedRepoUrl],
+    () => candidates.some((candidate) => !installedSkillNames.has(candidate.name)),
+    [candidates, installedSkillNames],
   );
   const normalizedCandidateSearchQuery = normalizeCandidateSearch(candidateSearchQuery);
   const filteredCandidates = useMemo(
@@ -130,9 +132,9 @@ export function RepoInstallPanel() {
   );
   const selectableFilteredCandidatePaths = useMemo(
     () => filteredCandidates
-      .filter((candidate) => !isRepoSkillCandidateInstalled(candidate.relativePath, normalizedRepoUrl, installedSkills))
+      .filter((candidate) => !installedSkillNames.has(candidate.name))
       .map((candidate) => candidate.relativePath),
-    [filteredCandidates, installedSkills, normalizedRepoUrl],
+    [filteredCandidates, installedSkillNames],
   );
   const hasSelectableFilteredCandidates = selectableFilteredCandidatePaths.length > 0;
   const allFilteredCandidatesSelected = hasSelectableFilteredCandidates
