@@ -14,7 +14,8 @@ use serde::{Deserialize, Deserializer, Serialize};
 use zip::ZipArchive;
 
 use crate::git_state::{
-    clear_skill_update_cache, enrich_newly_installed_skill_with_git_state,
+    clear_skill_update_cache, enrich_freshly_installed_skill,
+    enrich_newly_installed_skill_with_git_state,
     enrich_skill_with_cached_update_state, enrich_skill_with_git_state,
     enrich_skill_with_local_git_state,
 };
@@ -5124,8 +5125,10 @@ fn install_selected_repo_skills_blocking(
             owner_plugin_name: String::new(),
             tools: vec![],
         };
-        let enriched =
-            enrich_newly_installed_skill_with_git_state(&normalize_skill_tools(&installed_skill));
+        let enriched = enrich_freshly_installed_skill(
+            &normalize_skill_tools(&installed_skill),
+            selected_branch_arc.as_deref(),
+        );
         let enriched = apply_skill_install_activation(enriched, &installed_skills)?;
         persist_skill_timestamps(&enriched);
         installed_skills.retain(|skill| skill.name != enriched.name);
