@@ -18,12 +18,12 @@ use crate::git_state::{
     enrich_skill_with_local_git_state,
 };
 use crate::library::{
-    clone_repo_skill, configure_git_network_command, create_skill_symlink,
-    ensure_repo_skill_with_resolved_ref_and_sparse_paths, get_tool_skills_path,
-    install_market_skill_from_source, is_ssh_git_url, parse_market_source_url,
-    reconcile_tool_skill_symlinks, remote_clone_candidates, remove_reserved_workspace_entries,
-    remove_reserved_workspace_symlinks_from_all_tools, remove_skill_symlink,
-    remove_skill_symlinks_from_all_tools, resolve_clone_url_http_first,
+    clone_repo_skill, configure_git_network_command, configure_hidden_subprocess,
+    create_skill_symlink, ensure_repo_skill_with_resolved_ref_and_sparse_paths,
+    get_tool_skills_path, git_command, install_market_skill_from_source, is_ssh_git_url,
+    parse_market_source_url, reconcile_tool_skill_symlinks, remote_clone_candidates,
+    remove_reserved_workspace_entries, remove_reserved_workspace_symlinks_from_all_tools,
+    remove_skill_symlink, remove_skill_symlinks_from_all_tools, resolve_clone_url_http_first,
     resolve_git_clone_url_with_instead_of, sanitize_storage_name, skill_directory,
     summarize_git_error, tree_relative_path_for_branch, with_temporary_discovery_repo_resolved,
     RemoteCloneCandidate,
@@ -1394,7 +1394,10 @@ fn build_local_candidates(installed_skills: &[SkillSummary]) -> Vec<LocalSkillCa
     scan_local_skill_candidates(installed_skills)
         .into_iter()
         .map(|(name, detected_from)| {
-            let local_path = format!("{detected_from}/{name}");
+            let local_path = PathBuf::from(&detected_from)
+                .join(&name)
+                .to_string_lossy()
+                .to_string();
             let source_hint = local_candidate_source_hint(&local_path).to_string();
             LocalSkillCandidate {
                 description: format!("从 {detected_from} 发现的本地技能。"),
@@ -1453,6 +1456,43 @@ const EDITOR_HOST_APPS: &[&str] = &[
 
 const EDITOR_HOST_EXECUTABLES: &[&str] = &["cursor", "code", "windsurf", "devin", "trae", "idea"];
 
+#[cfg(windows)]
+fn windows_well_known_executable_candidates(executable_name: &str) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    let local_app_data = env::var_os("LOCALAPPDATA").map(PathBuf::from);
+    let program_files = env::var_os("ProgramFiles").map(PathBuf::from);
+    let program_files_x86 = env::var_os("ProgramFiles(x86)").map(PathBuf::from);
+
+    match executable_name.to_ascii_lowercase().as_str() {
+        "cursor" => {
+            if let Some(local) = &local_app_data {
+                paths.push(local.join("Programs/cursor/Cursor.exe"));
+            }
+        }
+        "codex" => {
+            if let Some(local) = &local_app_data {
+                paths.push(local.join("Programs/Codex/Codex.exe"));
+            }
+        }
+        "windsurf" | "devin" => {
+            if let Some(local) = &local_app_data {
+                paths.push(local.join("Programs/Windsurf/Windsurf.exe"));
+            }
+        }
+        "code" => {
+            if let Some(program_files) = &program_files {
+                paths.push(program_files.join("Microsoft VS Code/Code.exe"));
+            }
+            if let Some(program_files_x86) = &program_files_x86 {
+                paths.push(program_files_x86.join("Microsoft VS Code/Code.exe"));
+            }
+        }
+        _ => {}
+    }
+
+    paths
+}
+
 fn find_executable_path(executable_name: &str) -> Option<String> {
     if executable_name.contains('/') {
         return Path::new(executable_name)
@@ -1460,9 +1500,17 @@ fn find_executable_path(executable_name: &str) -> Option<String> {
             .then(|| executable_name.to_string());
     }
 
+    #[cfg(windows)]
+    for candidate in windows_well_known_executable_candidates(executable_name) {
+        if candidate.exists() {
+            return Some(candidate.to_string_lossy().to_string());
+        }
+    }
+
     let mut search_dirs = env::var_os("PATH")
         .map(|paths| env::split_paths(&paths).collect::<Vec<_>>())
         .unwrap_or_default();
+    #[cfg(unix)]
     search_dirs.extend([
         PathBuf::from("/opt/homebrew/bin"),
         PathBuf::from("/usr/local/bin"),
@@ -1471,13 +1519,38 @@ fn find_executable_path(executable_name: &str) -> Option<String> {
         PathBuf::from("/usr/sbin"),
         PathBuf::from("/sbin"),
     ]);
+    #[cfg(windows)]
+    {
+        if let Some(local_app_data) = env::var_os("LOCALAPPDATA") {
+            search_dirs.push(PathBuf::from(local_app_data).join("Programs"));
+        }
+        if let Some(program_files) = env::var_os("ProgramFiles") {
+            search_dirs.push(PathBuf::from(program_files));
+        }
+        if let Some(program_files_x86) = env::var_os("ProgramFiles(x86)") {
+            search_dirs.push(PathBuf::from(program_files_x86));
+        }
+    }
 
     search_dirs.into_iter().find_map(|dir| {
-        let executable_path = dir.join(executable_name);
-        executable_path
-            .exists()
-            .then(|| executable_path.to_string_lossy().to_string())
+        executable_file_candidates(executable_name).into_iter().find_map(|name| {
+            let executable_path = dir.join(&name);
+            executable_path
+                .exists()
+                .then(|| executable_path.to_string_lossy().to_string())
+        })
     })
+}
+
+fn executable_file_candidates(executable_name: &str) -> Vec<String> {
+    let mut candidates = vec![executable_name.to_string()];
+    #[cfg(windows)]
+    {
+        candidates.push(format!("{executable_name}.exe"));
+        candidates.push(format!("{executable_name}.cmd"));
+        candidates.push(format!("{executable_name}.bat"));
+    }
+    candidates
 }
 
 fn executable_exists(executable_name: &str) -> bool {
@@ -1497,7 +1570,15 @@ fn detect_tool_installation_label(
     software_spec: &SoftwareDetectionSpec,
     requires_software_detection: bool,
 ) -> String {
-    let has_config = config_paths.is_empty() || config_paths.iter().any(|path| path.exists());
+    if config_paths.is_empty() {
+        return if software_exists(software_spec) {
+            "已安装".to_string()
+        } else {
+            "未安装".to_string()
+        };
+    }
+
+    let has_config = config_paths.iter().any(|path| path.exists());
     if has_config && (!requires_software_detection || software_exists(software_spec)) {
         "已安装".to_string()
     } else {
@@ -2299,7 +2380,18 @@ fn enable_skill_for_all_installed_tools(
             .filter(|skill| skill.name != updated_skill.name)
             .collect::<Vec<_>>();
         enabled_skills.push(updated_skill.clone());
-        reconcile_tool_skill_symlinks(&tool_skills_path, &enabled_skills)?;
+        if let Err(error) = reconcile_tool_skill_symlinks(&tool_skills_path, &enabled_skills) {
+            if cfg!(windows) {
+                set_skill_tool_enabled_status(
+                    std::slice::from_mut(&mut updated_skill),
+                    &skill_name,
+                    &tool_name,
+                    false,
+                )?;
+                continue;
+            }
+            return Err(error);
+        }
     }
 
     Ok(updated_skill)
@@ -2346,7 +2438,6 @@ fn load_interactive_installed_skills() -> Vec<SkillSummary> {
     load_installed_skills(&default_installed_skills())
 }
 
-const GIT_BINARY: &str = "git";
 const ORIGIN_REMOTE: &str = "origin";
 const REMOTE_PREFIX: &str = "origin/";
 const RESERVED_WORKSPACE_NAMES: [&str; 5] =
@@ -2709,7 +2800,7 @@ fn run_git_command_with_allowed_codes(
     args: &[&str],
     allowed_codes: &[i32],
 ) -> Result<String, String> {
-    let mut command = Command::new(GIT_BINARY);
+    let mut command = git_command();
     configure_git_network_command(&mut command);
     let mut child = command
         .args(["-C", skill_path])
@@ -2760,7 +2851,7 @@ fn run_git_remote_command(args: &[&str]) -> Result<String, String> {
 }
 
 fn run_git_remote_command_with_timeout(args: &[&str], timeout: Duration) -> Result<String, String> {
-    let mut command = Command::new(GIT_BINARY);
+    let mut command = git_command();
     configure_git_network_command(&mut command);
     let mut child = command
         .args(args)
@@ -3216,16 +3307,41 @@ struct OpenCommandSpec {
     args: Vec<String>,
 }
 
+fn normalize_open_target_path(target: &str) -> String {
+    let trimmed = target.trim();
+    if cfg!(windows) {
+        let display = workspace::display_path_value(trimmed);
+        return PathBuf::from(&display)
+            .to_string_lossy()
+            .replace('/', "\\");
+    }
+    trimmed.to_string()
+}
+
+#[cfg(windows)]
+fn run_windows_explorer_open(path: &str, error_prefix: &str) -> Result<(), String> {
+    let path_buf = PathBuf::from(path);
+    if !path_buf.exists() {
+        return Err(format!(
+            "{error_prefix}: 路径不存在（{}）",
+            path_buf.display()
+        ));
+    }
+
+    let mut command = Command::new("explorer");
+    configure_hidden_subprocess(&mut command);
+    command
+        .arg(path)
+        .spawn()
+        .map_err(|error| format!("{error_prefix}: {error}"))?;
+    Ok(())
+}
+
 fn default_open_command_for_platform(target: &str) -> OpenCommandSpec {
     if cfg!(windows) {
         return OpenCommandSpec {
-            program: "cmd".to_string(),
-            args: vec![
-                "/C".to_string(),
-                "start".to_string(),
-                String::new(),
-                target.to_string(),
-            ],
+            program: "explorer".to_string(),
+            args: vec![normalize_open_target_path(target)],
         };
     }
     if cfg!(target_os = "macos") {
@@ -3241,7 +3357,17 @@ fn default_open_command_for_platform(target: &str) -> OpenCommandSpec {
 }
 
 fn run_open_command(spec: OpenCommandSpec, error_prefix: &str) -> Result<(), String> {
-    let output = Command::new(&spec.program)
+    #[cfg(windows)]
+    if spec.program.eq_ignore_ascii_case("explorer") {
+        let Some(path) = spec.args.first() else {
+            return Err(format!("{error_prefix}: 缺少目标路径"));
+        };
+        return run_windows_explorer_open(path, error_prefix);
+    }
+
+    let mut command = Command::new(&spec.program);
+    configure_hidden_subprocess(&mut command);
+    let output = command
         .args(&spec.args)
         .output()
         .map_err(|error| format!("{error_prefix}: {error}"))?;
@@ -3250,12 +3376,23 @@ fn run_open_command(spec: OpenCommandSpec, error_prefix: &str) -> Result<(), Str
         return Ok(());
     }
 
-    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-    Err(format!("{error_prefix}: {stderr}"))
+    let stderr = String::from_utf8(output.stderr)
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    Err(if stderr.is_empty() {
+        format!("{error_prefix}: 系统打开路径失败")
+    } else {
+        format!("{error_prefix}: {stderr}")
+    })
 }
 
 fn open_path_cross_platform(path: &str) -> Result<(), String> {
-    run_open_command(default_open_command_for_platform(path), "打开路径失败")
+    let normalized = normalize_open_target_path(path);
+    run_open_command(
+        default_open_command_for_platform(&normalized),
+        "打开路径失败",
+    )
 }
 
 fn open_url_cross_platform(url: &str) -> Result<(), String> {
@@ -5423,8 +5560,32 @@ fn copy_dir_contents(source_dir: &Path, target_dir: &Path) -> Result<(), String>
         if file_name.to_string_lossy() == ".git" {
             continue;
         }
-        let target_path = target_dir.join(file_name);
-        if path.is_dir() {
+        let target_path = target_dir.join(&file_name);
+        let metadata = fs::symlink_metadata(&path)
+            .map_err(|error| format!("读取本地技能条目失败: {error}"))?;
+        if metadata.file_type().is_symlink() {
+            let link_target =
+                fs::read_link(&path).map_err(|error| format!("读取符号链接失败: {error}"))?;
+            let resolved_target = if link_target.is_absolute() {
+                link_target
+            } else {
+                path.parent()
+                    .unwrap_or_else(|| Path::new("."))
+                    .join(link_target)
+            };
+            if resolved_target.is_dir() {
+                copy_dir_contents(&resolved_target, &target_path)?;
+            } else {
+                if let Some(parent) = target_path.parent() {
+                    fs::create_dir_all(parent)
+                        .map_err(|error| format!("创建 skill 目录失败: {error}"))?;
+                }
+                fs::copy(&resolved_target, &target_path)
+                    .map_err(|error| format!("复制 skill 文件失败: {error}"))?;
+            }
+            continue;
+        }
+        if metadata.is_dir() {
             copy_dir_contents(&path, &target_path)?;
         } else {
             fs::copy(&path, &target_path)
@@ -5632,17 +5793,28 @@ pub fn open_external_link(url: &str) -> Result<(), String> {
 #[tauri::command]
 pub fn open_tool_skills_folder(tool_id: &str) -> Result<(), String> {
     let skills_path = get_tool_skills_path(tool_id)?;
-    open_path_with_finder(&skills_path)
+    let path = PathBuf::from(&skills_path);
+    if !path.exists() {
+        fs::create_dir_all(&path)
+            .map_err(|error| format!("创建工具 skills 目录失败: {error}"))?;
+    }
+    open_path_with_finder(&normalize_open_target_path(&skills_path))
 }
 
 #[tauri::command]
 pub fn open_path_in_finder(path: &str) -> Result<(), String> {
-    let normalized_path = path.trim();
+    let normalized_path = normalize_open_target_path(path);
     if normalized_path.is_empty() {
         return Err("路径不能为空。".into());
     }
 
-    open_path_with_finder(normalized_path)
+    let path_buf = PathBuf::from(&normalized_path);
+    if !path_buf.exists() {
+        fs::create_dir_all(&path_buf)
+            .map_err(|error| format!("创建目录失败: {error}"))?;
+    }
+
+    open_path_with_finder(&normalized_path)
 }
 
 #[tauri::command]
@@ -6338,6 +6510,10 @@ mod tests {
         assert_eq!(candidates.len(), 1);
         assert_eq!(candidates[0].name, "real-skill");
         assert_eq!(candidates[0].source_hint, "本地文件");
+        assert_eq!(
+            candidates[0].local_path,
+            skill_dir.to_string_lossy().to_string()
+        );
 
         let _ = fs::remove_dir_all(temp_dir);
     }
@@ -7711,15 +7887,143 @@ mod tests {
     }
 
     #[test]
-    fn default_open_command_uses_windows_start_on_windows() {
-        let command = super::default_open_command_for_platform("C:\\Users\\demo\\repo");
+    fn default_open_command_uses_explorer_on_windows() {
+        let command = super::default_open_command_for_platform("C:\\Users\\demo\\.gemini\\skills");
         if cfg!(windows) {
-            assert_eq!(command.program, "cmd");
-            assert_eq!(
-                command.args,
-                vec!["/C", "start", "", "C:\\Users\\demo\\repo"]
-            );
+            assert_eq!(command.program, "explorer");
+            assert_eq!(command.args, vec!["C:\\Users\\demo\\.gemini\\skills"]);
         }
+    }
+
+    #[test]
+    fn normalize_open_target_path_strips_windows_verbatim_prefix() {
+        let normalized = super::normalize_open_target_path(
+            r"\\?\C:\Users\demo\.gemini/skills",
+        );
+        if cfg!(windows) {
+            assert_eq!(normalized, r"C:\Users\demo\.gemini\skills");
+        }
+    }
+
+    #[test]
+    fn normalize_open_target_path_normalizes_mixed_windows_separators() {
+        let normalized =
+            super::normalize_open_target_path("C:\\Users\\demo\\.gemini/skills");
+        if cfg!(windows) {
+            assert_eq!(normalized, "C:\\Users\\demo\\.gemini\\skills");
+        } else {
+            assert_eq!(normalized, "C:\\Users\\demo\\.gemini/skills");
+        }
+    }
+
+    #[test]
+    fn detect_tool_installation_uses_config_directory_for_cli_tools() {
+        let temp_dir = temp_test_dir("codex-installation-detection");
+        fs::create_dir_all(temp_dir.join(".codex/skills")).expect("create codex skills dir");
+
+        let spec = super::software_spec(&["Codex"], &["codex-missing-executable-xyz"]);
+        assert_eq!(
+            super::detect_tool_installation_label(&[temp_dir.join(".codex")], &spec, false),
+            "已安装"
+        );
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn detect_tool_installation_uses_cursor_directory_with_software() {
+        let temp_dir = temp_test_dir("cursor-installation-detection");
+        let cursor_dir = temp_dir.join(".cursor");
+        fs::create_dir_all(&cursor_dir).expect("create cursor dir");
+
+        let spec = super::software_spec(&[], &["cursor-missing-executable-xyz"]);
+        assert_eq!(
+            super::detect_tool_installation_label(&[cursor_dir.clone()], &spec, true),
+            "未安装"
+        );
+
+        let original_path = prepend_fake_executable_to_path(&temp_dir, "cursor");
+        let installed_spec = super::software_spec(&[], &["cursor"]);
+        assert_eq!(
+            super::detect_tool_installation_label(&[cursor_dir], &installed_spec, true),
+            "已安装"
+        );
+        restore_env_var("PATH", original_path);
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn detect_tool_installation_uses_opencode_config_directory() {
+        let temp_dir = temp_test_dir("opencode-installation-detection");
+        fs::create_dir_all(temp_dir.join(".config/opencode/skills")).expect("create opencode dir");
+
+        let spec = super::software_spec(&["OpenCode"], &["opencode-missing-executable-xyz"]);
+        assert_eq!(
+            super::detect_tool_installation_label(
+                &[temp_dir.join(".config/opencode")],
+                &spec,
+                false,
+            ),
+            "已安装"
+        );
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn detect_tool_installation_uses_continue_directory_with_host_editor() {
+        let temp_dir = temp_test_dir("continue-installation-detection");
+        fs::create_dir_all(temp_dir.join(".continue/skills")).expect("create continue dir");
+
+        let spec = super::software_spec(&[], &["missing-host-editor-xyz"]);
+        assert_eq!(
+            super::detect_tool_installation_label(&[temp_dir.join(".continue")], &spec, true),
+            "未安装"
+        );
+
+        let original_path = prepend_fake_executable_to_path(&temp_dir, "code");
+        let installed_spec = super::software_spec(&[], &["code"]);
+        assert_eq!(
+            super::detect_tool_installation_label(
+                &[temp_dir.join(".continue")],
+                &installed_spec,
+                true,
+            ),
+            "已安装"
+        );
+        restore_env_var("PATH", original_path);
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn detect_tool_installation_does_not_treat_empty_markers_as_installed() {
+        let spec = super::software_spec(&[], &[]);
+        assert_eq!(
+            super::detect_tool_installation_label(&[], &spec, false),
+            "未安装"
+        );
+    }
+
+    #[test]
+    fn detect_tool_installation_uses_software_only_for_empty_config_paths() {
+        let temp_dir = temp_test_dir("vscode-installation-detection");
+        let spec = super::software_spec(&[], &["code-missing-executable-xyz"]);
+        assert_eq!(
+            super::detect_tool_installation_label(&[], &spec, true),
+            "未安装"
+        );
+
+        let original_path = prepend_fake_executable_to_path(&temp_dir, "code");
+        let installed_spec = super::software_spec(&[], &["code"]);
+        assert_eq!(
+            super::detect_tool_installation_label(&[], &installed_spec, true),
+            "已安装"
+        );
+        restore_env_var("PATH", original_path);
+
+        let _ = fs::remove_dir_all(temp_dir);
     }
 
     #[test]

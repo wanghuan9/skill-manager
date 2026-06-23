@@ -573,7 +573,7 @@ export function McpMarketplacePanel(props: McpMarketplacePanelProps) {
       return;
     }
 
-    const scrollContainer = document.querySelector(".page-content");
+    const scrollContainer = document.querySelector(".market-install-scroll");
     if (!(scrollContainer instanceof HTMLElement)) {
       return;
     }
@@ -590,7 +590,7 @@ export function McpMarketplacePanel(props: McpMarketplacePanelProps) {
   }, []);
 
   useEffect(() => {
-    const scrollContainer = document.querySelector(".page-content");
+    const scrollContainer = document.querySelector(".market-install-scroll");
     if (!(scrollContainer instanceof HTMLElement)) {
       return;
     }
@@ -679,7 +679,7 @@ export function McpMarketplacePanel(props: McpMarketplacePanelProps) {
         </div>
       </div>
 
-      <div className="install-grid">
+      <div className="install-grid market-install-scroll">
         {showLoadingPlaceholder ? (
           <section className="placeholder-card">
             <h3>{t("install.mcp.loading.title")}</h3>

@@ -28,9 +28,16 @@
   box-sizing: border-box;
 }
 
+html {
+  height: 100%;
+  overflow: hidden;
+}
+
 body {
   margin: 0;
-  min-height: 100vh;
+  min-height: 100%;
+  height: 100%;
+  overflow: hidden;
   background:
     radial-gradient(
       circle at 8% 0%,
@@ -209,7 +216,9 @@ code {
 }
 
 #root {
-  min-height: 100vh;
+  min-height: 100%;
+  height: 100%;
+  overflow: hidden;
 }
 
 .app-notification-stack {
@@ -1144,6 +1153,11 @@ code {
   display: flex;
   flex-direction: column;
   gap: 14px;
+  min-height: 0;
+}
+
+.main-panel[data-active-route="install"] .page-content {
+  overflow: hidden;
 }
 
 .page-content {
@@ -2834,7 +2848,13 @@ code {
   display: flex;
   flex-direction: column;
   gap: 10px;
+  flex: 1;
   min-height: 0;
+  overflow: auto;
+}
+
+.market-shell:has(.market-panel) {
+  overflow: hidden;
 }
 
 .market-topbar {
@@ -2895,6 +2915,7 @@ code {
   align-items: center;
   justify-content: flex-start;
   align-self: flex-start;
+  flex-shrink: 0;
   padding: 4px;
   border-radius: 999px;
   border: 1px solid #dbe6f5;
@@ -3024,11 +3045,19 @@ code {
   pointer-events: none;
 }
 
-.market-panel {
-  display: grid;
-  gap: 8px;
+.market-route {
+  flex: 1;
   min-height: 0;
-  max-height: none;
+  overflow: hidden;
+}
+
+.market-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
   padding-top: 10px;
 }
 
@@ -3036,14 +3065,13 @@ code {
   display: flex;
   align-items: center;
   gap: 10px;
+  flex-shrink: 0;
   padding: 0 0 8px;
   border-bottom: 1px solid var(--line);
-  position: sticky;
-  top: 0;
+  position: relative;
   z-index: 2;
   border-radius: 0;
   background: var(--surface);
-  backdrop-filter: blur(8px);
 }
 
 .market-panel .panel-header {
@@ -3116,10 +3144,38 @@ code {
 .install-grid {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   min-height: 0;
-  overflow: visible;
   align-content: start;
   padding-right: 0;
   gap: 8px;
+}
+
+.market-install-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.market-install-scroll::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.market-install-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.market-install-scroll::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.58);
+  background-clip: padding-box;
+}
+
+.market-install-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgba(100, 116, 139, 0.66);
+  background-clip: padding-box;
 }
 
 .mcp-market-config-preview {

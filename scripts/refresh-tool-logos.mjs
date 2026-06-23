@@ -19,7 +19,12 @@ const TOOL_SOURCES = [
   { id: "cursor", homepage: "https://cursor.com/" },
   { id: "gemini", homepage: "https://gemini.google.com/" },
   { id: "antigravity", homepage: "https://antigravity.google/" },
-  { id: "windsurf", homepage: "https://devin.ai/desktop/", keepExistingFileName: "devin.png" },
+  {
+    id: "windsurf",
+    homepage: "https://devin.ai/desktop/",
+    preferredAssetUrl: "https://windsurf.com/favicon.ico",
+    keepExistingFileName: "devin.png",
+  },
   {
     id: "intellij",
     homepage: "https://www.jetbrains.com/idea/",
@@ -29,7 +34,11 @@ const TOOL_SOURCES = [
   { id: "continue", homepage: "https://www.continue.dev/" },
   { id: "iflow", homepage: "https://iflowai.com/" },
   { id: "codebuddy", homepage: "https://www.codebuddy.ai/" },
-  { id: "trae", homepage: "https://www.trae.ai/" },
+  {
+    id: "trae",
+    homepage: "https://www.trae.ai/",
+    preferredAssetUrl: "https://lf16-web-neutral.traecdn.ai/obj/trae-ai-static/trae_website/favicon.png",
+  },
   { id: "droid", homepage: "https://docs.factory.ai/cli/getting-started/overview" },
   { id: "augment", homepage: "https://www.augmentcode.com/" },
   { id: "cline", homepage: "https://cline.bot/" },
@@ -47,7 +56,11 @@ const TOOL_SOURCES = [
     preferredAssetUrl: "https://roocodeinc.github.io/Roo-Code/img/favicon.ico",
   },
   { id: "zencoder", homepage: "https://zencoder.ai/" },
-  { id: "trae-cn", homepage: "https://www.trae.cn/" },
+  {
+    id: "trae-cn",
+    homepage: "https://www.trae.cn/",
+    preferredAssetUrl: "https://lf-cdn.trae.com.cn/obj/trae-com-cn/trae_website_prod_cn/favicon.png",
+  },
   {
     id: "hermes",
     homepage: "https://hermes-agent.nousresearch.com/",

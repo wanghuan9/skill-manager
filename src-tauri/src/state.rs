@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::models::{AppSettings, SkillSummary, WorkspacePersistence};
 use crate::workspace::{
-    home_dir_option, managed_skill_library_root, managed_workspace_root_option,
+    display_path_value, home_dir_option, managed_skill_library_root, managed_workspace_root_option,
     normalize_workspace_path, remove_legacy_workspace_file, workspace_file_candidates,
     workspace_file_path,
 };
@@ -416,7 +416,10 @@ fn hydrate_skill_description(mut skill: SkillSummary) -> SkillSummary {
 }
 
 fn normalize_skill_workspace_path(mut skill: SkillSummary) -> SkillSummary {
-    skill.local_path = normalize_workspace_path(&skill.local_path);
+    skill.local_path = display_path_value(&normalize_workspace_path(&skill.local_path));
+    if skill.source_url.contains(r"\\?\") {
+        skill.source_url = display_path_value(&skill.source_url);
+    }
     skill
 }
 

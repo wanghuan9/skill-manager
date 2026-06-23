@@ -108,7 +108,7 @@ export function MarketplaceInstallPanel(props: MarketplaceInstallPanelProps) {
           })}
         </div>
       </div>
-      <div className="install-grid">
+      <div className="install-grid market-install-scroll">
         {isInitialLoading ? (
           <section className="placeholder-card">
             <h3 className="install-loading-title">

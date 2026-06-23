@@ -331,6 +331,8 @@ export const localInstallSkillCandidateFixtures: Record<string, LocalInstallSkil
 };
 
 export const toolConfigFixtures: ToolConfig[] = [
+  // Browser-only mock data (`npm run dev` without Tauri). Production builds use
+  // `list_tool_configs` from the Rust backend with real filesystem detection.
   { id: "claude-code", name: "Claude Code", skillsPath: "/Users/demo/.claude/skills", mcpConfigPath: "/Users/demo/.claude.json", supportsMcp: true, mcpConfigPathRecognized: true, statusLabel: "已安装", isEnabled: true, primaryType: "cli", surfaceTypes: ["cli", "desktop", "ide-plugin"], supportsDirectOpen: false },
   { id: "codex", name: "Codex", skillsPath: "/Users/demo/.codex/skills", mcpConfigPath: "/Users/demo/.codex/config.toml", supportsMcp: true, mcpConfigPathRecognized: true, statusLabel: "已安装", isEnabled: true, primaryType: "desktop", surfaceTypes: ["desktop", "cli"], supportsDirectOpen: false },
   { id: "opencode", name: "OpenCode", skillsPath: "/Users/demo/.config/opencode/skills", mcpConfigPath: "/Users/demo/.config/opencode/opencode.json", supportsMcp: true, mcpConfigPathRecognized: true, statusLabel: "已安装", isEnabled: true, primaryType: "cli", surfaceTypes: ["cli", "desktop", "ide-plugin"], supportsDirectOpen: false },

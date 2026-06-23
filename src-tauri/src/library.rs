@@ -29,7 +29,74 @@ pub struct RemoteCloneCandidate {
     pub url: String,
 }
 
+static GIT_EXECUTABLE: OnceLock<String> = OnceLock::new();
+
+/// Prevent console windows from flashing when SkillDock spawns CLI tools on Windows.
+pub fn configure_hidden_subprocess(command: &mut Command) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+}
+
+pub fn git_executable() -> &'static str {
+    GIT_EXECUTABLE
+        .get_or_init(|| {
+            #[cfg(windows)]
+            {
+                discover_windows_git_executable().unwrap_or_else(|| "git".to_string())
+            }
+            #[cfg(not(windows))]
+            {
+                "git".to_string()
+            }
+        })
+        .as_str()
+}
+
+pub fn git_command() -> Command {
+    let mut command = Command::new(git_executable());
+    configure_hidden_subprocess(&mut command);
+    command
+}
+
+#[cfg(windows)]
+fn discover_windows_git_executable() -> Option<String> {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+    for candidate in [
+        env::var_os("ProgramFiles").map(|path| PathBuf::from(path).join("Git\\bin\\git.exe")),
+        env::var_os("ProgramFiles(x86)").map(|path| PathBuf::from(path).join("Git\\bin\\git.exe")),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if candidate.is_file() {
+            return Some(candidate.to_string_lossy().into_owned());
+        }
+    }
+
+    let output = Command::new("where")
+        .arg("git")
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .find(|path| path.ends_with("git.exe"))
+        .map(str::to_string)
+}
+
 pub fn configure_git_network_command(command: &mut Command) {
+    configure_hidden_subprocess(command);
     command
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GCM_INTERACTIVE", "never")
@@ -1010,7 +1077,7 @@ pub fn resolve_git_clone_url_with_instead_of(clone_url: &str) -> String {
         return String::new();
     }
 
-    let mut command = Command::new("git");
+    let mut command = git_command();
     command.args(["config", "--get-regexp", "^url\\."]);
     let Ok(output) = command.output() else {
         return trimmed.to_string();
@@ -1105,7 +1172,7 @@ pub fn resolve_clone_url_http_first(
 }
 
 pub fn probe_remote_clone_url(clone_url: &str) -> Result<(), String> {
-    let mut command = Command::new("git");
+    let mut command = git_command();
     command.args(["ls-remote", clone_url, "HEAD"]);
     configure_git_network_command(&mut command);
     let output = output_with_timeout(command, GIT_REMOTE_PROBE_TIMEOUT, "git ls-remote")?;
@@ -1118,19 +1185,70 @@ pub fn probe_remote_clone_url(clone_url: &str) -> Result<(), String> {
     ))
 }
 
-pub fn summarize_git_error(error: &str) -> String {
-    let summary = error
-        .lines()
-        .rev()
-        .map(str::trim)
-        .find(|line| !line.is_empty())
-        .unwrap_or(error)
-        .to_string();
-    if summary.chars().count() <= 240 {
-        summary
+fn is_git_progress_line(line: &str) -> bool {
+    let lower = line.to_ascii_lowercase();
+    lower.starts_with("cloning into")
+        || lower.starts_with("remote:")
+        || lower.starts_with("receiving objects")
+        || lower.starts_with("resolving deltas")
+        || lower.starts_with("updating files")
+}
+
+fn is_git_error_signal(line: &str) -> bool {
+    let lower = line.to_ascii_lowercase();
+    lower.contains("fatal:")
+        || lower.contains("error:")
+        || lower.contains("could not")
+        || lower.contains("unable to")
+        || lower.contains("authentication failed")
+        || lower.contains("permission denied")
+}
+
+fn truncate_git_error_line(line: &str) -> String {
+    if line.chars().count() <= 240 {
+        line.to_string()
     } else {
-        summary.chars().take(240).collect::<String>()
+        line.chars().take(240).collect::<String>()
     }
+}
+
+pub fn summarize_git_error(error: &str) -> String {
+    let lines = error
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>();
+
+    if let Some(line) = lines
+        .iter()
+        .rev()
+        .find(|line| is_git_error_signal(line))
+    {
+        return truncate_git_error_line(line);
+    }
+
+    if let Some(line) = lines
+        .iter()
+        .rev()
+        .find(|line| !is_git_progress_line(line))
+    {
+        return truncate_git_error_line(line);
+    }
+
+    truncate_git_error_line(lines.last().copied().unwrap_or(error))
+}
+
+fn git_command_failure_message(prefix: &str, output: &std::process::Output) -> String {
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let combined = if stderr.trim().is_empty() {
+        stdout.trim().to_string()
+    } else if stdout.trim().is_empty() {
+        stderr.trim().to_string()
+    } else {
+        format!("{}\n{}", stderr.trim(), stdout.trim())
+    };
+    format!("{prefix}: {}", summarize_git_error(&combined))
 }
 
 fn parse_git_url_instead_of_rules(output: &str) -> Vec<GitUrlInsteadOfRule> {
@@ -1217,7 +1335,7 @@ fn clone_repo_with_optional_branch_internal(
     } else {
         source.trim().to_string()
     };
-    let mut command = Command::new("git");
+    let mut command = git_command();
     configure_git_network_command(&mut command);
     command.arg("clone");
     command.arg("--depth").arg(GIT_CLONE_HISTORY_DEPTH);
@@ -1232,10 +1350,7 @@ fn clone_repo_with_optional_branch_internal(
     let output = output_with_timeout(command, GIT_NETWORK_TIMEOUT, "git clone")?;
 
     if !output.status.success() {
-        return Err(format!(
-            "仓库克隆失败: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
+        return Err(git_command_failure_message("仓库克隆失败", &output));
     }
 
     Ok(())
@@ -1262,7 +1377,7 @@ fn clone_repo_with_sparse_paths_internal(
     } else {
         source.trim().to_string()
     };
-    let mut clone_command = Command::new("git");
+    let mut clone_command = git_command();
     configure_git_network_command(&mut clone_command);
     clone_command
         .arg("clone")
@@ -1281,10 +1396,7 @@ fn clone_repo_with_sparse_paths_internal(
         .arg(target_dir.to_string_lossy().as_ref());
     let clone_output = output_with_timeout(clone_command, GIT_NETWORK_TIMEOUT, "git sparse clone")?;
     if !clone_output.status.success() {
-        return Err(format!(
-            "仓库克隆失败: {}",
-            String::from_utf8_lossy(&clone_output.stderr).trim()
-        ));
+        return Err(git_command_failure_message("仓库克隆失败", &clone_output));
     }
 
     let sparse_strings = sparse_paths
@@ -1329,7 +1441,7 @@ fn configure_sparse_checkout(
 }
 
 fn run_git_in_dir(target_dir: &Path, args: &[&str]) -> Result<(), String> {
-    let mut command = Command::new("git");
+    let mut command = git_command();
     command
         .arg("-C")
         .arg(target_dir.to_string_lossy().as_ref())
@@ -1345,7 +1457,7 @@ fn run_git_in_dir(target_dir: &Path, args: &[&str]) -> Result<(), String> {
 }
 
 fn run_git_in_dir_owned(target_dir: &Path, args: &[String]) -> Result<(), String> {
-    let mut command = Command::new("git");
+    let mut command = git_command();
     command
         .arg("-C")
         .arg(target_dir.to_string_lossy().as_ref())
@@ -1361,7 +1473,7 @@ fn run_git_in_dir_owned(target_dir: &Path, args: &[String]) -> Result<(), String
 }
 
 fn run_git_output(target_dir: &Path, args: &[&str]) -> Result<String, String> {
-    let mut command = Command::new("git");
+    let mut command = git_command();
     command
         .arg("-C")
         .arg(target_dir.to_string_lossy().as_ref())
@@ -1381,6 +1493,7 @@ fn output_with_timeout(
     timeout: Duration,
     label: &str,
 ) -> Result<Output, String> {
+    configure_hidden_subprocess(&mut command);
     command.stdout(Stdio::piped()).stderr(Stdio::piped());
     let mut child = command
         .spawn()
@@ -1829,6 +1942,39 @@ fn windows_symlink_error_message(error: &str) -> String {
     )
 }
 
+#[cfg(windows)]
+fn create_windows_directory_junction(target: &Path, junction: &Path) -> Result<(), String> {
+    let target = target
+        .canonicalize()
+        .map_err(|error| format!("解析 skill 目录失败: {error}"))?;
+    if junction.exists() {
+        let _ = fs::remove_dir(junction);
+    }
+    if let Some(parent) = junction.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|error| format!("创建工具 skills 目录失败: {error}"))?;
+    }
+
+    let mut command = Command::new("cmd");
+    configure_hidden_subprocess(&mut command);
+    let output = command
+        .args([
+            "/C",
+            "mklink",
+            "/J",
+            &junction.to_string_lossy(),
+            &target.to_string_lossy(),
+        ])
+        .output()
+        .map_err(|error| format!("创建目录联接失败: {error}"))?;
+    if output.status.success() {
+        return Ok(());
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    Err(format!("创建目录联接失败: {stderr}"))
+}
+
 fn create_skill_directory_link(skill_path: &Path, symlink_path: &Path) -> Result<(), String> {
     #[cfg(unix)]
     {
@@ -1838,8 +1984,15 @@ fn create_skill_directory_link(skill_path: &Path, symlink_path: &Path) -> Result
 
     #[cfg(windows)]
     {
-        std::os::windows::fs::symlink_dir(skill_path, symlink_path)
-            .map_err(|error| windows_symlink_error_message(&error.to_string()))?;
+        match std::os::windows::fs::symlink_dir(skill_path, symlink_path) {
+            Ok(()) => {}
+            Err(error) if error.raw_os_error() == Some(1314) => {
+                create_windows_directory_junction(skill_path, symlink_path)?;
+            }
+            Err(error) => {
+                return Err(windows_symlink_error_message(&error.to_string()));
+            }
+        }
     }
 
     Ok(())
@@ -2272,14 +2425,14 @@ fn git_worktree_root(path: &Path) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::{
-        clone_branch_for_resolved_path, create_skill_symlink, get_tool_skills_path,
-        ignore_unnecessary_files, migrate_legacy_skill_symlinks, parse_git_url_instead_of_rules,
-        parse_market_source_url, reconcile_tool_skill_symlinks, remote_clone_candidates,
-        remove_reserved_workspace_entries, repo_cache_lock,
-        rewrite_git_clone_url_with_instead_of_rules, run_git_in_dir, run_git_output,
-        skill_dir_match_score, ssh_clone_url_for_repository_url, summarize_git_error,
-        tool_skills_path_for_home, tree_relative_path_for_branch, MarketSourceSpec,
-        RemoteCloneCandidate, ResolvedRemoteSkillPath,
+        clone_branch_for_resolved_path, configure_hidden_subprocess, create_skill_symlink,
+        get_tool_skills_path, git_executable, ignore_unnecessary_files,
+        migrate_legacy_skill_symlinks, parse_git_url_instead_of_rules, parse_market_source_url,
+        reconcile_tool_skill_symlinks, remote_clone_candidates, remove_reserved_workspace_entries,
+        repo_cache_lock, rewrite_git_clone_url_with_instead_of_rules, run_git_in_dir,
+        run_git_output, skill_dir_match_score, ssh_clone_url_for_repository_url,
+        summarize_git_error, tool_skills_path_for_home, tree_relative_path_for_branch,
+        MarketSourceSpec, RemoteCloneCandidate, ResolvedRemoteSkillPath,
     };
     use crate::models::SkillSummary;
     use crate::workspace::TEST_ENV_LOCK;
@@ -2302,6 +2455,17 @@ mod tests {
         ));
         fs::create_dir_all(&temp_dir).expect("create temp test dir");
         temp_dir
+    }
+
+    #[test]
+    fn git_executable_returns_non_empty_program_name() {
+        assert!(!git_executable().trim().is_empty());
+    }
+
+    #[test]
+    fn configure_hidden_subprocess_does_not_panic_for_git_command() {
+        let mut command = std::process::Command::new(git_executable());
+        configure_hidden_subprocess(&mut command);
     }
 
     #[test]
@@ -2431,6 +2595,22 @@ url.git@git.example.com:example-org/.insteadof https://git.example.com/example-o
                 label: "SSH",
                 url: "git@git.example.com:example-org/example-repo.git".to_string(),
             }]
+        );
+    }
+
+    #[test]
+    fn git_error_summary_prefers_fatal_line_over_clone_progress() {
+        assert_eq!(
+            summarize_git_error("Cloning into 'repo'...\nfatal: repository not found\n"),
+            "fatal: repository not found"
+        );
+    }
+
+    #[test]
+    fn git_error_summary_skips_clone_progress_when_no_fatal_line() {
+        assert_eq!(
+            summarize_git_error("Cloning into 'repo'...\n"),
+            "Cloning into 'repo'..."
         );
     }
 

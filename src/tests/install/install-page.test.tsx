@@ -18,10 +18,10 @@ function resetMcpMarketplaceRuntimeCache() {
   delete (window as Window & { __SKILLM_MCP_WORKSPACE__?: unknown }).__SKILLM_MCP_WORKSPACE__;
 }
 
-function scrollPageContentToBottom() {
-  const scrollContainer = document.querySelector(".page-content");
+function scrollMarketInstallToBottom() {
+  const scrollContainer = document.querySelector(".market-install-scroll");
   if (!(scrollContainer instanceof HTMLElement)) {
-    throw new Error("missing page content scroll container");
+    throw new Error("missing market install scroll container");
   }
 
   Object.defineProperty(scrollContainer, "scrollHeight", { configurable: true, value: 1000 });
@@ -1551,7 +1551,7 @@ test("searches MCP marketplace and restores browse pagination after clearing que
     expect(screen.getByText("context7")).toBeInTheDocument();
   });
 
-  scrollPageContentToBottom();
+  scrollMarketInstallToBottom();
 
   expect(await screen.findByText("已加载全部 MCP")).toBeInTheDocument();
 });
@@ -1580,7 +1580,7 @@ test("loads appended MCP marketplace avatars eagerly after scrolling", async () 
 
   expect(await screen.findByRole("heading", { name: "server-1", level: 3 })).toBeInTheDocument();
 
-  scrollPageContentToBottom();
+  scrollMarketInstallToBottom();
 
   const serverHeading = await screen.findByRole("heading", { name: "server-25", level: 3 });
   const serverCard = serverHeading.closest("article");

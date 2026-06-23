@@ -2,10 +2,10 @@ use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::{mpsc, Condvar, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, SystemTime};
 
+use crate::library::{configure_git_network_command, git_command};
 use crate::models::SkillSummary;
 use crate::workspace::{
     remove_legacy_workspace_file, workspace_file_candidates, workspace_file_path,
@@ -15,7 +15,6 @@ use serde::{Deserialize, Serialize};
 const STATUS_CLEAN: &str = "clean";
 const STATUS_UPDATE_AVAILABLE: &str = "update-available";
 const STATUS_PENDING_PUSH: &str = "pending-push";
-const GIT_BINARY: &str = "git";
 const ORIGIN_REMOTE: &str = "origin";
 const REMOTE_BRANCH_PREFIX: &str = "origin/";
 const UPDATE_CACHE_FILE_NAME: &str = "git-update-cache.json";
@@ -396,7 +395,9 @@ fn git_fetch_with_timeout(skill_path: &Path) {
     let _fetch_guard = acquire_git_fetch_lock(repo_key);
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
-        let result = Command::new(GIT_BINARY)
+        let mut command = git_command();
+        configure_git_network_command(&mut command);
+        let result = command
             .args([
                 "-C",
                 &path_str,
@@ -405,8 +406,6 @@ fn git_fetch_with_timeout(skill_path: &Path) {
                 "--quiet",
                 "--no-tags",
             ])
-            .env("GIT_TERMINAL_PROMPT", "0")
-            .env("GCM_INTERACTIVE", "Never")
             .output();
         let _ = tx.send(result);
     });
@@ -751,7 +750,7 @@ fn derive_collab_status(
 }
 
 fn run_git(skill_path: &Path, args: &[&str]) -> Option<String> {
-    let output = Command::new(GIT_BINARY)
+    let output = git_command()
         .args(["-C", skill_path.to_string_lossy().as_ref()])
         .args(args)
         .output()
@@ -765,7 +764,7 @@ fn run_git(skill_path: &Path, args: &[&str]) -> Option<String> {
 }
 
 fn run_git_owned(skill_path: &Path, args: &[String]) -> Option<String> {
-    let output = Command::new(GIT_BINARY)
+    let output = git_command()
         .args(["-C", skill_path.to_string_lossy().as_ref()])
         .args(args)
         .output()
@@ -946,7 +945,10 @@ fn parse_skill_time_label(value: &str) -> Option<(u32, u32, u32, u32, u32, u32)>
 mod tests {
     use super::*;
     use std::env;
+    use std::process::Command;
     use std::time::UNIX_EPOCH;
+
+    const GIT_BINARY: &str = "git";
 
     fn skill_summary(name: &str, local_path: &Path) -> SkillSummary {
         SkillSummary {

@@ -110,6 +110,27 @@ pub fn normalize_workspace_path(value: &str) -> String {
     value.replace(LEGACY_WORKSPACE_DIR_NAME, WORKSPACE_DIR_NAME)
 }
 
+/// Strip Windows verbatim/extended-length path prefixes before showing paths in the UI.
+pub fn display_path_value(value: &str) -> String {
+    strip_windows_verbatim_prefix(value.trim())
+}
+
+pub fn display_path_string(path: &Path) -> String {
+    display_path_value(&path.to_string_lossy())
+}
+
+fn strip_windows_verbatim_prefix(value: &str) -> String {
+    if let Some(rest) = value.strip_prefix(r"\\?\UNC\") {
+        return format!(r"\\{rest}");
+    }
+
+    if let Some(rest) = value.strip_prefix(r"\\?\") {
+        return rest.to_string();
+    }
+
+    value.to_string()
+}
+
 fn ensure_workspace_file_with_default_content(
     path: &Path,
     default_content: &str,
@@ -431,6 +452,18 @@ mod tests {
         assert_eq!(
             normalize_workspace_path("/Users/demo/.skillm/skills/demo"),
             "/Users/demo/.skilldock/skills/demo"
+        );
+    }
+
+    #[test]
+    fn display_path_value_strips_windows_verbatim_prefix() {
+        assert_eq!(
+            super::display_path_value(r"\\?\C:\Users\demo\.cache\codex-runtimes"),
+            r"C:\Users\demo\.cache\codex-runtimes"
+        );
+        assert_eq!(
+            super::display_path_value(r"\\?\UNC\server\share\plugins"),
+            r"\\server\share\plugins"
         );
     }
 

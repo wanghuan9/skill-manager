@@ -472,26 +472,30 @@ pub async fn import_mcp_servers_from_apps(app_handle: AppHandle) -> Result<usize
 
         for (id, mut server) in servers {
             normalize_imported_mcp_server(&mut server);
-            validate_mcp_server(&id, &server).map_err(|error| {
-                format!(
-                    "导入 {} MCP \"{}\" 失败: {}（配置：{}）",
+            if let Err(error) = validate_mcp_server(&id, &server) {
+                log::warn!(
+                    "跳过 {} MCP \"{}\": {}（配置：{}）",
                     app.name,
                     id,
                     error,
                     app.config_path.to_string_lossy()
-                )
-            })?;
+                );
+                continue;
+            }
             scanned_server_ids.insert(id.clone());
-            let basic_upsert = upsert_imported_record_basic(&mut records, &id, &app, server)
-                .map_err(|error| {
-                    format!(
-                        "导入 {} MCP \"{}\" 失败: {}（配置：{}）",
+            let basic_upsert = match upsert_imported_record_basic(&mut records, &id, &app, server) {
+                Ok(value) => value,
+                Err(error) => {
+                    log::warn!(
+                        "跳过 {} MCP \"{}\": {}（配置：{}）",
                         app.name,
                         id,
                         error,
                         app.config_path.to_string_lossy()
-                    )
-                })?;
+                    );
+                    continue;
+                }
+            };
             if basic_upsert.was_created {
                 added_server_ids.insert(id.clone());
             }
@@ -1563,15 +1567,46 @@ fn read_toml_document(path: &Path) -> Result<toml_edit::DocumentMut, String> {
         .map_err(|error| format!("解析 TOML 配置失败: {error}"))
 }
 
+fn infer_codex_server_type(table: &toml_edit::Table) -> String {
+    let has_url = table
+        .get("url")
+        .and_then(|value| value.as_str())
+        .is_some_and(|value| !value.trim().is_empty());
+    let has_command = table
+        .get("command")
+        .and_then(|value| value.as_str())
+        .is_some_and(|value| !value.trim().is_empty());
+
+    if let Some(server_type) = table.get("type").and_then(|value| value.as_str()) {
+        let normalized = match server_type {
+            "streamable-http" | "http" => "http".to_string(),
+            "sse" => "sse".to_string(),
+            "local" | "stdio" => "stdio".to_string(),
+            "remote" => "sse".to_string(),
+            other => other.to_string(),
+        };
+        if has_url && normalized == "stdio" && !has_command {
+            return "http".to_string();
+        }
+        return normalized;
+    }
+
+    if has_url {
+        return "http".to_string();
+    }
+
+    "stdio".to_string()
+}
+
 fn codex_table_to_json(table: &toml_edit::Table) -> Value {
     let mut obj = Map::new();
-    let server_type = table
-        .get("type")
-        .and_then(|value| value.as_str())
-        .unwrap_or("stdio");
-    obj.insert("type".to_string(), Value::String(server_type.to_string()));
+    let server_type = infer_codex_server_type(table);
+    obj.insert("type".to_string(), Value::String(server_type));
 
     for (key, item) in table.iter() {
+        if key == "type" {
+            continue;
+        }
         if key == "http_headers" {
             if let Some(headers) = toml_table_like_to_string_map(item) {
                 obj.insert("headers".to_string(), Value::Object(headers));
@@ -5230,6 +5265,47 @@ fn base64_url_decode(value: &str) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn codex_table_to_json_infers_http_from_url() {
+        let mut table = toml_edit::Table::new();
+        table["url"] = toml_edit::value("https://mcp.figma.com/mcp");
+        table["bearer_token_env_var"] = toml_edit::value("FIGMA_OAUTH_TOKEN");
+        table["http_headers"] = toml_edit::Item::Table({
+            let mut headers = toml_edit::Table::new();
+            headers["X-Figma-Region"] = toml_edit::value("us-east-1");
+            headers
+        });
+
+        let server = codex_table_to_json(&table);
+        assert_eq!(
+            server.get("type").and_then(Value::as_str),
+            Some("http")
+        );
+        assert_eq!(
+            server
+                .get("headers")
+                .and_then(Value::as_object)
+                .and_then(|headers| headers.get("X-Figma-Region"))
+                .and_then(Value::as_str),
+            Some("us-east-1")
+        );
+        validate_mcp_server("figma", &server).expect("figma codex server should validate");
+    }
+
+    #[test]
+    fn codex_table_to_json_prefers_http_when_stdio_type_has_url_without_command() {
+        let mut table = toml_edit::Table::new();
+        table["type"] = toml_edit::value("stdio");
+        table["url"] = toml_edit::value("https://mcp.figma.com/mcp");
+
+        let server = codex_table_to_json(&table);
+        assert_eq!(
+            server.get("type").and_then(Value::as_str),
+            Some("http")
+        );
+        validate_mcp_server("figma", &server).expect("figma codex server should validate");
+    }
 
     #[test]
     fn parses_npx_scoped_package_with_version() {

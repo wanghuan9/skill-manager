@@ -15,9 +15,9 @@ use sha2::{Digest, Sha256};
 use toml_edit::{DocumentMut, Item, Table};
 
 use crate::library::{
-    configure_git_network_command, parse_market_source_url, resolve_clone_url_http_first,
-    resolve_git_clone_url_with_instead_of, sanitize_storage_name, tree_relative_path_for_branch,
-    with_temporary_discovery_repo_resolved,
+    configure_git_network_command, git_command, parse_market_source_url,
+    resolve_clone_url_http_first, resolve_git_clone_url_with_instead_of, sanitize_storage_name,
+    tree_relative_path_for_branch, with_temporary_discovery_repo_resolved,
 };
 use crate::models::{
     CliToolSummary, PluginComponentPreview, PluginComponentSummary, PluginProbeResult,
@@ -34,7 +34,6 @@ const CURSOR_PLUGIN_MANIFEST: &str = ".cursor-plugin/plugin.json";
 const CODEX_PLUGIN_MANIFEST: &str = ".codex-plugin/plugin.json";
 const CODEX_MARKETPLACE_MANIFEST: &str = ".agents/plugins/marketplace.json";
 const PLUGIN_PACKAGE_DIR: &str = "plugins";
-const GIT_BINARY: &str = "git";
 const REMOTE_BRANCH_PREFIX: &str = "origin/";
 const PLUGIN_PACKAGE_IDENTITY_FILE: &str = ".skilldock-package.json";
 const PLUGIN_UPDATE_METADATA_FILE: &str = ".skilldock-update.json";
@@ -3882,7 +3881,7 @@ fn collect_plugin_files_for_hash(
 }
 
 fn run_git_at(path: &Path, args: &[&str]) -> Result<String, String> {
-    let mut command = Command::new(GIT_BINARY);
+    let mut command = git_command();
     configure_git_network_command(&mut command);
     let output = command
         .current_dir(path)
@@ -4638,7 +4637,7 @@ fn probe_source_revision(probe: &PluginProbeResult) -> String {
 
 fn current_git_commit(root: &Path) -> Option<String> {
     let git_root = find_git_root(root)?;
-    let output = Command::new("git")
+    let output = git_command()
         .arg("-C")
         .arg(git_root)
         .arg("rev-parse")
@@ -5902,11 +5901,12 @@ fn build_installed_plugin_summary(
     let components = collect_asset_components(&root, &plugin_id);
     let modified_at = plugin_modified_timestamp(&root, &descriptor.manifest_path, scan_mode);
     let last_scanned_at = current_timestamp_millis();
-    let source_url = if descriptor.source_url.trim().is_empty() {
+    let raw_source_url = if descriptor.source_url.trim().is_empty() {
         source_url_from_manifest(&manifest)
     } else {
-        descriptor.source_url
+        descriptor.source_url.clone()
     };
+    let source_url = display_source_url(&raw_source_url);
     let update_mode = if git_root.is_some()
         || descriptor.source_type == "marketplace"
         || !source_url.trim().is_empty()
@@ -6090,10 +6090,10 @@ fn git_fetch_plugin_remote(repo_root: &Path) {
     let repo_key = path_to_string(repo_root);
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
-        let result = Command::new(GIT_BINARY)
+        let mut command = git_command();
+        configure_git_network_command(&mut command);
+        let result = command
             .args(["-C", &repo_key, "fetch", "origin", "--quiet", "--no-tags"])
-            .env("GIT_TERMINAL_PROMPT", "0")
-            .env("GCM_INTERACTIVE", "Never")
             .output();
         let _ = tx.send(result);
     });
@@ -8422,7 +8422,24 @@ fn slugify(value: &str) -> String {
 }
 
 fn path_to_string(path: &Path) -> String {
-    path.to_string_lossy().to_string()
+    workspace::display_path_string(path)
+}
+
+fn display_source_url(value: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+
+    if trimmed.starts_with(r"\\?\")
+        || trimmed.contains(":\\")
+        || trimmed.starts_with(r"\\")
+        || trimmed.starts_with('/')
+    {
+        return workspace::display_path_value(trimmed);
+    }
+
+    trimmed.to_string()
 }
 
 struct ProbeBuildArgs<'a> {

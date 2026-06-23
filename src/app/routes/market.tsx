@@ -28,6 +28,13 @@ const installCategories: { key: InstallCategory; labelKey: "install.category.ski
 
 const sourceTabs: MarketplaceSourceSite[] = ["skills.sh", "skillsmp"];
 
+const MARKET_INSTALL_SCROLL_SELECTOR = ".market-install-scroll";
+
+function getMarketInstallScrollContainer() {
+  const scrollContainer = document.querySelector(MARKET_INSTALL_SCROLL_SELECTOR);
+  return scrollContainer instanceof HTMLElement ? scrollContainer : null;
+}
+
 function InstallTabIcon(props: { tab: InstallTab }) {
   const { tab } = props;
 
@@ -216,8 +223,8 @@ export function MarketRoute(props: MarketRouteProps) {
     ) {
       return;
     }
-    const scrollContainer = document.querySelector(".page-content");
-    if (!(scrollContainer instanceof HTMLElement)) {
+    const scrollContainer = getMarketInstallScrollContainer();
+    if (!scrollContainer) {
       return;
     }
     const remain = scrollContainer.scrollHeight - scrollContainer.scrollTop - scrollContainer.clientHeight;
@@ -231,11 +238,11 @@ export function MarketRoute(props: MarketRouteProps) {
   }, []);
 
   useEffect(() => {
-    if (activeInstallTab !== "market" || isSearching) {
+    if (activeInstallTab !== "market" || isSearching || activeInstallCategory !== "skill") {
       return;
     }
-    const scrollContainer = document.querySelector(".page-content");
-    if (!(scrollContainer instanceof HTMLElement)) {
+    const scrollContainer = getMarketInstallScrollContainer();
+    if (!scrollContainer) {
       return;
     }
 
@@ -243,7 +250,7 @@ export function MarketRoute(props: MarketRouteProps) {
     return () => {
       scrollContainer.removeEventListener("scroll", handleScroll);
     };
-  }, [activeInstallTab, isSearching, handleScroll]);
+  }, [activeInstallTab, isSearching, handleScroll, activeInstallCategory]);
 
   const categorySwitcher = (
             <InstallCategorySwitcher
