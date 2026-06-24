@@ -1029,6 +1029,11 @@ function getPluginOpenRootPath(
   activeHost: PluginTabKey,
   allPlugins: PluginSummary[],
 ) {
+  const displayRootPath = plugin.displayRootPath?.trim();
+  if (plugin.hostTool === "codex" && plugin.installSource === "skilldock" && displayRootPath) {
+    return displayRootPath;
+  }
+
   if (activeHost === "all") {
     const aggregatePlugins = allPlugins.filter((candidate) => (
       buildPluginAggregateKey(candidate) === buildPluginAggregateKey(plugin)
@@ -1060,6 +1065,11 @@ function getPluginDirectoryPath(
   activeHost: PluginTabKey,
   allPlugins: PluginSummary[],
 ) {
+  const displayRootPath = plugin.displayRootPath?.trim();
+  if (plugin.hostTool === "codex" && plugin.installSource === "skilldock" && displayRootPath) {
+    return displayRootPath;
+  }
+
   if (plugin.installSource === "skilldock" && plugin.repoRootPath.includes("/.skilldock/")) {
     return plugin.repoRootPath.trim();
   }

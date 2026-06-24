@@ -2098,8 +2098,9 @@ test("opens a plugin folder from the detail directory row", async () => {
   openPluginSpy.mockRestore();
 });
 
-test("shows the host plugin directory and opens the real SkillDock source directory", async () => {
+test("shows and opens the Codex SkillDock cache directory", async () => {
   const openFinderSpy = vi.spyOn(skillClient, "openPathInFinder").mockResolvedValue(undefined);
+  const openPluginSpy = vi.spyOn(skillClient, "openPluginInEditor").mockResolvedValue(undefined);
   const plugins: PluginSummary[] = [
     {
       ...pluginFixtures[0],
@@ -2107,10 +2108,10 @@ test("shows the host plugin directory and opens the real SkillDock source direct
       packageId: "skilldock-plugin",
       name: "SkillDock Plugin",
       hostTool: "codex",
-      rootPath: "/Users/demo/.skilldock/plugins/skilldock-plugin/plugins/skilldock-plugin",
+      rootPath: "/Users/demo/.codex/plugins/cache/skilldock/skilldock-plugin/latest",
       displayRootPath: "/Users/demo/.codex/plugins/cache/skilldock/skilldock-plugin",
       repoRootPath: "/Users/demo/.skilldock/plugins/skilldock-plugin",
-      manifestPath: "/Users/demo/.codex/plugins/cache/skilldock/skilldock-plugin/plugin.json",
+      manifestPath: "/Users/demo/.codex/plugins/cache/skilldock/skilldock-plugin/latest/.codex-plugin/plugin.json",
       sourceType: "git",
       sourceUrl: "https://github.com/example/skilldock-plugin",
       installSource: "skilldock",
@@ -2123,6 +2124,13 @@ test("shows the host plugin directory and opens the real SkillDock source direct
   await screen.findByRole("tab", { name: /全部/ });
   await userEvent.click(screen.getByRole("tab", { name: /Codex/ }));
   expect(await screen.findByText("SkillDock Plugin")).toBeInTheDocument();
+
+  await userEvent.click(screen.getByRole("button", { name: "打开 SkillDock Plugin 目录" }));
+  expect(openPluginSpy).toHaveBeenCalledWith({
+    rootPath: "/Users/demo/.codex/plugins/cache/skilldock/skilldock-plugin",
+    editorId: "finder",
+  });
+
   await userEvent.click(screen.getByRole("button", { name: /展开 SkillDock Plugin/ }));
 
   expect(
@@ -2133,10 +2141,11 @@ test("shows the host plugin directory and opens the real SkillDock source direct
   await userEvent.click(screen.getByRole("button", { name: "在访达中打开 SkillDock Plugin 插件目录" }));
 
   expect(openFinderSpy).toHaveBeenCalledWith({
-    path: "/Users/demo/.skilldock/plugins/skilldock-plugin",
+    path: "/Users/demo/.codex/plugins/cache/skilldock/skilldock-plugin",
   });
 
   openFinderSpy.mockRestore();
+  openPluginSpy.mockRestore();
 });
 
 test("deletes a plugin only after confirmation", async () => {

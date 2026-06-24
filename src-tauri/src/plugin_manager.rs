@@ -905,6 +905,8 @@ fn scan_codex_installed_plugins(scan_mode: PluginScanMode) -> Vec<PluginSummary>
             .ok()
             .map(|manifest| source_url_from_manifest(&manifest))
             .unwrap_or_default();
+        let display_root =
+            codex_plugin_display_root(&home_dir, marketplace_name, plugin_name, &plugin_root);
 
         let enabled_state = if plugin_config.enabled {
             "enabled"
@@ -922,7 +924,7 @@ fn scan_codex_installed_plugins(scan_mode: PluginScanMode) -> Vec<PluginSummary>
             InstalledPluginDescriptor {
                 host_tool: "codex".to_string(),
                 root: plugin_root.clone(),
-                display_root: plugin_root,
+                display_root,
                 manifest_path,
                 repo_root_override: None,
                 plugin_relative_path_override: None,
@@ -979,6 +981,53 @@ fn scan_codex_installed_plugins(scan_mode: PluginScanMode) -> Vec<PluginSummary>
     ));
 
     installed
+}
+
+fn codex_plugin_display_root(
+    home_dir: &Path,
+    marketplace_name: &str,
+    plugin_name: &str,
+    plugin_root: &Path,
+) -> PathBuf {
+    if marketplace_name == "skilldock" {
+        let cache_plugin_root = home_dir
+            .join(".codex/plugins/cache")
+            .join(marketplace_name)
+            .join(plugin_name);
+        if fs::symlink_metadata(&cache_plugin_root).is_ok() {
+            return cache_plugin_root;
+        }
+    }
+    plugin_root.to_path_buf()
+}
+
+fn codex_cached_plugin_display_root(
+    home_dir: &Path,
+    marketplace_name: &str,
+    plugin_root: &Path,
+) -> PathBuf {
+    if marketplace_name != "skilldock" {
+        return plugin_root.to_path_buf();
+    }
+
+    let cache_marketplace_root = home_dir.join(".codex/plugins/cache").join(marketplace_name);
+    let normalized_cache_marketplace_root =
+        canonicalize_existing_dir(&cache_marketplace_root).unwrap_or(cache_marketplace_root);
+    let normalized_plugin_root =
+        canonicalize_existing_dir(plugin_root).unwrap_or_else(|_| plugin_root.to_path_buf());
+    let Ok(relative_path) = normalized_plugin_root.strip_prefix(&normalized_cache_marketplace_root)
+    else {
+        return plugin_root.to_path_buf();
+    };
+    let Some(first_component) = relative_path.components().next() else {
+        return plugin_root.to_path_buf();
+    };
+    let display_root = normalized_cache_marketplace_root.join(first_component.as_os_str());
+    if fs::symlink_metadata(&display_root).is_ok() {
+        display_root
+    } else {
+        plugin_root.to_path_buf()
+    }
 }
 
 fn resolve_configured_codex_plugin_root(
@@ -1087,12 +1136,14 @@ fn scan_codex_cached_plugins(
                     .map(|manifest| source_url_from_manifest(&manifest))
                     .unwrap_or_default()
             });
+        let display_root =
+            codex_cached_plugin_display_root(home_dir, &source_label, &canonical_root);
 
         if let Some(summary) = build_installed_plugin_summary(
             InstalledPluginDescriptor {
                 host_tool: "codex".to_string(),
                 root: canonical_root,
-                display_root: plugin_root,
+                display_root,
                 manifest_path,
                 repo_root_override: None,
                 plugin_relative_path_override: None,
@@ -2779,6 +2830,8 @@ fn build_codex_plugin_summary_after_enabled_change(
         .ok()
         .map(|manifest| source_url_from_manifest(&manifest))
         .unwrap_or_default();
+    let display_root =
+        codex_plugin_display_root(home_dir, marketplace_name, plugin_name, &plugin_root);
     let enabled_state = if enabled { "enabled" } else { "disabled" };
     let scopes = vec![build_plugin_scope_summary(
         "user",
@@ -2791,7 +2844,7 @@ fn build_codex_plugin_summary_after_enabled_change(
         InstalledPluginDescriptor {
             host_tool: "codex".to_string(),
             root: plugin_root.clone(),
-            display_root: plugin_root,
+            display_root,
             manifest_path,
             repo_root_override: None,
             plugin_relative_path_override: None,
@@ -10066,6 +10119,10 @@ exit 0
         assert_eq!(installed[0].enabled_state, "enabled");
         assert_eq!(installed[0].install_state, "installed");
         assert_eq!(installed[0].install_source, "skilldock");
+        assert_eq!(
+            installed[0].display_root_path,
+            plugin_cache_root.to_string_lossy().into_owned()
+        );
         assert_eq!(
             listed_plugins
                 .iter()
