@@ -429,6 +429,57 @@ test("aggregates cross-host plugins by canonical plugin name instead of display 
   expect(row?.querySelector('[data-tooltip="Claude Code 已安装（已启用）"]')).toBeInTheDocument();
 });
 
+test("aggregates cross-host plugins when source URL includes a git web branch path", async () => {
+  const plugins: PluginSummary[] = [
+    {
+      ...pluginFixtures[0],
+      id: "codex:example-plugin",
+      packageId: "example-plugin",
+      manifestName: "example-plugin",
+      name: "example-plugin",
+      hostTool: "codex",
+      sourceLabel: "skilldock",
+      sourceUrl: "https://git.example.com/example-org/example-repo",
+      repoRootPath: "/Users/demo/.skilldock/plugins/example-plugin-example-repo",
+      rootPath: "/Users/demo/.codex/plugins/cache/skilldock/example-plugin",
+      manifestPath: "/Users/demo/.codex/plugins/cache/skilldock/example-plugin/.codex-plugin/plugin.json",
+      installSource: "skilldock",
+      relatedHostTools: [],
+      enabledState: "enabled",
+      scopes: [],
+      components: [],
+    },
+    {
+      ...pluginFixtures[0],
+      id: "claude-code:example-plugin",
+      packageId: "example-plugin",
+      manifestName: "example-plugin",
+      name: "example-plugin",
+      hostTool: "claude-code",
+      sourceLabel: "skilldock",
+      sourceUrl: "https://git.example.com/example-org/example-repo/tree/master",
+      repoRootPath: "/Users/demo/.skilldock/plugins/example-plugin",
+      rootPath: "/Users/demo/.claude/plugins/marketplaces/skilldock/plugins/example-plugin",
+      manifestPath: "/Users/demo/.claude/plugins/marketplaces/skilldock/plugins/example-plugin/.claude-plugin/plugin.json",
+      installSource: "skilldock",
+      relatedHostTools: [],
+      enabledState: "enabled",
+      scopes: [],
+      components: [],
+    },
+  ];
+  vi.spyOn(skillClient, "fetchStartupInstalledPlugins").mockResolvedValueOnce(plugins);
+
+  renderWithI18n(<PluginsRoute />);
+
+  const allTab = await screen.findByRole("tab", { name: "全部 1" });
+  expect(allTab).toHaveAttribute("aria-selected", "true");
+  expect(screen.getAllByText("example-plugin")).toHaveLength(1);
+  const row = screen.getByRole("button", { name: /展开 example-plugin/ }).closest(".tool-list-row");
+  expect(row?.querySelector('[data-tooltip="Codex 已安装（已启用）"]')).toBeInTheDocument();
+  expect(row?.querySelector('[data-tooltip="Claude Code 已安装（已启用）"]')).toBeInTheDocument();
+});
+
 test("aggregates plugins by manifest name when Codex display name differs from other hosts", async () => {
   const plugins: PluginSummary[] = [
     {

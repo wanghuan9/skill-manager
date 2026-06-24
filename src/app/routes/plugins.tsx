@@ -450,7 +450,10 @@ function getPluginDisplayName(plugin: PluginSummary) {
 }
 
 function normalizePluginAggregateIdentity(value: string) {
-  return value.trim().toLowerCase().replace(/\.git$/, "");
+  return value.trim().toLowerCase()
+    .replace(/\/+$/, "")
+    .replace(/\/(?:-\/)?tree\/[^/]+$/, "")
+    .replace(/\.git$/, "");
 }
 
 function normalizePluginAlias(value: string) {
