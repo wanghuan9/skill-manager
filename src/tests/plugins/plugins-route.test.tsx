@@ -2257,6 +2257,40 @@ test("deletes every installed host from the all-tab plugin row", async () => {
   deleteSpy.mockRestore();
 });
 
+test("deletes codex skilldock plugins by their manifest root instead of display directory", async () => {
+  const deleteSpy = vi.spyOn(skillClient, "deletePlugin").mockResolvedValue(undefined);
+  const plugin: PluginSummary = {
+    ...pluginFixtures[0],
+    id: "codex:example-plugin",
+    packageId: "example-plugin",
+    manifestName: "example-plugin",
+    name: "Example Plugin",
+    hostTool: "codex",
+    rootPath: "/Users/demo/.skilldock/plugins/example-plugin/example-plugin",
+    displayRootPath: "/Users/demo/.codex/plugins/cache/skilldock/example-plugin",
+    repoRootPath: "/Users/demo/.skilldock/plugins/example-plugin",
+    manifestPath: "/Users/demo/.codex/marketplaces/skilldock/plugins/example-plugin/.codex-plugin/plugin.json",
+    installSource: "skilldock",
+  };
+  vi.spyOn(skillClient, "fetchStartupInstalledPlugins").mockResolvedValueOnce([plugin]);
+
+  renderWithI18n(<PluginsRoute />);
+
+  await screen.findByRole("tab", { name: "全部 1" });
+  await userEvent.click(screen.getByRole("button", { name: "删除 example-plugin 插件" }));
+  await userEvent.click(screen.getByRole("button", { name: "确认删除 example-plugin 插件" }));
+
+  await waitFor(() => {
+    expect(deleteSpy).toHaveBeenCalledWith({
+      pluginId: "codex:example-plugin",
+      hostTool: "codex",
+      rootPath: "/Users/demo/.skilldock/plugins/example-plugin/example-plugin",
+    });
+  });
+
+  deleteSpy.mockRestore();
+});
+
 test("shows plugin toggle failures in the global notification stack", async () => {
   const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
   const toggleSpy = vi

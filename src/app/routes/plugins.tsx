@@ -2499,7 +2499,7 @@ export function PluginsRoute(props: { onGoInstall?: () => void } = {}) {
         await deletePlugin({
           pluginId: targetPlugin.id,
           hostTool: targetPlugin.hostTool,
-          rootPath: targetPlugin.displayRootPath || targetPlugin.rootPath,
+          rootPath: targetPlugin.rootPath,
         });
       }
       setPlugins((current) => {
