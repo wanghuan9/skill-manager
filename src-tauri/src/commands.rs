@@ -1547,16 +1547,17 @@ fn find_executable_path(executable_name: &str) -> Option<String> {
 fn executable_file_candidates(executable_name: &str) -> Vec<String> {
     #[cfg(windows)]
     {
-        return vec![
+        vec![
             format!("{executable_name}.exe"),
             format!("{executable_name}.cmd"),
             format!("{executable_name}.bat"),
             executable_name.to_string(),
-        ];
+        ]
     }
     #[cfg(not(windows))]
-    let candidates = vec![executable_name.to_string()];
-    candidates
+    {
+        vec![executable_name.to_string()]
+    }
 }
 
 fn executable_exists(executable_name: &str) -> bool {

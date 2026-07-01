@@ -5043,13 +5043,14 @@ fn copy_dir_all(source: &Path, target: &Path, skip_git_dir: bool) -> Result<(), 
 }
 
 fn copy_plugin_symlink(source_path: &Path, target_path: &Path) -> Result<(), String> {
-    let link_target = fs::read_link(source_path)
-        .map_err(|error| format!("读取插件符号链接失败（{}）: {error}", source_path.display()))?;
     if target_path.exists() || fs::symlink_metadata(target_path).is_ok() {
         remove_path(target_path)?;
     }
     #[cfg(unix)]
     {
+        let link_target = fs::read_link(source_path).map_err(|error| {
+            format!("读取插件符号链接失败（{}）: {error}", source_path.display())
+        })?;
         std::os::unix::fs::symlink(&link_target, target_path).map_err(|error| {
             format!(
                 "创建插件符号链接失败（{} -> {}）: {error}",
