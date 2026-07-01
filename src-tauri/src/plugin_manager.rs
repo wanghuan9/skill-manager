@@ -15,9 +15,9 @@ use sha2::{Digest, Sha256};
 use toml_edit::{DocumentMut, Item, Table};
 
 use crate::library::{
-    configure_git_network_command, git_command, parse_market_source_url,
-    resolve_clone_url_http_first, resolve_git_clone_url_with_instead_of, sanitize_storage_name,
-    tree_relative_path_for_branch, with_temporary_discovery_repo_resolved,
+    configure_git_network_command, configure_hidden_subprocess, git_command,
+    parse_market_source_url, resolve_clone_url_http_first, resolve_git_clone_url_with_instead_of,
+    sanitize_storage_name, tree_relative_path_for_branch, with_temporary_discovery_repo_resolved,
 };
 use crate::models::{
     CliToolSummary, PluginComponentPreview, PluginComponentSummary, PluginProbeResult,
@@ -2862,7 +2862,7 @@ fn ensure_plugin_manifest_for_host(host_tool: &str, plugin_root: &Path) -> Resul
 
     Err(format!(
         "目录不是有效的 {host_tool} 插件目录: {}",
-        plugin_root.display()
+        workspace::display_path_value(&plugin_root.to_string_lossy())
     ))
 }
 
@@ -3349,7 +3349,44 @@ fn manifest_template_path_for_probe(plugin_root: &Path, probe: &PluginProbeResul
     if probe_manifest_path.is_file() {
         return probe_manifest_path.to_path_buf();
     }
+
+    for candidate in manifest_template_candidates_for_probe(plugin_root, probe) {
+        if candidate.is_file() {
+            return candidate;
+        }
+    }
+
     plugin_root.join("plugin.json")
+}
+
+fn manifest_template_candidates_for_probe(
+    plugin_root: &Path,
+    probe: &PluginProbeResult,
+) -> Vec<PathBuf> {
+    let mut manifest_paths = Vec::new();
+
+    if let Ok(path) = plugin_manifest_path_for_host(&probe.tool, plugin_root) {
+        manifest_paths.push(path);
+    }
+
+    for host_tool in &probe.compatible_host_tools {
+        if host_tool == &probe.tool {
+            continue;
+        }
+        if let Ok(path) = plugin_manifest_path_for_host(host_tool, plugin_root) {
+            manifest_paths.push(path);
+        }
+    }
+
+    for relative_path in [
+        CODEX_PLUGIN_MANIFEST,
+        CLAUDE_PLUGIN_MANIFEST,
+        CURSOR_PLUGIN_MANIFEST,
+    ] {
+        manifest_paths.push(plugin_root.join(relative_path));
+    }
+
+    manifest_paths
 }
 
 fn plugin_relative_path_for_probe(
@@ -7267,7 +7304,9 @@ fn fetch_github_json<T: serde::de::DeserializeOwned>(
         url.push_str("?ref=");
         url.push_str(&branch.replace('/', "%2F"));
     }
-    let output = Command::new("curl")
+    let mut command = Command::new("curl");
+    configure_hidden_subprocess(&mut command);
+    let output = command
         .args([
             "-LsS",
             "--fail",
@@ -7641,13 +7680,23 @@ fn cleanup_plugin_probe_repo_roots(roots: &[PathBuf]) {
 
 fn canonicalize_existing_dir(path: &Path) -> Result<PathBuf, String> {
     if !path.exists() {
-        return Err(format!("插件目录不存在: {}", path.display()));
+        return Err(format!(
+            "插件目录不存在: {}",
+            workspace::display_path_value(&path.to_string_lossy())
+        ));
     }
     if !path.is_dir() {
-        return Err(format!("插件探测仅支持目录路径: {}", path.display()));
+        return Err(format!(
+            "插件探测仅支持目录路径: {}",
+            workspace::display_path_value(&path.to_string_lossy())
+        ));
     }
-    fs::canonicalize(path)
-        .map_err(|error| format!("解析插件目录失败（{}）: {error}", path.display()))
+    fs::canonicalize(path).map_err(|error| {
+        format!(
+            "解析插件目录失败（{}）: {error}",
+            workspace::display_path_value(&path.to_string_lossy())
+        )
+    })
 }
 
 fn detect_plugin_repo(
@@ -10902,6 +10951,18 @@ source = "__SOURCE__"
     }
 
     #[test]
+    fn plugin_manifest_error_strips_windows_verbatim_prefix() {
+        let error = super::ensure_plugin_manifest_for_host(
+            "cursor",
+            Path::new(r"\\?\C:\Users\demo\.skilldock\plugins\compound-engineering-plugin"),
+        )
+        .expect_err("missing manifest should fail");
+
+        assert!(!error.contains(r"\\?\"));
+        assert!(error.contains(r"C:\Users\demo\.skilldock\plugins\compound-engineering-plugin"));
+    }
+
+    #[test]
     fn installs_cloudflare_skills_with_matching_managed_and_cursor_directory_names() {
         let _guard = TEST_ENV_LOCK.lock().expect("lock test env");
         let temp_dir = temp_test_dir("cloudflare-skills-name-alignment");
@@ -11112,6 +11173,68 @@ source = "__SOURCE__"
             .join(".claude/plugins/installed_plugins.json")
             .is_file());
         assert!(home_dir.join(".codex/config.toml").is_file());
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn installs_cursor_plugin_by_materializing_manifest_from_codex_probe() {
+        let _guard = TEST_ENV_LOCK.lock().expect("lock test env");
+        let temp_dir = temp_test_dir("cursor-install-from-codex-probe");
+        let home_dir = temp_dir.join("home");
+        let source_root = temp_dir.join("repo");
+        fs::create_dir_all(source_root.join(".codex-plugin")).expect("create codex manifest dir");
+        fs::create_dir_all(source_root.join("skills/compound")).expect("create skill dir");
+        fs::write(
+            source_root.join(".codex-plugin/plugin.json"),
+            r#"{"name":"compound-engineering","version":"1.0.0","description":"Compound engineering","interface":{"displayName":"Compound Engineering"}}"#,
+        )
+        .expect("write codex manifest");
+        fs::write(source_root.join("skills/compound/SKILL.md"), "# Compound").expect("write skill");
+
+        let previous_home = env::var_os("HOME");
+        env::set_var("HOME", &home_dir);
+
+        let installed = install_selected_plugin_probes_blocking(
+            vec![PluginProbeResult {
+                tool: "codex".to_string(),
+                compatible_host_tools: vec!["codex".to_string(), "cursor".to_string()],
+                kind: "plugin-repo".to_string(),
+                manifest_name: "compound-engineering".to_string(),
+                name: "Compound Engineering".to_string(),
+                description: "Compound engineering".to_string(),
+                plugin_root: source_root.to_string_lossy().into_owned(),
+                manifest_path: temp_dir
+                    .join("stale-probe-repo/.codex-plugin/plugin.json")
+                    .to_string_lossy()
+                    .into_owned(),
+                marketplace_manifest_path: String::new(),
+                components: Vec::new(),
+                source_type: "local".to_string(),
+                source_url: String::new(),
+                source_ref: String::new(),
+                is_git_repo: false,
+                repo_root: String::new(),
+                plugin_relative_path: String::new(),
+                git_root: String::new(),
+                confidence: "high".to_string(),
+                install_strategy: "codex-plugin-dir".to_string(),
+                warnings: Vec::new(),
+            }],
+            vec!["cursor".to_string()],
+        )
+        .expect("install cursor plugin");
+
+        match previous_home {
+            Some(value) => env::set_var("HOME", value),
+            None => env::remove_var("HOME"),
+        }
+
+        let cursor_root = home_dir.join(".cursor/plugins/local/compound-engineering");
+        assert_eq!(installed.len(), 1);
+        assert_eq!(installed[0].host_tool, "cursor");
+        assert!(cursor_root.join(".cursor-plugin/plugin.json").is_file());
+        assert!(cursor_root.join("skills/compound/SKILL.md").is_file());
 
         let _ = fs::remove_dir_all(temp_dir);
     }

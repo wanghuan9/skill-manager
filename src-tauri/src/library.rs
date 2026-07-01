@@ -33,6 +33,9 @@ static GIT_EXECUTABLE: OnceLock<String> = OnceLock::new();
 
 /// Prevent console windows from flashing when SkillDock spawns CLI tools on Windows.
 pub fn configure_hidden_subprocess(command: &mut Command) {
+    #[cfg(not(windows))]
+    let _ = command;
+
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -639,14 +642,16 @@ fn remote_skill_file_exists(owner_repo: &str, branch: &str, skill_dir: &Path) ->
         "https://api.github.com/repos/{owner_repo}/contents/{encoded_path}?ref={}",
         branch.replace('/', "%2F")
     );
-    Command::new("curl")
+    let mut command = Command::new("curl");
+    configure_hidden_subprocess(&mut command);
+    command
         .args([
             "-LsS",
             "--fail",
             "--max-time",
             "6",
             "-o",
-            "/dev/null",
+            null_output_path(),
             "-H",
             "User-Agent: skilldock/0.1",
             &url,
@@ -654,6 +659,17 @@ fn remote_skill_file_exists(owner_repo: &str, branch: &str, skill_dir: &Path) ->
         .output()
         .map(|output| output.status.success())
         .unwrap_or(false)
+}
+
+fn null_output_path() -> &'static str {
+    #[cfg(windows)]
+    {
+        "NUL"
+    }
+    #[cfg(not(windows))]
+    {
+        "/dev/null"
+    }
 }
 
 fn percent_encode_path_segment(segment: &str) -> String {
@@ -669,7 +685,9 @@ fn percent_encode_path_segment(segment: &str) -> String {
 }
 
 fn fetch_json_with_curl<T: DeserializeOwned>(url: &str, timeout_seconds: u64) -> Result<T, String> {
-    let output = Command::new("curl")
+    let mut command = Command::new("curl");
+    configure_hidden_subprocess(&mut command);
+    let output = command
         .args([
             "-LsS",
             "--fail",
@@ -1219,19 +1237,11 @@ pub fn summarize_git_error(error: &str) -> String {
         .filter(|line| !line.is_empty())
         .collect::<Vec<_>>();
 
-    if let Some(line) = lines
-        .iter()
-        .rev()
-        .find(|line| is_git_error_signal(line))
-    {
+    if let Some(line) = lines.iter().rev().find(|line| is_git_error_signal(line)) {
         return truncate_git_error_line(line);
     }
 
-    if let Some(line) = lines
-        .iter()
-        .rev()
-        .find(|line| !is_git_progress_line(line))
-    {
+    if let Some(line) = lines.iter().rev().find(|line| !is_git_progress_line(line)) {
         return truncate_git_error_line(line);
     }
 
@@ -1951,20 +1961,18 @@ fn create_windows_directory_junction(target: &Path, junction: &Path) -> Result<(
         let _ = fs::remove_dir(junction);
     }
     if let Some(parent) = junction.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|error| format!("创建工具 skills 目录失败: {error}"))?;
+        fs::create_dir_all(parent).map_err(|error| format!("创建工具 skills 目录失败: {error}"))?;
     }
 
     let mut command = Command::new("cmd");
     configure_hidden_subprocess(&mut command);
+    let junction_command = format!(
+        r#"mklink /J "{}" "{}""#,
+        junction.to_string_lossy(),
+        target.to_string_lossy()
+    );
     let output = command
-        .args([
-            "/C",
-            "mklink",
-            "/J",
-            &junction.to_string_lossy(),
-            &target.to_string_lossy(),
-        ])
+        .args(["/C", &junction_command])
         .output()
         .map_err(|error| format!("创建目录联接失败: {error}"))?;
     if output.status.success() {
@@ -1972,7 +1980,9 @@ fn create_windows_directory_junction(target: &Path, junction: &Path) -> Result<(
     }
 
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-    Err(format!("创建目录联接失败: {stderr}"))
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let message = if stderr.is_empty() { stdout } else { stderr };
+    Err(format!("创建目录联接失败: {message}"))
 }
 
 fn create_skill_directory_link(skill_path: &Path, symlink_path: &Path) -> Result<(), String> {

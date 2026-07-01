@@ -1533,23 +1533,29 @@ fn find_executable_path(executable_name: &str) -> Option<String> {
     }
 
     search_dirs.into_iter().find_map(|dir| {
-        executable_file_candidates(executable_name).into_iter().find_map(|name| {
-            let executable_path = dir.join(&name);
-            executable_path
-                .exists()
-                .then(|| executable_path.to_string_lossy().to_string())
-        })
+        executable_file_candidates(executable_name)
+            .into_iter()
+            .find_map(|name| {
+                let executable_path = dir.join(&name);
+                executable_path
+                    .exists()
+                    .then(|| executable_path.to_string_lossy().to_string())
+            })
     })
 }
 
 fn executable_file_candidates(executable_name: &str) -> Vec<String> {
-    let mut candidates = vec![executable_name.to_string()];
     #[cfg(windows)]
     {
-        candidates.push(format!("{executable_name}.exe"));
-        candidates.push(format!("{executable_name}.cmd"));
-        candidates.push(format!("{executable_name}.bat"));
+        return vec![
+            format!("{executable_name}.exe"),
+            format!("{executable_name}.cmd"),
+            format!("{executable_name}.bat"),
+            executable_name.to_string(),
+        ];
     }
+    #[cfg(not(windows))]
+    let candidates = vec![executable_name.to_string()];
     candidates
 }
 
@@ -3311,9 +3317,7 @@ fn normalize_open_target_path(target: &str) -> String {
     let trimmed = target.trim();
     if cfg!(windows) {
         let display = workspace::display_path_value(trimmed);
-        return PathBuf::from(&display)
-            .to_string_lossy()
-            .replace('/', "\\");
+        return PathBuf::from(&display).to_string_lossy().replace('/', "\\");
     }
     trimmed.to_string()
 }
@@ -3356,6 +3360,21 @@ fn default_open_command_for_platform(target: &str) -> OpenCommandSpec {
     }
 }
 
+fn default_url_open_command_for_platform(target: &str) -> OpenCommandSpec {
+    if cfg!(windows) {
+        return OpenCommandSpec {
+            program: "cmd".to_string(),
+            args: vec![
+                "/C".to_string(),
+                "start".to_string(),
+                String::new(),
+                target.to_string(),
+            ],
+        };
+    }
+    default_open_command_for_platform(target)
+}
+
 fn run_open_command(spec: OpenCommandSpec, error_prefix: &str) -> Result<(), String> {
     #[cfg(windows)]
     if spec.program.eq_ignore_ascii_case("explorer") {
@@ -3396,7 +3415,7 @@ fn open_path_cross_platform(path: &str) -> Result<(), String> {
 }
 
 fn open_url_cross_platform(url: &str) -> Result<(), String> {
-    run_open_command(default_open_command_for_platform(url), "打开链接失败")
+    run_open_command(default_url_open_command_for_platform(url), "打开链接失败")
 }
 
 fn open_path_with_finder(path: &str) -> Result<(), String> {
@@ -3407,6 +3426,23 @@ fn open_path_with_finder(path: &str) -> Result<(), String> {
 /// This is the most reliable way to launch an editor and open a directory,
 /// especially for Electron-based apps like Cursor that fail with `open -a`.
 fn open_path_with_cli(cli_path: &str, path: &str) -> Result<(), String> {
+    #[cfg(windows)]
+    if Path::new(cli_path)
+        .extension()
+        .and_then(|value| value.to_str())
+        .is_some_and(|extension| {
+            extension.eq_ignore_ascii_case("cmd") || extension.eq_ignore_ascii_case("bat")
+        })
+    {
+        let mut command = Command::new("cmd");
+        configure_hidden_subprocess(&mut command);
+        command
+            .args(["/C", cli_path, path])
+            .spawn()
+            .map_err(|error| format!("启动编辑器 CLI 失败: {error}"))?;
+        return Ok(());
+    }
+
     Command::new(cli_path)
         .arg(path)
         .spawn()
@@ -4202,7 +4238,14 @@ fn normalize_package_source(source: &str) -> String {
 }
 
 fn normalize_package_relative_path(relative_path: &str) -> String {
-    relative_path.trim_matches('/').to_ascii_lowercase()
+    normalize_selected_install_path(relative_path).to_ascii_lowercase()
+}
+
+fn normalize_selected_install_path(relative_path: &str) -> String {
+    relative_path
+        .trim()
+        .trim_matches(|value| value == '/' || value == '\\')
+        .replace('\\', "/")
 }
 
 fn skill_package_identity(skill: &SkillSummary) -> ManagedPackageIdentity {
@@ -5017,7 +5060,7 @@ fn install_selected_repo_skills_blocking(
     let mut installed_results = Vec::new();
 
     for selected_path in &selected_paths {
-        let normalized_path = selected_path.trim_matches('/').to_string();
+        let normalized_path = normalize_selected_install_path(selected_path);
         let skill_name = Path::new(&normalized_path)
             .file_name()
             .and_then(|value| value.to_str())
@@ -5795,8 +5838,7 @@ pub fn open_tool_skills_folder(tool_id: &str) -> Result<(), String> {
     let skills_path = get_tool_skills_path(tool_id)?;
     let path = PathBuf::from(&skills_path);
     if !path.exists() {
-        fs::create_dir_all(&path)
-            .map_err(|error| format!("创建工具 skills 目录失败: {error}"))?;
+        fs::create_dir_all(&path).map_err(|error| format!("创建工具 skills 目录失败: {error}"))?;
     }
     open_path_with_finder(&normalize_open_target_path(&skills_path))
 }
@@ -5810,8 +5852,7 @@ pub fn open_path_in_finder(path: &str) -> Result<(), String> {
 
     let path_buf = PathBuf::from(&normalized_path);
     if !path_buf.exists() {
-        fs::create_dir_all(&path_buf)
-            .map_err(|error| format!("创建目录失败: {error}"))?;
+        fs::create_dir_all(&path_buf).map_err(|error| format!("创建目录失败: {error}"))?;
     }
 
     open_path_with_finder(&normalized_path)
@@ -7896,10 +7937,41 @@ mod tests {
     }
 
     #[test]
+    fn default_url_open_command_uses_shell_on_windows() {
+        let url = "https://github.com/wanghuan9/skill-manager";
+        let command = super::default_url_open_command_for_platform(url);
+        if cfg!(windows) {
+            assert_eq!(command.program, "cmd");
+            assert_eq!(
+                command.args,
+                vec![
+                    "/C".to_string(),
+                    "start".to_string(),
+                    String::new(),
+                    url.to_string(),
+                ]
+            );
+        } else if cfg!(target_os = "macos") {
+            assert_eq!(command.program, "open");
+            assert_eq!(command.args, vec![url.to_string()]);
+        }
+    }
+
+    #[test]
+    fn executable_file_candidates_prefers_windows_launchable_files() {
+        let candidates = super::executable_file_candidates("cursor");
+        if cfg!(windows) {
+            assert_eq!(candidates[0], "cursor.exe");
+            assert_eq!(candidates[1], "cursor.cmd");
+            assert_eq!(candidates[2], "cursor.bat");
+        } else {
+            assert_eq!(candidates, vec!["cursor".to_string()]);
+        }
+    }
+
+    #[test]
     fn normalize_open_target_path_strips_windows_verbatim_prefix() {
-        let normalized = super::normalize_open_target_path(
-            r"\\?\C:\Users\demo\.gemini/skills",
-        );
+        let normalized = super::normalize_open_target_path(r"\\?\C:\Users\demo\.gemini/skills");
         if cfg!(windows) {
             assert_eq!(normalized, r"C:\Users\demo\.gemini\skills");
         }
@@ -7907,13 +7979,20 @@ mod tests {
 
     #[test]
     fn normalize_open_target_path_normalizes_mixed_windows_separators() {
-        let normalized =
-            super::normalize_open_target_path("C:\\Users\\demo\\.gemini/skills");
+        let normalized = super::normalize_open_target_path("C:\\Users\\demo\\.gemini/skills");
         if cfg!(windows) {
             assert_eq!(normalized, "C:\\Users\\demo\\.gemini\\skills");
         } else {
             assert_eq!(normalized, "C:\\Users\\demo\\.gemini/skills");
         }
+    }
+
+    #[test]
+    fn normalize_selected_install_path_accepts_windows_separators() {
+        assert_eq!(
+            super::normalize_selected_install_path(r"\skills\canvas-design\"),
+            "skills/canvas-design"
+        );
     }
 
     #[test]

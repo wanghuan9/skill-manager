@@ -1,6 +1,27 @@
 {
+  "app": {
+    "windows": [
+      {
+        "title": "SkillDock",
+        "width": 1280,
+        "height": 840,
+        "resizable": true,
+        "decorations": true,
+        "hiddenTitle": false,
+        "titleBarStyle": "Visible",
+        "fullscreen": false,
+        "minWidth": 1024,
+        "minHeight": 700
+      }
+    ]
+  },
   "bundle": {
     "createUpdaterArtifacts": false,
-    "targets": ["nsis"]
+    "targets": ["nsis"],
+    "windows": {
+      "nsis": {
+        "installerIcon": "icons/icon.ico"
+      }
+    }
   }
 }
