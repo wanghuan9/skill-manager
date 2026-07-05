@@ -1968,11 +1968,16 @@ fn create_windows_directory_junction(target: &Path, junction: &Path) -> Result<(
     configure_hidden_subprocess(&mut command);
     let junction_command = format!(
         r#"mklink /J "{}" "{}""#,
-        junction.to_string_lossy(),
-        target.to_string_lossy()
+        windows_cmd_path(&junction),
+        windows_cmd_path(&target)
     );
     let output = command
-        .args(["/C", &junction_command])
+        .args([
+            "/D",
+            "/S",
+            "/C",
+            &format!("chcp 65001>NUL & {junction_command}"),
+        ])
         .output()
         .map_err(|error| format!("创建目录联接失败: {error}"))?;
     if output.status.success() {
@@ -1983,6 +1988,18 @@ fn create_windows_directory_junction(target: &Path, junction: &Path) -> Result<(
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
     let message = if stderr.is_empty() { stdout } else { stderr };
     Err(format!("创建目录联接失败: {message}"))
+}
+
+#[cfg(windows)]
+fn windows_cmd_path(path: &Path) -> String {
+    let value = path.to_string_lossy();
+    if let Some(rest) = value.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{rest}")
+    } else if let Some(rest) = value.strip_prefix(r"\\?\") {
+        rest.to_string()
+    } else {
+        value.into_owned()
+    }
 }
 
 fn create_skill_directory_link(skill_path: &Path, symlink_path: &Path) -> Result<(), String> {
@@ -2415,7 +2432,8 @@ fn schedule_ignore_unnecessary_files(skill_dir: PathBuf) {
 }
 
 fn git_worktree_root(path: &Path) -> Option<PathBuf> {
-    let output = Command::new("git")
+    let mut command = git_command();
+    let output = command
         .arg("-C")
         .arg(path.to_string_lossy().as_ref())
         .args(["rev-parse", "--show-toplevel"])

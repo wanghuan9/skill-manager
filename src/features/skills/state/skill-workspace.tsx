@@ -964,8 +964,11 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
         const base = current.filter((item) => item.sourceSite !== sourceSite);
         const currentSourceSkills = current.filter((item) => item.sourceSite === sourceSite);
         const merged = append ? [...base, ...currentSourceSkills, ...pageSkills] : [...base, ...pageSkills];
-        const deduped = new Map(merged.map((item) => [item.id, item]));
-        return Array.from(deduped.values());
+        const nextSourceSkills = sortMarketplaceSkillsByPopularity(
+          Array.from(new Map(merged.map((item) => [item.id, item])).values())
+            .filter((item) => item.sourceSite === sourceSite),
+        );
+        return [...base, ...nextSourceSkills];
       });
       setMarketplacePageBySource((current) => ({
         ...current,
