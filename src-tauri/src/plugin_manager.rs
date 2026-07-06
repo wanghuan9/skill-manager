@@ -9052,6 +9052,7 @@ exit 0
     #[cfg(unix)]
     #[test]
     fn skilldock_metadata_for_symlinked_git_plugins_stays_out_of_worktree() {
+        let _guard = TEST_ENV_LOCK.lock().expect("lock test env");
         let temp_dir = temp_test_dir("plugin-metadata-symlink-out-of-worktree");
         let repo_root = temp_dir.join("repo");
         let plugin_root = repo_root.join("plugins/coding-tutor");
