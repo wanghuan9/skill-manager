@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { getDirectoryPath } from "@/app/path-utils";
 import { useTranslate } from "@/app/i18n";
 import { useFailureReporter } from "@/app/failure-feedback";
+import { alignExpandedRowIntoView } from "@/app/utils/align-expanded-row";
 import {
   type AppUpdateCheckResult,
   type AppUpdateProgress,
@@ -20,6 +21,7 @@ import {
   sortToolCards,
 } from "@/features/skills/utils/open-tools";
 import { getToolLogoUrl } from "@/features/skills/utils/tool-logo";
+import { clearRepoCache, getRepoCacheSize } from "@/features/skills/api/skill-client";
 
 function FolderOpenIcon() {
   return (
@@ -52,6 +54,27 @@ function RefreshIcon({ isSpinning = false }: { isSpinning?: boolean }) {
   );
 }
 
+function TrashIcon() {
+  return (
+    <svg className="settings-update-button__svg" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+      <path
+        d="M4.75 6.65h10.5M8.15 6.65V5.5c0-.5.4-.9.9-.9h1.9c.5 0 .9.4.9.9v1.15"
+        stroke="currentColor"
+        strokeWidth="1.55"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M6.65 8.6l.48 5.9c.07.75.69 1.32 1.44 1.32h2.86c.75 0 1.37-.57 1.44-1.32l.48-5.9"
+        stroke="currentColor"
+        strokeWidth="1.55"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path d="M8.85 9.75v3.7M11.15 9.75v3.7" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round" />
+    </svg>
+  );
+}
 
 function formatBytes(bytes: number) {
   if (bytes <= 0) {
@@ -102,6 +125,8 @@ export function SettingsRoute() {
     : openToolOptions[0]?.id ?? "";
   const [isToolStatusExpanded, setIsToolStatusExpanded] = useState(false);
   const [isOpeningStoragePath, setIsOpeningStoragePath] = useState(false);
+  const [repoCacheSize, setRepoCacheSize] = useState<number | null>(null);
+  const [isClearingCache, setIsClearingCache] = useState(false);
   const [currentAppVersion, setCurrentAppVersion] = useState("");
   const [appUpdate, setAppUpdate] = useState<AppUpdateCheckResult | null>(null);
   const [appUpdateStatus, setAppUpdateStatus] = useState<
@@ -110,10 +135,9 @@ export function SettingsRoute() {
   const [isAppUpdateReleaseNotesOpen, setIsAppUpdateReleaseNotesOpen] = useState(false);
   const [appUpdateMessage, setAppUpdateMessage] = useState(t("settings.update.status.idle"));
   const [appUpdateProgress, setAppUpdateProgress] = useState<AppUpdateProgress | null>(null);
+  const toolStatusGroupRef = useRef<HTMLElement | null>(null);
   const reportFailure = useFailureReporter();
-  const toolStatusPanelClassName = `panel-card placeholder-panel settings-panel settings-panel--tool-status${
-    isToolStatusExpanded ? "" : " is-clickable"
-  }`;
+  const toolStatusPanelClassName = "panel-card placeholder-panel settings-panel settings-panel--tool-status";
   const storageDirectoryPath = getDirectoryPath(appSettings.storagePath);
   const isCheckingAppUpdate = appUpdateStatus === "checking";
   const isInstallingAppUpdate = appUpdateStatus === "installing";
@@ -129,6 +153,13 @@ export function SettingsRoute() {
   const appUpdateActionClassName = shouldShowInstallAppUpdate
     ? "primary-button primary-button--compact settings-update-button settings-update-button--install"
     : "secondary-button secondary-button--compact settings-update-button";
+  const repoCacheSizeLabel =
+    repoCacheSize === null
+      ? t("settings.cache.loading")
+      : repoCacheSize === 0
+        ? t("settings.cache.empty")
+        : formatBytes(repoCacheSize);
+  const canClearRepoCache = !isClearingCache && repoCacheSize !== null && repoCacheSize > 0;
 
   useEffect(() => {
     if (!shouldShowAppUpdateReleaseNotes && isAppUpdateReleaseNotesOpen) {
@@ -164,6 +195,21 @@ export function SettingsRoute() {
       shouldIgnore = true;
     };
   }, []);
+
+  useEffect(() => {
+    void getRepoCacheSize().then(setRepoCacheSize).catch(() => setRepoCacheSize(0));
+  }, []);
+
+  async function handleClearCache() {
+    if (isClearingCache) return;
+    setIsClearingCache(true);
+    try {
+      await clearRepoCache();
+      setRepoCacheSize(0);
+    } finally {
+      setIsClearingCache(false);
+    }
+  }
 
   async function handleOpenStoragePath() {
     if (!storageDirectoryPath || isOpeningStoragePath) {
@@ -249,6 +295,14 @@ export function SettingsRoute() {
     }
   }
 
+  async function handleToggleToolStatus() {
+    const shouldExpand = !isToolStatusExpanded;
+    setIsToolStatusExpanded((current) => !current);
+    if (shouldExpand) {
+      await alignExpandedRowIntoView(toolStatusGroupRef.current);
+    }
+  }
+
   const generalSettingsItems: SettingsFormItem[] = [
     {
       label: t("settings.storage.label"),
@@ -258,16 +312,19 @@ export function SettingsRoute() {
           <div className="settings-form-item__value settings-form-item__value--path">
             {storageDirectoryPath || t("settings.storage.empty")}
           </div>
-          <span className="secondary-button secondary-button--compact settings-open-button settings-open-button--static">
+          <button
+            className="secondary-button secondary-button--compact settings-open-button"
+            type="button"
+            aria-label={t("settings.storage.action")}
+            disabled={!storageDirectoryPath || isOpeningStoragePath}
+            onClick={() => void handleOpenStoragePath()}
+          >
             <FolderOpenIcon />
             {t("settings.storage.open")}
-          </span>
+          </button>
         </div>
       ),
       readonly: true,
-      actionLabel: t("settings.storage.action"),
-      disabled: !storageDirectoryPath || isOpeningStoragePath,
-      onActivate: handleOpenStoragePath,
     },
     {
       label: t("settings.language.label"),
@@ -508,20 +565,46 @@ export function SettingsRoute() {
       <section className="settings-group">
         <div className="settings-group__heading">
           <span className="settings-group__bar" aria-hidden="true" />
+          <h2 className="settings-group__title">{t("settings.group.cache")}</h2>
+        </div>
+        <div className="panel-card placeholder-panel settings-panel settings-panel--module">
+          <div className="settings-form-list">
+            <div className="settings-form-item">
+              <div className="settings-form-item__copy">
+                <span className="settings-form-item__title">{t("settings.cache.repoCache.label")}</span>
+                <p>{t("settings.cache.repoCache.description")}</p>
+                <p className="settings-cache-meta">
+                  {t("settings.cache.sizeUsed", { size: repoCacheSizeLabel })}
+                </p>
+              </div>
+              <div className="settings-form-item__control settings-update-actions">
+                <button
+                  className="secondary-button secondary-button--compact settings-update-button settings-update-button--cache"
+                  type="button"
+                  disabled={!canClearRepoCache}
+                  onClick={() => void handleClearCache()}
+                >
+                  <span aria-hidden="true" className="settings-update-button__icon">
+                    <TrashIcon />
+                  </span>
+                  <span>{isClearingCache ? t("settings.cache.clearing") : t("settings.cache.clear")}</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section ref={toolStatusGroupRef} className="settings-group">
+        <div className="settings-group__heading">
+          <span className="settings-group__bar" aria-hidden="true" />
           <h2 className="settings-group__title">{t("settings.group.toolStatus")}</h2>
         </div>
-        <section
-          className={toolStatusPanelClassName}
-          onClick={() => {
-            if (!isToolStatusExpanded) {
-              setIsToolStatusExpanded(true);
-            }
-          }}
-        >
+        <section className={toolStatusPanelClassName}>
           <button
             className="settings-section-toggle"
             type="button"
-            onClick={() => setIsToolStatusExpanded((current) => !current)}
+            onClick={() => void handleToggleToolStatus()}
             aria-expanded={isToolStatusExpanded}
             aria-label={t("settings.group.toolStatus")}
           >

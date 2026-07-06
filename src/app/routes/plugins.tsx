@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useTranslate } from "@/app/i18n";
+import { ToolbarGoInstallButton } from "@/app/components/ToolbarGoInstallButton";
 import { useNotifications } from "@/app/notifications";
 import { formatSkillLastEditor } from "@/features/skills/utils/skill-editor";
 import { formatSkillUpdatedAt } from "@/features/skills/utils/skill-time";
@@ -449,7 +450,10 @@ function getPluginDisplayName(plugin: PluginSummary) {
 }
 
 function normalizePluginAggregateIdentity(value: string) {
-  return value.trim().toLowerCase().replace(/\.git$/, "");
+  return value.trim().toLowerCase()
+    .replace(/\/+$/, "")
+    .replace(/\/(?:-\/)?tree\/[^/]+$/, "")
+    .replace(/\.git$/, "");
 }
 
 function normalizePluginAlias(value: string) {
@@ -899,7 +903,10 @@ function getPluginCollabBadge(
 }
 
 function canTogglePlugin(plugin: PluginSummary) {
-  return plugin.hostTool === "codex" || plugin.hostTool === "claude-code";
+  return (
+    plugin.enabledState !== "unknown"
+    && (plugin.hostTool === "codex" || plugin.hostTool === "claude-code")
+  );
 }
 
 function getPluginToggleActionLabel(
@@ -1022,6 +1029,11 @@ function getPluginOpenRootPath(
   activeHost: PluginTabKey,
   allPlugins: PluginSummary[],
 ) {
+  const displayRootPath = plugin.displayRootPath?.trim();
+  if (plugin.hostTool === "codex" && plugin.installSource === "skilldock" && displayRootPath) {
+    return displayRootPath;
+  }
+
   if (activeHost === "all") {
     const aggregatePlugins = allPlugins.filter((candidate) => (
       buildPluginAggregateKey(candidate) === buildPluginAggregateKey(plugin)
@@ -1053,6 +1065,11 @@ function getPluginDirectoryPath(
   activeHost: PluginTabKey,
   allPlugins: PluginSummary[],
 ) {
+  const displayRootPath = plugin.displayRootPath?.trim();
+  if (plugin.hostTool === "codex" && plugin.installSource === "skilldock" && displayRootPath) {
+    return displayRootPath;
+  }
+
   if (plugin.installSource === "skilldock" && plugin.repoRootPath.includes("/.skilldock/")) {
     return plugin.repoRootPath.trim();
   }
@@ -1424,7 +1441,7 @@ function isGitSourceValue(value: string) {
   }
 }
 
-export function PluginsRoute() {
+export function PluginsRoute(props: { onGoInstall?: () => void } = {}) {
   const { t } = useTranslate();
   const { defaultOpenToolId, language, toolConfigs } = useSkillWorkspace();
   const { notify } = useNotifications();
@@ -2058,7 +2075,7 @@ export function PluginsRoute() {
       className="plugins-page__toolbar-primary skills-header-bar__tools"
       aria-label={t("plugins.toolbar.aria")}
     >
-      <label className="search-field search-field--header skill-search-field">
+      <label className="search-field search-field--header skill-search-field plugins-page__search">
         <span className="sr-only">{t("plugins.toolbar.searchLabel")}</span>
         <input
           type="search"
@@ -2067,6 +2084,7 @@ export function PluginsRoute() {
           onChange={(event) => setQuery(event.target.value)}
         />
       </label>
+      {props.onGoInstall ? <ToolbarGoInstallButton onClick={props.onGoInstall} /> : null}
       <div className="plugins-page__toolbar-actions">
         <label className="skill-status-filter plugins-page__toolbar-filter">
           <span className="sr-only">{t("plugins.toolbar.filterLabel")}</span>
@@ -2481,7 +2499,7 @@ export function PluginsRoute() {
         await deletePlugin({
           pluginId: targetPlugin.id,
           hostTool: targetPlugin.hostTool,
-          rootPath: targetPlugin.displayRootPath || targetPlugin.rootPath,
+          rootPath: targetPlugin.rootPath,
         });
       }
       setPlugins((current) => {

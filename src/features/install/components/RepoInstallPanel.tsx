@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
+import { listen } from "@tauri-apps/api/event";
 import { useTranslate } from "@/app/i18n";
 import { useNotifications } from "@/app/notifications";
 import { useFailureReporter } from "@/app/failure-feedback";
@@ -9,6 +10,36 @@ import type { GitBranchOption, RepoSkillCandidate } from "@/features/skills/stat
 import { formatSkillDescription } from "@/features/skills/utils/skill-description";
 
 const DISCOVERING_MIN_DURATION_MS = 450;
+
+type RepoPanelCache = {
+  repoInput: string;
+  branches: GitBranchOption[];
+  selectedBranch: string;
+  candidates: RepoSkillCandidate[];
+  selectedPaths: string[];
+  candidateSearchQuery: string;
+};
+
+let repoPanelCache: RepoPanelCache | null = null;
+
+function readCache(): RepoPanelCache {
+  return repoPanelCache ?? {
+    repoInput: "",
+    branches: [],
+    selectedBranch: "",
+    candidates: [],
+    selectedPaths: [],
+    candidateSearchQuery: "",
+  };
+}
+
+function clearCache() {
+  repoPanelCache = null;
+}
+
+export function resetRepoInstallPanelState() {
+  clearCache();
+}
 
 function wait(duration: number) {
   return new Promise((resolve) => setTimeout(resolve, duration));
@@ -70,15 +101,48 @@ export function RepoInstallPanel() {
   const { discoverRepoSkills, installFromRepo, installedSkills } = useSkillWorkspace();
   const { notify } = useNotifications();
   const reportFailure = useFailureReporter();
-  const [repoInput, setRepoInput] = useState("");
-  const [branches, setBranches] = useState<GitBranchOption[]>([]);
-  const [selectedBranch, setSelectedBranch] = useState("");
-  const [candidates, setCandidates] = useState<RepoSkillCandidate[]>([]);
-  const [selectedPaths, setSelectedPaths] = useState<string[]>([]);
-  const [candidateSearchQuery, setCandidateSearchQuery] = useState("");
+  const initial = readCache();
+  const [repoInput, setRepoInput] = useState(initial.repoInput);
+  const [branches, setBranches] = useState<GitBranchOption[]>(initial.branches);
+  const [selectedBranch, setSelectedBranch] = useState(initial.selectedBranch);
+  const [candidates, setCandidates] = useState<RepoSkillCandidate[]>(initial.candidates);
+  const [selectedPaths, setSelectedPaths] = useState<string[]>(initial.selectedPaths);
+  const [candidateSearchQuery, setCandidateSearchQuery] = useState(initial.candidateSearchQuery);
   const [isLoadingBranches, setIsLoadingBranches] = useState(false);
   const [isDiscovering, setIsDiscovering] = useState(false);
   const [isInstalling, setIsInstalling] = useState(false);
+  const [cloneProgressMessage, setCloneProgressMessage] = useState<string | null>(null);
+  const prevRepoInputRef = useRef(initial.repoInput);
+
+  // 同步状态到 module-level 缓存，下次 mount 恢复
+  useEffect(() => {
+    repoPanelCache = { repoInput, branches, selectedBranch, candidates, selectedPaths, candidateSearchQuery };
+  });
+
+  // 监听 git clone 进度事件（仅在 discovering/installing 期间注册）
+  useEffect(() => {
+    if (!isDiscovering && !isInstalling) {
+      return;
+    }
+    let unlisten: (() => void) | undefined;
+    let mounted = true;
+    listen<{ phase: string; message: string }>("repo-clone-progress", (event) => {
+      if (mounted && event.payload.message) {
+        setCloneProgressMessage(event.payload.message);
+      }
+    }).then((fn) => {
+      if (mounted) {
+        unlisten = fn;
+      } else {
+        fn();
+      }
+    }).catch(() => undefined);
+    return () => {
+      mounted = false;
+      unlisten?.();
+    };
+  }, [isDiscovering, isInstalling]);
+
   const normalizedRepoUrl = useMemo(() => normalizeRepoInput(repoInput), [repoInput]);
   const isValid = isValidRepoUrl(normalizedRepoUrl);
   const selectedGitRef = selectedBranch.trim() || undefined;
@@ -86,6 +150,7 @@ export function RepoInstallPanel() {
     () => new Set(installedSkills.map((skill) => skill.name)),
     [installedSkills],
   );
+  const isCandidateInstalled = (candidate: RepoSkillCandidate) => installedSkillNames.has(candidate.name);
   const hasSelectableCandidates = useMemo(
     () => candidates.some((candidate) => !installedSkillNames.has(candidate.name)),
     [candidates, installedSkillNames],
@@ -106,12 +171,22 @@ export function RepoInstallPanel() {
     && selectableFilteredCandidatePaths.every((relativePath) => selectedPaths.includes(relativePath));
 
   useEffect(() => {
-    setBranches([]);
-    setSelectedBranch("");
-    setCandidates([]);
-    setSelectedPaths([]);
+    const urlChanged = prevRepoInputRef.current !== repoInput;
+    prevRepoInputRef.current = repoInput;
+
+    if (urlChanged) {
+      setBranches([]);
+      setSelectedBranch("");
+      setCandidates([]);
+      setSelectedPaths([]);
+    }
+
     if (!isValid) {
       setIsLoadingBranches(false);
+      return;
+    }
+    // 缓存恢复且 URL 未变时，跳过重复拉取
+    if (!urlChanged && branches.length > 0) {
       return;
     }
 
@@ -158,6 +233,7 @@ export function RepoInstallPanel() {
 
     flushSync(() => {
       setIsDiscovering(true);
+      setCloneProgressMessage("正在连接仓库...");
     });
     setCandidateSearchQuery("");
 
@@ -179,6 +255,7 @@ export function RepoInstallPanel() {
       });
     } finally {
       setIsDiscovering(false);
+      setCloneProgressMessage(null);
     }
   }
 
@@ -188,6 +265,7 @@ export function RepoInstallPanel() {
     }
 
     setIsInstalling(true);
+    setCloneProgressMessage("正在准备安装...");
     try {
       await installFromRepo(normalizedRepoUrl, selectedPaths, selectedGitRef);
       notify({ message: t("install.repo.success.selectedInstalled"), tone: "success" });
@@ -199,6 +277,7 @@ export function RepoInstallPanel() {
       });
     } finally {
       setIsInstalling(false);
+      setCloneProgressMessage(null);
     }
   }
 
@@ -218,6 +297,11 @@ export function RepoInstallPanel() {
 
   return (
     <section className="panel-card market-panel">
+      {(isDiscovering || isInstalling) && cloneProgressMessage ? (
+        <div className="repo-clone-progress-bar">
+          <span className="repo-clone-progress-bar__text">{cloneProgressMessage}</span>
+        </div>
+      ) : null}
       {candidates.length === 0 ? (
         <form className="repo-form" onSubmit={(event) => void handleDiscover(event)}>
           <div className="repo-form__section">
@@ -306,9 +390,9 @@ export function RepoInstallPanel() {
                     key={candidate.id}
                     className={`repo-install__option${selected ? " is-selected" : ""}`}
                     type="button"
-                    disabled={installedSkillNames.has(candidate.name)}
+                    disabled={isCandidateInstalled(candidate)}
                     onClick={() =>
-                      !installedSkillNames.has(candidate.name)
+                      !isCandidateInstalled(candidate)
                         ? setSelectedPaths((current) => toggleSelection(current, candidate.relativePath))
                         : undefined
                     }
@@ -316,12 +400,13 @@ export function RepoInstallPanel() {
                     <div className="repo-install__option-main">
                       <div className="repo-install__option-title">
                         <h3>{candidate.name}</h3>
-                        {installedSkillNames.has(candidate.name) ? (
+                        {isCandidateInstalled(candidate) ? (
                           <span className="repo-install__option-badge">{t("install.repo.badgeInstalled")}</span>
                         ) : null}
                       </div>
-                      <p>{formatSkillDescription(candidate.description) || t("skills.description.empty")}</p>
-                      <span>{candidate.relativePath}</span>
+                      <p className="repo-install__option-description">
+                        {formatSkillDescription(candidate.description) || t("skills.description.empty")}
+                      </p>
                     </div>
                   </button>
                 );
@@ -341,6 +426,7 @@ export function RepoInstallPanel() {
                 setCandidates([]);
                 setSelectedPaths([]);
                 setCandidateSearchQuery("");
+                clearCache();
               }}
             >
               {t("install.repo.back")}

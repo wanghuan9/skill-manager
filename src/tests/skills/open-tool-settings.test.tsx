@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { invoke } from "@tauri-apps/api/core";
 import { vi } from "vitest";
 import { App } from "@/app/App";
+import { alignExpandedRowIntoView } from "@/app/utils/align-expanded-row";
 import * as appUpdateClient from "@/features/app-update/app-update-client";
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -10,7 +11,12 @@ vi.mock("@tauri-apps/api/core", () => ({
   isTauri: vi.fn(() => false),
 }));
 
+vi.mock("@/app/utils/align-expanded-row", () => ({
+  alignExpandedRowIntoView: vi.fn().mockResolvedValue(undefined),
+}));
+
 afterEach(() => {
+  vi.clearAllMocks();
   vi.restoreAllMocks();
   delete (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
 });
@@ -68,20 +74,23 @@ test("allows selecting default open tool in settings", async () => {
   expect(screen.queryByText("CodeBuddy")).not.toBeInTheDocument();
 });
 
-test("expands tool status when clicking the hint copy", async () => {
+test("toggles tool status from the full row", async () => {
   window.localStorage.clear();
+  const alignMock = vi.mocked(alignExpandedRowIntoView);
+  alignMock.mockClear();
   render(<App />);
 
   await userEvent.click(screen.getByRole("button", { name: /设置/ }));
 
-  const toolStatusPanel = screen.getByText("展示当前支持的软件列表以及各软件的安装状态。").closest("section");
-  if (!toolStatusPanel) {
-    throw new Error("missing tool status panel");
-  }
-
-  await userEvent.click(toolStatusPanel);
+  await userEvent.click(screen.getByRole("button", { name: "工具状态" }));
 
   expect(screen.getByText("CodeBuddy")).toBeInTheDocument();
+  expect(alignMock).toHaveBeenCalledWith(expect.any(HTMLElement));
+
+  await userEvent.click(screen.getByRole("button", { name: "工具状态" }));
+
+  expect(screen.queryByText("CodeBuddy")).not.toBeInTheDocument();
+  expect(alignMock).toHaveBeenCalledTimes(1);
 });
 
 test("checks app updates from settings", async () => {
@@ -197,6 +206,10 @@ test("opens storage path in Finder from settings", async () => {
   (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
   invokeMock.mockResolvedValue(undefined);
   await userEvent.click(screen.getByText("/Users/demo/.skilldock"));
+
+  expect(invokeMock).not.toHaveBeenCalled();
+
+  await userEvent.click(screen.getByRole("button", { name: "打开配置文件存储目录" }));
 
   expect(invokeMock).toHaveBeenCalledWith("open_path_in_finder", {
     path: "/Users/demo/.skilldock",

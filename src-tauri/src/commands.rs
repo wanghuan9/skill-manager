@@ -3,7 +3,8 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -13,20 +14,22 @@ use serde::{Deserialize, Deserializer, Serialize};
 use zip::ZipArchive;
 
 use crate::git_state::{
-    clear_skill_update_cache, enrich_newly_installed_skill_with_git_state,
+    clear_skill_update_cache, enrich_freshly_installed_skill,
+    enrich_newly_installed_skill_with_git_state,
     enrich_skill_with_cached_update_state, enrich_skill_with_git_state,
     enrich_skill_with_local_git_state,
 };
 use crate::library::{
-    clone_repo_skill, configure_git_network_command, configure_hidden_subprocess,
-    create_skill_symlink, ensure_repo_skill_with_resolved_ref_and_sparse_paths,
-    get_tool_skills_path, git_command, install_market_skill_from_source, is_ssh_git_url,
-    parse_market_source_url, reconcile_tool_skill_symlinks, remote_clone_candidates,
-    remove_reserved_workspace_entries, remove_reserved_workspace_symlinks_from_all_tools,
-    remove_skill_symlink, remove_skill_symlinks_from_all_tools, resolve_clone_url_http_first,
-    resolve_git_clone_url_with_instead_of, sanitize_storage_name, skill_directory,
-    summarize_git_error, tree_relative_path_for_branch, with_temporary_discovery_repo_resolved,
-    RemoteCloneCandidate,
+    clone_repo_skill, clone_shared_install_batch_repo, configure_git_network_command,
+    configure_hidden_subprocess, create_skill_symlink, ensure_repo_skill_from_local_batch_source,
+    ensure_repo_skill_with_resolved_ref_and_sparse_paths, get_tool_skills_path, git_command,
+    install_market_skill_from_source, is_ssh_git_url, parse_market_source_url,
+    reconcile_tool_skill_symlinks, remote_clone_candidates, remove_reserved_workspace_entries,
+    remove_reserved_workspace_symlinks_from_all_tools, remove_skill_symlink,
+    remove_skill_symlinks_from_all_tools, resolve_clone_url_http_first,
+    repo_cache_directory_root, resolve_git_clone_url_with_instead_of, sanitize_storage_name,
+    skill_directory, summarize_git_error, tree_relative_path_for_branch,
+    with_temporary_discovery_repo_resolved, CloneProgressCallback, RemoteCloneCandidate,
 };
 use crate::models::{
     AppSettings, GitAccountSummary, GitBranchOption, GitChangeFile, LocalInstallSkillCandidate,
@@ -1027,6 +1030,27 @@ fn persist_skill_timestamps(_skill: &SkillSummary) {
 
 fn now_timestamp_label() -> String {
     format_system_time_label(SystemTime::now()).unwrap_or_else(|| "刚刚".into())
+}
+
+/// 创建一个 Clone 进度回调，将 git stderr 行通过 Tauri 事件推送到前端。
+fn make_clone_progress_emitter(app_handle: &tauri::AppHandle, phase: &'static str) -> CloneProgressCallback {
+    use tauri::Emitter;
+    let handle = app_handle.clone();
+    Arc::new(move |message: &str| {
+        let _ = handle.emit(
+            "repo-clone-progress",
+            serde_json::json!({ "phase": phase, "message": message }),
+        );
+    })
+}
+
+/// 直接 emit 一条状态消息（生命周期节点，如 preparing / finalizing）。
+fn emit_repo_status(app_handle: &tauri::AppHandle, phase: &str, message: &str) {
+    use tauri::Emitter;
+    let _ = app_handle.emit(
+        "repo-clone-progress",
+        serde_json::json!({ "phase": phase, "message": message }),
+    );
 }
 
 fn format_system_time_label(value: SystemTime) -> Option<String> {
@@ -2071,10 +2095,14 @@ fn canonical_tool_display_name(tool_name: &str) -> String {
     }
 }
 
+fn supports_skill_sync_for_tool(tool_id: &str) -> bool {
+    !matches!(tool_id, "intellij" | "vscode")
+}
+
 fn installed_tool_sync_entries_from_configs(tool_configs: &[ToolConfig]) -> Vec<ToolSyncStatus> {
     tool_configs
         .iter()
-        .filter(|tool| tool.status_label == "已安装" && tool.id != "intellij")
+        .filter(|tool| tool.status_label == "已安装" && supports_skill_sync_for_tool(&tool.id))
         .map(|tool| ToolSyncStatus {
             name: canonical_tool_display_name(&tool.name),
             status_label: "未启用".into(),
@@ -2117,7 +2145,7 @@ fn installed_tool_sync_entries_for_skill(
 ) -> Vec<ToolSyncStatus> {
     tool_configs
         .iter()
-        .filter(|tool| tool.status_label == "已安装" && tool.id != "intellij")
+        .filter(|tool| tool.status_label == "已安装" && supports_skill_sync_for_tool(&tool.id))
         .map(|tool| ToolSyncStatus {
             name: canonical_tool_display_name(&tool.name),
             status_label: inspect_skill_tool_status(skill, &tool.name),
@@ -2352,7 +2380,7 @@ fn enable_skill_for_all_installed_tools(
 ) -> Result<SkillSummary, String> {
     let installed_tool_configs = build_tool_configs()
         .into_iter()
-        .filter(|tool| tool.status_label == "已安装" && tool.id != "intellij")
+        .filter(|tool| tool.status_label == "已安装" && supports_skill_sync_for_tool(&tool.id))
         .collect::<Vec<_>>();
     if installed_tool_configs.is_empty() {
         return Ok(skill);
@@ -3869,7 +3897,7 @@ fn update_skill_repo(skill: &SkillSummary) -> Result<(), String> {
         return Err("当前仓库处于 detached HEAD，无法自动更新。".into());
     }
 
-    run_git_command(&skill.local_path, &["fetch", ORIGIN_REMOTE, "--quiet"])?;
+    run_git_command(&skill.local_path, &["fetch", ORIGIN_REMOTE, "--quiet", "--no-tags"])?;
     let remote_branch = resolve_remote_branch_name(&skill.local_path, &current_branch)?;
     let (commits_to_pull, local_commits) =
         branch_divergence_counts(&skill.local_path, &remote_branch)?;
@@ -4270,10 +4298,10 @@ fn resolve_skill_install_name(
     let base_name = sanitize_storage_name(base_name);
     let candidates = package_name_candidates(&base_name, source, relative_path);
     for candidate in candidates {
-        let skill_dir =
-            skill_directory(&candidate).map_err(|error| format!("无法确定 skill 目录: {error}"))?;
         let name_used = installed_skills.iter().any(|skill| skill.name == candidate);
-        if !name_used && !skill_dir.exists() {
+        // 目录存在但 state.json 中没有记录，说明是未完成的安装（如超时中断），
+        // 调用方（install_selected_repo_skills_blocking）会负责清理并重新克隆。
+        if !name_used {
             return Ok(candidate);
         }
     }
@@ -4281,10 +4309,8 @@ fn resolve_skill_install_name(
     let mut index = 2;
     loop {
         let candidate = format!("{base_name}-{index}");
-        let skill_dir =
-            skill_directory(&candidate).map_err(|error| format!("无法确定 skill 目录: {error}"))?;
         let name_used = installed_skills.iter().any(|skill| skill.name == candidate);
-        if !name_used && !skill_dir.exists() {
+        if !name_used {
             return Ok(candidate);
         }
         index += 1;
@@ -4961,8 +4987,11 @@ pub fn install_skill_from_repo(repo_url: &str) -> Result<SkillSummary, String> {
 pub async fn discover_repo_skills(
     repo_url: String,
     git_ref: Option<String>,
+    app_handle: tauri::AppHandle,
 ) -> Result<Vec<RepoSkillCandidate>, String> {
     tauri::async_runtime::spawn_blocking(move || {
+        emit_repo_status(&app_handle, "preparing", "正在连接仓库...");
+        let progress = make_clone_progress_emitter(&app_handle, "discovering");
         let spec = parse_repo_install_spec(&repo_url)?;
         let clone_url = resolve_repo_clone_url_for_network(&spec, git_ref.as_deref())?;
         let selected_branch = selected_repo_branch(&spec, &clone_url, git_ref.as_deref());
@@ -4971,15 +5000,20 @@ pub async fn discover_repo_skills(
             .as_ref()
             .map(|path| vec![path.clone()])
             .unwrap_or_default();
+        let scan_progress = progress.clone();
         let candidates = if sparse_paths.is_empty() {
-            discover_repo_skills_without_path_hint(&spec, &clone_url, selected_branch.as_deref())?
+            discover_repo_skills_without_path_hint(&spec, &clone_url, selected_branch.as_deref(), Some(&progress))?
         } else {
             with_temporary_discovery_repo_resolved(
                 &clone_url,
                 selected_branch.as_deref(),
                 &spec.repo_key,
                 &sparse_paths,
-                |repo_root| scan_repo_skill_candidates(repo_root, path_hint.as_deref()),
+                Some(&progress),
+                |repo_root| {
+                    scan_progress("正在扫描技能目录...");
+                    scan_repo_skill_candidates(repo_root, path_hint.as_deref())
+                },
             )?
         };
         if candidates.is_empty() {
@@ -5013,20 +5047,13 @@ fn discover_repo_skills_without_path_hint(
     spec: &RepoInstallSpec,
     clone_url: &str,
     git_ref: Option<&str>,
+    on_progress: Option<&CloneProgressCallback>,
 ) -> Result<Vec<RepoSkillCandidate>, String> {
-    if let Ok(candidates) = with_temporary_discovery_repo_resolved(
-        clone_url,
-        git_ref,
-        &spec.repo_key,
-        &["skills".to_string()],
-        |repo_root| Ok(scan_repo_skill_candidates(repo_root, None).unwrap_or_default()),
-    ) {
-        if !candidates.is_empty() {
-            return Ok(candidates);
+    // 直接做完整 clone，避免先 sparse["skills"] 探测失败再 fallback 导致双倍网络请求
+    with_temporary_discovery_repo_resolved(clone_url, git_ref, &spec.repo_key, &[], on_progress, |repo_root| {
+        if let Some(cb) = on_progress {
+            cb("正在扫描技能目录...");
         }
-    }
-
-    with_temporary_discovery_repo_resolved(clone_url, git_ref, &spec.repo_key, &[], |repo_root| {
         scan_repo_skill_candidates(repo_root, None)
     })
 }
@@ -5036,18 +5063,82 @@ pub async fn install_selected_repo_skills(
     repo_url: String,
     selected_paths: Vec<String>,
     git_ref: Option<String>,
+    app_handle: tauri::AppHandle,
 ) -> Result<Vec<SkillSummary>, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        install_selected_repo_skills_blocking(repo_url, selected_paths, git_ref)
+        install_selected_repo_skills_blocking(repo_url, selected_paths, git_ref, app_handle)
     })
     .await
     .map_err(|error| format!("后台安装仓库技能失败: {error}"))?
+}
+
+const BATCH_INSTALL_CONCURRENCY: usize = 10;
+
+struct PendingSkillInstall {
+    index: usize,
+    install_name: String,
+    source_url: String,
+    normalized_path: String,
+    skill_dir: PathBuf,
+    selected_path: String,
+}
+
+struct SkillInstallOutcome {
+    index: usize,
+    install_name: String,
+    source_url: String,
+    local_path: Result<String, String>,
+}
+
+fn materialize_skill_from_batch_or_clone(
+    batch_root: &Option<Arc<PathBuf>>,
+    clone_url: &str,
+    selected_branch: &Option<String>,
+    item: &PendingSkillInstall,
+    on_progress: Option<&CloneProgressCallback>,
+) -> Result<String, String> {
+    if let Some(batch) = batch_root.as_deref() {
+        if item.normalized_path.is_empty() {
+            ensure_repo_skill_from_local_batch_source(batch, clone_url, &item.install_name, &[])
+        } else {
+            let sparse = vec![item.normalized_path.clone()];
+            ensure_repo_skill_from_local_batch_source(batch, clone_url, &item.install_name, &sparse)?;
+            let subdir = item.skill_dir.join(&item.normalized_path);
+            if !subdir.is_dir() || !subdir.join("SKILL.md").is_file() {
+                return Err(format!("未找到待安装技能路径: {}", item.selected_path));
+            }
+            Ok(subdir.to_string_lossy().to_string())
+        }
+    } else if item.normalized_path.is_empty() {
+        ensure_repo_skill_with_resolved_ref_and_sparse_paths(
+            clone_url,
+            selected_branch.as_deref(),
+            &item.install_name,
+            &[],
+            on_progress,
+        )
+    } else {
+        let sparse = vec![item.normalized_path.clone()];
+        ensure_repo_skill_with_resolved_ref_and_sparse_paths(
+            clone_url,
+            selected_branch.as_deref(),
+            &item.install_name,
+            &sparse,
+            on_progress,
+        )?;
+        let subdir = item.skill_dir.join(&item.normalized_path);
+        if !subdir.is_dir() || !subdir.join("SKILL.md").is_file() {
+            return Err(format!("未找到待安装技能路径: {}", item.selected_path));
+        }
+        Ok(subdir.to_string_lossy().to_string())
+    }
 }
 
 fn install_selected_repo_skills_blocking(
     repo_url: String,
     selected_paths: Vec<String>,
     git_ref: Option<String>,
+    app_handle: tauri::AppHandle,
 ) -> Result<Vec<SkillSummary>, String> {
     if selected_paths.is_empty() {
         return Err("请至少选择一个技能再安装。".into());
@@ -5058,9 +5149,14 @@ fn install_selected_repo_skills_blocking(
     let selected_branch = selected_repo_branch(&spec, &clone_url, git_ref.as_deref());
     let installed_at = now_timestamp_label();
     let mut installed_skills = load_installed_skills(&default_installed_skills());
-    let mut installed_results = Vec::new();
+    let mut installed_results: Vec<SkillSummary> = Vec::new();
 
-    for selected_path in &selected_paths {
+    // 阶段 A（串行）：解析安装名称、准备目录，收集待安装任务
+    let mut pending_installs: Vec<PendingSkillInstall> = Vec::new();
+    let mut batch_sparse_paths = BTreeSet::new();
+    let mut batch_needs_full_repo = false;
+
+    for (index, selected_path) in selected_paths.iter().enumerate() {
         let normalized_path = normalize_selected_install_path(selected_path);
         let skill_name = Path::new(&normalized_path)
             .file_name()
@@ -5090,10 +5186,7 @@ fn install_selected_repo_skills_blocking(
             &normalized_path,
             &installed_skills,
         )?;
-        if let Some(existing_skill) = installed_skills
-            .iter()
-            .find(|skill| skill.name == install_name)
-        {
+        if let Some(existing_skill) = installed_skills.iter().find(|s| s.name == install_name) {
             installed_results.push(existing_skill.clone());
             continue;
         }
@@ -5101,36 +5194,127 @@ fn install_selected_repo_skills_blocking(
         let skill_dir = skill_directory(&install_name)
             .map_err(|error| format!("无法确定 skill 目录: {error}"))?;
         if skill_dir.exists() {
-            std::fs::remove_dir_all(&skill_dir)
+            fs::remove_dir_all(&skill_dir)
                 .map_err(|error| format!("清理旧 skill 目录失败: {error}"))?;
         }
         if let Some(parent) = skill_dir.parent() {
-            std::fs::create_dir_all(parent)
+            fs::create_dir_all(parent)
                 .map_err(|error| format!("创建 skill 目录失败: {error}"))?;
         }
 
-        let local_path = if normalized_path.is_empty() {
-            ensure_repo_skill_with_resolved_ref_and_sparse_paths(
-                &clone_url,
-                selected_branch.as_deref(),
-                &install_name,
-                &[],
-            )?
+        if normalized_path.is_empty() {
+            batch_needs_full_repo = true;
         } else {
-            let sparse_paths = vec![normalized_path.clone()];
-            ensure_repo_skill_with_resolved_ref_and_sparse_paths(
-                &clone_url,
-                selected_branch.as_deref(),
-                &install_name,
-                &sparse_paths,
-            )?;
-            // 不移动文件，直接返回子目录路径，保持 git 索引正确
-            let subdir = skill_dir.join(&normalized_path);
-            if !subdir.is_dir() || !subdir.join("SKILL.md").is_file() {
-                return Err(format!("未找到待安装技能路径: {selected_path}"));
-            }
-            subdir.to_string_lossy().to_string()
+            batch_sparse_paths.insert(normalized_path.clone());
+        }
+        pending_installs.push(PendingSkillInstall {
+            index,
+            install_name,
+            source_url,
+            normalized_path,
+            skill_dir,
+            selected_path: selected_path.clone(),
+        });
+    }
+
+    emit_repo_status(&app_handle, "preparing", "正在准备安装...");
+    let install_progress = make_clone_progress_emitter(&app_handle, "installing");
+
+    // 多个待安装时一次性 clone，否则各自走独立 clone
+    let shared_batch_root = if pending_installs.len() > 1 {
+        let batch_cache_key = format!(
+            "install-batch-{}-{}",
+            spec.repo_key,
+            sanitize_storage_name(selected_branch.as_deref().unwrap_or("default"))
+        );
+        let sparse_paths = if batch_needs_full_repo {
+            Vec::new()
+        } else {
+            batch_sparse_paths.into_iter().collect::<Vec<_>>()
         };
+        Some(clone_shared_install_batch_repo(
+            &clone_url,
+            selected_branch.as_deref(),
+            &batch_cache_key,
+            &sparse_paths,
+            Some(&install_progress),
+        )?)
+    } else {
+        None
+    };
+
+    // 阶段 B（并发）：并发 materialize，最多 BATCH_INSTALL_CONCURRENCY 个线程同时运行
+    let batch_arc: Option<Arc<PathBuf>> = shared_batch_root.as_ref().map(|p| Arc::new(p.clone()));
+    let clone_url_arc = Arc::new(clone_url);
+    let selected_branch_arc = Arc::new(selected_branch);
+    // 单个安装时（batch_root == None）在并发线程中传入 progress；多个安装时共享 batch 不需要网络 progress
+    let single_progress_arc = install_progress.clone();
+
+    let (tx, rx) = mpsc::channel::<SkillInstallOutcome>();
+    let mut active = 0usize;
+    let mut outcomes: Vec<SkillInstallOutcome> = Vec::new();
+
+    for item in pending_installs {
+        // 已达并发上限时等一个完成再继续
+        while active >= BATCH_INSTALL_CONCURRENCY {
+            match rx.recv() {
+                Ok(outcome) => {
+                    outcomes.push(outcome);
+                    active -= 1;
+                }
+                Err(_) => break,
+            }
+        }
+        let tx_clone = tx.clone();
+        let batch_opt = batch_arc.clone();
+        let clone_url_ref = Arc::clone(&clone_url_arc);
+        let branch_ref = Arc::clone(&selected_branch_arc);
+        let progress_for_thread = if batch_opt.is_none() {
+            Some(Arc::clone(&single_progress_arc))
+        } else {
+            None
+        };
+        thread::spawn(move || {
+            let local_path = materialize_skill_from_batch_or_clone(
+                &batch_opt,
+                &clone_url_ref,
+                &branch_ref,
+                &item,
+                progress_for_thread.as_ref(),
+            );
+            tx_clone
+                .send(SkillInstallOutcome {
+                    index: item.index,
+                    install_name: item.install_name,
+                    source_url: item.source_url,
+                    local_path,
+                })
+                .ok();
+        });
+        active += 1;
+    }
+    drop(tx); // 关闭发送端，drain 阶段依赖计数而非通道关闭
+    while active > 0 {
+        match rx.recv() {
+            Ok(outcome) => {
+                outcomes.push(outcome);
+                active -= 1;
+            }
+            Err(_) => break,
+        }
+    }
+
+    emit_repo_status(&app_handle, "finalizing", "正在完成安装...");
+
+    // 清理临时 batch clone
+    if let Some(batch_root) = shared_batch_root {
+        let _ = fs::remove_dir_all(batch_root);
+    }
+
+    // 阶段 C（串行）：按原始顺序排序、enrich、持久化
+    outcomes.sort_by_key(|o| o.index);
+    for outcome in outcomes {
+        let local_path = outcome.local_path?;
         let skill_file = Path::new(&local_path).join("SKILL.md");
         let description = if skill_file.is_file() {
             read_skill_description(&skill_file)
@@ -5138,10 +5322,10 @@ fn install_selected_repo_skills_blocking(
             "从仓库导入的 skill，后续可继续同步和检查更新。".into()
         };
         let installed_skill = SkillSummary {
-            name: install_name,
+            name: outcome.install_name,
             source_label: source_label_for_type(&spec.source_type).into(),
             source_type: spec.source_type.clone(),
-            source_url,
+            source_url: outcome.source_url,
             description,
             local_path,
             branch: "main".into(),
@@ -5160,8 +5344,10 @@ fn install_selected_repo_skills_blocking(
             owner_plugin_name: String::new(),
             tools: vec![],
         };
-        let enriched =
-            enrich_newly_installed_skill_with_git_state(&normalize_skill_tools(&installed_skill));
+        let enriched = enrich_freshly_installed_skill(
+            &normalize_skill_tools(&installed_skill),
+            selected_branch_arc.as_deref(),
+        );
         let enriched = apply_skill_install_activation(enriched, &installed_skills)?;
         persist_skill_timestamps(&enriched);
         installed_skills.retain(|skill| skill.name != enriched.name);
@@ -5797,7 +5983,7 @@ pub fn get_update_preview_snapshot(skill_name: &str) -> Result<UpdatePreviewSnap
     let (installed_skills, skill_index) = find_skill_by_name(skill_name)?;
     let skill = &installed_skills[skill_index];
     let current_branch = current_branch_name(&skill.local_path)?;
-    run_git_command(&skill.local_path, &["fetch", ORIGIN_REMOTE, "--quiet"])?;
+    run_git_command(&skill.local_path, &["fetch", ORIGIN_REMOTE, "--quiet", "--no-tags"])?;
     let remote_branch = resolve_remote_branch_name(&skill.local_path, &current_branch)?;
     let (commits_to_pull, _) = branch_divergence_counts(&skill.local_path, &remote_branch)?;
     let uncommitted_files = collect_working_tree_changes(&skill.local_path)?;
@@ -5857,6 +6043,38 @@ pub fn open_path_in_finder(path: &str) -> Result<(), String> {
     }
 
     open_path_with_finder(&normalized_path)
+}
+
+#[tauri::command]
+pub fn get_repo_cache_size() -> Result<u64, String> {
+    let cache_dir = repo_cache_directory_root()?;
+    if !cache_dir.exists() {
+        return Ok(0);
+    }
+    fn dir_size(path: &std::path::Path) -> u64 {
+        let Ok(entries) = std::fs::read_dir(path) else {
+            return 0;
+        };
+        entries.flatten().map(|entry| {
+            let p = entry.path();
+            if p.is_dir() {
+                dir_size(&p)
+            } else {
+                entry.metadata().map(|m| m.len()).unwrap_or(0)
+            }
+        }).sum()
+    }
+    Ok(dir_size(&cache_dir))
+}
+
+#[tauri::command]
+pub fn clear_repo_cache() -> Result<(), String> {
+    let cache_dir = repo_cache_directory_root()?;
+    if cache_dir.exists() {
+        fs::remove_dir_all(&cache_dir)
+            .map_err(|error| format!("清理缓存失败: {error}"))?;
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -6237,7 +6455,7 @@ mod tests {
         should_use_skills_sh_homepage_page, tool_name_to_id, update_skill_repo,
         REFRESH_GIT_STATES_CONCURRENCY,
     };
-    use crate::models::{MarketplaceSkill, SkillSummary, WorkspacePersistence};
+    use crate::models::{MarketplaceSkill, SkillSummary, ToolConfig, WorkspacePersistence};
     use crate::workspace::TEST_ENV_LOCK;
     use std::env;
     use std::fs;
@@ -6400,6 +6618,37 @@ mod tests {
 
         restore_env_var("HOME", previous_home);
         assert_eq!(resolved, "coding-tutor-other-plugin");
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn skill_install_name_reuses_canonical_name_for_stale_partial_install_dir() {
+        let _guard = TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let temp_dir = temp_test_dir("skill-install-name-stale-dir");
+        let home_dir = temp_dir.join("home");
+        let previous_home = env::var_os("HOME");
+        // SAFETY: this test holds ENV_LOCK and restores HOME before returning.
+        unsafe {
+            env::set_var("HOME", &home_dir);
+        }
+        // 模拟安装中断留下的残留目录：目录存在但 state.json 没有记录
+        let stale_dir = home_dir.join(".skilldock/skills/coding-tutor");
+        fs::create_dir_all(&stale_dir).expect("create stale skill dir");
+        let installed: Vec<SkillSummary> = vec![];
+
+        let resolved = resolve_skill_install_name(
+            "coding-tutor",
+            "https://github.com/everyinc/compound-engineering-plugin/tree/main/plugins/coding-tutor",
+            "plugins/coding-tutor",
+            &installed,
+        )
+        .expect("resolve install name");
+
+        restore_env_var("HOME", previous_home);
+        // 应复用正规名称，由调用方负责清理残留目录后重新安装
+        assert_eq!(resolved, "coding-tutor");
         let _ = fs::remove_dir_all(temp_dir);
     }
 
@@ -7280,6 +7529,47 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn local_import_preserves_unicode_skill_name() {
+        let _guard = TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let temp_dir = temp_test_dir("local-import-unicode-name");
+        let home_dir = temp_dir.join("home");
+        let source_skill_dir = home_dir.join(".claude/skills/更新周报skill");
+        fs::create_dir_all(&source_skill_dir).expect("create source skill dir");
+        fs::write(
+            source_skill_dir.join("SKILL.md"),
+            "---\nname: 更新周报skill\ndescription: 更新周报\n---",
+        )
+        .expect("write source skill file");
+
+        let original_home = env::var_os("HOME");
+        let original_path = prepend_fake_executable_to_path(&temp_dir, "codex");
+        // SAFETY: this test holds ENV_LOCK and restores HOME before returning.
+        unsafe {
+            env::set_var("HOME", &home_dir);
+        }
+
+        let imported =
+            import_local_skill(source_skill_dir.to_string_lossy().as_ref()).expect("import skill");
+
+        restore_env_var("HOME", original_home);
+        restore_env_var("PATH", original_path);
+
+        let managed_skill_dir = home_dir.join(".skilldock/skills/更新周报skill");
+        assert_eq!(imported.name, "更新周报skill");
+        assert_eq!(
+            imported.local_path,
+            managed_skill_dir.to_string_lossy().to_string()
+        );
+        assert!(managed_skill_dir.join("SKILL.md").is_file());
+        assert!(!home_dir.join(".skilldock/skills/skill").exists());
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn local_import_replaces_existing_tool_directory_with_symlink() {
         let _guard = TEST_ENV_LOCK
             .lock()
@@ -7911,7 +8201,7 @@ mod tests {
             &[
                 "Visual Studio Code",
                 "Visual Studio Code - Insiders",
-                "VS Code"
+                "VS Code",
             ]
         );
         assert_eq!(super::editor_cli_name_candidates("vscode"), &["code"]);
@@ -8129,5 +8419,49 @@ mod tests {
         let label = super::format_system_time_label(UNIX_EPOCH).expect("label");
         assert!(label.contains("1970") || label.contains("1969"));
         assert!(label.contains(':'));
+    }
+
+    #[test]
+    fn skips_open_only_editors_from_skill_sync_targets() {
+        assert!(!super::supports_skill_sync_for_tool("vscode"));
+        assert!(!super::supports_skill_sync_for_tool("intellij"));
+        assert!(super::supports_skill_sync_for_tool("cursor"));
+    }
+
+    #[test]
+    fn excludes_open_only_editors_from_installed_tool_sync_entries() {
+        let tool_configs = vec![
+            ToolConfig {
+                id: "cursor".into(),
+                name: "Cursor".into(),
+                skills_path: "/Users/demo/.cursor/skills".into(),
+                mcp_config_path: String::new(),
+                supports_mcp: false,
+                mcp_config_path_recognized: false,
+                status_label: "已安装".into(),
+                is_enabled: true,
+                primary_type: "editor".into(),
+                surface_types: vec!["editor".into()],
+                supports_direct_open: true,
+            },
+            ToolConfig {
+                id: "vscode".into(),
+                name: "VS Code".into(),
+                skills_path: String::new(),
+                mcp_config_path: String::new(),
+                supports_mcp: false,
+                mcp_config_path_recognized: false,
+                status_label: "已安装".into(),
+                is_enabled: true,
+                primary_type: "editor".into(),
+                surface_types: vec!["editor".into()],
+                supports_direct_open: true,
+            },
+        ];
+
+        let entries = super::installed_tool_sync_entries_from_configs(&tool_configs);
+
+        assert!(entries.iter().any(|tool| tool.name == "Cursor"));
+        assert!(!entries.iter().any(|tool| tool.name == "VS Code"));
     }
 }

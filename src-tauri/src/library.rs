@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::io::{BufRead, BufReader};
 use std::process::{Command, Output, Stdio};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::thread;
@@ -13,11 +14,14 @@ use crate::workspace::normalize_workspace_path;
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 
+/// 进度回调：接收来自 git clone stderr 的实时输出行。
+pub type CloneProgressCallback = Arc<dyn Fn(&str) + Send + Sync + 'static>;
+
 const SKILL_LIBRARY_DIR: &str = "skills";
 const REPO_CACHE_DIR: &str = "repo-cache";
 const RESERVED_WORKSPACE_LINK_NAMES: [&str; 5] =
     ["state.json", "skills", "repo-cache", "cache", "imports"];
-const GIT_CLONE_HISTORY_DEPTH: &str = "20";
+const GIT_CLONE_HISTORY_DEPTH: &str = "10";
 const GIT_NETWORK_TIMEOUT: Duration = Duration::from_secs(120);
 const GIT_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 const GIT_REMOTE_PROBE_TIMEOUT: Duration = Duration::from_secs(8);
@@ -883,6 +887,7 @@ pub fn clone_repo_for_discovery_with_ref_and_sparse_paths(
         repo_key,
         sparse_paths,
         true,
+        None,
     )
 }
 
@@ -891,6 +896,7 @@ pub fn clone_repo_for_discovery_resolved_with_ref_and_sparse_paths(
     git_ref: Option<&str>,
     repo_key: &str,
     sparse_paths: &[String],
+    on_progress: Option<&CloneProgressCallback>,
 ) -> Result<PathBuf, String> {
     clone_repo_for_discovery_with_ref_and_sparse_paths_internal(
         clone_url,
@@ -898,6 +904,7 @@ pub fn clone_repo_for_discovery_resolved_with_ref_and_sparse_paths(
         repo_key,
         sparse_paths,
         false,
+        on_progress,
     )
 }
 
@@ -907,12 +914,19 @@ fn clone_repo_for_discovery_with_ref_and_sparse_paths_internal(
     repo_key: &str,
     sparse_paths: &[String],
     apply_instead_of: bool,
+    on_progress: Option<&CloneProgressCallback>,
 ) -> Result<PathBuf, String> {
     let repo_lock = repo_cache_lock(repo_key);
     let _repo_guard = repo_lock.lock().unwrap_or_else(|error| error.into_inner());
     let repo_dir = repo_cache_directory(repo_key)?;
-    if repo_dir.exists() {
-        fs::remove_dir_all(&repo_dir).map_err(|error| format!("清理旧仓库缓存失败: {error}"))?;
+
+    // 尝试复用缓存：cache 存在时用 git fetch 更新，避免重新 clone
+    if repo_dir.exists() && repo_dir.join(".git").is_dir() {
+        if try_update_discovery_cache(&repo_dir, git_ref, sparse_paths, on_progress).is_ok() {
+            return Ok(repo_dir);
+        }
+        // fetch 失败则清理缓存后重新 clone
+        let _ = fs::remove_dir_all(&repo_dir);
     }
 
     let parent_dir = repo_dir
@@ -921,7 +935,7 @@ fn clone_repo_for_discovery_with_ref_and_sparse_paths_internal(
     fs::create_dir_all(parent_dir).map_err(|error| format!("创建仓库缓存目录失败: {error}"))?;
 
     let clone_result = if sparse_paths.is_empty() {
-        clone_repo_with_optional_branch_internal(repo_url, git_ref, &repo_dir, apply_instead_of)
+        clone_repo_with_optional_branch_internal(repo_url, git_ref, &repo_dir, apply_instead_of, false, on_progress)
     } else {
         let sparse_paths = sparse_paths.iter().map(PathBuf::from).collect::<Vec<_>>();
         clone_repo_with_sparse_paths_internal(
@@ -930,6 +944,8 @@ fn clone_repo_for_discovery_with_ref_and_sparse_paths_internal(
             &repo_dir,
             &sparse_paths,
             apply_instead_of,
+            false,
+            on_progress,
         )
     };
     if let Err(error) = clone_result {
@@ -937,6 +953,40 @@ fn clone_repo_for_discovery_with_ref_and_sparse_paths_internal(
         return Err(error);
     }
     Ok(repo_dir)
+}
+
+/// 复用已有的发现缓存：fetch 最新内容并更新工作区。
+fn try_update_discovery_cache(
+    repo_dir: &Path,
+    git_ref: Option<&str>,
+    sparse_paths: &[String],
+    on_progress: Option<&CloneProgressCallback>,
+) -> Result<(), String> {
+    if let Some(cb) = on_progress {
+        cb("正在更新本地缓存...");
+    }
+    // 拉取指定分支（或 HEAD）的最新浅层提交
+    let mut fetch_args = vec![
+        "fetch",
+        "origin",
+        "--depth",
+        GIT_CLONE_HISTORY_DEPTH,
+        "--no-tags",
+        "--quiet",
+    ];
+    let branch_arg;
+    if let Some(r) = git_ref.filter(|s| !s.trim().is_empty()) {
+        branch_arg = r.to_string();
+        fetch_args.push(&branch_arg);
+    }
+    run_git_in_dir(repo_dir, &fetch_args)?;
+    run_git_in_dir(repo_dir, &["reset", "--hard", "FETCH_HEAD"])?;
+    // 稀疏检出：重新应用路径过滤
+    if !sparse_paths.is_empty() {
+        let _ = configure_sparse_checkout(repo_dir, sparse_paths, false);
+        let _ = run_git_in_dir(repo_dir, &["checkout", "--quiet"]);
+    }
+    Ok(())
 }
 
 #[allow(dead_code)]
@@ -957,7 +1007,7 @@ where
         sparse_paths,
     )?;
     let result = callback(&repo_root);
-    let _ = fs::remove_dir_all(&repo_root);
+    // 保留缓存目录供下次复用，不删除
     result
 }
 
@@ -966,6 +1016,7 @@ pub fn with_temporary_discovery_repo_resolved<T, F>(
     git_ref: Option<&str>,
     repo_key: &str,
     sparse_paths: &[String],
+    on_progress: Option<&CloneProgressCallback>,
     callback: F,
 ) -> Result<T, String>
 where
@@ -976,9 +1027,10 @@ where
         git_ref,
         repo_key,
         sparse_paths,
+        on_progress,
     )?;
     let result = callback(&repo_root);
-    let _ = fs::remove_dir_all(&repo_root);
+    // 保留缓存目录供下次复用，不删除
     result
 }
 
@@ -1003,6 +1055,7 @@ pub fn ensure_repo_skill_with_ref_and_sparse_paths(
         install_key,
         sparse_paths,
         true,
+        None,
     )
 }
 
@@ -1011,6 +1064,7 @@ pub fn ensure_repo_skill_with_resolved_ref_and_sparse_paths(
     git_ref: Option<&str>,
     install_key: &str,
     sparse_paths: &[String],
+    on_progress: Option<&CloneProgressCallback>,
 ) -> Result<String, String> {
     ensure_repo_skill_with_ref_and_sparse_paths_internal(
         clone_url,
@@ -1018,6 +1072,7 @@ pub fn ensure_repo_skill_with_resolved_ref_and_sparse_paths(
         install_key,
         sparse_paths,
         false,
+        on_progress,
     )
 }
 
@@ -1027,6 +1082,7 @@ fn ensure_repo_skill_with_ref_and_sparse_paths_internal(
     install_key: &str,
     sparse_paths: &[String],
     apply_instead_of: bool,
+    on_progress: Option<&CloneProgressCallback>,
 ) -> Result<String, String> {
     let skill_dir = skill_directory(install_key)?;
     if skill_dir.exists() {
@@ -1040,7 +1096,6 @@ fn ensure_repo_skill_with_ref_and_sparse_paths_internal(
             if !sparse_paths.is_empty() {
                 configure_sparse_checkout(&skill_dir, sparse_paths, true)?;
             }
-            // 忽略非必要文件
             ignore_unnecessary_files(&skill_dir)?;
             return Ok(skill_dir.to_string_lossy().to_string());
         }
@@ -1055,7 +1110,7 @@ fn ensure_repo_skill_with_ref_and_sparse_paths_internal(
         .map_err(|error| format!("创建 skill library 目录失败: {error}"))?;
 
     if sparse_paths.is_empty() {
-        clone_repo_with_optional_branch_internal(repo_url, git_ref, &skill_dir, apply_instead_of)?;
+        clone_repo_with_optional_branch_internal(repo_url, git_ref, &skill_dir, apply_instead_of, true, on_progress)?;
     } else {
         let path_bufs = sparse_paths.iter().map(PathBuf::from).collect::<Vec<_>>();
         clone_repo_with_sparse_paths_internal(
@@ -1064,9 +1119,86 @@ fn ensure_repo_skill_with_ref_and_sparse_paths_internal(
             &skill_dir,
             &path_bufs,
             apply_instead_of,
+            true,
+            on_progress,
         )?;
     }
-    // 忽略非必要文件
+    ignore_unnecessary_files(&skill_dir)?;
+    Ok(skill_dir.to_string_lossy().to_string())
+}
+
+pub fn clone_shared_install_batch_repo(
+    clone_url: &str,
+    git_ref: Option<&str>,
+    batch_cache_key: &str,
+    sparse_paths: &[String],
+    on_progress: Option<&CloneProgressCallback>,
+) -> Result<PathBuf, String> {
+    let repo_lock = repo_cache_lock(batch_cache_key);
+    let _repo_guard = repo_lock.lock().unwrap_or_else(|error| error.into_inner());
+    let batch_dir = repo_cache_directory(batch_cache_key)?;
+    if batch_dir.exists() {
+        fs::remove_dir_all(&batch_dir)
+            .map_err(|error| format!("清理共享安装缓存失败: {error}"))?;
+    }
+
+    let parent_dir = batch_dir
+        .parent()
+        .ok_or_else(|| "无法确定共享安装缓存的父目录".to_string())?;
+    fs::create_dir_all(parent_dir)
+        .map_err(|error| format!("创建共享安装缓存目录失败: {error}"))?;
+
+    let clone_result = if sparse_paths.is_empty() {
+        clone_repo_with_optional_branch_internal(clone_url, git_ref, &batch_dir, false, true, on_progress)
+    } else {
+        let path_bufs = sparse_paths.iter().map(PathBuf::from).collect::<Vec<_>>();
+        clone_repo_with_sparse_paths_internal(clone_url, git_ref, &batch_dir, &path_bufs, false, true, on_progress)
+    };
+    if let Err(error) = clone_result {
+        let _ = fs::remove_dir_all(&batch_dir);
+        return Err(error);
+    }
+
+    Ok(batch_dir)
+}
+
+pub fn ensure_repo_skill_from_local_batch_source(
+    local_batch_dir: &Path,
+    remote_clone_url: &str,
+    install_key: &str,
+    sparse_paths: &[String],
+) -> Result<String, String> {
+    let skill_dir = skill_directory(install_key)?;
+    if skill_dir.exists() {
+        if !skill_dir.is_dir() {
+            return Err(format!(
+                "目标 skill 工作区已存在且不是目录: {}",
+                skill_dir.to_string_lossy()
+            ));
+        }
+        if skill_dir.join(".git").is_dir() {
+            if !sparse_paths.is_empty() {
+                configure_sparse_checkout(&skill_dir, sparse_paths, true)?;
+            }
+            ignore_unnecessary_files(&skill_dir)?;
+            return Ok(skill_dir.to_string_lossy().to_string());
+        }
+        fs::remove_dir_all(&skill_dir)
+            .map_err(|error| format!("清理旧 skill 目录失败: {error}"))?;
+    }
+
+    let parent_dir = skill_dir
+        .parent()
+        .ok_or_else(|| "无法确定 skill 目录的父目录".to_string())?;
+    fs::create_dir_all(parent_dir)
+        .map_err(|error| format!("创建 skill library 目录失败: {error}"))?;
+
+    let path_bufs = sparse_paths.iter().map(PathBuf::from).collect::<Vec<_>>();
+    materialize_repo_from_local_batch_internal(local_batch_dir, &skill_dir, &path_bufs)?;
+    run_git_in_dir(
+        &skill_dir,
+        &["remote", "set-url", "origin", remote_clone_url],
+    )?;
     ignore_unnecessary_files(&skill_dir)?;
     Ok(skill_dir.to_string_lossy().to_string())
 }
@@ -1081,6 +1213,10 @@ pub fn repo_cache_directory(repo_key: &str) -> Result<PathBuf, String> {
     Ok(workspace::managed_workspace_root()?
         .join(REPO_CACHE_DIR)
         .join(repo_key))
+}
+
+pub fn repo_cache_directory_root() -> Result<PathBuf, String> {
+    Ok(workspace::managed_workspace_root()?.join(REPO_CACHE_DIR))
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -1158,6 +1294,15 @@ pub fn ssh_clone_url_for_repository_url(repository_url: &str) -> Option<String> 
     Some(format!("git@{host}:{owner}/{repo}.git"))
 }
 
+/// 对于公网知名 HTTPS 托管平台，直接信任 HTTPS 无需 ls-remote 探测。
+/// 网络不通时 git clone 本身会给出清晰的错误，无需双重往返。
+fn is_trusted_https_host(url: &str) -> bool {
+    let lower = url.to_lowercase();
+    lower.starts_with("https://github.com/")
+        || lower.starts_with("https://gitlab.com/")
+        || lower.starts_with("https://bitbucket.org/")
+}
+
 pub fn resolve_clone_url_http_first(
     clone_url: &str,
     repository_url: &str,
@@ -1166,7 +1311,12 @@ pub fn resolve_clone_url_http_first(
     if candidates.is_empty() {
         return Err("仓库地址解析失败: clone URL 为空".into());
     }
+    // SSH-only: no probe needed
     if candidates.len() == 1 && candidates[0].label == "SSH" {
+        return Ok(candidates[0].url.clone());
+    }
+    // Trusted public HTTPS hosts: skip ls-remote probe, let clone fail naturally
+    if candidates[0].label == "HTTP" && is_trusted_https_host(&candidates[0].url) {
         return Ok(candidates[0].url.clone());
     }
 
@@ -1248,19 +1398,6 @@ pub fn summarize_git_error(error: &str) -> String {
     truncate_git_error_line(lines.last().copied().unwrap_or(error))
 }
 
-fn git_command_failure_message(prefix: &str, output: &std::process::Output) -> String {
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let combined = if stderr.trim().is_empty() {
-        stdout.trim().to_string()
-    } else if stdout.trim().is_empty() {
-        stderr.trim().to_string()
-    } else {
-        format!("{}\n{}", stderr.trim(), stdout.trim())
-    };
-    format!("{prefix}: {}", summarize_git_error(&combined))
-}
-
 fn parse_git_url_instead_of_rules(output: &str) -> Vec<GitUrlInsteadOfRule> {
     output
         .lines()
@@ -1306,16 +1443,16 @@ pub fn sanitize_storage_name(name: &str) -> String {
     let mut last_was_separator = false;
 
     for character in name.chars() {
-        let normalized = if character.is_ascii_alphanumeric() {
+        let normalized = if character.is_alphanumeric() {
             last_was_separator = false;
-            character.to_ascii_lowercase()
+            character.to_lowercase().to_string()
         } else if !last_was_separator {
             last_was_separator = true;
-            '-'
+            "-".to_string()
         } else {
             continue;
         };
-        sanitized.push(normalized);
+        sanitized.push_str(&normalized);
     }
 
     let trimmed = sanitized.trim_matches('-').to_string();
@@ -1331,7 +1468,7 @@ fn clone_repo_with_optional_branch(
     branch: Option<&str>,
     target_dir: &Path,
 ) -> Result<(), String> {
-    clone_repo_with_optional_branch_internal(source, branch, target_dir, true)
+    clone_repo_with_optional_branch_internal(source, branch, target_dir, true, false, None)
 }
 
 fn clone_repo_with_optional_branch_internal(
@@ -1339,6 +1476,8 @@ fn clone_repo_with_optional_branch_internal(
     branch: Option<&str>,
     target_dir: &Path,
     apply_instead_of: bool,
+    no_single_branch: bool,
+    on_progress: Option<&CloneProgressCallback>,
 ) -> Result<(), String> {
     let clone_url = if apply_instead_of {
         resolve_git_clone_url_with_instead_of(source)
@@ -1349,21 +1488,21 @@ fn clone_repo_with_optional_branch_internal(
     configure_git_network_command(&mut command);
     command.arg("clone");
     command.arg("--depth").arg(GIT_CLONE_HISTORY_DEPTH);
-    command.arg("--single-branch");
     command.arg("--no-tags");
+    // --depth 隐式开启 --single-branch；永久安装的 skill 需要 --no-single-branch 保留所有远端分支
+    if no_single_branch {
+        command.arg("--no-single-branch");
+    }
+    if on_progress.is_some() {
+        command.arg("--progress");
+    }
     if let Some(branch_name) = branch.filter(|value| !value.trim().is_empty()) {
         command.arg("--branch").arg(branch_name);
     }
     command
         .arg(&clone_url)
         .arg(target_dir.to_string_lossy().as_ref());
-    let output = output_with_timeout(command, GIT_NETWORK_TIMEOUT, "git clone")?;
-
-    if !output.status.success() {
-        return Err(git_command_failure_message("仓库克隆失败", &output));
-    }
-
-    Ok(())
+    run_git_clone_with_progress(&mut command, on_progress, "git clone")
 }
 
 fn clone_repo_with_sparse_paths(
@@ -1372,7 +1511,7 @@ fn clone_repo_with_sparse_paths(
     target_dir: &Path,
     sparse_paths: &[PathBuf],
 ) -> Result<(), String> {
-    clone_repo_with_sparse_paths_internal(source, branch, target_dir, sparse_paths, true)
+    clone_repo_with_sparse_paths_internal(source, branch, target_dir, sparse_paths, true, false, None)
 }
 
 fn clone_repo_with_sparse_paths_internal(
@@ -1381,6 +1520,8 @@ fn clone_repo_with_sparse_paths_internal(
     target_dir: &Path,
     sparse_paths: &[PathBuf],
     apply_instead_of: bool,
+    no_single_branch: bool,
+    on_progress: Option<&CloneProgressCallback>,
 ) -> Result<(), String> {
     let clone_url = if apply_instead_of {
         resolve_git_clone_url_with_instead_of(source)
@@ -1394,20 +1535,22 @@ fn clone_repo_with_sparse_paths_internal(
         .arg("--filter=blob:none")
         .arg("--depth")
         .arg(GIT_CLONE_HISTORY_DEPTH)
-        .arg("--single-branch")
         .arg("--no-tags")
         .arg("--sparse")
         .arg("--no-checkout");
+    if no_single_branch {
+        clone_command.arg("--no-single-branch");
+    }
+    if on_progress.is_some() {
+        clone_command.arg("--progress");
+    }
     if let Some(branch_name) = branch.filter(|value| !value.trim().is_empty()) {
         clone_command.arg("--branch").arg(branch_name);
     }
     clone_command
         .arg(&clone_url)
         .arg(target_dir.to_string_lossy().as_ref());
-    let clone_output = output_with_timeout(clone_command, GIT_NETWORK_TIMEOUT, "git sparse clone")?;
-    if !clone_output.status.success() {
-        return Err(git_command_failure_message("仓库克隆失败", &clone_output));
-    }
+    run_git_clone_with_progress(&mut clone_command, on_progress, "git sparse clone")?;
 
     let sparse_strings = sparse_paths
         .iter()
@@ -1415,6 +1558,93 @@ fn clone_repo_with_sparse_paths_internal(
         .collect::<Vec<_>>();
     configure_sparse_checkout(target_dir, &sparse_strings, false)?;
     run_git_in_dir(target_dir, &["checkout", "--quiet"])?;
+    Ok(())
+}
+
+fn materialize_repo_from_local_batch_internal(
+    local_source_dir: &Path,
+    target_dir: &Path,
+    sparse_paths: &[PathBuf],
+) -> Result<(), String> {
+    copy_skill_repo_dir_all(local_source_dir, target_dir)?;
+
+    if sparse_paths.is_empty() {
+        return Ok(());
+    }
+
+    let sparse_strings = sparse_paths
+        .iter()
+        .map(|path| path.to_string_lossy().to_string())
+        .collect::<Vec<_>>();
+    configure_sparse_checkout(target_dir, &sparse_strings, false)?;
+    run_git_in_dir(target_dir, &["checkout", "--quiet", "--force"])?;
+    Ok(())
+}
+
+fn copy_skill_repo_dir_all(source: &Path, target: &Path) -> Result<(), String> {
+    fs::create_dir_all(target).map_err(|error| {
+        format!(
+            "创建 skill 目录失败（{}）: {error}",
+            target.display()
+        )
+    })?;
+    let entries = fs::read_dir(source).map_err(|error| {
+        format!(
+            "读取 skill 源目录失败（{}）: {error}",
+            source.display()
+        )
+    })?;
+    for entry in entries {
+        let entry = entry.map_err(|error| {
+            format!(
+                "读取 skill 源目录条目失败（{}）: {error}",
+                source.display()
+            )
+        })?;
+        let source_path = entry.path();
+        let target_path = target.join(entry.file_name());
+        let metadata = fs::symlink_metadata(&source_path).map_err(|error| {
+            format!(
+                "读取 skill 源目录条目元数据失败（{}）: {error}",
+                source_path.display()
+            )
+        })?;
+        if metadata.file_type().is_symlink() {
+            let link_target = fs::read_link(&source_path).map_err(|error| {
+                format!(
+                    "读取 skill 源符号链接失败（{}）: {error}",
+                    source_path.display()
+                )
+            })?;
+            #[cfg(unix)]
+            {
+                std::os::unix::fs::symlink(&link_target, &target_path).map_err(|error| {
+                    format!(
+                        "创建 skill 符号链接失败（{} -> {}）: {error}",
+                        target_path.display(),
+                        link_target.display()
+                    )
+                })?;
+            }
+            #[cfg(not(unix))]
+            {
+                return Err(format!(
+                    "当前平台不支持复制 skill 符号链接: {}",
+                    source_path.display()
+                ));
+            }
+        } else if metadata.is_dir() {
+            copy_skill_repo_dir_all(&source_path, &target_path)?;
+        } else {
+            fs::copy(&source_path, &target_path).map_err(|error| {
+                format!(
+                    "复制 skill 文件失败（{} -> {}）: {error}",
+                    source_path.display(),
+                    target_path.display()
+                )
+            })?;
+        }
+    }
     Ok(())
 }
 
@@ -1519,6 +1749,89 @@ fn output_with_timeout(
             }
             Ok(None) => {
                 if started_at.elapsed() >= timeout {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(format!("{label} 超时，请检查网络后重试"));
+                }
+                thread::sleep(Duration::from_millis(100));
+            }
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!("等待 {label} 失败: {error}"));
+            }
+        }
+    }
+}
+
+/// 以流式方式运行 git clone，将 stderr 逐行转发给 `on_progress`，并在超时或失败时返回错误。
+/// 成功时返回 Ok(())，失败时返回包含 stderr 内容的 Err。
+pub fn run_git_clone_with_progress(
+    command: &mut Command,
+    on_progress: Option<&CloneProgressCallback>,
+    label: &str,
+) -> Result<(), String> {
+    command.stdout(Stdio::null()).stderr(Stdio::piped());
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("执行 {label} 失败: {error}"))?;
+
+    let stderr = child.stderr.take();
+    let has_progress = on_progress.is_some();
+    let (stderr_tx, stderr_rx) = mpsc::channel::<String>();
+
+    let stderr_thread = thread::spawn(move || {
+        let mut collected = String::new();
+        let Some(stderr) = stderr else {
+            return collected;
+        };
+        let reader = BufReader::new(stderr);
+        for line in reader.split(b'\r').flat_map(|r| {
+            r.ok().into_iter().flat_map(|buf| {
+                buf.split(|&b| b == b'\n')
+                    .map(|l| l.to_vec())
+                    .collect::<Vec<_>>()
+            })
+        }) {
+            if line.is_empty() {
+                continue;
+            }
+            let text = String::from_utf8_lossy(&line).to_string();
+            collected.push_str(&text);
+            collected.push('\n');
+            if has_progress {
+                let _ = stderr_tx.send(text);
+            }
+        }
+        collected
+    });
+
+    let deadline = Instant::now() + GIT_NETWORK_TIMEOUT;
+    loop {
+        if let Some(cb) = on_progress {
+            while let Ok(line) = stderr_rx.try_recv() {
+                if !line.trim().is_empty() {
+                    cb(&line);
+                }
+            }
+        }
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let collected = stderr_thread.join().unwrap_or_default();
+                if on_progress.is_some() {
+                    while let Ok(line) = stderr_rx.try_recv() {
+                        if !line.trim().is_empty() {
+                            on_progress.unwrap()(line.as_str());
+                        }
+                    }
+                }
+                if status.success() {
+                    return Ok(());
+                }
+                return Err(format!("仓库克隆失败: {}", collected.trim()));
+            }
+            Ok(None) => {
+                if Instant::now() >= deadline {
                     let _ = child.kill();
                     let _ = child.wait();
                     return Err(format!("{label} 超时，请检查网络后重试"));
@@ -2458,7 +2771,7 @@ mod tests {
         migrate_legacy_skill_symlinks, parse_git_url_instead_of_rules, parse_market_source_url,
         reconcile_tool_skill_symlinks, remote_clone_candidates, remove_reserved_workspace_entries,
         repo_cache_lock, rewrite_git_clone_url_with_instead_of_rules, run_git_in_dir,
-        run_git_output, skill_dir_match_score, ssh_clone_url_for_repository_url,
+        run_git_output, sanitize_storage_name, skill_dir_match_score, ssh_clone_url_for_repository_url,
         summarize_git_error, tool_skills_path_for_home, tree_relative_path_for_branch,
         MarketSourceSpec, RemoteCloneCandidate, ResolvedRemoteSkillPath,
     };
@@ -2494,6 +2807,13 @@ mod tests {
     fn configure_hidden_subprocess_does_not_panic_for_git_command() {
         let mut command = std::process::Command::new(git_executable());
         configure_hidden_subprocess(&mut command);
+    }
+
+    #[test]
+    fn sanitize_storage_name_preserves_unicode_skill_names() {
+        assert_eq!(sanitize_storage_name("更新周报skill"), "更新周报skill");
+        assert_eq!(sanitize_storage_name("Local Skill"), "local-skill");
+        assert_eq!(sanitize_storage_name("!!!"), "skill");
     }
 
     #[test]

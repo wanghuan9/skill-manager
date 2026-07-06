@@ -17,7 +17,8 @@ use toml_edit::{DocumentMut, Item, Table};
 use crate::library::{
     configure_git_network_command, configure_hidden_subprocess, git_command,
     parse_market_source_url, resolve_clone_url_http_first, resolve_git_clone_url_with_instead_of,
-    sanitize_storage_name, tree_relative_path_for_branch, with_temporary_discovery_repo_resolved,
+    run_git_clone_with_progress, sanitize_storage_name, tree_relative_path_for_branch,
+    with_temporary_discovery_repo_resolved, CloneProgressCallback,
 };
 use crate::models::{
     CliToolSummary, PluginComponentPreview, PluginComponentSummary, PluginProbeResult,
@@ -33,6 +34,7 @@ const CLAUDE_MARKETPLACE_MANIFEST: &str = ".claude-plugin/marketplace.json";
 const CURSOR_PLUGIN_MANIFEST: &str = ".cursor-plugin/plugin.json";
 const CODEX_PLUGIN_MANIFEST: &str = ".codex-plugin/plugin.json";
 const CODEX_MARKETPLACE_MANIFEST: &str = ".agents/plugins/marketplace.json";
+const CODEX_SKILLDOCK_CACHE_VERSION: &str = "latest";
 const PLUGIN_PACKAGE_DIR: &str = "plugins";
 const REMOTE_BRANCH_PREFIX: &str = "origin/";
 const PLUGIN_PACKAGE_IDENTITY_FILE: &str = ".skilldock-package.json";
@@ -377,6 +379,7 @@ pub async fn probe_plugin_source(
             git_ref.as_deref(),
             sparse_path.as_deref(),
             hint_host_tool,
+            None,
         )
     })
     .await
@@ -389,17 +392,43 @@ pub async fn probe_plugin_source_candidates(
     git_ref: Option<String>,
     sparse_path: Option<String>,
     hint_host_tool: Option<String>,
+    app_handle: tauri::AppHandle,
 ) -> Result<Vec<PluginProbeResult>, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        probe_plugin_source_candidates_blocking(
+        emit_plugin_status(&app_handle, "preparing", "正在查询插件信息...");
+        let progress = make_plugin_progress_emitter(&app_handle);
+        let result = probe_plugin_source_candidates_blocking(
             &source,
             git_ref.as_deref(),
             sparse_path.as_deref(),
             hint_host_tool,
-        )
+            Some(&progress),
+        );
+        emit_plugin_status(&app_handle, "finalizing", "正在扫描插件目录...");
+        result
     })
     .await
     .map_err(|error| format!("插件来源批量探测任务失败: {error}"))?
+}
+
+fn emit_plugin_status(app_handle: &tauri::AppHandle, phase: &str, message: &str) {
+    use tauri::Emitter;
+    let _ = app_handle.emit(
+        "repo-clone-progress",
+        serde_json::json!({ "phase": phase, "message": message }),
+    );
+}
+
+fn make_plugin_progress_emitter(app_handle: &tauri::AppHandle) -> CloneProgressCallback {
+    use std::sync::Arc;
+    use tauri::Emitter;
+    let handle = app_handle.clone();
+    Arc::new(move |message: &str| {
+        let _ = handle.emit(
+            "repo-clone-progress",
+            serde_json::json!({ "phase": "cloning", "message": message }),
+        );
+    })
 }
 
 #[tauri::command]
@@ -496,9 +525,14 @@ fn refresh_and_persist_local_plugin_state(
 pub async fn install_selected_plugin_probes(
     probes: Vec<PluginProbeResult>,
     host_tools: Vec<String>,
+    app_handle: tauri::AppHandle,
 ) -> Result<Vec<PluginSummary>, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        install_selected_plugin_probes_blocking(probes, host_tools)
+        emit_plugin_status(&app_handle, "preparing", "正在准备安装...");
+        let progress = make_plugin_progress_emitter(&app_handle);
+        let result = install_selected_plugin_probes_blocking(probes, host_tools, Some(&progress));
+        emit_plugin_status(&app_handle, "finalizing", "正在完成安装...");
+        result
     })
     .await
     .map_err(|error| format!("插件安装任务失败: {error}"))?
@@ -507,6 +541,7 @@ pub async fn install_selected_plugin_probes(
 fn install_selected_plugin_probes_blocking(
     probes: Vec<PluginProbeResult>,
     host_tools: Vec<String>,
+    on_progress: Option<&CloneProgressCallback>,
 ) -> Result<Vec<PluginSummary>, String> {
     let cleanup_roots = plugin_probe_cleanup_roots(&probes);
     let home_dir = workspace::home_dir_option().ok_or_else(|| "无法定位用户主目录".to_string())?;
@@ -525,7 +560,7 @@ fn install_selected_plugin_probes_blocking(
             for host_tool in &selected_host_tools {
                 ensure_plugin_host_tool_installed(host_tool)?;
             }
-            let package = ensure_shared_plugin_package(&probe)?;
+            let package = ensure_shared_plugin_package(&probe, on_progress)?;
             let source_root = canonicalize_existing_dir(&package.plugin_root)?;
             let package_root = managed_plugin_package_root_for_path(&source_root)
                 .unwrap_or_else(|| source_root.clone());
@@ -617,12 +652,18 @@ fn update_plugin_blocking(host_tool: &str, root_path: &str) -> Result<PluginSumm
             let update_root = if host_tool == "cursor" && find_git_root(&target_root).is_none() {
                 managed_plugin_root_for_cursor_plugin_path(&target_root)
                     .unwrap_or_else(|| target_root.clone())
+            } else if host_tool == "codex" && find_git_root(&target_root).is_none() {
+                managed_plugin_package_root_from_source_metadata(&target_root)
+                    .unwrap_or_else(|| target_root.clone())
             } else {
                 target_root.clone()
             };
             update_plugin_repo(&update_root)?;
             if host_tool == "cursor" && update_root != target_root {
                 sync_cursor_local_git_copy(&update_root, &target_root)?;
+            }
+            if host_tool == "codex" && plugin.source_label == "skilldock" {
+                reconcile_skilldock_codex_cache_after_update(&plugin, &target_root, &update_root)?;
             }
             find_plugin_after_enabled_change(host_tool, &target_root)
         }
@@ -856,13 +897,16 @@ fn scan_codex_installed_plugins(scan_mode: PluginScanMode) -> Vec<PluginSummary>
             continue;
         }
 
-        let source_metadata = read_skilldock_plugin_source_metadata(&plugin_root);
+        let source_metadata =
+            read_skilldock_plugin_source_metadata_with_package_fallback(&plugin_root);
         let source_type =
             resolve_plugin_source_type(&plugin_root, source_metadata.as_ref(), "marketplace");
         let source_url = read_plugin_manifest(&manifest_path)
             .ok()
             .map(|manifest| source_url_from_manifest(&manifest))
             .unwrap_or_default();
+        let display_root =
+            codex_plugin_display_root(&home_dir, marketplace_name, plugin_name, &plugin_root);
 
         let enabled_state = if plugin_config.enabled {
             "enabled"
@@ -880,7 +924,7 @@ fn scan_codex_installed_plugins(scan_mode: PluginScanMode) -> Vec<PluginSummary>
             InstalledPluginDescriptor {
                 host_tool: "codex".to_string(),
                 root: plugin_root.clone(),
-                display_root: plugin_root,
+                display_root,
                 manifest_path,
                 repo_root_override: None,
                 plugin_relative_path_override: None,
@@ -919,6 +963,13 @@ fn scan_codex_installed_plugins(scan_mode: PluginScanMode) -> Vec<PluginSummary>
             scan_mode,
         ) {
             installed_roots.insert(summary.root_path.clone());
+            if let Some(cache_plugin_root) =
+                find_codex_cached_plugin_root(&cache_root, marketplace_name, plugin_name)
+            {
+                let cache_plugin_root =
+                    canonicalize_existing_dir(&cache_plugin_root).unwrap_or(cache_plugin_root);
+                installed_roots.insert(path_to_string(&cache_plugin_root));
+            }
             installed.push(summary);
         }
     }
@@ -930,6 +981,53 @@ fn scan_codex_installed_plugins(scan_mode: PluginScanMode) -> Vec<PluginSummary>
     ));
 
     installed
+}
+
+fn codex_plugin_display_root(
+    home_dir: &Path,
+    marketplace_name: &str,
+    plugin_name: &str,
+    plugin_root: &Path,
+) -> PathBuf {
+    if marketplace_name == "skilldock" {
+        let cache_plugin_root = home_dir
+            .join(".codex/plugins/cache")
+            .join(marketplace_name)
+            .join(plugin_name);
+        if fs::symlink_metadata(&cache_plugin_root).is_ok() {
+            return cache_plugin_root;
+        }
+    }
+    plugin_root.to_path_buf()
+}
+
+fn codex_cached_plugin_display_root(
+    home_dir: &Path,
+    marketplace_name: &str,
+    plugin_root: &Path,
+) -> PathBuf {
+    if marketplace_name != "skilldock" {
+        return plugin_root.to_path_buf();
+    }
+
+    let cache_marketplace_root = home_dir.join(".codex/plugins/cache").join(marketplace_name);
+    let normalized_cache_marketplace_root =
+        canonicalize_existing_dir(&cache_marketplace_root).unwrap_or(cache_marketplace_root);
+    let normalized_plugin_root =
+        canonicalize_existing_dir(plugin_root).unwrap_or_else(|_| plugin_root.to_path_buf());
+    let Ok(relative_path) = normalized_plugin_root.strip_prefix(&normalized_cache_marketplace_root)
+    else {
+        return plugin_root.to_path_buf();
+    };
+    let Some(first_component) = relative_path.components().next() else {
+        return plugin_root.to_path_buf();
+    };
+    let display_root = normalized_cache_marketplace_root.join(first_component.as_os_str());
+    if fs::symlink_metadata(&display_root).is_ok() {
+        display_root
+    } else {
+        plugin_root.to_path_buf()
+    }
 }
 
 fn resolve_configured_codex_plugin_root(
@@ -1022,35 +1120,54 @@ fn scan_codex_cached_plugins(
             config_path,
             &source_label,
         );
-        let source_type = if find_git_root(&canonical_root).is_some() {
-            "git".to_string()
-        } else {
-            "marketplace".to_string()
-        };
-        let source_url = read_plugin_manifest(&manifest_path)
-            .ok()
-            .map(|manifest| source_url_from_manifest(&manifest))
-            .unwrap_or_default();
+        if install_state == "detected" {
+            continue;
+        }
+        let source_metadata =
+            read_skilldock_plugin_source_metadata_with_package_fallback(&canonical_root);
+        let source_type =
+            resolve_plugin_source_type(&canonical_root, source_metadata.as_ref(), "marketplace");
+        let source_url = source_metadata
+            .as_ref()
+            .and_then(|metadata| non_empty_trimmed_string(&metadata.source_url))
+            .unwrap_or_else(|| {
+                read_plugin_manifest(&manifest_path)
+                    .ok()
+                    .map(|manifest| source_url_from_manifest(&manifest))
+                    .unwrap_or_default()
+            });
+        let display_root =
+            codex_cached_plugin_display_root(home_dir, &source_label, &canonical_root);
 
         if let Some(summary) = build_installed_plugin_summary(
             InstalledPluginDescriptor {
                 host_tool: "codex".to_string(),
                 root: canonical_root,
-                display_root: plugin_root,
+                display_root,
                 manifest_path,
                 repo_root_override: None,
                 plugin_relative_path_override: None,
                 source_type,
                 source_label,
                 source_url,
-                source_ref: String::new(),
-                source_revision: String::new(),
+                source_ref: source_metadata
+                    .as_ref()
+                    .and_then(|metadata| non_empty_trimmed_string(&metadata.source_ref))
+                    .unwrap_or_default(),
+                source_revision: source_metadata
+                    .as_ref()
+                    .and_then(|metadata| non_empty_trimmed_string(&metadata.source_revision))
+                    .unwrap_or_default(),
                 current_version: String::new(),
                 current_commit: String::new(),
                 installed_at: String::new(),
                 updated_at: String::new(),
                 install_state,
-                install_source: "host".to_string(),
+                install_source: if source_metadata.is_some() {
+                    "skilldock".to_string()
+                } else {
+                    "host".to_string()
+                },
                 scopes,
             },
             scan_mode,
@@ -1720,6 +1837,21 @@ fn delete_codex_plugin(root_path: &str) -> Result<(), String> {
                     })
                     .unwrap_or_default();
                 let cache_root = home_dir.join(".codex/plugins/cache");
+                if marketplace_name == "skilldock" {
+                    if let Some(marketplace_config) = config.marketplaces.get(&marketplace_name) {
+                        if let Some(marketplace_plugin_root) = resolve_configured_codex_plugin_root(
+                            &cache_root,
+                            &marketplace_name,
+                            marketplace_config,
+                            &plugin_name,
+                        ) {
+                            roots_to_remove.insert(
+                                path_to_string(&marketplace_plugin_root),
+                                marketplace_plugin_root,
+                            );
+                        }
+                    }
+                }
                 for cached_root in
                     collect_codex_cached_plugin_roots(&cache_root, &marketplace_name, &plugin_name)
                 {
@@ -2698,6 +2830,8 @@ fn build_codex_plugin_summary_after_enabled_change(
         .ok()
         .map(|manifest| source_url_from_manifest(&manifest))
         .unwrap_or_default();
+    let display_root =
+        codex_plugin_display_root(home_dir, marketplace_name, plugin_name, &plugin_root);
     let enabled_state = if enabled { "enabled" } else { "disabled" };
     let scopes = vec![build_plugin_scope_summary(
         "user",
@@ -2710,7 +2844,7 @@ fn build_codex_plugin_summary_after_enabled_change(
         InstalledPluginDescriptor {
             host_tool: "codex".to_string(),
             root: plugin_root.clone(),
-            display_root: plugin_root,
+            display_root,
             manifest_path,
             repo_root_override: None,
             plugin_relative_path_override: None,
@@ -2932,6 +3066,7 @@ fn update_hash_plugin_root(
         source_ref.as_deref(),
         &repo_key,
         &sparse_paths,
+        None,
         |repo_root| {
             let remote_plugin_root = if plugin_relative_path.is_empty() {
                 repo_root.to_path_buf()
@@ -3009,7 +3144,7 @@ fn update_plugin_repo(plugin_root: &Path) -> Result<(), String> {
         return Err("当前插件仓库处于 detached HEAD，无法自动更新。".to_string());
     }
 
-    run_git_at(&repo_root, &["fetch", "origin", "--quiet"])?;
+    run_git_at(&repo_root, &["fetch", "origin", "--quiet", "--no-tags"])?;
     let remote_branch = format!("{REMOTE_BRANCH_PREFIX}{branch}");
     run_git_at(&repo_root, &["merge", "--ff-only", &remote_branch])?;
     Ok(())
@@ -3031,7 +3166,10 @@ fn install_plugin_probe_for_host(
     }
 }
 
-fn ensure_shared_plugin_package(probe: &PluginProbeResult) -> Result<SharedPluginPackage, String> {
+fn ensure_shared_plugin_package(
+    probe: &PluginProbeResult,
+    on_progress: Option<&CloneProgressCallback>,
+) -> Result<SharedPluginPackage, String> {
     let source_root = canonicalize_existing_dir(Path::new(&probe.plugin_root))
         .ok()
         .map(|root| resolve_effective_probe_plugin_root(probe, &root));
@@ -3072,6 +3210,7 @@ fn ensure_shared_plugin_package(probe: &PluginProbeResult) -> Result<SharedPlugi
                 &repo_root,
                 &plugin_relative_path,
                 false,
+                on_progress,
             )?;
             ensure_host_manifests_for_probe(&plugin_root, probe)?;
             return Ok(SharedPluginPackage { plugin_root });
@@ -3157,6 +3296,7 @@ fn ensure_shared_plugin_package(probe: &PluginProbeResult) -> Result<SharedPlugi
                 &repo_root,
                 &plugin_relative_path,
                 false,
+                on_progress,
             )?;
             cleanup_duplicate_plugin_package_roots(
                 &repo_root,
@@ -3705,8 +3845,23 @@ fn ensure_shared_plugin_repo(
     repo_root: &Path,
     plugin_relative_path: &Path,
     apply_instead_of: bool,
+    on_progress: Option<&CloneProgressCallback>,
 ) -> Result<(), String> {
     if repo_root.join(".git").is_dir() {
+        // 已有缓存：用 fetch 拉最新内容，避免重新 clone
+        if let Some(cb) = on_progress {
+            cb("正在更新插件缓存...");
+        }
+        let mut fetch_args = vec!["fetch", "origin", "--no-tags", "--quiet"];
+        let branch_arg;
+        if let Some(r) = git_ref.and_then(non_empty_trimmed_string) {
+            branch_arg = r.to_string();
+            fetch_args.push(&branch_arg);
+        }
+        if run_git_at(repo_root, &fetch_args).is_ok() {
+            let _ = run_git_at(repo_root, &["reset", "--hard", "FETCH_HEAD"]);
+        }
+        // fetch 失败也继续（使用现有内容），不阻断安装
         ensure_managed_plugin_repo_git_excludes(repo_root)?;
         configure_plugin_sparse_checkout(repo_root, plugin_relative_path)?;
         return Ok(());
@@ -3722,21 +3877,30 @@ fn ensure_shared_plugin_repo(
         })?;
     }
 
-    let mut args = vec![
-        "clone".to_string(),
-        "--filter=blob:none".to_string(),
-        "--sparse".to_string(),
-    ];
-    if let Some(branch) = git_ref.and_then(non_empty_trimmed_string) {
-        args.extend(["--branch".to_string(), branch]);
-    }
-    let clone_url = if apply_instead_of {
+    let resolved_url = if apply_instead_of {
         resolve_git_clone_url_with_instead_of(clone_url)
     } else {
         clone_url.trim().to_string()
     };
-    args.extend([clone_url, repo_root.to_string_lossy().to_string()]);
-    run_git_network_dynamic_at(Path::new("."), &args)?;
+
+    let mut command = Command::new("git");
+    configure_git_network_command(&mut command);
+    command
+        .arg("clone")
+        .arg("--filter=blob:none")
+        .arg("--no-tags")
+        .arg("--sparse");
+    if on_progress.is_some() {
+        command.arg("--progress");
+    }
+    if let Some(branch) = git_ref.and_then(non_empty_trimmed_string) {
+        command.arg("--branch").arg(branch);
+    }
+    command
+        .arg(&resolved_url)
+        .arg(repo_root.to_string_lossy().as_ref());
+    run_git_clone_with_progress(&mut command, on_progress, "git clone (plugin)")?;
+
     ensure_managed_plugin_repo_git_excludes(repo_root)?;
     configure_plugin_sparse_checkout(repo_root, plugin_relative_path)?;
     Ok(())
@@ -4032,25 +4196,28 @@ fn find_plugin_host_app_bundle(app_name_candidates: &[&str]) -> Option<PathBuf> 
 fn install_codex_plugin_probe(
     home_dir: &Path,
     source_root: &Path,
-    _probe: &PluginProbeResult,
+    probe: &PluginProbeResult,
 ) -> Result<PathBuf, String> {
     const SKILLDOCK_MARKETPLACE_NAME: &str = "skilldock";
     let manifest = read_plugin_manifest(&source_root.join(CODEX_PLUGIN_MANIFEST))?;
     let plugin_name = plugin_install_name(&manifest, source_root);
     let marketplace_root = ensure_skilldock_codex_marketplace(home_dir, source_root, &plugin_name)?;
-    ensure_skilldock_codex_cache_link(
+    let marketplace_plugin_root = marketplace_root.join("plugins").join(&plugin_name);
+    write_skilldock_plugin_source_metadata(&marketplace_plugin_root, probe)?;
+    let cache_plugin_root = ensure_skilldock_codex_cache_link(
         home_dir,
         source_root,
         SKILLDOCK_MARKETPLACE_NAME,
         &plugin_name,
     )?;
+    write_skilldock_plugin_source_metadata(&cache_plugin_root, probe)?;
     write_codex_plugin_install_config(
         home_dir,
         SKILLDOCK_MARKETPLACE_NAME,
         &plugin_name,
         &marketplace_root,
     )?;
-    Ok(marketplace_root.join("plugins").join(&plugin_name))
+    Ok(marketplace_plugin_root)
 }
 
 fn ensure_skilldock_codex_cache_link(
@@ -4059,12 +4226,183 @@ fn ensure_skilldock_codex_cache_link(
     marketplace_name: &str,
     plugin_name: &str,
 ) -> Result<PathBuf, String> {
-    let target_root = home_dir
+    let plugin_cache_root = home_dir
         .join(".codex/plugins/cache")
         .join(marketplace_name)
         .join(plugin_name);
-    link_or_copy_plugin_dir(source_root, &target_root)?;
+    remove_legacy_codex_plugin_cache_root(&plugin_cache_root, source_root)?;
+    prune_codex_plugin_cache_versions(&plugin_cache_root, CODEX_SKILLDOCK_CACHE_VERSION)?;
+    let target_root = plugin_cache_root.join(CODEX_SKILLDOCK_CACHE_VERSION);
+    mirror_codex_plugin_cache_dir(source_root, &target_root)?;
     Ok(target_root)
+}
+
+fn reconcile_skilldock_codex_cache_after_update(
+    plugin: &PluginSummary,
+    target_root: &Path,
+    update_root: &Path,
+) -> Result<(), String> {
+    let home_dir = workspace::home_dir_option().ok_or_else(|| "无法定位用户主目录".to_string())?;
+    let source_root = resolve_updated_codex_plugin_source_root(plugin, target_root, update_root)
+        .ok_or_else(|| format!("更新后未找到 Codex 插件目录: {}", plugin.name))?;
+    ensure_skilldock_codex_cache_link(&home_dir, &source_root, "skilldock", &plugin.manifest_name)?;
+    Ok(())
+}
+
+fn resolve_updated_codex_plugin_source_root(
+    plugin: &PluginSummary,
+    target_root: &Path,
+    update_root: &Path,
+) -> Option<PathBuf> {
+    if target_root.join(CODEX_PLUGIN_MANIFEST).is_file() && find_git_root(target_root).is_some() {
+        return Some(target_root.to_path_buf());
+    }
+    if update_root.join(CODEX_PLUGIN_MANIFEST).is_file() {
+        return Some(update_root.to_path_buf());
+    }
+
+    let mut candidates = Vec::new();
+    collect_codex_plugin_roots(update_root, 0, &mut candidates);
+    candidates
+        .into_iter()
+        .filter(|root| cached_codex_plugin_matches(root, &plugin.manifest_name))
+        .max_by_key(|root| file_modified_timestamp(&root.join(CODEX_PLUGIN_MANIFEST)))
+}
+
+fn remove_legacy_codex_plugin_cache_root(
+    plugin_cache_root: &Path,
+    source_root: &Path,
+) -> Result<(), String> {
+    if fs::symlink_metadata(plugin_cache_root).is_err() {
+        return Ok(());
+    }
+    let metadata = fs::symlink_metadata(plugin_cache_root).map_err(|error| {
+        format!(
+            "读取 Codex 插件缓存失败（{}）: {error}",
+            plugin_cache_root.display()
+        )
+    })?;
+    if metadata.file_type().is_symlink()
+        || metadata.is_file()
+        || paths_refer_to_same_dir(plugin_cache_root, source_root)
+        || plugin_cache_root.join(CODEX_PLUGIN_MANIFEST).is_file()
+    {
+        remove_path(plugin_cache_root)?;
+    }
+    Ok(())
+}
+
+fn prune_codex_plugin_cache_versions(
+    plugin_cache_root: &Path,
+    keep_version: &str,
+) -> Result<(), String> {
+    if !plugin_cache_root.is_dir() {
+        return Ok(());
+    }
+    let entries = fs::read_dir(plugin_cache_root).map_err(|error| {
+        format!(
+            "读取 Codex 插件缓存目录失败（{}）: {error}",
+            plugin_cache_root.display()
+        )
+    })?;
+    for entry in entries {
+        let entry = entry.map_err(|error| {
+            format!(
+                "读取 Codex 插件缓存条目失败（{}）: {error}",
+                plugin_cache_root.display()
+            )
+        })?;
+        if entry.file_name().to_string_lossy() != keep_version {
+            remove_path(&entry.path())?;
+        }
+    }
+    Ok(())
+}
+
+fn mirror_codex_plugin_cache_dir(source_root: &Path, target_root: &Path) -> Result<(), String> {
+    if paths_refer_to_same_dir(source_root, target_root) {
+        return Ok(());
+    }
+    let source_metadata = read_skilldock_plugin_source_metadata(target_root)
+        .or_else(|| read_skilldock_plugin_source_metadata(source_root))
+        .or_else(|| plugin_source_metadata_from_package_identity(source_root));
+    if target_root.exists() || fs::symlink_metadata(target_root).is_ok() {
+        remove_path(target_root)?;
+    }
+    if let Some(parent) = target_root.parent() {
+        fs::create_dir_all(parent).map_err(|error| {
+            format!(
+                "创建 Codex 插件缓存目录失败（{}）: {error}",
+                parent.display()
+            )
+        })?;
+    }
+
+    #[cfg(unix)]
+    {
+        if let Err(error) = symlink_plugin_dir_entries(source_root, target_root) {
+            let _ = remove_path(target_root);
+            copy_dir_all(source_root, target_root, false).map_err(|copy_error| {
+                format!(
+                    "创建 Codex 插件缓存镜像失败（{} -> {}）: {error}; 复制回退也失败: {copy_error}",
+                    source_root.display(),
+                    target_root.display()
+                )
+            })?;
+        }
+        if let Some(metadata) = source_metadata.as_ref() {
+            write_skilldock_plugin_source_metadata_value(target_root, metadata)?;
+        }
+        return Ok(());
+    }
+
+    #[cfg(not(unix))]
+    {
+        copy_dir_all(source_root, target_root, false)?;
+        if let Some(metadata) = source_metadata.as_ref() {
+            write_skilldock_plugin_source_metadata_value(target_root, metadata)?;
+        }
+        Ok(())
+    }
+}
+
+#[cfg(unix)]
+fn symlink_plugin_dir_entries(source_root: &Path, target_root: &Path) -> Result<(), String> {
+    fs::create_dir_all(target_root).map_err(|error| {
+        format!(
+            "创建 Codex 插件缓存镜像目录失败（{}）: {error}",
+            target_root.display()
+        )
+    })?;
+    let entries = fs::read_dir(source_root).map_err(|error| {
+        format!(
+            "读取 Codex 插件源目录失败（{}）: {error}",
+            source_root.display()
+        )
+    })?;
+    for entry in entries {
+        let entry = entry.map_err(|error| {
+            format!(
+                "读取 Codex 插件源目录条目失败（{}）: {error}",
+                source_root.display()
+            )
+        })?;
+        let source_path = entry.path();
+        let target_path = target_root.join(entry.file_name());
+        let entry_name = entry.file_name();
+        let entry_name = entry_name.to_string_lossy();
+        if entry_name == ".git" || entry_name == ".skilldock" {
+            continue;
+        }
+        std::os::unix::fs::symlink(&source_path, &target_path).map_err(|error| {
+            format!(
+                "创建 Codex 插件缓存镜像链接失败（{} -> {}）: {error}",
+                target_path.display(),
+                source_path.display()
+            )
+        })?;
+    }
+    Ok(())
 }
 
 fn ensure_skilldock_codex_marketplace(
@@ -4594,7 +4932,13 @@ fn write_skilldock_plugin_source_metadata(
     {
         return Ok(());
     }
+    write_skilldock_plugin_source_metadata_value(plugin_root, &metadata)
+}
 
+fn write_skilldock_plugin_source_metadata_value(
+    plugin_root: &Path,
+    metadata: &SkillDockPluginSourceMetadata,
+) -> Result<(), String> {
     let metadata_path = skilldock_plugin_source_metadata_path(plugin_root);
     if let Some(parent) = metadata_path.parent() {
         fs::create_dir_all(parent).map_err(|error| {
@@ -4631,6 +4975,36 @@ fn read_skilldock_plugin_source_metadata(
     };
     let content = fs::read_to_string(metadata_path).ok()?;
     serde_json::from_str::<SkillDockPluginSourceMetadata>(&content).ok()
+}
+
+fn read_skilldock_plugin_source_metadata_with_package_fallback(
+    plugin_root: &Path,
+) -> Option<SkillDockPluginSourceMetadata> {
+    read_skilldock_plugin_source_metadata(plugin_root)
+        .or_else(|| plugin_source_metadata_from_package_identity(plugin_root))
+}
+
+fn plugin_source_metadata_from_package_identity(
+    plugin_root: &Path,
+) -> Option<SkillDockPluginSourceMetadata> {
+    let effective_plugin_root =
+        canonicalize_existing_dir(plugin_root).unwrap_or_else(|_| plugin_root.to_path_buf());
+    let identity = read_plugin_package_identity(&effective_plugin_root).or_else(|| {
+        find_git_root(&effective_plugin_root)
+            .and_then(|git_root| read_plugin_package_identity(&git_root))
+    })?;
+    let source_url = non_empty_trimmed_string(&identity.source)?;
+    let source_type = if find_git_root(&effective_plugin_root).is_some() {
+        "git"
+    } else {
+        "marketplace"
+    };
+    Some(SkillDockPluginSourceMetadata {
+        source_url,
+        source_type: source_type.to_string(),
+        source_ref: String::new(),
+        source_revision: current_git_commit(&effective_plugin_root).unwrap_or_default(),
+    })
 }
 
 fn resolve_plugin_source_type(
@@ -5439,7 +5813,20 @@ fn plugin_source_type_priority(source_type: &str) -> usize {
 }
 
 fn normalize_plugin_source_identity(value: &str) -> String {
-    value.trim().trim_end_matches('/').to_ascii_lowercase()
+    let normalized = value.trim().trim_end_matches('/').to_ascii_lowercase();
+
+    if let Some((repo_url, branch_path)) = normalized.rsplit_once("/-/tree/") {
+        if !repo_url.is_empty() && !branch_path.contains('/') {
+            return repo_url.trim_end_matches(".git").to_string();
+        }
+    }
+    if let Some((repo_url, branch_path)) = normalized.rsplit_once("/tree/") {
+        if !repo_url.is_empty() && !branch_path.contains('/') {
+            return repo_url.trim_end_matches(".git").to_string();
+        }
+    }
+
+    normalized.trim_end_matches(".git").to_string()
 }
 
 fn split_enabled_plugin_key(value: &str) -> Option<(&str, &str)> {
@@ -5892,6 +6279,7 @@ fn remote_plugin_hash(
         source_ref.as_deref(),
         &repo_key,
         &sparse_paths,
+        None,
         |repo_root| {
             let target_root = if plugin_relative_path.trim().is_empty() {
                 repo_root.to_path_buf()
@@ -6832,10 +7220,6 @@ fn run_git_dynamic_at(repo_root: &Path, args: &[String]) -> Result<String, Strin
     run_git_at(repo_root, &arg_refs)
 }
 
-fn run_git_network_dynamic_at(repo_root: &Path, args: &[String]) -> Result<String, String> {
-    run_git_dynamic_at(repo_root, args)
-}
-
 fn source_url_from_manifest(manifest: &PluginManifest) -> String {
     if !manifest.repository.trim().is_empty() {
         return manifest.repository.trim().to_string();
@@ -6925,6 +7309,7 @@ fn probe_plugin_source_blocking(
     git_ref: Option<&str>,
     sparse_path: Option<&str>,
     hint_host_tool: Option<String>,
+    on_progress: Option<&CloneProgressCallback>,
 ) -> Result<PluginProbeResult, String> {
     let trimmed_source = source.trim();
     if trimmed_source.is_empty() {
@@ -6951,12 +7336,10 @@ fn probe_plugin_source_blocking(
         source_spec.relative_path = explicit_sparse_path.map(PathBuf::from);
     }
 
-    let repository_url = repository_url_from_clone_url(&source_spec.clone_url);
-    let resolved_clone_url = resolve_clone_url_http_first(&source_spec.clone_url, &repository_url)?;
-    source_spec.clone_url = resolved_clone_url;
-    let resolved_source_url = plugin_probe_source_url(&source_spec);
+    // 先尝试 GitHub API 快速路径
+    let early_source_url = plugin_probe_source_url(&source_spec);
     if let Ok(Some(mut probes)) = detect_remote_github_plugin_candidates(
-        &resolved_source_url,
+        &early_source_url,
         &source_spec,
         hint_host_tool.clone(),
     ) {
@@ -6964,6 +7347,11 @@ fn probe_plugin_source_blocking(
             return Ok(probe);
         }
     }
+
+    let repository_url = repository_url_from_clone_url(&source_spec.clone_url);
+    let resolved_clone_url = resolve_clone_url_http_first(&source_spec.clone_url, &repository_url)?;
+    source_spec.clone_url = resolved_clone_url;
+    let resolved_source_url = plugin_probe_source_url(&source_spec);
 
     let repo_key = plugin_discovery_repo_key(
         &source_spec.clone_url,
@@ -6980,6 +7368,7 @@ fn probe_plugin_source_blocking(
         source_spec.branch.as_deref(),
         &repo_key,
         &sparse_paths,
+        on_progress,
         |repo_root| {
             let probe_root = source_spec
                 .relative_path
@@ -7002,6 +7391,7 @@ fn probe_plugin_source_candidates_blocking(
     git_ref: Option<&str>,
     sparse_path: Option<&str>,
     hint_host_tool: Option<String>,
+    on_progress: Option<&CloneProgressCallback>,
 ) -> Result<Vec<PluginProbeResult>, String> {
     let trimmed_source = source.trim();
     if trimmed_source.is_empty() {
@@ -7028,17 +7418,21 @@ fn probe_plugin_source_candidates_blocking(
         source_spec.relative_path = explicit_sparse_path.map(PathBuf::from);
     }
 
-    let repository_url = repository_url_from_clone_url(&source_spec.clone_url);
-    let resolved_clone_url = resolve_clone_url_http_first(&source_spec.clone_url, &repository_url)?;
-    source_spec.clone_url = resolved_clone_url;
-    let resolved_source_url = plugin_probe_source_url(&source_spec);
+    // 先尝试 GitHub API 快速路径（无需 git ls-remote，纯 HTTP API）
+    let early_source_url = plugin_probe_source_url(&source_spec);
     if let Ok(Some(probes)) = detect_remote_github_plugin_candidates(
-        &resolved_source_url,
+        &early_source_url,
         &source_spec,
         hint_host_tool.clone(),
     ) {
         return Ok(probes);
     }
+
+    // GitHub API 未命中时才解析/探测 clone URL，再做 git clone
+    let repository_url = repository_url_from_clone_url(&source_spec.clone_url);
+    let resolved_clone_url = resolve_clone_url_http_first(&source_spec.clone_url, &repository_url)?;
+    source_spec.clone_url = resolved_clone_url;
+    let resolved_source_url = plugin_probe_source_url(&source_spec);
 
     let repo_key = plugin_discovery_repo_key(
         &source_spec.clone_url,
@@ -7055,6 +7449,7 @@ fn probe_plugin_source_candidates_blocking(
         source_spec.branch.as_deref(),
         &repo_key,
         &sparse_paths,
+        on_progress,
         |repo_root| {
             let probe_root = source_spec
                 .relative_path
@@ -8513,6 +8908,7 @@ mod tests {
         build_plugin_scope_summary, cleanup_duplicate_plugin_package_roots,
         configure_plugin_sparse_checkout, copy_plugin_dir, current_timestamp_rfc3339,
         dedupe_and_sort_plugins, delete_plugin, ensure_skilldock_claude_marketplace,
+        ensure_skilldock_codex_cache_link,
         ensure_skilldock_codex_marketplace, get_plugin_component_preview,
         install_selected_plugin_probes_blocking, legacy_plugin_package_identity_path,
         legacy_skilldock_plugin_source_metadata_path, list_cli_tools,
@@ -9361,9 +9757,14 @@ exit 0
         )
         .expect("write marketplace manifest");
 
-        let results =
-            probe_plugin_source_candidates_blocking(&repo_root.to_string_lossy(), None, None, None)
-                .expect("probe plugin candidates");
+        let results = probe_plugin_source_candidates_blocking(
+            &repo_root.to_string_lossy(),
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("probe plugin candidates");
         let roots = results
             .iter()
             .map(|result| result.plugin_root.as_str())
@@ -9430,6 +9831,7 @@ exit 0
                 warnings: Vec::new(),
             }],
             vec!["claude-code".to_string()],
+            None,
         )
         .expect("install selected plugin");
 
@@ -9529,6 +9931,7 @@ exit 0
                 warnings: Vec::new(),
             }],
             vec!["codex".to_string()],
+            None,
         )
         .expect("skip install when no host matches probe");
 
@@ -9706,6 +10109,15 @@ exit 0
         .expect("write codex manifest");
         fs::write(source_root.join("skills/prototype/SKILL.md"), "# Prototype")
             .expect("write skill");
+        let stale_cache_root =
+            home_dir.join(".codex/plugins/cache/skilldock/product-design/0.1.40");
+        fs::create_dir_all(stale_cache_root.join(".codex-plugin"))
+            .expect("create stale codex cache manifest dir");
+        fs::write(
+            stale_cache_root.join(".codex-plugin/plugin.json"),
+            r#"{"name":"product-design","version":"0.1.40"}"#,
+        )
+        .expect("write stale codex cache manifest");
         let cli_path = temp_dir.join("codex-cli");
         let log_path = temp_dir.join("codex-cli.log");
         write_cli_logging_script(&cli_path, &log_path);
@@ -9741,8 +10153,10 @@ exit 0
                 warnings: Vec::new(),
             }],
             vec!["codex".to_string()],
+            None,
         )
         .expect("install selected plugin");
+        let listed_plugins = list_installed_plugins().expect("list installed plugins");
 
         match previous_home {
             Some(value) => env::set_var("HOME", value),
@@ -9753,7 +10167,8 @@ exit 0
             None => env::remove_var("SKILLDOCK_CODEX_CLI"),
         }
 
-        let installed_root = home_dir.join(".codex/plugins/cache/skilldock/product-design");
+        let plugin_cache_root = home_dir.join(".codex/plugins/cache/skilldock/product-design");
+        let installed_root = plugin_cache_root.join("latest");
         let marketplace_plugin_root =
             home_dir.join(".codex/marketplaces/skilldock/plugins/product-design");
         let config_content =
@@ -9768,6 +10183,24 @@ exit 0
         assert_eq!(installed[0].name, "Product Design");
         assert_eq!(installed[0].enabled_state, "enabled");
         assert_eq!(installed[0].install_state, "installed");
+        assert_eq!(installed[0].install_source, "skilldock");
+        assert_eq!(
+            installed[0].display_root_path,
+            plugin_cache_root.to_string_lossy().into_owned()
+        );
+        assert_eq!(
+            listed_plugins
+                .iter()
+                .filter(|plugin| plugin.host_tool == "codex"
+                    && plugin.manifest_name == "product-design")
+                .count(),
+            1
+        );
+        assert_eq!(installed[0].source_type, "git");
+        assert_eq!(
+            installed[0].source_url,
+            "https://github.com/openai/role-specific-plugins.git"
+        );
         let managed_plugin_root = home_dir.join(".skilldock/plugins/product-design");
         assert!(paths_refer_to_same_dir(
             Path::new(&installed[0].root_path),
@@ -9801,20 +10234,188 @@ exit 0
             &marketplace_plugin_root,
             &managed_plugin_root
         ));
+        assert!(!fs::symlink_metadata(&installed_root)
+            .expect("read codex cache metadata")
+            .file_type()
+            .is_symlink());
         assert!(paths_refer_to_same_dir(
-            &installed_root,
-            &managed_plugin_root
+            &installed_root.join(".codex-plugin"),
+            &managed_plugin_root.join(".codex-plugin")
+        ));
+        assert!(paths_refer_to_same_dir(
+            &installed_root.join("skills"),
+            &managed_plugin_root.join("skills")
         ));
         assert!(fs::symlink_metadata(&marketplace_plugin_root)
             .expect("read marketplace plugin metadata")
             .file_type()
             .is_symlink());
-        assert!(fs::symlink_metadata(&installed_root)
-            .expect("read codex cache metadata")
+        assert!(fs::symlink_metadata(installed_root.join("skills"))
+            .expect("read codex cache skills metadata")
             .file_type()
             .is_symlink());
-        assert!(!installed_root.join("0.1.41").exists());
+        assert_eq!(
+            read_skilldock_plugin_source_metadata(&marketplace_plugin_root)
+                .expect("read marketplace source metadata")
+                .source_url,
+            "https://github.com/openai/role-specific-plugins.git"
+        );
+        assert_eq!(
+            read_skilldock_plugin_source_metadata(&installed_root)
+                .expect("read cache source metadata")
+                .source_url,
+            "https://github.com/openai/role-specific-plugins.git"
+        );
+        assert!(!plugin_cache_root.join(".codex-plugin/plugin.json").exists());
+        assert!(!stale_cache_root.exists());
         assert!(!log_path.exists());
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn installs_codex_plugin_probe_replaces_legacy_direct_cache_link() {
+        let _guard = TEST_ENV_LOCK.lock().expect("lock test env");
+        let temp_dir = temp_test_dir("selected-codex-plugin-legacy-cache");
+        let home_dir = temp_dir.join("home");
+        let source_root = temp_dir.join("source/example-plugin");
+        let plugin_cache_root = home_dir.join(".codex/plugins/cache/skilldock/example-plugin");
+        let installed_root = plugin_cache_root.join("latest");
+
+        fs::create_dir_all(source_root.join(".codex-plugin")).expect("create codex manifest dir");
+        fs::create_dir_all(source_root.join("skills/example-plugin"))
+            .expect("create skill dir");
+        fs::write(
+            source_root.join(".codex-plugin/plugin.json"),
+            r#"{"name":"example-plugin","version":"0.1.0","skills":"./skills/"}"#,
+        )
+        .expect("write codex manifest");
+        fs::write(
+            source_root.join("skills/example-plugin/SKILL.md"),
+            "# Example Plugin",
+        )
+        .expect("write skill");
+        fs::create_dir_all(plugin_cache_root.parent().expect("cache parent"))
+            .expect("create codex cache parent");
+        std::os::unix::fs::symlink(&source_root, &plugin_cache_root)
+            .expect("create legacy direct cache link");
+
+        ensure_skilldock_codex_cache_link(
+            &home_dir,
+            &source_root,
+            "skilldock",
+            "example-plugin",
+        )
+        .expect("ensure codex cache link");
+
+        assert!(plugin_cache_root.is_dir());
+        assert!(!plugin_cache_root.join(".codex-plugin/plugin.json").exists());
+        assert!(installed_root.join(".codex-plugin/plugin.json").is_file());
+        assert!(installed_root
+            .join("skills/example-plugin/SKILL.md")
+            .is_file());
+        assert!(!fs::symlink_metadata(&installed_root)
+            .expect("read versioned cache metadata")
+            .file_type()
+            .is_symlink());
+        assert!(paths_refer_to_same_dir(
+            &installed_root.join("skills"),
+            &source_root.join("skills")
+        ));
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scans_legacy_codex_skilldock_symlink_from_package_identity() {
+        let _guard = TEST_ENV_LOCK.lock().expect("lock test env");
+        let temp_dir = temp_test_dir("codex-skilldock-package-identity-fallback");
+        let home_dir = temp_dir.join("home");
+        let shared_package_root =
+            home_dir.join(".skilldock/plugins/example-plugin-example-repo");
+        let shared_plugin_root = shared_package_root.join("example-plugin");
+        let codex_marketplace_root = home_dir.join(".codex/marketplaces/skilldock");
+        let marketplace_plugin_root = codex_marketplace_root.join("plugins/example-plugin");
+        let source_url = "https://git.example.com/example-org/example-repo";
+
+        fs::create_dir_all(shared_plugin_root.join(".codex-plugin"))
+            .expect("create shared codex manifest dir");
+        fs::write(
+            shared_plugin_root.join(".codex-plugin/plugin.json"),
+            format!(
+                r#"{{"name":"example-plugin","version":"0.1.0","repository":"{source_url}","interface":{{"displayName":"Example Plugin"}}}}"#
+            ),
+        )
+        .expect("write shared codex manifest");
+        fs::create_dir_all(
+            marketplace_plugin_root
+                .parent()
+                .expect("marketplace parent"),
+        )
+        .expect("create marketplace plugin parent");
+        std::os::unix::fs::symlink(&shared_plugin_root, &marketplace_plugin_root)
+            .expect("link codex marketplace plugin");
+        run_git_test(&shared_package_root, &["init", "-b", "master"]);
+        run_git_test(
+            &shared_package_root,
+            &["config", "user.email", "skilldock@example.com"],
+        );
+        run_git_test(&shared_package_root, &["config", "user.name", "SkillDock"]);
+        run_git_test(&shared_package_root, &["add", "."]);
+        run_git_test(&shared_package_root, &["commit", "-m", "init"]);
+        write_plugin_package_identity(
+            &shared_package_root,
+            source_url,
+            Path::new("example-plugin"),
+        )
+        .expect("write package identity");
+
+        fs::create_dir_all(codex_marketplace_root.join(".agents/plugins"))
+            .expect("create codex marketplace manifest dir");
+        fs::write(
+            codex_marketplace_root.join(".agents/plugins/marketplace.json"),
+            r#"{
+  "plugins": [
+    {
+      "name": "example-plugin",
+      "source": { "source": "local", "path": "./plugins/example-plugin" }
+    }
+  ]
+}"#,
+        )
+        .expect("write codex marketplace manifest");
+        fs::create_dir_all(home_dir.join(".codex")).expect("create codex dir");
+        fs::write(
+            home_dir.join(".codex/config.toml"),
+            r#"[plugins."example-plugin@skilldock"]
+enabled = true
+
+[marketplaces.skilldock]
+source = "__SOURCE__"
+"#
+            .replace("__SOURCE__", &codex_marketplace_root.to_string_lossy()),
+        )
+        .expect("write codex config");
+
+        let previous_home = env::var_os("HOME");
+        env::set_var("HOME", &home_dir);
+
+        let plugins = list_installed_plugins().expect("list plugins");
+
+        match previous_home {
+            Some(value) => env::set_var("HOME", value),
+            None => env::remove_var("HOME"),
+        }
+
+        assert_eq!(plugins.len(), 1);
+        assert_eq!(plugins[0].host_tool, "codex");
+        assert_eq!(plugins[0].name, "Example Plugin");
+        assert_eq!(plugins[0].install_source, "skilldock");
+        assert_eq!(plugins[0].source_type, "git");
+        assert_eq!(plugins[0].source_url, source_url);
+        assert!(plugins[0].source_revision.len() >= 7);
 
         let _ = fs::remove_dir_all(temp_dir);
     }
@@ -9872,6 +10473,7 @@ exit 0
                 warnings: Vec::new(),
             }],
             vec!["codex".to_string()],
+            None,
         )
         .expect("install selected plugin");
 
@@ -9900,7 +10502,7 @@ exit 0
             .is_file());
         let marketplace_plugin_root =
             home_dir.join(".codex/marketplaces/skilldock/plugins/shopify-plugin");
-        let installed_root = home_dir.join(".codex/plugins/cache/skilldock/shopify-plugin");
+        let installed_root = home_dir.join(".codex/plugins/cache/skilldock/shopify-plugin/latest");
         assert!(marketplace_plugin_root
             .join(".codex-plugin/plugin.json")
             .is_file());
@@ -9909,9 +10511,13 @@ exit 0
             &marketplace_plugin_root,
             &managed_plugin_root
         ));
+        assert!(!fs::symlink_metadata(&installed_root)
+            .expect("read codex cache metadata")
+            .file_type()
+            .is_symlink());
         assert!(paths_refer_to_same_dir(
-            &installed_root,
-            &managed_plugin_root
+            &installed_root.join(".codex-plugin"),
+            &managed_plugin_root.join(".codex-plugin")
         ));
         assert!(!log_path.exists());
 
@@ -10073,6 +10679,7 @@ exit 0
         let installed = install_selected_plugin_probes_blocking(
             vec![target_probe],
             vec!["claude-code".to_string()],
+            None,
         )
         .expect("install selected plugin");
 
@@ -10385,7 +10992,7 @@ source = "__SOURCE__"
     }
 
     #[test]
-    fn lists_codex_cached_plugins_when_config_source_is_remote() {
+    fn skips_unconfigured_codex_cached_plugins_when_config_source_is_remote() {
         let _guard = TEST_ENV_LOCK.lock().expect("lock test env");
         let temp_dir = temp_test_dir("codex-cache-scan");
         let home_dir = temp_dir.join("home");
@@ -10454,13 +11061,10 @@ source = "https://example.com/example-org.git"
         assert_eq!(configured.enabled_state, "enabled");
         assert_eq!(configured.install_state, "installed");
 
-        let detected = plugins
-            .iter()
-            .find(|plugin| plugin.name == "Documents")
-            .expect("cache-only plugin should be detected");
-        assert_eq!(detected.host_tool, "codex");
-        assert_eq!(detected.enabled_state, "unknown");
-        assert_eq!(detected.install_state, "detected");
+        assert!(
+            plugins.iter().all(|plugin| plugin.name != "Documents"),
+            "cache-only plugin should not be listed"
+        );
 
         let _ = fs::remove_dir_all(temp_dir);
     }
@@ -10872,6 +11476,7 @@ source = "__SOURCE__"
                 warnings: Vec::new(),
             }],
             vec!["cursor".to_string()],
+            None,
         )
         .expect("install selected plugin");
 
@@ -11013,6 +11618,7 @@ source = "__SOURCE__"
                 warnings: Vec::new(),
             }],
             vec!["cursor".to_string()],
+            None,
         )
         .expect("install cloudflare plugin");
 
@@ -11079,6 +11685,7 @@ source = "__SOURCE__"
                 warnings: Vec::new(),
             }],
             vec!["claude-code".to_string()],
+            None,
         )
         .expect("install nested cloudflare claude plugin");
 
@@ -11152,6 +11759,7 @@ source = "__SOURCE__"
                 warnings: Vec::new(),
             }],
             vec!["claude-code".to_string(), "codex".to_string()],
+            None,
         )
         .expect("install selected plugin");
 
@@ -11224,6 +11832,7 @@ source = "__SOURCE__"
                 warnings: Vec::new(),
             }],
             vec!["cursor".to_string()],
+            None,
         )
         .expect("install cursor plugin");
 
@@ -11292,6 +11901,7 @@ source = "__SOURCE__"
                 warnings: Vec::new(),
             }],
             vec!["cursor".to_string()],
+            None,
         )
         .expect("install selected plugin");
 
@@ -11371,6 +11981,7 @@ source = "__SOURCE__"
                 warnings: Vec::new(),
             }],
             vec!["cursor".to_string()],
+            None,
         )
         .expect("install selected plugin");
 
@@ -12868,6 +13479,107 @@ source = "__SOURCE__"
             r#"{
   "enabledPlugins": {
     "repo-scout@claude-plugins-official": true
+  }
+}"#,
+        )
+        .expect("write claude settings");
+
+        let previous_home = env::var_os("HOME");
+        env::set_var("HOME", &home_dir);
+
+        let plugins = list_installed_plugins().expect("list plugins");
+
+        match previous_home {
+            Some(value) => env::set_var("HOME", value),
+            None => env::remove_var("HOME"),
+        }
+
+        assert_eq!(plugins.len(), 2);
+        let claude_plugin = plugins
+            .iter()
+            .find(|plugin| plugin.host_tool == "claude-code")
+            .expect("find claude plugin");
+        let codex_plugin = plugins
+            .iter()
+            .find(|plugin| plugin.host_tool == "codex")
+            .expect("find codex plugin");
+        assert_eq!(claude_plugin.related_host_tools, vec!["codex".to_string()]);
+        assert_eq!(
+            codex_plugin.related_host_tools,
+            vec!["claude-code".to_string()]
+        );
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn links_related_host_tools_when_source_url_uses_git_web_branch_path() {
+        let _guard = TEST_ENV_LOCK.lock().expect("lock test env");
+        let temp_dir = temp_test_dir("plugin-cross-host-branch-source-scan");
+        let home_dir = temp_dir.join("home");
+        let repo_source_url = "https://git.example.com/example-org/example-repo";
+        let branch_source_url = "https://git.example.com/example-org/example-repo/tree/master";
+
+        let codex_plugin_root = home_dir.join(".codex/plugins/cache/skilldock/example-plugin");
+        fs::create_dir_all(codex_plugin_root.join(".codex-plugin"))
+            .expect("create codex plugin manifest dir");
+        fs::write(
+            codex_plugin_root.join(".codex-plugin/plugin.json"),
+            format!(
+                r#"{{"name":"example-plugin","version":"1.0.0","repository":"{repo_source_url}","interface":{{"displayName":"example-plugin"}}}}"#,
+            ),
+        )
+        .expect("write codex plugin manifest");
+        fs::create_dir_all(home_dir.join(".codex")).expect("create codex home dir");
+        fs::write(
+            home_dir.join(".codex/config.toml"),
+            r#"[plugins."example-plugin@skilldock"]
+enabled = true
+
+[marketplaces.skilldock]
+source = "__SOURCE__"
+"#
+            .replace("__SOURCE__", repo_source_url),
+        )
+        .expect("write codex config");
+
+        let claude_install_root =
+            home_dir.join(".claude/plugins/cache/skilldock/example-plugin/1.0.0");
+        fs::create_dir_all(claude_install_root.join(".claude-plugin"))
+            .expect("create claude plugin manifest dir");
+        fs::write(
+            claude_install_root.join(".claude-plugin/plugin.json"),
+            format!(
+                r#"{{"name":"example-plugin","version":"1.0.0","repository":"{branch_source_url}","interface":{{"displayName":"example-plugin"}}}}"#,
+            ),
+        )
+        .expect("write claude plugin manifest");
+        fs::create_dir_all(home_dir.join(".claude/plugins")).expect("create claude plugins dir");
+        fs::write(
+            home_dir.join(".claude/plugins/installed_plugins.json"),
+            r#"{
+  "version": 2,
+  "plugins": {
+    "example-plugin@skilldock": [
+      {
+        "scope": "user",
+        "installPath": "__INSTALL_PATH__",
+        "version": "1.0.0",
+        "installedAt": "2026-03-25T14:47:45.632Z",
+        "lastUpdated": "2026-04-20T15:35:07.019Z",
+        "gitCommitSha": "abc123"
+      }
+    ]
+  }
+}"#
+            .replace("__INSTALL_PATH__", &claude_install_root.to_string_lossy()),
+        )
+        .expect("write claude installed plugins state");
+        fs::write(
+            home_dir.join(".claude/settings.json"),
+            r#"{
+  "enabledPlugins": {
+    "example-plugin@skilldock": true
   }
 }"#,
         )

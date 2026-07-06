@@ -271,6 +271,7 @@ function renderRoute(
   onInstallSkillFromLocal: () => void,
   onInstallSkillFromMarketplace: () => void,
   onInstallMcpFromMarketplace: () => void,
+  onInstallPluginFromMarketplace: () => void,
   activeSkillsSection: SkillsSectionKey,
 ) {
   if (route === "tools") {
@@ -287,7 +288,7 @@ function renderRoute(
     );
   }
   if (route === "plugins") {
-    return <PluginsRoute />;
+    return <PluginsRoute onGoInstall={onInstallPluginFromMarketplace} />;
   }
   if (route === "settings") {
     return <SettingsRoute />;
@@ -590,6 +591,12 @@ function AppContent() {
     setActiveInstallTab("market");
   }
 
+  function handleOpenPluginInstall() {
+    setActiveRoute("install");
+    setActiveInstallCategory("plugin");
+    setActiveInstallTab("market");
+  }
+
   return (
     <div
       className={`app-shell${isSidebarCollapsed ? " is-sidebar-collapsed" : ""}${isMacOS ? " is-macos-window" : ""}`}
@@ -754,6 +761,7 @@ function AppContent() {
                     onStatusFilterChange={setSkillStatusFilter}
                     showGroupView={showGroupView}
                     onShowGroupViewChange={handleShowGroupViewChange}
+                    onGoInstall={() => handleOpenSkillInstall("market")}
                   />
                 ) : (
                   <div
@@ -867,6 +875,7 @@ function AppContent() {
               () => handleOpenSkillInstall("local"),
               () => handleOpenSkillInstall("market"),
               handleOpenMcpInstall,
+              handleOpenPluginInstall,
               activeSkillsSection,
             )}
           </RouteErrorBoundary>

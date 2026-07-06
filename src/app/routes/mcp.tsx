@@ -2,6 +2,7 @@ import { startTransition, useDeferredValue, useEffect, useMemo, useRef, useState
 import type { MouseEvent as ReactMouseEvent } from "react";
 import { createPortal } from "react-dom";
 import { alignExpandedRowIntoView } from "@/app/utils/align-expanded-row";
+import { ToolbarGoInstallButton } from "@/app/components/ToolbarGoInstallButton";
 import { useTranslate, type TranslationKey } from "@/app/i18n";
 import { useNotifications } from "@/app/notifications";
 import { BusinessError } from "@/app/errors";
@@ -1248,6 +1249,9 @@ export function McpRoute(props: McpRouteProps = {}) {
           onChange={(event) => setQuery(event.target.value)}
         />
       </label>
+      {props.onInstallFromMarketplace ? (
+        <ToolbarGoInstallButton onClick={props.onInstallFromMarketplace} />
+      ) : null}
       <button
         className={`secondary-button secondary-button--compact skills-toolbar-button skills-toolbar-button--refresh${isRefreshing ? " is-loading" : ""}`}
         type="button"

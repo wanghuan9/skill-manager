@@ -1211,6 +1211,8 @@ code {
 }
 
 .skill-card,
+.mcp-server-card,
+.tool-list-row,
 .tool-card {
   transition:
     border-color 140ms ease,
@@ -1219,12 +1221,16 @@ code {
 
 .skill-card:hover,
 .skill-card:focus-within,
+.mcp-server-card:hover,
+.mcp-server-card:focus-within,
+.tool-list-row:hover,
+.tool-list-row:focus-within,
 .tool-card:hover,
 .tool-card:focus-within {
-  border-color: #b9ccff;
+  border-color: #c6d7ff;
   box-shadow:
-    0 0 0 1px rgba(59, 130, 246, 0.18),
-    0 8px 20px rgba(23, 35, 63, 0.1);
+    0 0 0 0.75px rgba(59, 130, 246, 0.13),
+    0 7px 18px rgba(23, 35, 63, 0.085);
 }
 
 .panel-card,
@@ -1370,12 +1376,12 @@ code {
 }
 
 .search-field--header {
-  flex: 0 1 300px;
+  flex: 0 1 230px;
   display: flex;
   align-items: center;
   height: 36px;
   min-height: 36px;
-  min-width: 220px;
+  min-width: 180px;
   border: 1px solid var(--line);
   border-radius: 14px;
   padding: 0 12px;
@@ -1385,8 +1391,8 @@ code {
 }
 
 .skill-search-field {
-  flex: 0 0 300px;
-  width: 300px;
+  flex: 0 0 230px;
+  width: 230px;
 }
 
 .search-field--header input {
@@ -1859,8 +1865,8 @@ code {
 .skill-group-section__list .skill-card:focus-within {
   border-color: #c6d7ff;
   box-shadow:
-    0 0 0 1px rgba(59, 130, 246, 0.13),
-    0 7px 16px rgba(23, 35, 63, 0.09);
+    0 0 0 0.75px rgba(59, 130, 246, 0.13),
+    0 7px 18px rgba(23, 35, 63, 0.085);
 }
 
 .skills-page .status-badge,
@@ -1882,6 +1888,14 @@ code {
   border-color: var(--line);
   background: var(--surface);
   box-shadow: var(--shadow);
+}
+
+.skills-page .skill-card:hover,
+.skills-page .skill-card:focus-within {
+  border-color: #c6d7ff;
+  box-shadow:
+    0 0 0 0.75px rgba(59, 130, 246, 0.13),
+    0 7px 18px rgba(23, 35, 63, 0.085);
 }
 
 .skill-card__header,
@@ -3713,6 +3727,74 @@ code {
   border-color: #7a7a7a;
 }
 
+.repo-clone-progress-bar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 34px;
+  margin-bottom: 12px;
+  padding: 8px 12px;
+  overflow: hidden;
+  background: #f7fbff;
+  border: 1px solid #d7e6fb;
+  border-radius: 10px;
+  box-shadow: 0 8px 18px rgba(47, 120, 255, 0.08);
+}
+
+.repo-clone-progress-bar::before {
+  content: "";
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  border: 2px solid rgba(47, 120, 255, 0.22);
+  border-top-color: #2f78ff;
+  animation: spin 0.8s linear infinite;
+}
+
+.repo-clone-progress-bar::after {
+  content: "";
+  position: absolute;
+  right: 12px;
+  bottom: 0;
+  left: 12px;
+  height: 2px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(47, 120, 255, 0), #2f78ff, rgba(47, 120, 255, 0));
+  animation: repo-progress-slide 1.35s ease-in-out infinite;
+}
+
+.repo-clone-progress-bar__text {
+  display: block;
+  min-width: 0;
+  color: #34517a;
+  font-size: 0.78rem;
+  font-weight: 600;
+  line-height: 1.35;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+@keyframes repo-progress-slide {
+  0% {
+    transform: translateX(-62%);
+    opacity: 0.35;
+  }
+
+  50% {
+    opacity: 0.9;
+  }
+
+  100% {
+    transform: translateX(62%);
+    opacity: 0.35;
+  }
+}
+
 .loading-button-content {
   display: inline-flex;
   align-items: center;
@@ -3851,6 +3933,13 @@ code {
   color: var(--muted);
   font-size: 0.82rem;
   line-height: 1.45;
+}
+
+.repo-install__option-description {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
 }
 
 .repo-install__option-main span {
@@ -6099,7 +6188,7 @@ button.settings-form-item {
   text-align: left;
 }
 
-.settings-form-item:hover {
+.settings-form-item--action:hover {
   background: rgba(244, 247, 252, 0.88);
 }
 
@@ -6171,6 +6260,49 @@ button.settings-form-item:disabled {
 
 .settings-update-button--notes {
   min-width: 104px;
+}
+
+.settings-update-button--cache {
+  min-width: 0;
+  gap: 5px;
+  padding: 0 10px;
+  color: #475467;
+  border-color: #d7e0ec;
+  background: #ffffff;
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
+}
+
+.settings-update-button--cache:hover:not(:disabled) {
+  color: #b42318;
+  border-color: #f4b7ae;
+  background: #fff7f5;
+  box-shadow: 0 5px 12px rgba(180, 35, 24, 0.08);
+}
+
+.settings-update-button--cache:active:not(:disabled) {
+  background: #fff0ed;
+  box-shadow: 0 2px 7px rgba(180, 35, 24, 0.1);
+}
+
+.settings-update-button--cache:disabled {
+  box-shadow: none;
+}
+
+.settings-update-button--cache .settings-update-button__icon {
+  width: 15px;
+  height: 15px;
+}
+
+.settings-update-button--cache .settings-update-button__icon svg {
+  width: 15px;
+  height: 15px;
+}
+
+.settings-cache-meta {
+  margin: 0;
+  font-size: 0.74rem;
+  color: #98a2b3;
+  line-height: 1.35;
 }
 
 .settings-update-button--install {
@@ -6400,10 +6532,6 @@ button.settings-form-item:disabled {
   height: 18px;
 }
 
-.settings-open-button--static {
-  pointer-events: none;
-}
-
 .settings-form-item--readonly .settings-form-item__value {
   background: #f7f9fd;
 }
@@ -6418,12 +6546,18 @@ button.settings-form-item:disabled {
 }
 
 .settings-panel--tool-status {
-  padding-top: 2px;
-  padding-bottom: 10px;
+  padding: 0;
+  transition:
+    border-color 140ms ease,
+    box-shadow 140ms ease;
 }
 
-.settings-panel--tool-status.is-clickable {
-  cursor: pointer;
+.settings-panel--tool-status:hover,
+.settings-panel--tool-status:focus-within {
+  border-color: #c6d7ff;
+  box-shadow:
+    0 0 0 0.75px rgba(59, 130, 246, 0.13),
+    0 12px 24px rgba(23, 35, 63, 0.095);
 }
 
 .settings-tool-card {
@@ -6625,10 +6759,11 @@ button.settings-form-item:disabled {
 
 .settings-section-toggle {
   display: flex;
-  align-items: stretch;
+  align-items: center;
   justify-content: space-between;
   width: 100%;
-  padding: 12px 20px 8px;
+  min-height: 76px;
+  padding: 14px 20px;
   border: 0;
   background: transparent;
   color: var(--heading);
@@ -6648,7 +6783,7 @@ button.settings-form-item:disabled {
 }
 
 .settings-section-toggle__chevron {
-  align-self: flex-start;
+  align-self: center;
   color: var(--muted);
   font-size: 0.92rem;
 }
@@ -6902,8 +7037,31 @@ button.settings-form-item:disabled {
   flex-wrap: nowrap;
 }
 
+.skills-toolbar-button--go-install {
+  flex-shrink: 0;
+  background: rgba(47, 120, 255, 0.07);
+  border-color: rgba(47, 120, 255, 0.2);
+  color: #2f78ff;
+  box-shadow: none;
+}
+
+.skills-toolbar-button--go-install:hover:not(:disabled) {
+  background: rgba(47, 120, 255, 0.11);
+  border-color: rgba(47, 120, 255, 0.28);
+  color: #2563eb;
+  box-shadow: 0 4px 10px rgba(47, 120, 255, 0.08);
+  transform: translateY(-1px);
+}
+
+.skills-toolbar-button--go-install:active:not(:disabled) {
+  background: rgba(47, 120, 255, 0.13);
+  border-color: rgba(47, 120, 255, 0.32);
+  box-shadow: none;
+  transform: translateY(1px);
+}
+
 .mcp-toolbar__search {
-  flex: 0 0 320px;
+  flex: 0 0 230px;
   width: auto;
 }
 
@@ -6938,8 +7096,8 @@ button.settings-form-item:disabled {
 }
 
 .plugins-page__search {
-  flex: 0 1 360px;
-  min-width: 260px;
+  flex: 0 1 230px;
+  min-width: 180px;
 }
 
 .plugins-page__host-tabs {
@@ -8193,7 +8351,7 @@ button.settings-form-item:disabled {
 
 @media (max-width: 1180px) {
   .skill-search-field {
-    flex: 0 1 300px;
+    flex: 0 1 230px;
     width: auto;
   }
 
@@ -8214,7 +8372,7 @@ button.settings-form-item:disabled {
   }
 
   .mcp-toolbar__search {
-    flex-basis: min(320px, 100%);
+    flex-basis: min(230px, 100%);
   }
 
   .plugins-page__toolbar-primary,
@@ -8224,7 +8382,7 @@ button.settings-form-item:disabled {
   }
 
   .plugins-page__search {
-    flex-basis: min(100%, 420px);
+    flex-basis: min(100%, 230px);
   }
 
   .plugins-page__toolbar-secondary {

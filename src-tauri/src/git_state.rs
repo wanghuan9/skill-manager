@@ -157,6 +157,65 @@ pub fn enrich_skill_with_git_state(skill: &SkillSummary) -> SkillSummary {
     enriched
 }
 
+/// 刚 clone 完的 skill 快速 enrich：仅跑一次 `git log`。
+/// 跳过 `git status`（工作区刚 clone 必定 clean）和 remote 元数据查询（remote == local HEAD）。
+pub fn enrich_freshly_installed_skill(skill: &SkillSummary, known_branch: Option<&str>) -> SkillSummary {
+    let skill_path = Path::new(&skill.local_path);
+
+    // 取 known_branch 作为分支名，无需再跑 rev-parse --abbrev-ref HEAD
+    let branch = known_branch
+        .filter(|b| !b.trim().is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| skill.branch.clone());
+
+    // 一次 git log 同时拿到 short hash + 提交时间 + 提交者
+    let git_state = run_git(
+        skill_path,
+        &[
+            "log",
+            "-1",
+            "--date=format-local:%Y/%-m/%-d %H:%M:%S",
+            "--pretty=format:%h%x00%cd%x00%cn",
+            "--",
+            ".",
+        ],
+    );
+
+    let (commit_label, updated_at, committer) = git_state
+        .as_deref()
+        .map(|raw| {
+            let mut parts = raw.splitn(3, '\x00');
+            let hash = parts.next().map(str::trim).filter(|s| !s.is_empty()).map(ToOwned::to_owned);
+            let date = parts.next().map(str::trim).filter(|s| !s.is_empty()).map(ToOwned::to_owned);
+            let author = parts.next().map(str::trim).filter(|s| !s.is_empty()).map(ToOwned::to_owned);
+            (hash, date, author)
+        })
+        .unwrap_or((None, None, None));
+
+    let fallback_local = if skill.local_updated_at.trim().is_empty() {
+        skill.last_synced_at.clone()
+    } else {
+        skill.local_updated_at.clone()
+    };
+    let local_updated_at = prefer_newer_local_updated_at(&fallback_local, updated_at.clone());
+    let remote_updated_at = updated_at.unwrap_or_else(|| local_updated_at.clone());
+
+    let (collab_status, status_text) = derive_collab_status(false, Some((0, 0)));
+
+    let mut enriched = skill.clone();
+    enriched.branch = branch;
+    enriched.commit_label = commit_label.unwrap_or_else(|| skill.commit_label.clone());
+    enriched.collab_status = collab_status.to_string();
+    enriched.status_text = status_text;
+    enriched.remote_updated_at = remote_updated_at;
+    enriched.local_updated_at = local_updated_at.clone();
+    enriched.last_synced_at = local_updated_at;
+    enriched.last_checked_at = "刚刚检查".into();
+    enriched.last_editor = committer.unwrap_or_else(|| skill.last_editor.clone());
+    enriched.git_linked = true;
+    enriched
+}
+
 pub fn enrich_newly_installed_skill_with_git_state(skill: &SkillSummary) -> SkillSummary {
     let skill_path = Path::new(&skill.local_path);
     if !skill_path.exists() || repo_root(skill_path).is_none() {

@@ -1,7 +1,9 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { vi } from "vitest";
+import { beforeEach, vi } from "vitest";
 import { App } from "@/app/App";
+import { resetPluginInstallPanelState } from "@/features/install/components/PluginInstallPanel";
+import { resetRepoInstallPanelState } from "@/features/install/components/RepoInstallPanel";
 import * as skillClient from "@/features/skills/api/skill-client";
 import {
   marketplaceSkillFixtures,
@@ -11,6 +13,12 @@ import {
 import type { MarketplaceSkill, McpMarketplaceServer, PluginSummary } from "@/features/skills/state/skill-store";
 import { getCachedMcpWorkspace } from "@/features/skills/utils/mcp-workspace-cache";
 import { getCachedPlugins } from "@/features/skills/utils/plugin-cache";
+import { clickNavInstall } from "@/tests/helpers/nav";
+
+beforeEach(() => {
+  resetRepoInstallPanelState();
+  resetPluginInstallPanelState();
+});
 
 function resetMcpMarketplaceRuntimeCache() {
   delete (window as Window & { __SKILLM_MCP_MARKETPLACE_CACHE__?: unknown }).__SKILLM_MCP_MARKETPLACE_CACHE__;
@@ -32,7 +40,7 @@ function scrollMarketInstallToBottom() {
 
 test("renders install-source and repository install panels", async () => {
   render(<App />);
-  await userEvent.click(screen.getByRole("button", { name: /安装/ }));
+  await clickNavInstall();
   expect(screen.getByRole("heading", { name: "安装", level: 1 })).toBeInTheDocument();
   expect(screen.getByText("通过安装源、Git 仓库或本地目录纳入新的 skill 和 MCP")).toBeInTheDocument();
   expect(screen.getByRole("tab", { name: "Skill" })).toHaveAttribute("aria-selected", "true");
@@ -58,7 +66,7 @@ test("discovers repo skills with the full branch from GitLab tree urls", async (
   const discoverSpy = vi.spyOn(skillClient, "installSkillFromRepo").mockResolvedValue([]);
 
   render(<App />);
-  await userEvent.click(screen.getByRole("button", { name: /安装/ }));
+  await clickNavInstall();
   await userEvent.click(screen.getByRole("tab", { name: "Git 安装" }));
   await userEvent.type(screen.getByRole("textbox", { name: "Git 仓库地址" }), sourceUrl);
 
@@ -148,7 +156,7 @@ test("probes plugin sources with Codex-style inputs and host selection", async (
   vi.spyOn(skillClient, "fetchInstalledPlugins").mockResolvedValue([]);
 
   render(<App />);
-  await userEvent.click(screen.getByRole("button", { name: /安装/ }));
+  await clickNavInstall();
   await userEvent.click(screen.getByRole("tab", { name: "Plugin" }));
 
   expect(screen.getByRole("textbox", { name: "Git 仓库地址" })).toBeInTheDocument();
@@ -306,7 +314,7 @@ test("marks already installed plugin hosts and still allows installing remaining
   const installSpy = vi.spyOn(skillClient, "installSelectedPluginProbes").mockResolvedValue([]);
 
   render(<App />);
-  await userEvent.click(screen.getByRole("button", { name: /安装/ }));
+  await clickNavInstall();
   await userEvent.click(screen.getByRole("tab", { name: "Plugin" }));
   await userEvent.type(screen.getByRole("textbox", { name: "Git 仓库地址" }), sourceUrl);
   await waitFor(() => {
@@ -413,7 +421,7 @@ test("disables plugin install when every compatible host already has the plugin"
   const installSpy = vi.spyOn(skillClient, "installSelectedPluginProbes").mockResolvedValue([]);
 
   render(<App />);
-  await userEvent.click(screen.getByRole("button", { name: /安装/ }));
+  await clickNavInstall();
   await userEvent.click(screen.getByRole("tab", { name: "Plugin" }));
   await userEvent.type(screen.getByRole("textbox", { name: "Git 仓库地址" }), sourceUrl);
   await waitFor(() => {
@@ -467,7 +475,7 @@ test("probes GitLab tree plugin sources with sparse paths", async () => {
   }]);
 
   render(<App />);
-  await userEvent.click(screen.getByRole("button", { name: /安装/ }));
+  await clickNavInstall();
   await userEvent.click(screen.getByRole("tab", { name: "Plugin" }));
   await userEvent.type(screen.getByRole("textbox", { name: "Git 仓库地址" }), sourceUrl);
 
@@ -559,7 +567,7 @@ test("treats manifest name as the stable identity when plugin display names diff
   }]);
 
   render(<App />);
-  await userEvent.click(screen.getByRole("button", { name: /安装/ }));
+  await clickNavInstall();
   await userEvent.click(screen.getByRole("tab", { name: "Plugin" }));
   await userEvent.type(screen.getByRole("textbox", { name: "Git 仓库地址" }), sourceUrl);
 
@@ -610,7 +618,7 @@ test("keeps plugin probes visible and stops blocking on workspace refresh after 
     .mockImplementationOnce(() => new Promise(() => {}));
 
   render(<App />);
-  await userEvent.click(screen.getByRole("button", { name: /安装/ }));
+  await clickNavInstall();
   await userEvent.click(screen.getByRole("tab", { name: "Plugin" }));
   await userEvent.type(screen.getByRole("textbox", { name: "Git 仓库地址" }), sourceUrl);
   await waitFor(() => {
@@ -664,7 +672,7 @@ test("renders plugin probe title from manifest name instead of cache directory n
   }]);
 
   render(<App />);
-  await userEvent.click(screen.getByRole("button", { name: /安装/ }));
+  await clickNavInstall();
   await userEvent.click(screen.getByRole("tab", { name: "Plugin" }));
   await userEvent.type(
     screen.getByRole("textbox", { name: "Git 仓库地址" }),
@@ -747,7 +755,7 @@ test("probes repository roots and lists every plugin candidate", async () => {
   const installSpy = vi.spyOn(skillClient, "installSelectedPluginProbes").mockResolvedValue([]);
 
   render(<App />);
-  await userEvent.click(screen.getByRole("button", { name: /安装/ }));
+  await clickNavInstall();
   await userEvent.click(screen.getByRole("tab", { name: "Plugin" }));
   await userEvent.type(screen.getByRole("textbox", { name: "Git 仓库地址" }), sourceUrl);
 
@@ -797,7 +805,7 @@ test("uses browser fixtures to list example-repo plugin candidates", async () =>
   vi.spyOn(skillClient, "fetchInstalledPlugins").mockResolvedValue([]);
 
   render(<App />);
-  await userEvent.click(screen.getByRole("button", { name: /安装/ }));
+  await clickNavInstall();
   await userEvent.click(screen.getByRole("tab", { name: "Plugin" }));
   await userEvent.type(screen.getByRole("textbox", { name: "Git 仓库地址" }), sourceUrl);
 
@@ -817,7 +825,7 @@ test("filters discovered plugin candidates by name and description", async () =>
   const fetchInstalledPluginsSpy = vi.spyOn(skillClient, "fetchInstalledPlugins").mockResolvedValue([]);
 
   render(<App />);
-  await userEvent.click(screen.getByRole("button", { name: /安装/ }));
+  await clickNavInstall();
   await userEvent.click(screen.getByRole("tab", { name: "Plugin" }));
   await userEvent.type(screen.getByRole("textbox", { name: "Git 仓库地址" }), sourceUrl);
 
@@ -852,7 +860,7 @@ test("selects and deselects visible plugin candidates from git install search re
   const fetchInstalledPluginsSpy = vi.spyOn(skillClient, "fetchInstalledPlugins").mockResolvedValue([]);
 
   render(<App />);
-  await userEvent.click(screen.getByRole("button", { name: /安装/ }));
+  await clickNavInstall();
   await userEvent.click(screen.getByRole("tab", { name: "Plugin" }));
   await userEvent.type(screen.getByRole("textbox", { name: "Git 仓库地址" }), sourceUrl);
 
@@ -962,7 +970,7 @@ test("keeps the plugin install result page open after installing selected hosts"
   const installSpy = vi.spyOn(skillClient, "installSelectedPluginProbes").mockResolvedValue([]);
 
   render(<App />);
-  await userEvent.click(screen.getByRole("button", { name: /安装/ }));
+  await clickNavInstall();
   await userEvent.click(screen.getByRole("tab", { name: "Plugin" }));
   await userEvent.type(screen.getByRole("textbox", { name: "Git 仓库地址" }), sourceUrl);
 
@@ -1065,7 +1073,7 @@ test("updates the shared plugin cache right after plugin install completes", asy
   const installSpy = vi.spyOn(skillClient, "installSelectedPluginProbes").mockResolvedValue([]);
 
   render(<App />);
-  await userEvent.click(screen.getByRole("button", { name: /安装/ }));
+  await clickNavInstall();
   await userEvent.click(screen.getByRole("tab", { name: "Plugin" }));
   await userEvent.type(screen.getByRole("textbox", { name: "Git 仓库地址" }), sourceUrl);
   await waitFor(() => {
@@ -1177,7 +1185,7 @@ test("shows newly installed plugin before the follow-up plugin refresh resolves"
   const installSpy = vi.spyOn(skillClient, "installSelectedPluginProbes").mockResolvedValue([installedPlugin]);
 
   render(<App />);
-  await userEvent.click(screen.getByRole("button", { name: /安装/ }));
+  await clickNavInstall();
   await userEvent.click(screen.getByRole("tab", { name: "Plugin" }));
   await userEvent.type(screen.getByRole("textbox", { name: "Git 仓库地址" }), sourceUrl);
   await waitFor(() => {
@@ -1213,7 +1221,7 @@ test("shows MCP marketplace separately from skill-only install methods", async (
   window.localStorage.clear();
   resetMcpMarketplaceRuntimeCache();
   render(<App />);
-  await userEvent.click(screen.getByRole("button", { name: /安装/ }));
+  await clickNavInstall();
   await userEvent.click(screen.getByRole("tab", { name: "MCP" }));
 
   expect(screen.getByRole("tab", { name: "MCP" })).toHaveAttribute("aria-selected", "true");
@@ -1227,7 +1235,7 @@ test("shows MCP marketplace separately from skill-only install methods", async (
 
 test("shows store and repository actions in skill marketplace detail", async () => {
   render(<App />);
-  await userEvent.click(screen.getByRole("button", { name: /安装/ }));
+  await clickNavInstall();
 
   const workflowHeading = await screen.findByRole("heading", { name: "workflow-critic", level: 3 });
   await userEvent.click(workflowHeading);
@@ -1244,7 +1252,7 @@ test("keeps MCP marketplace card and detail metadata consistent", async () => {
   window.localStorage.clear();
   resetMcpMarketplaceRuntimeCache();
   render(<App />);
-  await userEvent.click(screen.getByRole("button", { name: /安装/ }));
+  await clickNavInstall();
   await userEvent.click(screen.getByRole("tab", { name: "MCP" }));
 
   const context7Heading = await screen.findByRole("heading", { name: "context7", level: 3 });
@@ -1273,7 +1281,7 @@ test("marks MCP marketplace avatars as loaded after image load events", async ()
   window.localStorage.clear();
   resetMcpMarketplaceRuntimeCache();
   render(<App />);
-  await userEvent.click(screen.getByRole("button", { name: /安装/ }));
+  await clickNavInstall();
   await userEvent.click(screen.getByRole("tab", { name: "MCP" }));
 
   const context7Heading = await screen.findByRole("heading", { name: "context7", level: 3 });
@@ -1317,7 +1325,7 @@ test("loads and caches MCP install config when opening marketplace detail", asyn
     }));
 
   render(<App />);
-  await userEvent.click(screen.getByRole("button", { name: /安装/ }));
+  await clickNavInstall();
   await userEvent.click(screen.getByRole("tab", { name: "MCP" }));
 
   const playwrightHeading = await screen.findByRole("heading", { name: "playwright", level: 3 });
@@ -1372,7 +1380,7 @@ test("installs MCP marketplace servers into the managed MCP list with apps enabl
   resetMcpMarketplaceRuntimeCache();
   const installSpy = vi.spyOn(skillClient, "installMcpServerFromMarketplace");
   render(<App />);
-  await userEvent.click(screen.getByRole("button", { name: /安装/ }));
+  await clickNavInstall();
   await userEvent.click(screen.getByRole("tab", { name: "MCP" }));
 
   const playwrightHeading = await screen.findByRole("heading", { name: "playwright", level: 3 });
@@ -1411,7 +1419,7 @@ test("refreshes marketplace MCP tools right after install when they are still un
   const refreshSpy = vi.spyOn(skillClient, "refreshMcpServerTools");
 
   render(<App />);
-  await userEvent.click(screen.getByRole("button", { name: /安装/ }));
+  await clickNavInstall();
   await userEvent.click(screen.getByRole("tab", { name: "MCP" }));
 
   const playwrightHeading = await screen.findByRole("heading", { name: "playwright", level: 3 });
@@ -1442,7 +1450,7 @@ test("stores refreshed MCP workspace after async tools discovery finishes", asyn
   const refreshSpy = vi.spyOn(skillClient, "refreshMcpServerTools").mockResolvedValue(refreshedWorkspace);
 
   render(<App />);
-  await userEvent.click(screen.getByRole("button", { name: /安装/ }));
+  await clickNavInstall();
   await userEvent.click(screen.getByRole("tab", { name: "MCP" }));
 
   const playwrightHeading = await screen.findByRole("heading", { name: "playwright", level: 3 });
@@ -1487,7 +1495,7 @@ test("clears installed MCP badge after the server is deleted from the MCP page",
 
   render(<App />);
 
-  await userEvent.click(screen.getByRole("button", { name: /安装/ }));
+  await clickNavInstall();
   await userEvent.click(screen.getByRole("tab", { name: "MCP" }));
 
   const playwrightHeading = await screen.findByRole("heading", { name: "playwright", level: 3 });
@@ -1509,7 +1517,7 @@ test("clears installed MCP badge after the server is deleted from the MCP page",
     expect(screen.queryByText("playwright")).not.toBeInTheDocument();
   });
 
-  await userEvent.click(screen.getByRole("button", { name: /安装/ }));
+  await clickNavInstall();
   await userEvent.click(screen.getByRole("tab", { name: "MCP" }));
 
   const playwrightHeadingAfterDelete = await screen.findByRole("heading", { name: "playwright", level: 3 });
@@ -1530,7 +1538,7 @@ test("searches MCP marketplace and restores browse pagination after clearing que
   window.localStorage.clear();
   resetMcpMarketplaceRuntimeCache();
   render(<App />);
-  await userEvent.click(screen.getByRole("button", { name: /安装/ }));
+  await clickNavInstall();
   await userEvent.click(screen.getByRole("tab", { name: "MCP" }));
 
   expect(await screen.findByText("context7")).toBeInTheDocument();
@@ -1575,7 +1583,7 @@ test("loads appended MCP marketplace avatars eagerly after scrolling", async () 
     });
 
   render(<App />);
-  await userEvent.click(screen.getByRole("button", { name: /安装/ }));
+  await clickNavInstall();
   await userEvent.click(screen.getByRole("tab", { name: "MCP" }));
 
   expect(await screen.findByRole("heading", { name: "server-1", level: 3 })).toBeInTheDocument();
@@ -1621,7 +1629,7 @@ test("keeps the current MCP list visible until pending search results return", a
     });
 
   render(<App />);
-  await userEvent.click(screen.getByRole("button", { name: /安装/ }));
+  await clickNavInstall();
   await userEvent.click(screen.getByRole("tab", { name: "MCP" }));
 
   expect(await screen.findByText("context7")).toBeInTheDocument();
@@ -1666,7 +1674,7 @@ test("keeps the current skill list visible until pending search results return",
     });
 
   render(<App />);
-  await userEvent.click(screen.getByRole("button", { name: /安装/ }));
+  await clickNavInstall();
 
   expect(await screen.findByText("workflow-critic")).toBeInTheDocument();
 
@@ -1698,7 +1706,7 @@ test("reuses cached MCP marketplace results when switching away and back", async
   window.localStorage.clear();
   resetMcpMarketplaceRuntimeCache();
   render(<App />);
-  await userEvent.click(screen.getByRole("button", { name: /安装/ }));
+  await clickNavInstall();
   await userEvent.click(screen.getByRole("tab", { name: "MCP" }));
 
   expect(await screen.findByText("context7")).toBeInTheDocument();
@@ -1726,7 +1734,7 @@ test("hydrates MCP marketplace from persisted cache on first open", async () => 
   );
 
   render(<App />);
-  await userEvent.click(screen.getByRole("button", { name: /安装/ }));
+  await clickNavInstall();
   await userEvent.click(screen.getByRole("tab", { name: "MCP" }));
 
   expect(screen.getByText("context7")).toBeInTheDocument();
@@ -1763,7 +1771,7 @@ test("prefetches GitHub source links and reuses the in-flight request on click",
   const openSpy = vi.spyOn(window, "open").mockImplementation(() => null);
 
   render(<App />);
-  await userEvent.click(screen.getByRole("button", { name: /安装/ }));
+  await clickNavInstall();
   await userEvent.click(screen.getByRole("tab", { name: "MCP" }));
 
   const sourceLink = await screen.findByRole("link", { name: "打开 context7 仓库" });
@@ -1797,7 +1805,7 @@ test("prefetches GitHub source links and reuses the in-flight request on click",
 
 test("discovers repo skills and allows multi-select install", async () => {
   render(<App />);
-  await userEvent.click(screen.getByRole("button", { name: /安装/ }));
+  await clickNavInstall();
   await userEvent.click(screen.getByRole("tab", { name: "Git 安装" }));
 
   await userEvent.type(screen.getByRole("textbox", { name: "Git 仓库地址" }), "https://github.com/team/skill-repo");
@@ -1810,6 +1818,8 @@ test("discovers repo skills and allows multi-select install", async () => {
   expect(screen.getByRole("button", { name: "安装选中技能" })).toBeInTheDocument();
   expect(screen.getByText("service-observer")).toBeInTheDocument();
   expect(screen.getByText("release-scribe")).toBeInTheDocument();
+  expect(screen.queryByText("skills/service-observer")).not.toBeInTheDocument();
+  expect(screen.queryByText("skills/release-scribe")).not.toBeInTheDocument();
 
   await userEvent.click(screen.getByRole("button", { name: "返回" }));
   expect(screen.getByRole("textbox", { name: "Git 仓库地址" })).toBeInTheDocument();
@@ -1817,7 +1827,7 @@ test("discovers repo skills and allows multi-select install", async () => {
 
 test("filters discovered repo skills by name and description", async () => {
   render(<App />);
-  await userEvent.click(screen.getByRole("button", { name: /安装/ }));
+  await clickNavInstall();
   await userEvent.click(screen.getByRole("tab", { name: "Git 安装" }));
 
   await userEvent.type(screen.getByRole("textbox", { name: "Git 仓库地址" }), "https://github.com/team/skill-repo");
@@ -1843,7 +1853,7 @@ test("filters discovered repo skills by name and description", async () => {
 
 test("selects and deselects visible repo skills from git install search results", async () => {
   render(<App />);
-  await userEvent.click(screen.getByRole("button", { name: /安装/ }));
+  await clickNavInstall();
   await userEvent.click(screen.getByRole("tab", { name: "Git 安装" }));
 
   await userEvent.type(screen.getByRole("textbox", { name: "Git 仓库地址" }), "https://github.com/team/skill-repo");
@@ -1873,7 +1883,7 @@ test("selects and deselects visible repo skills from git install search results"
 
 test("keeps the git install selection page open after installing selected repo skills", async () => {
   render(<App />);
-  await userEvent.click(screen.getByRole("button", { name: /安装/ }));
+  await clickNavInstall();
   await userEvent.click(screen.getByRole("tab", { name: "Git 安装" }));
 
   await userEvent.type(screen.getByRole("textbox", { name: "Git 仓库地址" }), "https://github.com/team/skill-repo");
@@ -1892,7 +1902,7 @@ test("keeps the git install selection page open after installing selected repo s
 
 test("installs a local skill from a typed path", async () => {
   render(<App />);
-  await userEvent.click(screen.getByRole("button", { name: /安装/ }));
+  await clickNavInstall();
   await userEvent.click(screen.getByRole("tab", { name: "本地安装" }));
   await userEvent.click(screen.getByRole("tab", { name: "手动安装" }));
 
@@ -1909,7 +1919,7 @@ test("discovers local project skills and allows multi-select install", async () 
   const installSpy = vi.spyOn(skillClient, "installSelectedLocalSkills");
 
   render(<App />);
-  await userEvent.click(screen.getByRole("button", { name: /安装/ }));
+  await clickNavInstall();
   await userEvent.click(screen.getByRole("tab", { name: "本地安装" }));
   await userEvent.click(screen.getByRole("tab", { name: "手动安装" }));
 
@@ -1940,7 +1950,7 @@ test("discovers local project skills and allows multi-select install", async () 
 
 test("fills local skill path from a dropped file", async () => {
   render(<App />);
-  await userEvent.click(screen.getByRole("button", { name: /安装/ }));
+  await clickNavInstall();
   await userEvent.click(screen.getByRole("tab", { name: "本地安装" }));
   await userEvent.click(screen.getByRole("tab", { name: "手动安装" }));
 
@@ -1963,7 +1973,7 @@ test("fills local skill path from a dropped file", async () => {
 
 test("shows install errors in the global notification stack", async () => {
   render(<App />);
-  await userEvent.click(screen.getByRole("button", { name: /安装/ }));
+  await clickNavInstall();
   await userEvent.click(screen.getByRole("tab", { name: "Git 安装" }));
 
   await userEvent.type(screen.getByRole("textbox", { name: "Git 仓库地址" }), "invalid-url");
@@ -1980,7 +1990,7 @@ test("accepts scp-like SSH repository urls for skill git install", async () => {
   const discoverSpy = vi.spyOn(skillClient, "installSkillFromRepo").mockResolvedValue([]);
 
   render(<App />);
-  await userEvent.click(screen.getByRole("button", { name: /安装/ }));
+  await clickNavInstall();
   await userEvent.click(screen.getByRole("tab", { name: "Git 安装" }));
 
   await userEvent.type(screen.getByRole("textbox", { name: "Git 仓库地址" }), sourceUrl);
@@ -1999,7 +2009,7 @@ test("accepts scp-like SSH repository urls for skill git install", async () => {
 
 test("marks already installed repo skills as unavailable", async () => {
   render(<App />);
-  await userEvent.click(screen.getByRole("button", { name: /安装/ }));
+  await clickNavInstall();
   await userEvent.click(screen.getByRole("tab", { name: "Git 安装" }));
 
   await userEvent.type(
@@ -2016,7 +2026,7 @@ test("marks already installed repo skills as unavailable", async () => {
 
 test("searches marketplace skills across all supported sources", async () => {
   render(<App />);
-  await userEvent.click(screen.getByRole("button", { name: /安装/ }));
+  await clickNavInstall();
 
   const searchInput = screen.getByRole("searchbox", { name: "搜索 skill" });
   await userEvent.type(searchInput, "guardian");
@@ -2027,7 +2037,7 @@ test("searches marketplace skills across all supported sources", async () => {
 
 test("sorts marketplace search results by popularity across sources", async () => {
   render(<App />);
-  await userEvent.click(screen.getByRole("button", { name: /安装/ }));
+  await clickNavInstall();
 
   await userEvent.type(screen.getByRole("searchbox", { name: "搜索 skill" }), "skills");
 
@@ -2043,7 +2053,7 @@ test("sorts marketplace search results by popularity across sources", async () =
 
 test("keeps source results isolated and preserves the skills.sh display order", async () => {
   render(<App />);
-  await userEvent.click(screen.getByRole("button", { name: /安装/ }));
+  await clickNavInstall();
 
   const skillsShCards = screen
     .getAllByRole("heading", { level: 3 })

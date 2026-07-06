@@ -429,6 +429,57 @@ test("aggregates cross-host plugins by canonical plugin name instead of display 
   expect(row?.querySelector('[data-tooltip="Claude Code 已安装（已启用）"]')).toBeInTheDocument();
 });
 
+test("aggregates cross-host plugins when source URL includes a git web branch path", async () => {
+  const plugins: PluginSummary[] = [
+    {
+      ...pluginFixtures[0],
+      id: "codex:example-plugin",
+      packageId: "example-plugin",
+      manifestName: "example-plugin",
+      name: "example-plugin",
+      hostTool: "codex",
+      sourceLabel: "skilldock",
+      sourceUrl: "https://git.example.com/example-org/example-repo",
+      repoRootPath: "/Users/demo/.skilldock/plugins/example-plugin-example-repo",
+      rootPath: "/Users/demo/.codex/plugins/cache/skilldock/example-plugin",
+      manifestPath: "/Users/demo/.codex/plugins/cache/skilldock/example-plugin/.codex-plugin/plugin.json",
+      installSource: "skilldock",
+      relatedHostTools: [],
+      enabledState: "enabled",
+      scopes: [],
+      components: [],
+    },
+    {
+      ...pluginFixtures[0],
+      id: "claude-code:example-plugin",
+      packageId: "example-plugin",
+      manifestName: "example-plugin",
+      name: "example-plugin",
+      hostTool: "claude-code",
+      sourceLabel: "skilldock",
+      sourceUrl: "https://git.example.com/example-org/example-repo/tree/master",
+      repoRootPath: "/Users/demo/.skilldock/plugins/example-plugin",
+      rootPath: "/Users/demo/.claude/plugins/marketplaces/skilldock/plugins/example-plugin",
+      manifestPath: "/Users/demo/.claude/plugins/marketplaces/skilldock/plugins/example-plugin/.claude-plugin/plugin.json",
+      installSource: "skilldock",
+      relatedHostTools: [],
+      enabledState: "enabled",
+      scopes: [],
+      components: [],
+    },
+  ];
+  vi.spyOn(skillClient, "fetchStartupInstalledPlugins").mockResolvedValueOnce(plugins);
+
+  renderWithI18n(<PluginsRoute />);
+
+  const allTab = await screen.findByRole("tab", { name: "全部 1" });
+  expect(allTab).toHaveAttribute("aria-selected", "true");
+  expect(screen.getAllByText("example-plugin")).toHaveLength(1);
+  const row = screen.getByRole("button", { name: /展开 example-plugin/ }).closest(".tool-list-row");
+  expect(row?.querySelector('[data-tooltip="Codex 已安装（已启用）"]')).toBeInTheDocument();
+  expect(row?.querySelector('[data-tooltip="Claude Code 已安装（已启用）"]')).toBeInTheDocument();
+});
+
 test("aggregates plugins by manifest name when Codex display name differs from other hosts", async () => {
   const plugins: PluginSummary[] = [
     {
@@ -648,6 +699,19 @@ test("keeps plugin scan import action in the toolbar", async () => {
 
   expect(screen.getByRole("button", { name: "刷新" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "扫描导入" })).toBeInTheDocument();
+});
+
+test("renders go-install action in the plugin toolbar", async () => {
+  const onGoInstall = vi.fn();
+
+  renderWithI18n(<PluginsRoute onGoInstall={onGoInstall} />);
+
+  await screen.findByRole("tab", { name: /全部/ });
+
+  const goInstallButton = screen.getByRole("button", { name: "去安装" });
+  expect(goInstallButton).toHaveClass("skills-toolbar-button--go-install");
+  await userEvent.click(goInstallButton);
+  expect(onGoInstall).toHaveBeenCalledOnce();
 });
 
 test("refreshes the plugin list from the toolbar", async () => {
@@ -1778,6 +1842,37 @@ test("toggles plugin enabled state from the plugin list", async () => {
   expect(screen.getAllByText("已启用").length).toBeGreaterThan(0);
 });
 
+test("keeps unknown plugins disabled from toggle actions", async () => {
+  const setPluginEnabledSpy = vi.spyOn(skillClient, "setPluginEnabled");
+  const unknownPlugin: PluginSummary = {
+    ...pluginFixtures[1],
+    enabledState: "unknown",
+    scopes: [
+      {
+        ...pluginFixtures[1].scopes[0],
+        enabledState: "unknown",
+      },
+    ],
+  };
+  vi.spyOn(skillClient, "fetchStartupInstalledPlugins").mockResolvedValueOnce([unknownPlugin]);
+
+  renderWithI18n(<PluginsRoute />);
+
+  await screen.findByRole("tab", { name: /全部/ });
+  await userEvent.click(screen.getByRole("tab", { name: /Claude Code/ }));
+
+  const toggleButton = screen.getByRole("button", {
+    name: /暂不支持在 SkillDock 内切换/,
+  });
+  expect(toggleButton).toBeDisabled();
+  expect(toggleButton).toHaveClass("is-unknown");
+
+  await userEvent.click(toggleButton);
+
+  expect(setPluginEnabledSpy).not.toHaveBeenCalled();
+  setPluginEnabledSpy.mockRestore();
+});
+
 test("toggles every installed host from the all-tab plugin row", async () => {
   const setPluginEnabledSpy = vi.spyOn(skillClient, "setPluginEnabled")
     .mockImplementation(async (input) => ({
@@ -2003,8 +2098,9 @@ test("opens a plugin folder from the detail directory row", async () => {
   openPluginSpy.mockRestore();
 });
 
-test("shows the host plugin directory and opens the real SkillDock source directory", async () => {
+test("shows and opens the Codex SkillDock cache directory", async () => {
   const openFinderSpy = vi.spyOn(skillClient, "openPathInFinder").mockResolvedValue(undefined);
+  const openPluginSpy = vi.spyOn(skillClient, "openPluginInEditor").mockResolvedValue(undefined);
   const plugins: PluginSummary[] = [
     {
       ...pluginFixtures[0],
@@ -2012,10 +2108,10 @@ test("shows the host plugin directory and opens the real SkillDock source direct
       packageId: "skilldock-plugin",
       name: "SkillDock Plugin",
       hostTool: "codex",
-      rootPath: "/Users/demo/.skilldock/plugins/skilldock-plugin/plugins/skilldock-plugin",
+      rootPath: "/Users/demo/.codex/plugins/cache/skilldock/skilldock-plugin/latest",
       displayRootPath: "/Users/demo/.codex/plugins/cache/skilldock/skilldock-plugin",
       repoRootPath: "/Users/demo/.skilldock/plugins/skilldock-plugin",
-      manifestPath: "/Users/demo/.codex/plugins/cache/skilldock/skilldock-plugin/plugin.json",
+      manifestPath: "/Users/demo/.codex/plugins/cache/skilldock/skilldock-plugin/latest/.codex-plugin/plugin.json",
       sourceType: "git",
       sourceUrl: "https://github.com/example/skilldock-plugin",
       installSource: "skilldock",
@@ -2028,6 +2124,13 @@ test("shows the host plugin directory and opens the real SkillDock source direct
   await screen.findByRole("tab", { name: /全部/ });
   await userEvent.click(screen.getByRole("tab", { name: /Codex/ }));
   expect(await screen.findByText("SkillDock Plugin")).toBeInTheDocument();
+
+  await userEvent.click(screen.getByRole("button", { name: "打开 SkillDock Plugin 目录" }));
+  expect(openPluginSpy).toHaveBeenCalledWith({
+    rootPath: "/Users/demo/.codex/plugins/cache/skilldock/skilldock-plugin",
+    editorId: "finder",
+  });
+
   await userEvent.click(screen.getByRole("button", { name: /展开 SkillDock Plugin/ }));
 
   expect(
@@ -2038,10 +2141,11 @@ test("shows the host plugin directory and opens the real SkillDock source direct
   await userEvent.click(screen.getByRole("button", { name: "在访达中打开 SkillDock Plugin 插件目录" }));
 
   expect(openFinderSpy).toHaveBeenCalledWith({
-    path: "/Users/demo/.skilldock/plugins/skilldock-plugin",
+    path: "/Users/demo/.codex/plugins/cache/skilldock/skilldock-plugin",
   });
 
   openFinderSpy.mockRestore();
+  openPluginSpy.mockRestore();
 });
 
 test("deletes a plugin only after confirmation", async () => {
@@ -2149,6 +2253,40 @@ test("deletes every installed host from the all-tab plugin row", async () => {
     rootPath: "/Users/demo/.claude/plugins/cache/repo-scout/1.0.0",
   });
   expect(screen.queryByText("Repo Scout")).not.toBeInTheDocument();
+
+  deleteSpy.mockRestore();
+});
+
+test("deletes codex skilldock plugins by their manifest root instead of display directory", async () => {
+  const deleteSpy = vi.spyOn(skillClient, "deletePlugin").mockResolvedValue(undefined);
+  const plugin: PluginSummary = {
+    ...pluginFixtures[0],
+    id: "codex:example-plugin",
+    packageId: "example-plugin",
+    manifestName: "example-plugin",
+    name: "Example Plugin",
+    hostTool: "codex",
+    rootPath: "/Users/demo/.skilldock/plugins/example-plugin/example-plugin",
+    displayRootPath: "/Users/demo/.codex/plugins/cache/skilldock/example-plugin",
+    repoRootPath: "/Users/demo/.skilldock/plugins/example-plugin",
+    manifestPath: "/Users/demo/.codex/marketplaces/skilldock/plugins/example-plugin/.codex-plugin/plugin.json",
+    installSource: "skilldock",
+  };
+  vi.spyOn(skillClient, "fetchStartupInstalledPlugins").mockResolvedValueOnce([plugin]);
+
+  renderWithI18n(<PluginsRoute />);
+
+  await screen.findByRole("tab", { name: "全部 1" });
+  await userEvent.click(screen.getByRole("button", { name: "删除 example-plugin 插件" }));
+  await userEvent.click(screen.getByRole("button", { name: "确认删除 example-plugin 插件" }));
+
+  await waitFor(() => {
+    expect(deleteSpy).toHaveBeenCalledWith({
+      pluginId: "codex:example-plugin",
+      hostTool: "codex",
+      rootPath: "/Users/demo/.skilldock/plugins/example-plugin/example-plugin",
+    });
+  });
 
   deleteSpy.mockRestore();
 });

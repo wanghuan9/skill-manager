@@ -11,6 +11,7 @@ import {
   writeSkillGroupCollapsedState,
 } from "@/features/skills/utils/skill-view-preference";
 import { getMonogramLabel } from "@/features/skills/utils/monogram";
+import { ToolbarGoInstallButton } from "@/app/components/ToolbarGoInstallButton";
 import type { SkillStatusFilter, SkillSummary } from "@/features/skills/state/skill-store";
 
 type SkillToolbarProps = {
@@ -20,6 +21,7 @@ type SkillToolbarProps = {
   onStatusFilterChange: (value: SkillStatusFilter) => void;
   showGroupView: boolean;
   onShowGroupViewChange: (value: boolean) => void;
+  onGoInstall?: () => void;
 };
 
 function GridIcon() {
@@ -131,6 +133,7 @@ export function SkillListToolbar(props: SkillToolbarProps) {
     onStatusFilterChange,
     showGroupView,
     onShowGroupViewChange,
+    onGoInstall,
   } = props;
   const {
     installedSkills,
@@ -207,6 +210,7 @@ export function SkillListToolbar(props: SkillToolbarProps) {
           onChange={(event) => onQueryChange(event.target.value)}
         />
       </label>
+      {onGoInstall ? <ToolbarGoInstallButton onClick={onGoInstall} /> : null}
       <button
         className={`secondary-button secondary-button--compact skills-toolbar-button skills-toolbar-button--toggle${showGroupView ? " is-active" : ""}`}
         type="button"
