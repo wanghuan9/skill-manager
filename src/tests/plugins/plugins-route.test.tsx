@@ -6,7 +6,7 @@ import { listen } from "@tauri-apps/api/event";
 import { PluginsRoute, resetPluginScanSessionForTests } from "@/app/routes/plugins";
 import * as skillClient from "@/features/skills/api/skill-client";
 import { pluginFixtures } from "@/features/skills/state/skill-fixtures";
-import type { PluginHostTool, PluginSummary } from "@/features/skills/state/skill-store";
+import type { PluginComponentPreview, PluginHostTool, PluginSummary } from "@/features/skills/state/skill-store";
 import { formatSkillUpdatedAt } from "@/features/skills/utils/skill-time";
 import { useSkillWorkspace } from "@/features/skills/state/skill-workspace";
 import { renderWithI18n } from "@/tests/helpers/render-with-i18n";
@@ -2362,8 +2362,7 @@ test("switches plugin list by host tab and shows cross-host relation in details"
   await userEvent.click(
     screen.getByRole("button", { name: /展开 Repo Scout/ }),
   );
-  expect(screen.getByText("分支")).toBeInTheDocument();
-  expect(screen.getByText("main")).toBeInTheDocument();
+  expect(screen.queryByText("分支")).not.toBeInTheDocument();
   expect(screen.getByText("MCP")).toBeInTheDocument();
   expect(screen.getByText("Skills")).toBeInTheDocument();
   expect(screen.getByText("Subagents")).toBeInTheDocument();
@@ -2679,12 +2678,66 @@ test("opens a plugin component preview from the component list", async () => {
   });
 });
 
+test("shows nested files for plugin skill component previews", async () => {
+  const previewEntries: PluginComponentPreview["entries"] = [
+    { path: "skills/repo-scout-skill", name: "repo-scout-skill", entryType: "directory", depth: 0 },
+    { path: "skills/repo-scout-skill/SKILL.md", name: "SKILL.md", entryType: "file", depth: 1 },
+    { path: "skills/repo-scout-skill/reference", name: "reference", entryType: "directory", depth: 1 },
+    { path: "skills/repo-scout-skill/reference/company-standards.md", name: "company-standards.md", entryType: "file", depth: 2 },
+  ];
+  const previewSpy = vi.spyOn(skillClient, "fetchPluginComponentPreview").mockImplementation(async (input) => ({
+    path: input.componentId.endsWith(".md")
+      ? input.componentId
+      : "skills/repo-scout-skill/SKILL.md",
+    title: "repo-scout-skill",
+    assetType: "skill",
+    content: input.componentId.endsWith("company-standards.md")
+      ? "# Company Standards\n\n子目录内容。"
+      : "# repo-scout-skill\n\n[Standards](reference/company-standards.md)",
+    rootName: "repo-scout-skill",
+    entries: previewEntries,
+    initialFilePath: "skills/repo-scout-skill/SKILL.md",
+  }));
+
+  renderWithI18n(<PluginsRoute />);
+
+  await screen.findByRole("tab", { name: /全部/ });
+  await userEvent.click(screen.getByRole("tab", { name: /Codex/ }));
+  await userEvent.click(
+    await screen.findByRole("button", { name: /展开 Repo Scout/ }),
+  );
+  await userEvent.click(
+    screen.getByRole("button", { name: /repo-scout-skill/ }),
+  );
+
+  expect(await screen.findByRole("dialog")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "展开 reference" })).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "展开 reference" }));
+  await userEvent.click(screen.getByRole("button", { name: "company-standards.md" }));
+
+  await waitFor(() => {
+    expect(previewSpy).toHaveBeenLastCalledWith({
+      pluginRoot: pluginFixtures[0].rootPath,
+      componentId: "skills/repo-scout-skill/reference/company-standards.md",
+      assetType: "skill",
+    });
+  });
+  expect(screen.getByText("Repo Scout · skills/repo-scout-skill/reference/company-standards.md")).toBeInTheDocument();
+  expect(screen.getByText(/子目录内容/)).toBeInTheDocument();
+});
+
 test("saves edited plugin component preview content", async () => {
   const saveSpy = vi.spyOn(skillClient, "savePluginComponentPreview").mockResolvedValue({
     path: "skills/repo-scout-skill/SKILL.md",
     title: "repo-scout-skill",
     assetType: "skill",
     content: "# repo-scout-skill\n\n已保存内容。",
+    rootName: "repo-scout-skill",
+    entries: [
+      { path: "skills/repo-scout-skill", name: "repo-scout-skill", entryType: "directory", depth: 0 },
+      { path: "skills/repo-scout-skill/SKILL.md", name: "SKILL.md", entryType: "file", depth: 1 },
+    ],
+    initialFilePath: "skills/repo-scout-skill/SKILL.md",
   });
 
   renderWithI18n(<PluginsRoute />);
@@ -2708,7 +2761,7 @@ test("saves edited plugin component preview content", async () => {
   await waitFor(() => {
     expect(saveSpy).toHaveBeenCalledWith({
       pluginRoot: pluginFixtures[0].rootPath,
-      componentId: "skills/repo-scout-skill",
+      componentId: "skills/repo-scout-skill/SKILL.md",
       assetType: "skill",
       content: "# repo-scout-skill\n\n已保存内容。",
     });

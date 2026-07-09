@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::env;
 use std::fs;
-use std::path::{Path, PathBuf};
 use std::io::{BufRead, BufReader};
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::thread;
@@ -850,7 +850,14 @@ fn clone_repo_for_discovery_with_ref_and_sparse_paths_internal(
     fs::create_dir_all(parent_dir).map_err(|error| format!("创建仓库缓存目录失败: {error}"))?;
 
     let clone_result = if sparse_paths.is_empty() {
-        clone_repo_with_optional_branch_internal(repo_url, git_ref, &repo_dir, apply_instead_of, false, on_progress)
+        clone_repo_with_optional_branch_internal(
+            repo_url,
+            git_ref,
+            &repo_dir,
+            apply_instead_of,
+            false,
+            on_progress,
+        )
     } else {
         let sparse_paths = sparse_paths.iter().map(PathBuf::from).collect::<Vec<_>>();
         clone_repo_with_sparse_paths_internal(
@@ -1025,7 +1032,14 @@ fn ensure_repo_skill_with_ref_and_sparse_paths_internal(
         .map_err(|error| format!("创建 skill library 目录失败: {error}"))?;
 
     if sparse_paths.is_empty() {
-        clone_repo_with_optional_branch_internal(repo_url, git_ref, &skill_dir, apply_instead_of, true, on_progress)?;
+        clone_repo_with_optional_branch_internal(
+            repo_url,
+            git_ref,
+            &skill_dir,
+            apply_instead_of,
+            true,
+            on_progress,
+        )?;
     } else {
         let path_bufs = sparse_paths.iter().map(PathBuf::from).collect::<Vec<_>>();
         clone_repo_with_sparse_paths_internal(
@@ -1053,21 +1067,34 @@ pub fn clone_shared_install_batch_repo(
     let _repo_guard = repo_lock.lock().unwrap_or_else(|error| error.into_inner());
     let batch_dir = repo_cache_directory(batch_cache_key)?;
     if batch_dir.exists() {
-        fs::remove_dir_all(&batch_dir)
-            .map_err(|error| format!("清理共享安装缓存失败: {error}"))?;
+        fs::remove_dir_all(&batch_dir).map_err(|error| format!("清理共享安装缓存失败: {error}"))?;
     }
 
     let parent_dir = batch_dir
         .parent()
         .ok_or_else(|| "无法确定共享安装缓存的父目录".to_string())?;
-    fs::create_dir_all(parent_dir)
-        .map_err(|error| format!("创建共享安装缓存目录失败: {error}"))?;
+    fs::create_dir_all(parent_dir).map_err(|error| format!("创建共享安装缓存目录失败: {error}"))?;
 
     let clone_result = if sparse_paths.is_empty() {
-        clone_repo_with_optional_branch_internal(clone_url, git_ref, &batch_dir, false, true, on_progress)
+        clone_repo_with_optional_branch_internal(
+            clone_url,
+            git_ref,
+            &batch_dir,
+            false,
+            true,
+            on_progress,
+        )
     } else {
         let path_bufs = sparse_paths.iter().map(PathBuf::from).collect::<Vec<_>>();
-        clone_repo_with_sparse_paths_internal(clone_url, git_ref, &batch_dir, &path_bufs, false, true, on_progress)
+        clone_repo_with_sparse_paths_internal(
+            clone_url,
+            git_ref,
+            &batch_dir,
+            &path_bufs,
+            false,
+            true,
+            on_progress,
+        )
     };
     if let Err(error) = clone_result {
         let _ = fs::remove_dir_all(&batch_dir);
@@ -1396,7 +1423,15 @@ fn clone_repo_with_sparse_paths(
     target_dir: &Path,
     sparse_paths: &[PathBuf],
 ) -> Result<(), String> {
-    clone_repo_with_sparse_paths_internal(source, branch, target_dir, sparse_paths, true, false, None)
+    clone_repo_with_sparse_paths_internal(
+        source,
+        branch,
+        target_dir,
+        sparse_paths,
+        true,
+        false,
+        None,
+    )
 }
 
 fn clone_repo_with_sparse_paths_internal(
@@ -1467,24 +1502,13 @@ fn materialize_repo_from_local_batch_internal(
 }
 
 fn copy_skill_repo_dir_all(source: &Path, target: &Path) -> Result<(), String> {
-    fs::create_dir_all(target).map_err(|error| {
-        format!(
-            "创建 skill 目录失败（{}）: {error}",
-            target.display()
-        )
-    })?;
-    let entries = fs::read_dir(source).map_err(|error| {
-        format!(
-            "读取 skill 源目录失败（{}）: {error}",
-            source.display()
-        )
-    })?;
+    fs::create_dir_all(target)
+        .map_err(|error| format!("创建 skill 目录失败（{}）: {error}", target.display()))?;
+    let entries = fs::read_dir(source)
+        .map_err(|error| format!("读取 skill 源目录失败（{}）: {error}", source.display()))?;
     for entry in entries {
         let entry = entry.map_err(|error| {
-            format!(
-                "读取 skill 源目录条目失败（{}）: {error}",
-                source.display()
-            )
+            format!("读取 skill 源目录条目失败（{}）: {error}", source.display())
         })?;
         let source_path = entry.path();
         let target_path = target.join(entry.file_name());

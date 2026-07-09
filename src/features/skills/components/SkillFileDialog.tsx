@@ -114,13 +114,13 @@ export function SkillFileViewModeToggle({
   );
 }
 
-function entryIndent(entry: SkillFileEntry) {
+export function entryIndent(entry: SkillFileEntry) {
   return {
     paddingLeft: `${16 + entry.depth * 14}px`,
   };
 }
 
-function parentDirectoryPath(path: string) {
+export function parentDirectoryPath(path: string) {
   const slashIndex = path.lastIndexOf("/");
   if (slashIndex < 0) {
     return "";
@@ -128,7 +128,7 @@ function parentDirectoryPath(path: string) {
   return path.slice(0, slashIndex);
 }
 
-function collectAncestorDirectoryPaths(path: string) {
+export function collectAncestorDirectoryPaths(path: string) {
   const directories: string[] = [];
   let currentPath = parentDirectoryPath(path);
 
@@ -140,7 +140,7 @@ function collectAncestorDirectoryPaths(path: string) {
   return directories;
 }
 
-function buildInitialCollapsedDirectories(entries: SkillFileEntry[], initialPath: string) {
+export function buildInitialCollapsedDirectories(entries: SkillFileEntry[], initialPath: string) {
   const collapsedDirectories = entries.reduce<Record<string, boolean>>((result, entry) => {
     if (entry.entryType === "directory" && entry.depth > 0) {
       result[entry.path] = true;
@@ -155,7 +155,7 @@ function buildInitialCollapsedDirectories(entries: SkillFileEntry[], initialPath
   return collapsedDirectories;
 }
 
-function hasCollapsedAncestor(entry: SkillFileEntry, collapsedDirectories: Record<string, boolean>) {
+export function hasCollapsedAncestor(entry: SkillFileEntry, collapsedDirectories: Record<string, boolean>) {
   let currentPath = parentDirectoryPath(entry.path);
 
   while (currentPath) {

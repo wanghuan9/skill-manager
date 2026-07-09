@@ -49,6 +49,9 @@ export type PluginComponentPreview = {
   title: string;
   assetType: PluginAssetType;
   content: string;
+  rootName: string;
+  entries: SkillFileEntry[];
+  initialFilePath: string | null;
 };
 
 export type PluginScopeSummary = {

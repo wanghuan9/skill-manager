@@ -28,6 +28,12 @@ pub struct PluginComponentPreview {
     pub title: String,
     pub asset_type: String,
     pub content: String,
+    #[serde(default)]
+    pub root_name: String,
+    #[serde(default)]
+    pub entries: Vec<SkillFileEntry>,
+    #[serde(default)]
+    pub initial_file_path: Option<String>,
 }
 
 #[allow(dead_code)]

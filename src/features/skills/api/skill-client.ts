@@ -56,6 +56,7 @@ import type {
   RepoSkillCandidate,
   SkillFileBrowserSnapshot,
   SkillFileDocument,
+  SkillFileEntry,
   SkillSummary,
   ToolConfig,
   WorkspaceSnapshot,
@@ -744,8 +745,25 @@ function normalizeCliToolSummaryList(cliTools: LegacyCliToolSummary[]): CliToolS
 }
 
 function normalizePluginComponentPreview(preview: LegacyPluginComponentPreview): PluginComponentPreview {
+  const fallbackPath = preview.path ?? "";
+  const fallbackName = fallbackPath.split("/").pop() || fallbackPath || preview.title || "";
+  const entries = Array.isArray(preview.entries)
+    ? preview.entries
+        .filter((entry): entry is SkillFileEntry => (
+          typeof entry?.path === "string"
+          && typeof entry.name === "string"
+          && (entry.entryType === "file" || entry.entryType === "directory")
+          && typeof entry.depth === "number"
+        ))
+    : [];
+  const normalizedEntries: SkillFileEntry[] = entries.length > 0
+    ? entries
+    : fallbackPath
+      ? [{ path: fallbackPath, name: fallbackName, entryType: "file" as const, depth: 0 }]
+      : [];
+
   return {
-    path: preview.path ?? "",
+    path: fallbackPath,
     title: preview.title ?? "",
     assetType:
       preview.assetType === "skill"
@@ -757,6 +775,9 @@ function normalizePluginComponentPreview(preview: LegacyPluginComponentPreview):
         ? preview.assetType
         : "command",
     content: preview.content ?? "",
+    rootName: preview.rootName ?? fallbackName,
+    entries: normalizedEntries,
+    initialFilePath: preview.initialFilePath ?? (fallbackPath || null),
   };
 }
 

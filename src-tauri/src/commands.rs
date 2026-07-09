@@ -3,8 +3,8 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::{Arc, Mutex, OnceLock};
 use std::sync::mpsc;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -15,9 +15,8 @@ use zip::ZipArchive;
 
 use crate::git_state::{
     clear_skill_update_cache, enrich_freshly_installed_skill,
-    enrich_newly_installed_skill_with_git_state,
-    enrich_skill_with_cached_update_state, enrich_skill_with_git_state,
-    enrich_skill_with_local_git_state,
+    enrich_newly_installed_skill_with_git_state, enrich_skill_with_cached_update_state,
+    enrich_skill_with_git_state, enrich_skill_with_local_git_state,
 };
 use crate::library::{
     clone_repo_skill, clone_shared_install_batch_repo, configure_git_network_command,
@@ -26,10 +25,10 @@ use crate::library::{
     install_market_skill_from_source, is_ssh_git_url, parse_market_source_url,
     reconcile_tool_skill_symlinks, remote_clone_candidates, remove_reserved_workspace_entries,
     remove_reserved_workspace_symlinks_from_all_tools, remove_skill_symlink,
-    remove_skill_symlinks_from_all_tools, resolve_clone_url_http_first,
-    repo_cache_directory_root, resolve_git_clone_url_with_instead_of, sanitize_storage_name,
-    skill_directory, summarize_git_error, tree_relative_path_for_branch,
-    with_temporary_discovery_repo_resolved, CloneProgressCallback, RemoteCloneCandidate,
+    remove_skill_symlinks_from_all_tools, repo_cache_directory_root, resolve_clone_url_http_first,
+    resolve_git_clone_url_with_instead_of, sanitize_storage_name, skill_directory,
+    summarize_git_error, tree_relative_path_for_branch, with_temporary_discovery_repo_resolved,
+    CloneProgressCallback, RemoteCloneCandidate,
 };
 use crate::models::{
     AppSettings, GitAccountSummary, GitBranchOption, GitChangeFile, LocalInstallSkillCandidate,
@@ -1035,7 +1034,10 @@ fn now_timestamp_label() -> String {
 }
 
 /// 创建一个 Clone 进度回调，将 git stderr 行通过 Tauri 事件推送到前端。
-fn make_clone_progress_emitter(app_handle: &tauri::AppHandle, phase: &'static str) -> CloneProgressCallback {
+fn make_clone_progress_emitter(
+    app_handle: &tauri::AppHandle,
+    phase: &'static str,
+) -> CloneProgressCallback {
     use tauri::Emitter;
     let handle = app_handle.clone();
     Arc::new(move |message: &str| {
@@ -3679,7 +3681,10 @@ fn update_skill_repo(skill: &SkillSummary) -> Result<(), String> {
         return Err("当前仓库处于 detached HEAD，无法自动更新。".into());
     }
 
-    run_git_command(&skill.local_path, &["fetch", ORIGIN_REMOTE, "--quiet", "--no-tags"])?;
+    run_git_command(
+        &skill.local_path,
+        &["fetch", ORIGIN_REMOTE, "--quiet", "--no-tags"],
+    )?;
     let remote_branch = resolve_remote_branch_name(&skill.local_path, &current_branch)?;
     let (commits_to_pull, local_commits) =
         branch_divergence_counts(&skill.local_path, &remote_branch)?;
@@ -4777,7 +4782,12 @@ pub async fn discover_repo_skills(
             .unwrap_or_default();
         let scan_progress = progress.clone();
         let candidates = if sparse_paths.is_empty() {
-            discover_repo_skills_without_path_hint(&spec, &clone_url, selected_branch.as_deref(), Some(&progress))?
+            discover_repo_skills_without_path_hint(
+                &spec,
+                &clone_url,
+                selected_branch.as_deref(),
+                Some(&progress),
+            )?
         } else {
             with_temporary_discovery_repo_resolved(
                 &clone_url,
@@ -4825,12 +4835,19 @@ fn discover_repo_skills_without_path_hint(
     on_progress: Option<&CloneProgressCallback>,
 ) -> Result<Vec<RepoSkillCandidate>, String> {
     // 直接做完整 clone，避免先 sparse["skills"] 探测失败再 fallback 导致双倍网络请求
-    with_temporary_discovery_repo_resolved(clone_url, git_ref, &spec.repo_key, &[], on_progress, |repo_root| {
-        if let Some(cb) = on_progress {
-            cb("正在扫描技能目录...");
-        }
-        scan_repo_skill_candidates(repo_root, None)
-    })
+    with_temporary_discovery_repo_resolved(
+        clone_url,
+        git_ref,
+        &spec.repo_key,
+        &[],
+        on_progress,
+        |repo_root| {
+            if let Some(cb) = on_progress {
+                cb("正在扫描技能目录...");
+            }
+            scan_repo_skill_candidates(repo_root, None)
+        },
+    )
 }
 
 #[tauri::command]
@@ -4877,7 +4894,12 @@ fn materialize_skill_from_batch_or_clone(
             ensure_repo_skill_from_local_batch_source(batch, clone_url, &item.install_name, &[])
         } else {
             let sparse = vec![item.normalized_path.clone()];
-            ensure_repo_skill_from_local_batch_source(batch, clone_url, &item.install_name, &sparse)?;
+            ensure_repo_skill_from_local_batch_source(
+                batch,
+                clone_url,
+                &item.install_name,
+                &sparse,
+            )?;
             let subdir = item.skill_dir.join(&item.normalized_path);
             if !subdir.is_dir() || !subdir.join("SKILL.md").is_file() {
                 return Err(format!("未找到待安装技能路径: {}", item.selected_path));
@@ -4973,8 +4995,7 @@ fn install_selected_repo_skills_blocking(
                 .map_err(|error| format!("清理旧 skill 目录失败: {error}"))?;
         }
         if let Some(parent) = skill_dir.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|error| format!("创建 skill 目录失败: {error}"))?;
+            fs::create_dir_all(parent).map_err(|error| format!("创建 skill 目录失败: {error}"))?;
         }
 
         if normalized_path.is_empty() {
@@ -5734,7 +5755,10 @@ pub fn get_update_preview_snapshot(skill_name: &str) -> Result<UpdatePreviewSnap
     let (installed_skills, skill_index) = find_skill_by_name(skill_name)?;
     let skill = &installed_skills[skill_index];
     let current_branch = current_branch_name(&skill.local_path)?;
-    run_git_command(&skill.local_path, &["fetch", ORIGIN_REMOTE, "--quiet", "--no-tags"])?;
+    run_git_command(
+        &skill.local_path,
+        &["fetch", ORIGIN_REMOTE, "--quiet", "--no-tags"],
+    )?;
     let remote_branch = resolve_remote_branch_name(&skill.local_path, &current_branch)?;
     let (commits_to_pull, _) = branch_divergence_counts(&skill.local_path, &remote_branch)?;
     let uncommitted_files = collect_working_tree_changes(&skill.local_path)?;
@@ -5815,14 +5839,17 @@ pub fn get_repo_cache_size() -> Result<u64, String> {
         let Ok(entries) = std::fs::read_dir(path) else {
             return 0;
         };
-        entries.flatten().map(|entry| {
-            let p = entry.path();
-            if p.is_dir() {
-                dir_size(&p)
-            } else {
-                entry.metadata().map(|m| m.len()).unwrap_or(0)
-            }
-        }).sum()
+        entries
+            .flatten()
+            .map(|entry| {
+                let p = entry.path();
+                if p.is_dir() {
+                    dir_size(&p)
+                } else {
+                    entry.metadata().map(|m| m.len()).unwrap_or(0)
+                }
+            })
+            .sum()
     }
     Ok(dir_size(&cache_dir))
 }
@@ -5831,8 +5858,7 @@ pub fn get_repo_cache_size() -> Result<u64, String> {
 pub fn clear_repo_cache() -> Result<(), String> {
     let cache_dir = repo_cache_directory_root()?;
     if cache_dir.exists() {
-        fs::remove_dir_all(&cache_dir)
-            .map_err(|error| format!("清理缓存失败: {error}"))?;
+        fs::remove_dir_all(&cache_dir).map_err(|error| format!("清理缓存失败: {error}"))?;
     }
     Ok(())
 }
