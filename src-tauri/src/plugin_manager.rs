@@ -544,7 +544,6 @@ fn install_selected_plugin_probes_blocking(
     host_tools: Vec<String>,
     on_progress: Option<&CloneProgressCallback>,
 ) -> Result<Vec<PluginSummary>, String> {
-    let cleanup_roots = plugin_probe_cleanup_roots(&probes);
     let home_dir = workspace::home_dir_option().ok_or_else(|| "无法定位用户主目录".to_string())?;
     let install_result = (|| {
         let mut installed_roots = Vec::new();
@@ -617,7 +616,6 @@ fn install_selected_plugin_probes_blocking(
         Ok(installed)
     })();
 
-    cleanup_plugin_probe_repo_roots(&cleanup_roots);
     install_result
 }
 
@@ -5050,6 +5048,12 @@ fn install_cursor_plugin_probe_independent(
     probe: &PluginProbeResult,
     on_progress: Option<&CloneProgressCallback>,
 ) -> Result<PathBuf, String> {
+    if let Ok(installed_root) =
+        install_cursor_plugin_probe_from_existing_git_source(home_dir, probe, on_progress)
+    {
+        return Ok(installed_root);
+    }
+
     if let Ok((clone_url, source_ref, plugin_relative_path)) = cursor_remote_clone_spec(probe) {
         return install_cursor_plugin_probe_from_remote(
             home_dir,
@@ -5059,6 +5063,39 @@ fn install_cursor_plugin_probe_independent(
             &plugin_relative_path,
             on_progress,
         );
+    }
+
+    let host_tools = vec!["cursor".to_string()];
+    let package = ensure_shared_plugin_package(probe, &host_tools, on_progress)?;
+    let source_root = canonicalize_existing_dir(&package.plugin_root)?;
+    let package_root =
+        managed_plugin_package_root_for_path(&source_root).unwrap_or_else(|| source_root.clone());
+    install_cursor_plugin_probe(home_dir, &source_root, &package_root, probe)
+}
+
+fn install_cursor_plugin_probe_from_existing_git_source(
+    home_dir: &Path,
+    probe: &PluginProbeResult,
+    on_progress: Option<&CloneProgressCallback>,
+) -> Result<PathBuf, String> {
+    let source_root = canonicalize_existing_dir(Path::new(&probe.plugin_root))
+        .ok()
+        .map(|root| resolve_effective_probe_plugin_root(probe, &root))
+        .ok_or_else(|| "插件本地源目录不存在".to_string())?;
+    let source_git_root = non_empty_trimmed_string(&probe.git_root)
+        .and_then(|value| canonicalize_existing_dir(Path::new(&value)).ok())
+        .filter(|path| path.join(".git").is_dir())
+        .or_else(|| find_git_root(&source_root))
+        .ok_or_else(|| "插件本地源目录不是 Git 仓库".to_string())?;
+    if !source_git_root.join(".git").is_dir() {
+        return Err("插件本地源目录不是 Git 仓库".to_string());
+    }
+    let repo_cache_root = workspace::managed_workspace_root_option()
+        .map(|root| root.join("repo-cache"))
+        .and_then(|root| canonicalize_existing_dir(&root).ok())
+        .ok_or_else(|| "插件本地源不是 SkillDock repo-cache".to_string())?;
+    if source_git_root.strip_prefix(&repo_cache_root).is_err() {
+        return Err("插件本地源不是 SkillDock repo-cache".to_string());
     }
 
     let host_tools = vec!["cursor".to_string()];
@@ -8554,35 +8591,6 @@ fn detect_remote_github_plugin_candidates(
     )?]))
 }
 
-fn plugin_probe_cleanup_roots(probes: &[PluginProbeResult]) -> Vec<PathBuf> {
-    let Some(repo_cache_root) =
-        workspace::managed_workspace_root_option().map(|root| root.join("repo-cache"))
-    else {
-        return Vec::new();
-    };
-    let repo_cache_root = canonicalize_existing_dir(&repo_cache_root).unwrap_or(repo_cache_root);
-    let mut cleanup_roots = BTreeSet::new();
-    for probe in probes {
-        let Some(repo_root) = non_empty_trimmed_string(&probe.repo_root) else {
-            continue;
-        };
-        let Ok(repo_root) = canonicalize_existing_dir(Path::new(&repo_root)) else {
-            continue;
-        };
-        if repo_root.strip_prefix(&repo_cache_root).is_ok() {
-            cleanup_roots.insert(repo_root);
-        }
-    }
-
-    cleanup_roots.into_iter().collect()
-}
-
-fn cleanup_plugin_probe_repo_roots(roots: &[PathBuf]) {
-    for root in roots {
-        let _ = fs::remove_dir_all(root);
-    }
-}
-
 fn canonicalize_existing_dir(path: &Path) -> Result<PathBuf, String> {
     if !path.exists() {
         return Err(format!("插件目录不存在: {}", path.display()));
@@ -11668,7 +11676,79 @@ source = "__SOURCE__"
             .join(".claude/plugins/installed_plugins.json")
             .is_file());
         assert!(home_dir.join(".claude/settings.json").is_file());
-        assert!(!repo_root.exists());
+        assert!(repo_root.exists());
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn installs_cursor_plugin_from_repo_cache_before_remote_clone() {
+        let _guard = TEST_ENV_LOCK.lock().expect("lock test env");
+        let temp_dir = temp_test_dir("cursor-install-from-repo-cache");
+        let home_dir = temp_dir.join("home");
+        let repo_root = home_dir.join(".skilldock/repo-cache/cursor-cache-install");
+        let plugin_root = repo_root.join("plugins/coding-tutor");
+        fs::create_dir_all(plugin_root.join(".cursor-plugin")).expect("create cursor manifest dir");
+        fs::create_dir_all(plugin_root.join("commands")).expect("create command dir");
+        fs::write(
+            plugin_root.join(".cursor-plugin/plugin.json"),
+            r#"{"name":"coding-tutor","displayName":"Coding Tutor","version":"1.0.0","description":"Tutor plugin"}"#,
+        )
+        .expect("write cursor manifest");
+        fs::write(plugin_root.join("commands/teach.md"), "# teach").expect("write command");
+        let source_url = "https://example.invalid/org/coding-tutor.git".to_string();
+        commit_test_repo(&repo_root, Some(&source_url));
+
+        let previous_home = env::var_os("HOME");
+        env::set_var("HOME", &home_dir);
+        let installed = install_selected_plugin_probes_blocking(
+            vec![PluginProbeResult {
+                tool: "cursor".to_string(),
+                compatible_host_tools: vec!["cursor".to_string()],
+                kind: "plugin-repo".to_string(),
+                manifest_name: "coding-tutor".to_string(),
+                name: "Coding Tutor".to_string(),
+                description: "Tutor plugin".to_string(),
+                plugin_root: plugin_root.to_string_lossy().into_owned(),
+                manifest_path: plugin_root
+                    .join(".cursor-plugin/plugin.json")
+                    .to_string_lossy()
+                    .into_owned(),
+                marketplace_manifest_path: String::new(),
+                components: Vec::new(),
+                source_type: "git".to_string(),
+                source_url: source_url.clone(),
+                source_ref: String::new(),
+                is_git_repo: true,
+                repo_root: repo_root.to_string_lossy().into_owned(),
+                plugin_relative_path: "plugins/coding-tutor".to_string(),
+                git_root: repo_root.to_string_lossy().into_owned(),
+                confidence: "high".to_string(),
+                install_strategy: "cursor-plugin-dir".to_string(),
+                warnings: Vec::new(),
+            }],
+            vec!["cursor".to_string()],
+            None,
+        )
+        .expect("install cursor plugin from repo cache");
+
+        match previous_home {
+            Some(value) => env::set_var("HOME", value),
+            None => env::remove_var("HOME"),
+        }
+
+        let installed_repo_root = home_dir.join(".cursor/plugins/local/coding-tutor");
+        assert_eq!(installed.len(), 1);
+        assert!(repo_root.exists());
+        assert!(installed_repo_root.join(".git").is_dir());
+        assert!(installed_repo_root
+            .join(".cursor-plugin/plugin.json")
+            .is_file());
+        assert!(installed_repo_root.join("commands/teach.md").is_file());
+        assert_eq!(
+            run_git_test_output(&installed_repo_root, &["remote", "get-url", "origin"]),
+            source_url
+        );
 
         let _ = fs::remove_dir_all(temp_dir);
     }
