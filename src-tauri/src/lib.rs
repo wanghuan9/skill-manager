@@ -10,6 +10,10 @@ mod skill_watcher;
 mod state;
 mod workspace;
 
+#[cfg(windows)]
+#[doc(hidden)]
+pub use library::create_windows_directory_junction;
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()

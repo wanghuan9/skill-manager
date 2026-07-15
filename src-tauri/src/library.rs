@@ -2266,7 +2266,7 @@ fn windows_symlink_error_message(error: &str) -> String {
 }
 
 #[cfg(windows)]
-fn create_windows_directory_junction(target: &Path, junction: &Path) -> Result<(), String> {
+pub fn create_windows_directory_junction(target: &Path, junction: &Path) -> Result<(), String> {
     let target = target
         .canonicalize()
         .map_err(|error| format!("解析 skill 目录失败: {error}"))?;
