@@ -2279,40 +2279,49 @@ fn create_windows_directory_junction(target: &Path, junction: &Path) -> Result<(
 
     let mut command = Command::new("cmd");
     configure_hidden_subprocess(&mut command);
-    let junction_command = format!(
-        r#"mklink /J "{}" "{}""#,
-        windows_cmd_path(&junction),
-        windows_cmd_path(&target)
-    );
+    let junction_path = windows_cmd_path(junction);
+    let target_path = windows_cmd_path(&target);
     let output = command
-        .args([
-            "/D",
-            "/S",
-            "/C",
-            &format!("chcp 65001>NUL & {junction_command}"),
-        ])
+        .args(["/D", "/U", "/C", "mklink", "/J"])
+        .arg(&junction_path)
+        .arg(&target_path)
         .output()
         .map_err(|error| format!("创建目录联接失败: {error}"))?;
     if output.status.success() {
         return Ok(());
     }
 
-    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stderr = decode_windows_cmd_output(&output.stderr);
+    let stdout = decode_windows_cmd_output(&output.stdout);
     let message = if stderr.is_empty() { stdout } else { stderr };
     Err(format!("创建目录联接失败: {message}"))
 }
 
 #[cfg(windows)]
+fn decode_windows_cmd_output(output: &[u8]) -> String {
+    let mut chunks = output.chunks_exact(2);
+    let units = chunks
+        .by_ref()
+        .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
+        .collect::<Vec<_>>();
+    if chunks.remainder().is_empty() {
+        String::from_utf16_lossy(&units).trim().to_string()
+    } else {
+        String::from_utf8_lossy(output).trim().to_string()
+    }
+}
+
+#[cfg(windows)]
 fn windows_cmd_path(path: &Path) -> String {
     let value = path.to_string_lossy();
-    if let Some(rest) = value.strip_prefix(r"\\?\UNC\") {
+    let normalized = if let Some(rest) = value.strip_prefix(r"\\?\UNC\") {
         format!(r"\\{rest}")
     } else if let Some(rest) = value.strip_prefix(r"\\?\") {
         rest.to_string()
     } else {
         value.into_owned()
-    }
+    };
+    normalized.replace('/', "\\")
 }
 
 fn create_skill_directory_link(skill_path: &Path, symlink_path: &Path) -> Result<(), String> {
@@ -2775,6 +2784,10 @@ mod tests {
         summarize_git_error, tool_skills_path_for_home, tree_relative_path_for_branch,
         MarketSourceSpec, RemoteCloneCandidate, ResolvedRemoteSkillPath,
     };
+    #[cfg(windows)]
+    use super::{
+        create_windows_directory_junction, decode_windows_cmd_output, windows_cmd_path,
+    };
     use crate::models::SkillSummary;
     use crate::workspace::TEST_ENV_LOCK;
     use std::fs;
@@ -2807,6 +2820,50 @@ mod tests {
     fn configure_hidden_subprocess_does_not_panic_for_git_command() {
         let mut command = std::process::Command::new(git_executable());
         configure_hidden_subprocess(&mut command);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_cmd_path_normalizes_verbatim_and_mixed_separators() {
+        assert_eq!(
+            windows_cmd_path(Path::new(r"\\?\C:\Users\demo/.config/opencode/skills")),
+            r"C:\Users\demo\.config\opencode\skills"
+        );
+        assert_eq!(
+            windows_cmd_path(Path::new(r"\\?\UNC\server\share/skills")),
+            r"\\server\share\skills"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn decode_windows_cmd_output_reads_utf16_messages() {
+        let output = "文件名、目录名或卷标语法不正确。"
+            .encode_utf16()
+            .flat_map(u16::to_le_bytes)
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            decode_windows_cmd_output(&output),
+            "文件名、目录名或卷标语法不正确。"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn create_windows_directory_junction_handles_paths_with_spaces() {
+        let temp_dir = temp_test_dir("windows-directory-junction");
+        let target_dir = temp_dir.join("source skill");
+        let junction_path = temp_dir.join("tool skills").join("research");
+        fs::create_dir_all(&target_dir).expect("create junction target");
+        fs::write(target_dir.join("SKILL.md"), "# research").expect("write junction target");
+
+        create_windows_directory_junction(&target_dir, &junction_path)
+            .expect("create Windows directory junction");
+
+        assert!(junction_path.join("SKILL.md").is_file());
+        fs::remove_dir(&junction_path).expect("remove directory junction");
+        fs::remove_dir_all(&temp_dir).expect("remove junction test directory");
     }
 
     #[test]

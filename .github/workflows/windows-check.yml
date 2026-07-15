@@ -30,6 +30,9 @@ jobs:
 
       - run: cd src-tauri && cargo check --target x86_64-pc-windows-msvc
 
+      - name: Test Windows directory junction fallback
+        run: cd src-tauri && cargo test --target x86_64-pc-windows-msvc create_windows_directory_junction_handles_paths_with_spaces -- --test-threads=1
+
       - name: Build Windows installer probe
         run: npm exec -- tauri build --target x86_64-pc-windows-msvc --config src-tauri/tauri.windows.conf.json
 
