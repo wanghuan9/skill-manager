@@ -12,7 +12,7 @@ mod workspace;
 
 #[cfg(windows)]
 #[doc(hidden)]
-pub use library::create_windows_directory_junction;
+pub use library::{create_windows_directory_junction, remove_skill_symlink};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {

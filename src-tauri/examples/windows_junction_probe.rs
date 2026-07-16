@@ -36,11 +36,24 @@ fn run_probe() -> Result<(), String> {
 
     let result = (|| {
         fs::create_dir_all(&target).map_err(|error| error.to_string())?;
-        fs::write(target.join("SKILL.md"), "# research")
-            .map_err(|error| error.to_string())?;
+        fs::write(target.join("SKILL.md"), "# research").map_err(|error| error.to_string())?;
         skill_manager_lib::create_windows_directory_junction(&target, &junction)?;
         if !junction.join("SKILL.md").is_file() {
             return Err("junction target file is not readable".to_string());
+        }
+        skill_manager_lib::remove_skill_symlink(
+            junction
+                .parent()
+                .ok_or_else(|| "junction parent is missing".to_string())?
+                .to_string_lossy()
+                .as_ref(),
+            "research",
+        )?;
+        if fs::symlink_metadata(&junction).is_ok() {
+            return Err("junction still exists after production removal".to_string());
+        }
+        if !target.join("SKILL.md").is_file() {
+            return Err("junction removal deleted the target skill".to_string());
         }
         Ok(())
     })();

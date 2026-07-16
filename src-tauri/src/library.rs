@@ -2243,16 +2243,10 @@ pub fn create_skill_symlink(
     let symlink_path = tool_path.join(normalized_skill_name);
 
     // 如果同名条目已存在，先按条目类型清理，再创建新的符号链接。
-    if symlink_path.exists() || symlink_path.is_symlink() {
+    if fs::symlink_metadata(&symlink_path).is_ok() {
         let metadata = fs::symlink_metadata(&symlink_path)
             .map_err(|error| format!("读取现有技能条目失败: {error}"))?;
-        if metadata.file_type().is_dir() && !metadata.file_type().is_symlink() {
-            fs::remove_dir_all(&symlink_path)
-                .map_err(|error| format!("删除现有技能目录失败: {error}"))?;
-        } else {
-            fs::remove_file(&symlink_path)
-                .map_err(|error| format!("删除现有符号链接失败: {error}"))?;
-        }
+        remove_existing_skill_entry(&symlink_path, &metadata)?;
     }
 
     create_skill_directory_link(&skill_path, &symlink_path)
@@ -2345,6 +2339,58 @@ fn create_skill_directory_link(skill_path: &Path, symlink_path: &Path) -> Result
     }
 
     Ok(())
+}
+
+#[cfg(windows)]
+fn is_windows_directory_reparse_point(metadata: &fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+
+    const FILE_ATTRIBUTE_DIRECTORY: u32 = 0x10;
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+    let attributes = metadata.file_attributes();
+    attributes & FILE_ATTRIBUTE_DIRECTORY != 0 && attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0
+}
+
+fn is_skill_link_entry(path: &Path) -> bool {
+    let Ok(metadata) = fs::symlink_metadata(path) else {
+        return false;
+    };
+    if metadata.file_type().is_symlink() {
+        return true;
+    }
+
+    #[cfg(windows)]
+    {
+        return is_windows_directory_reparse_point(&metadata);
+    }
+
+    #[cfg(not(windows))]
+    false
+}
+
+fn remove_skill_link_entry(path: &Path) -> Result<(), std::io::Error> {
+    #[cfg(windows)]
+    {
+        let metadata = fs::symlink_metadata(path)?;
+        if is_windows_directory_reparse_point(&metadata) {
+            return fs::remove_dir(path);
+        }
+    }
+
+    fs::remove_file(path)
+}
+
+fn remove_existing_skill_entry(path: &Path, metadata: &fs::Metadata) -> Result<(), String> {
+    #[cfg(windows)]
+    if is_windows_directory_reparse_point(metadata) {
+        return fs::remove_dir(path).map_err(|error| format!("删除现有技能链接失败: {error}"));
+    }
+
+    if metadata.file_type().is_dir() && !metadata.file_type().is_symlink() {
+        fs::remove_dir_all(path).map_err(|error| format!("删除现有技能目录失败: {error}"))
+    } else {
+        fs::remove_file(path).map_err(|error| format!("删除现有符号链接失败: {error}"))
+    }
 }
 
 fn is_reserved_workspace_dir(path: &Path) -> bool {
@@ -2450,8 +2496,9 @@ pub fn remove_skill_symlink(tool_skills_path: &str, skill_name: &str) -> Result<
     let symlink_path = tool_path.join(skill_name);
 
     // 如果符号链接存在，删除它
-    if symlink_path.exists() || symlink_path.is_symlink() {
-        fs::remove_file(&symlink_path).map_err(|error| format!("删除符号链接失败: {error}"))?;
+    if fs::symlink_metadata(&symlink_path).is_ok() {
+        remove_skill_link_entry(&symlink_path)
+            .map_err(|error| format!("删除符号链接失败: {error}"))?;
     }
 
     Ok(())
@@ -2556,7 +2603,7 @@ pub fn reconcile_tool_skill_symlinks(
     for entry in entries {
         let entry = entry.map_err(|error| format!("读取工具 skills 条目失败: {error}"))?;
         let symlink_path = entry.path();
-        if !symlink_path.is_symlink() || !is_managed_workspace_path(&symlink_path) {
+        if !is_skill_link_entry(&symlink_path) || !is_managed_workspace_path(&symlink_path) {
             continue;
         }
 
@@ -2565,7 +2612,7 @@ pub fn reconcile_tool_skill_symlinks(
             .and_then(|value| value.to_str())
             .unwrap_or_default();
         if !expected_skill_names.contains(entry_name) {
-            fs::remove_file(&symlink_path)
+            remove_skill_link_entry(&symlink_path)
                 .map_err(|error| format!("删除多余的技能链接失败: {error}"))?;
         }
     }
@@ -2779,15 +2826,14 @@ mod tests {
         get_tool_skills_path, git_executable, ignore_unnecessary_files,
         migrate_legacy_skill_symlinks, parse_git_url_instead_of_rules, parse_market_source_url,
         reconcile_tool_skill_symlinks, remote_clone_candidates, remove_reserved_workspace_entries,
-        repo_cache_lock, rewrite_git_clone_url_with_instead_of_rules, run_git_in_dir,
-        run_git_output, sanitize_storage_name, skill_dir_match_score, ssh_clone_url_for_repository_url,
-        summarize_git_error, tool_skills_path_for_home, tree_relative_path_for_branch,
-        MarketSourceSpec, RemoteCloneCandidate, ResolvedRemoteSkillPath,
+        remove_skill_symlink, repo_cache_lock, rewrite_git_clone_url_with_instead_of_rules,
+        run_git_in_dir, run_git_output, sanitize_storage_name, skill_dir_match_score,
+        ssh_clone_url_for_repository_url, summarize_git_error, tool_skills_path_for_home,
+        tree_relative_path_for_branch, MarketSourceSpec, RemoteCloneCandidate,
+        ResolvedRemoteSkillPath,
     };
     #[cfg(windows)]
-    use super::{
-        create_windows_directory_junction, decode_windows_cmd_output, windows_cmd_path,
-    };
+    use super::{create_windows_directory_junction, decode_windows_cmd_output, windows_cmd_path};
     use crate::models::SkillSummary;
     use crate::workspace::TEST_ENV_LOCK;
     use std::fs;
@@ -2862,8 +2908,38 @@ mod tests {
             .expect("create Windows directory junction");
 
         assert!(junction_path.join("SKILL.md").is_file());
-        fs::remove_dir(&junction_path).expect("remove directory junction");
+        remove_skill_symlink(
+            junction_path
+                .parent()
+                .expect("junction parent")
+                .to_string_lossy()
+                .as_ref(),
+            "research",
+        )
+        .expect("remove directory junction through production helper");
+        assert!(fs::symlink_metadata(&junction_path).is_err());
+        assert!(target_dir.join("SKILL.md").is_file());
         fs::remove_dir_all(&temp_dir).expect("remove junction test directory");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn remove_skill_symlink_removes_link_without_deleting_target() {
+        let temp_dir = temp_test_dir("remove-skill-symlink");
+        let target_dir = temp_dir.join("target");
+        let tool_skills_dir = temp_dir.join("tool-skills");
+        let symlink_path = tool_skills_dir.join("research");
+        fs::create_dir_all(&target_dir).expect("create skill target");
+        fs::create_dir_all(&tool_skills_dir).expect("create tool skills directory");
+        fs::write(target_dir.join("SKILL.md"), "# research").expect("write skill target");
+        std::os::unix::fs::symlink(&target_dir, &symlink_path).expect("create skill symlink");
+
+        remove_skill_symlink(tool_skills_dir.to_string_lossy().as_ref(), "research")
+            .expect("remove skill symlink");
+
+        assert!(fs::symlink_metadata(&symlink_path).is_err());
+        assert!(target_dir.join("SKILL.md").is_file());
+        fs::remove_dir_all(&temp_dir).expect("remove test directory");
     }
 
     #[test]
