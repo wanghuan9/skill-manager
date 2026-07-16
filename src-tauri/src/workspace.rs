@@ -3,6 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 #[cfg(test)]
 use std::sync::Mutex;
+use std::time::SystemTime;
 
 pub const APP_BRAND_NAME: &str = "SkillDock";
 pub const WORKSPACE_DIR_NAME: &str = ".skilldock";
@@ -36,6 +37,40 @@ pub fn config_home_dir() -> Result<PathBuf, String> {
         }
     }
     home_dir()
+}
+
+pub fn application_support_dir_for_home(home_dir: &Path) -> PathBuf {
+    #[cfg(windows)]
+    {
+        env::var_os("APPDATA")
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+            .unwrap_or_else(|| home_dir.join("AppData/Roaming"))
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        home_dir.join("Library/Application Support")
+    }
+
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        env::var_os("XDG_CONFIG_HOME")
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+            .unwrap_or_else(|| home_dir.join(".config"))
+    }
+}
+
+pub fn format_local_system_time(value: SystemTime) -> String {
+    let datetime: chrono::DateTime<chrono::Local> = value.into();
+    format!(
+        "{}/{}/{} {}",
+        datetime.format("%Y"),
+        datetime.format("%m").to_string().trim_start_matches('0'),
+        datetime.format("%d").to_string().trim_start_matches('0'),
+        datetime.format("%H:%M:%S")
+    )
 }
 
 pub fn managed_workspace_root() -> Result<PathBuf, String> {
@@ -464,6 +499,43 @@ mod tests {
         assert_eq!(
             super::display_path_value(r"\\?\UNC\server\share\plugins"),
             r"\\server\share\plugins"
+        );
+    }
+
+    #[test]
+    fn application_support_dir_uses_platform_location() {
+        let home_dir = PathBuf::from(if cfg!(windows) {
+            r"C:\Users\demo"
+        } else {
+            "/Users/demo"
+        });
+        let path = super::application_support_dir_for_home(&home_dir);
+
+        if cfg!(windows) {
+            let expected = env::var_os("APPDATA")
+                .filter(|value| !value.is_empty())
+                .map(PathBuf::from)
+                .unwrap_or_else(|| home_dir.join("AppData/Roaming"));
+            assert_eq!(path, expected);
+        } else if cfg!(target_os = "macos") {
+            assert_eq!(path, home_dir.join("Library/Application Support"));
+        }
+    }
+
+    #[test]
+    fn format_local_system_time_uses_local_timezone() {
+        let value = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+        let expected: chrono::DateTime<chrono::Local> = value.into();
+
+        assert_eq!(
+            super::format_local_system_time(value),
+            format!(
+                "{}/{}/{} {}",
+                expected.format("%Y"),
+                expected.format("%m").to_string().trim_start_matches('0'),
+                expected.format("%d").to_string().trim_start_matches('0'),
+                expected.format("%H:%M:%S")
+            )
         );
     }
 

@@ -16,9 +16,9 @@ use toml_edit::{DocumentMut, Item, Table};
 
 use crate::library::{
     configure_git_network_command, configure_hidden_subprocess, git_command,
-    parse_market_source_url, resolve_clone_url_http_first, resolve_git_clone_url_with_instead_of,
-    run_git_clone_with_progress, sanitize_storage_name, tree_relative_path_for_branch,
-    with_temporary_discovery_repo_resolved, CloneProgressCallback,
+    parse_market_source_url, resolve_clone_url_http_first, resolve_command_in_path,
+    resolve_git_clone_url_with_instead_of, run_git_clone_with_progress, sanitize_storage_name,
+    tree_relative_path_for_branch, with_temporary_discovery_repo_resolved, CloneProgressCallback,
 };
 use crate::models::{
     CliToolSummary, PluginComponentPreview, PluginComponentSummary, PluginProbeResult,
@@ -3883,7 +3883,7 @@ fn ensure_shared_plugin_repo(
         clone_url.trim().to_string()
     };
 
-    let mut command = Command::new("git");
+    let mut command = git_command();
     configure_git_network_command(&mut command);
     command
         .arg("clone")
@@ -8718,15 +8718,16 @@ fn normalize_repo_url(url: &str) -> String {
 }
 
 fn resolve_cli_command_path(command: &str) -> Option<String> {
-    let output = Command::new("which").arg(command).output().ok()?;
-    if !output.status.success() {
-        return None;
+    let path = resolve_command_in_path(command)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = fs::metadata(&path).ok()?.permissions().mode();
+        if mode & 0o111 == 0 {
+            return None;
+        }
     }
-    let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if path.is_empty() {
-        return None;
-    }
-    Some(path)
+    Some(workspace::display_path_string(&path))
 }
 
 fn find_git_root(path: &Path) -> Option<PathBuf> {
@@ -13615,7 +13616,49 @@ source = "__SOURCE__"
 
     #[test]
     fn lists_direct_cli_tools_from_shell_path() {
+        let _guard = TEST_ENV_LOCK.lock().expect("lock test env");
+        let temp_dir = temp_test_dir("direct-cli-tools");
+        let home_dir = temp_dir.join("home");
+        let bin_dir = temp_dir.join("bin");
+        fs::create_dir_all(&home_dir).expect("create test home");
+        fs::create_dir_all(&bin_dir).expect("create test bin");
+        let executable_path = bin_dir.join(if cfg!(windows) {
+            "lark-cli.cmd"
+        } else {
+            "lark-cli"
+        });
+        fs::write(&executable_path, "#!/bin/sh\nexit 0\n").expect("write fake lark cli");
+        #[cfg(unix)]
+        {
+            let mut permissions = fs::metadata(&executable_path)
+                .expect("read fake cli metadata")
+                .permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(&executable_path, permissions).expect("make fake cli executable");
+        }
+
+        let previous_home = env::var_os("HOME");
+        let previous_path = env::var_os("PATH");
+        let mut search_paths = vec![bin_dir];
+        if let Some(path) = &previous_path {
+            search_paths.extend(env::split_paths(path));
+        }
+        env::set_var("HOME", &home_dir);
+        env::set_var(
+            "PATH",
+            env::join_paths(search_paths).expect("build test PATH"),
+        );
+
         let cli_tools = list_cli_tools().expect("list cli tools");
+
+        match previous_home {
+            Some(value) => env::set_var("HOME", value),
+            None => env::remove_var("HOME"),
+        }
+        match previous_path {
+            Some(value) => env::set_var("PATH", value),
+            None => env::remove_var("PATH"),
+        }
 
         let lark_cli = cli_tools
             .iter()
@@ -13629,6 +13672,8 @@ source = "__SOURCE__"
             .iter()
             .all(|tool| tool.lifecycle_source == "direct"));
         assert!(cli_tools.iter().all(|tool| tool.executable_path.is_some()));
+
+        let _ = fs::remove_dir_all(temp_dir);
     }
 
     #[test]

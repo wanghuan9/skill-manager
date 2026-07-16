@@ -9,12 +9,13 @@ use std::ffi::OsString;
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter};
 
+use crate::library::{command_for_executable, resolve_command_path};
 use crate::state::{load_app_settings, normalize_mcp_install_activation};
 use crate::workspace::{
     self, remove_legacy_workspace_file, workspace_file_candidates, workspace_file_path,
@@ -855,6 +856,7 @@ fn target_apps() -> Result<Vec<McpTargetApp>, String> {
 
 fn target_app_specs() -> Result<Vec<McpTargetAppSpec>, String> {
     let home_dir = home_dir()?;
+    let application_support_dir = workspace::application_support_dir_for_home(&home_dir);
 
     Ok(vec![
         supported_app_spec(
@@ -968,8 +970,8 @@ fn target_app_specs() -> Result<Vec<McpTargetAppSpec>, String> {
         supported_app_spec(
             APP_TRAE,
             "Trae",
-            home_dir.join("Library/Application Support/Trae/User/mcp.json"),
-            home_dir.join("Library/Application Support/Trae"),
+            application_support_dir.join("Trae/User/mcp.json"),
+            application_support_dir.join("Trae"),
         ),
         supported_app_spec(
             APP_DROID,
@@ -992,10 +994,9 @@ fn target_app_specs() -> Result<Vec<McpTargetAppSpec>, String> {
         supported_app_spec(
             APP_KILO_CODE,
             "Kilo Code",
-            home_dir.join(
-                "Library/Application Support/Code/User/globalStorage/kilocode.kilo-code/settings/mcp_settings.json",
-            ),
-            home_dir.join("Library/Application Support/Code/User/globalStorage/kilocode.kilo-code"),
+            application_support_dir
+                .join("Code/User/globalStorage/kilocode.kilo-code/settings/mcp_settings.json"),
+            application_support_dir.join("Code/User/globalStorage/kilocode.kilo-code"),
         ),
         supported_app_spec(
             APP_KIRO,
@@ -1018,16 +1019,16 @@ fn target_app_specs() -> Result<Vec<McpTargetAppSpec>, String> {
         supported_app_spec(
             APP_ROO_CODE,
             "Roo Code",
-            home_dir.join(
-                "Library/Application Support/Code/User/globalStorage/RooVeterinaryInc.roo-cline/settings/mcp_settings.json",
+            application_support_dir.join(
+                "Code/User/globalStorage/RooVeterinaryInc.roo-cline/settings/mcp_settings.json",
             ),
-            home_dir.join("Library/Application Support/Code/User/globalStorage/RooVeterinaryInc.roo-cline"),
+            application_support_dir.join("Code/User/globalStorage/RooVeterinaryInc.roo-cline"),
         ),
         supported_app_spec(
             APP_TRAE_CN,
             "Trae CN",
-            home_dir.join("Library/Application Support/Trae CN/User/mcp.json"),
-            home_dir.join("Library/Application Support/Trae CN"),
+            application_support_dir.join("Trae CN/User/mcp.json"),
+            application_support_dir.join("Trae CN"),
         ),
     ])
 }
@@ -1376,8 +1377,9 @@ fn remove_codebuddy_mcp_server(server_id: &str) -> Result<(), String> {
 
 fn trae_cn_mcp_candidate_paths() -> Result<Vec<PathBuf>, String> {
     let home_dir = home_dir()?;
-    let root_path = home_dir.join("Library/Application Support/Trae CN/User/mcp.json");
-    let profiles_dir = home_dir.join("Library/Application Support/Trae CN/User/profiles");
+    let application_support_dir = workspace::application_support_dir_for_home(&home_dir);
+    let root_path = application_support_dir.join("Trae CN/User/mcp.json");
+    let profiles_dir = application_support_dir.join("Trae CN/User/profiles");
     let mut paths = vec![root_path];
 
     if let Ok(entries) = fs::read_dir(profiles_dir) {
@@ -2510,7 +2512,7 @@ fn discover_stdio_mcp_tools_with_wire_format(
 
     let resolved_command =
         resolve_executable_path(command).unwrap_or_else(|| PathBuf::from(command));
-    let mut child_command = Command::new(&resolved_command);
+    let mut child_command = command_for_executable(&resolved_command);
     child_command
         .args(args)
         .stdin(Stdio::piped())
@@ -4074,20 +4076,7 @@ fn normalize_stdio_command_path_with_search_dirs(server: &mut Value, search_dirs
 }
 
 fn resolve_sync_command_path(command: &str, search_dirs: &[PathBuf]) -> Option<PathBuf> {
-    let trimmed = command.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-
-    let command_path = Path::new(trimmed);
-    if command_path.components().count() > 1 || command_path.is_absolute() {
-        return command_path.exists().then(|| command_path.to_path_buf());
-    }
-
-    search_dirs.iter().find_map(|search_dir| {
-        let candidate = search_dir.join(trimmed);
-        candidate.exists().then_some(candidate)
-    })
+    resolve_command_path(command, search_dirs)
 }
 
 fn command_basename(command: &str) -> &str {
@@ -4129,14 +4118,31 @@ fn command_search_paths() -> Vec<PathBuf> {
 fn fallback_command_search_paths() -> Vec<PathBuf> {
     let mut paths = Vec::new();
     if let Ok(home_dir) = home_dir() {
-        paths.push(home_dir.join(".local/bin"));
-        paths.push(home_dir.join(".npm-global/bin"));
-        paths.push(home_dir.join(".cargo/bin"));
+        #[cfg(windows)]
+        paths.push(home_dir.join("AppData/Roaming/npm"));
+        #[cfg(not(windows))]
+        {
+            paths.push(home_dir.join(".local/bin"));
+            paths.push(home_dir.join(".npm-global/bin"));
+            paths.push(home_dir.join(".cargo/bin"));
+        }
     }
-    paths.push(PathBuf::from("/opt/homebrew/bin"));
-    paths.push(PathBuf::from("/usr/local/bin"));
-    paths.push(PathBuf::from("/usr/bin"));
-    paths.push(PathBuf::from("/bin"));
+    #[cfg(windows)]
+    {
+        if let Some(appdata) = env::var_os("APPDATA").filter(|value| !value.is_empty()) {
+            paths.push(PathBuf::from(appdata).join("npm"));
+        }
+        if let Some(program_files) = env::var_os("ProgramFiles").filter(|value| !value.is_empty()) {
+            paths.push(PathBuf::from(program_files).join("nodejs"));
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        paths.push(PathBuf::from("/opt/homebrew/bin"));
+        paths.push(PathBuf::from("/usr/local/bin"));
+        paths.push(PathBuf::from("/usr/bin"));
+        paths.push(PathBuf::from("/bin"));
+    }
     paths
 }
 
@@ -4324,14 +4330,7 @@ fn parse_mcp_time_label(value: &str) -> i64 {
 }
 
 fn format_system_time_label(value: SystemTime) -> Option<String> {
-    let datetime: chrono::DateTime<chrono::Utc> = value.into();
-    Some(format!(
-        "{}/{}/{} {}",
-        datetime.format("%Y"),
-        datetime.format("%m").to_string().trim_start_matches('0'),
-        datetime.format("%d").to_string().trim_start_matches('0'),
-        datetime.format("%H:%M:%S")
-    ))
+    Some(workspace::format_local_system_time(value))
 }
 
 fn json_string_map_to_toml_table(map: &Map<String, Value>) -> toml_edit::Table {

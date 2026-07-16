@@ -32,7 +32,7 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 json5 = "0.4"
 toml_edit = "0.22"
 base64 = "0.22"
-chrono = { version = "0.4", default-features = false, features = ["std"] }
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
 sha2 = "0.10"
 tauri-plugin-updater = "2.10.1"
 tauri-plugin-process = "2.3.1"

@@ -1054,14 +1054,7 @@ fn emit_repo_status(app_handle: &tauri::AppHandle, phase: &str, message: &str) {
 }
 
 fn format_system_time_label(value: SystemTime) -> Option<String> {
-    let datetime: chrono::DateTime<chrono::Utc> = value.into();
-    Some(format!(
-        "{}/{}/{} {}",
-        datetime.format("%Y"),
-        datetime.format("%m").to_string().trim_start_matches('0'),
-        datetime.format("%d").to_string().trim_start_matches('0'),
-        datetime.format("%H:%M:%S")
-    ))
+    Some(workspace::format_local_system_time(value))
 }
 
 async fn fetch_skillsmp_marketplace(
@@ -1618,6 +1611,7 @@ fn detect_tool_installation_label(
 }
 
 fn mcp_config_path_for_tool(tool_id: &str, home_path: &Path) -> PathBuf {
+    let application_support_dir = workspace::application_support_dir_for_home(home_path);
     match tool_id {
         "augment" => home_path.join(".augment/settings.json"),
         "claude-code" => home_path.join(".claude.json"),
@@ -1633,18 +1627,16 @@ fn mcp_config_path_for_tool(tool_id: &str, home_path: &Path) -> PathBuf {
         "hermes" => home_path.join(".hermes/config.yaml"),
         "iflow" => home_path.join(".iflow/settings.json"),
         "junie" => home_path.join(".junie/mcp/mcp.json"),
-        "kilo-code" => home_path.join(
-            "Library/Application Support/Code/User/globalStorage/kilocode.kilo-code/settings/mcp_settings.json",
-        ),
+        "kilo-code" => application_support_dir
+            .join("Code/User/globalStorage/kilocode.kilo-code/settings/mcp_settings.json"),
         "kiro" => home_path.join(".kiro/settings/mcp.json"),
         "opencode" => home_path.join(".config/opencode/opencode.json"),
         "qoder" => home_path.join(".config/Qoder/SharedClientCache/mcp.json"),
         "qwen-code" => home_path.join(".qwen/settings.json"),
-        "roo-code" => home_path.join(
-            "Library/Application Support/Code/User/globalStorage/RooVeterinaryInc.roo-cline/settings/mcp_settings.json",
-        ),
-        "trae" => home_path.join("Library/Application Support/Trae/User/mcp.json"),
-        "trae-cn" => home_path.join("Library/Application Support/Trae CN/User/mcp.json"),
+        "roo-code" => application_support_dir
+            .join("Code/User/globalStorage/RooVeterinaryInc.roo-cline/settings/mcp_settings.json"),
+        "trae" => application_support_dir.join("Trae/User/mcp.json"),
+        "trae-cn" => application_support_dir.join("Trae CN/User/mcp.json"),
         "droid" => home_path.join(".factory/mcp.json"),
         "windsurf" => home_path.join(".codeium/windsurf/mcp_config.json"),
         "openclaw" => home_path.join(".openclaw/openclaw.json"),
@@ -3637,7 +3629,8 @@ fn intellij_trusted_locations_for_project(project_path: &Path) -> Vec<PathBuf> {
 }
 
 fn intellij_config_dirs() -> Result<Vec<PathBuf>, String> {
-    let jetbrains_dir = workspace::home_dir()?.join("Library/Application Support/JetBrains");
+    let home_dir = workspace::home_dir()?;
+    let jetbrains_dir = workspace::application_support_dir_for_home(&home_dir).join("JetBrains");
     if !jetbrains_dir.exists() {
         return Ok(Vec::new());
     }
@@ -8216,6 +8209,32 @@ mod tests {
         });
         let path = super::mcp_config_path_for_tool("cursor", &home);
         assert!(path.ends_with(Path::new(".cursor").join("mcp.json")));
+    }
+
+    #[test]
+    fn application_support_mcp_paths_follow_platform_location() {
+        let home = PathBuf::from(if cfg!(windows) {
+            r"C:\Users\demo"
+        } else {
+            "/Users/demo"
+        });
+        let application_support_dir = crate::workspace::application_support_dir_for_home(&home);
+
+        assert_eq!(
+            super::mcp_config_path_for_tool("trae", &home),
+            application_support_dir.join("Trae/User/mcp.json")
+        );
+        assert_eq!(
+            super::mcp_config_path_for_tool("kilo-code", &home),
+            application_support_dir
+                .join("Code/User/globalStorage/kilocode.kilo-code/settings/mcp_settings.json")
+        );
+        assert_eq!(
+            super::mcp_config_path_for_tool("roo-code", &home),
+            application_support_dir.join(
+                "Code/User/globalStorage/RooVeterinaryInc.roo-cline/settings/mcp_settings.json"
+            )
+        );
     }
 
     #[test]

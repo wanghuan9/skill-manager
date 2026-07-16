@@ -952,14 +952,7 @@ fn max_system_time(left: Option<SystemTime>, right: Option<SystemTime>) -> Optio
 }
 
 fn format_system_time(value: SystemTime) -> Option<String> {
-    let datetime: chrono::DateTime<chrono::Utc> = value.into();
-    Some(format!(
-        "{}/{}/{} {}",
-        datetime.format("%Y"),
-        datetime.format("%m").to_string().trim_start_matches('0'),
-        datetime.format("%d").to_string().trim_start_matches('0'),
-        datetime.format("%H:%M:%S")
-    ))
+    Some(crate::workspace::format_local_system_time(value))
 }
 
 fn prefer_newer_local_updated_at(

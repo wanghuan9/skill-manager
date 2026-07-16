@@ -69,6 +69,69 @@ pub fn git_command() -> Command {
     command
 }
 
+fn command_path_candidates(path: &Path) -> Vec<PathBuf> {
+    #[cfg(windows)]
+    {
+        if path.extension().is_none() {
+            return ["exe", "cmd", "bat", "com"]
+                .into_iter()
+                .map(|extension| path.with_extension(extension))
+                .chain(std::iter::once(path.to_path_buf()))
+                .collect();
+        }
+    }
+
+    vec![path.to_path_buf()]
+}
+
+pub fn resolve_command_path(command: &str, search_dirs: &[PathBuf]) -> Option<PathBuf> {
+    let trimmed = command.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let command_path = Path::new(trimmed);
+    if command_path.is_absolute() || command_path.components().count() > 1 {
+        return command_path_candidates(command_path)
+            .into_iter()
+            .find(|candidate| candidate.is_file());
+    }
+
+    search_dirs.iter().find_map(|search_dir| {
+        command_path_candidates(&search_dir.join(command_path))
+            .into_iter()
+            .find(|candidate| candidate.is_file())
+    })
+}
+
+pub fn resolve_command_in_path(command: &str) -> Option<PathBuf> {
+    let search_dirs = env::var_os("PATH")
+        .map(|value| env::split_paths(&value).collect::<Vec<_>>())
+        .unwrap_or_default();
+    resolve_command_path(command, &search_dirs)
+}
+
+pub fn command_for_executable(executable: &Path) -> Command {
+    #[cfg(windows)]
+    if executable
+        .extension()
+        .and_then(|value| value.to_str())
+        .is_some_and(|extension| {
+            extension.eq_ignore_ascii_case("cmd") || extension.eq_ignore_ascii_case("bat")
+        })
+    {
+        let shell = env::var_os("COMSPEC").unwrap_or_else(|| "cmd.exe".into());
+        let mut command = Command::new(shell);
+        configure_hidden_subprocess(&mut command);
+        command.args(["/D", "/Q", "/C"]).arg(executable);
+        return command;
+    }
+
+    let mut command = Command::new(executable);
+    configure_hidden_subprocess(&mut command);
+    command
+}
+
 #[cfg(windows)]
 fn discover_windows_git_executable() -> Option<String> {
     use std::os::windows::process::CommandExt;
@@ -2866,6 +2929,25 @@ mod tests {
     fn configure_hidden_subprocess_does_not_panic_for_git_command() {
         let mut command = std::process::Command::new(git_executable());
         configure_hidden_subprocess(&mut command);
+    }
+
+    #[test]
+    fn resolve_command_path_finds_exact_executable_in_search_directory() {
+        let temp_dir = temp_test_dir("resolve-command-path");
+        let executable_name = if cfg!(windows) {
+            "skilldock-command.cmd"
+        } else {
+            "skilldock-command"
+        };
+        let executable_path = temp_dir.join(executable_name);
+        fs::write(&executable_path, "probe").expect("write executable candidate");
+
+        assert_eq!(
+            super::resolve_command_path("skilldock-command", std::slice::from_ref(&temp_dir)),
+            Some(executable_path)
+        );
+
+        fs::remove_dir_all(temp_dir).expect("remove command test directory");
     }
 
     #[cfg(windows)]
