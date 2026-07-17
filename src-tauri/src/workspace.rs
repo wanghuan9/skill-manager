@@ -8,6 +8,8 @@ use std::time::SystemTime;
 pub const APP_BRAND_NAME: &str = "SkillDock";
 pub const WORKSPACE_DIR_NAME: &str = ".skilldock";
 const LEGACY_WORKSPACE_DIR_NAME: &str = ".skillm";
+const LEGACY_MACOS_APP_STORAGE_NAMES: [&str; 2] = ["com.wanghuan.skilldock", "skill-manager"];
+const MACOS_APP_STORAGE_ROOTS: [&str; 3] = ["Library/Caches", "Library/WebKit", "Library/Logs"];
 const MIGRATION_DEFERRED_FILE_NAMES: [&str; 3] =
     ["state.json", "settings.json", "mcp-servers.json"];
 const CONFLICT_SUFFIX: &str = ".migrated-from-skillm";
@@ -59,6 +61,29 @@ pub fn application_support_dir_for_home(home_dir: &Path) -> PathBuf {
             .filter(|value| !value.is_empty())
             .map(PathBuf::from)
             .unwrap_or_else(|| home_dir.join(".config"))
+    }
+}
+
+/// Remove cache, WebKit, and log directories left by pre-SkillDock builds.
+///
+/// These directories are disposable and may contain the former bundle/user name. The
+/// cleanup is intentionally limited to macOS storage roots and never touches the
+/// SkillDock workspace or application data.
+pub fn cleanup_legacy_macos_app_storage() {
+    #[cfg(target_os = "macos")]
+    if let Some(home_dir) = home_dir_option() {
+        cleanup_legacy_macos_app_storage_for_home(&home_dir);
+    }
+}
+
+fn cleanup_legacy_macos_app_storage_for_home(home_dir: &Path) {
+    for root in MACOS_APP_STORAGE_ROOTS {
+        for name in LEGACY_MACOS_APP_STORAGE_NAMES {
+            let path = home_dir.join(root).join(name);
+            if path.is_dir() {
+                let _ = fs::remove_dir_all(path);
+            }
+        }
     }
 }
 
@@ -372,8 +397,9 @@ fn prune_legacy_workspace_root_if_empty(home_dir: &Path) {
 #[cfg(test)]
 mod tests {
     use super::{
-        ensure_workspace_initialized, managed_workspace_root, normalize_workspace_path,
-        workspace_file_candidates, TEST_ENV_LOCK, WORKSPACE_DIR_NAME,
+        cleanup_legacy_macos_app_storage_for_home, ensure_workspace_initialized,
+        managed_workspace_root, normalize_workspace_path, workspace_file_candidates, TEST_ENV_LOCK,
+        WORKSPACE_DIR_NAME,
     };
     use std::env;
     use std::fs;
@@ -520,6 +546,34 @@ mod tests {
         } else if cfg!(target_os = "macos") {
             assert_eq!(path, home_dir.join("Library/Application Support"));
         }
+    }
+
+    #[test]
+    fn removes_legacy_macos_app_storage_without_touching_skilldock_data() {
+        run_with_temp_home("legacy-app-storage", |temp_home| {
+            for root in super::MACOS_APP_STORAGE_ROOTS {
+                for name in super::LEGACY_MACOS_APP_STORAGE_NAMES {
+                    let path = temp_home.join(root).join(name);
+                    fs::create_dir_all(&path).expect("create legacy app storage");
+                    fs::write(path.join("entry"), "legacy").expect("write legacy app storage");
+                }
+            }
+            let current_data = temp_home.join("Library/Caches/skilldock");
+            fs::create_dir_all(&current_data).expect("create current app storage");
+            fs::write(current_data.join("entry"), "current").expect("write current app storage");
+            let workspace = temp_home.join(WORKSPACE_DIR_NAME);
+            fs::create_dir_all(&workspace).expect("create workspace");
+
+            cleanup_legacy_macos_app_storage_for_home(&temp_home);
+
+            for root in super::MACOS_APP_STORAGE_ROOTS {
+                for name in super::LEGACY_MACOS_APP_STORAGE_NAMES {
+                    assert!(!temp_home.join(root).join(name).exists());
+                }
+            }
+            assert!(current_data.join("entry").exists());
+            assert!(workspace.exists());
+        });
     }
 
     #[test]

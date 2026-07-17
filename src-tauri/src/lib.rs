@@ -22,6 +22,7 @@ pub use workspace::application_support_dir_for_home;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    workspace::cleanup_legacy_macos_app_storage();
     tauri::Builder::default()
         .setup(|app| {
             workspace::ensure_workspace_initialized()?;
