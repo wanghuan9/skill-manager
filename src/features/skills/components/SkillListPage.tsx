@@ -4,6 +4,7 @@ import { useFailureReporter } from "@/app/failure-feedback";
 import { openExternalLink } from "@/features/skills/api/skill-client";
 import { filterSkills, hasEnabledTool } from "@/features/skills/state/skill-selectors";
 import { SkillCard } from "@/features/skills/components/SkillCard";
+import { SkillSourceView } from "@/features/skills/components/SkillSourceView";
 import { useSkillWorkspace } from "@/features/skills/state/skill-workspace";
 import { groupSkillsBySource } from "@/features/skills/utils/skill-groups";
 import {
@@ -13,12 +14,21 @@ import {
 import { getMonogramLabel } from "@/features/skills/utils/monogram";
 import { ToolbarGoInstallButton } from "@/app/components/ToolbarGoInstallButton";
 import type { SkillStatusFilter, SkillSummary } from "@/features/skills/state/skill-store";
+import {
+  MANAGED_SKILL_SOURCE_ID,
+  type SkillSourceId,
+  type ToolSkillManagementFilter,
+} from "@/features/skills/utils/skill-source-view";
 
 type SkillToolbarProps = {
+  activeSourceId?: SkillSourceId;
   query: string;
   statusFilter: SkillStatusFilter;
+  managementFilter?: ToolSkillManagementFilter;
+  managementFilterCounts?: Record<ToolSkillManagementFilter, number>;
   onQueryChange: (value: string) => void;
   onStatusFilterChange: (value: SkillStatusFilter) => void;
+  onManagementFilterChange?: (value: ToolSkillManagementFilter) => void;
   showGroupView: boolean;
   onShowGroupViewChange: (value: boolean) => void;
   onGoInstall?: () => void;
@@ -128,9 +138,13 @@ export function SkillListToolbar(props: SkillToolbarProps) {
   const { t } = useTranslate();
   const {
     query,
+    activeSourceId = MANAGED_SKILL_SOURCE_ID,
     statusFilter,
+    managementFilter = "all",
+    managementFilterCounts = { all: 0, managed: 0, unmanaged: 0, mismatch: 0 },
     onQueryChange,
     onStatusFilterChange,
+    onManagementFilterChange = () => undefined,
     showGroupView,
     onShowGroupViewChange,
     onGoInstall,
@@ -165,6 +179,13 @@ export function SkillListToolbar(props: SkillToolbarProps) {
     { value: "pending-push", label: t("skills.filter.pendingPush") },
     { value: "disabled", label: t("skills.filter.disabled") },
   ];
+  const managementFilterOptions: Array<{ value: ToolSkillManagementFilter; label: string }> = [
+    { value: "all", label: t("skills.source.filter.all") },
+    { value: "managed", label: t("skills.source.filter.managed") },
+    { value: "unmanaged", label: t("skills.source.filter.unmanaged") },
+    { value: "mismatch", label: t("skills.source.filter.mismatch") },
+  ];
+  const isManagedSource = activeSourceId === MANAGED_SKILL_SOURCE_ID;
   const updateAllButtonLabel = updatableSkillCount > 0
     ? t("skills.updateAllWithCount", { count: updatableSkillCount })
     : t("skills.updateAll");
@@ -205,38 +226,56 @@ export function SkillListToolbar(props: SkillToolbarProps) {
         <span className="sr-only">{t("skills.searchAria")}</span>
         <input
           type="search"
-          placeholder={t("skills.searchPlaceholder")}
+          placeholder={t(activeSourceId === MANAGED_SKILL_SOURCE_ID
+            ? "skills.searchPlaceholder"
+            : "skills.source.searchPlaceholder")}
           value={query}
           onChange={(event) => onQueryChange(event.target.value)}
         />
       </label>
-      <button
-        className={`secondary-button secondary-button--compact skills-toolbar-button skills-toolbar-button--toggle${showGroupView ? " is-active" : ""}`}
-        type="button"
-        aria-pressed={showGroupView}
-        onClick={() => onShowGroupViewChange(!showGroupView)}
-      >
-        <span aria-hidden="true" className="skills-toolbar-button__icon">
-          {showGroupView ? <GroupIcon /> : <GridIcon />}
-        </span>
-        <span>{showGroupView ? t("skills.view.grouped") : t("skills.view.grid")}</span>
-      </button>
+      {isManagedSource ? (
+          <button
+            className={`secondary-button secondary-button--compact skills-toolbar-button skills-toolbar-button--toggle${showGroupView ? " is-active" : ""}`}
+            type="button"
+            aria-pressed={showGroupView}
+            onClick={() => onShowGroupViewChange(!showGroupView)}
+          >
+            <span aria-hidden="true" className="skills-toolbar-button__icon">
+              {showGroupView ? <GroupIcon /> : <GridIcon />}
+            </span>
+            <span>{showGroupView ? t("skills.view.grouped") : t("skills.view.grid")}</span>
+          </button>
+      ) : null}
       <label className="skill-status-filter">
-        <span className="sr-only">{t("skills.filter.aria")}</span>
+        <span className="sr-only">{t(isManagedSource ? "skills.filter.aria" : "skills.source.filter.aria")}</span>
         <span className="skill-status-filter__icon" aria-hidden="true">
           <FilterIcon />
         </span>
-        <select
-          value={statusFilter}
-          onChange={(event) => onStatusFilterChange(event.target.value as SkillStatusFilter)}
-          aria-label={t("skills.filter.aria")}
-        >
-          {skillStatusFilterOptions.map((option) => (
-            <option key={option.value} value={option.value}>
-              {`${option.label} (${statusFilterCounts[option.value]})`}
-            </option>
-          ))}
-        </select>
+        {isManagedSource ? (
+          <select
+            value={statusFilter}
+            onChange={(event) => onStatusFilterChange(event.target.value as SkillStatusFilter)}
+            aria-label={t("skills.filter.aria")}
+          >
+            {skillStatusFilterOptions.map((option) => (
+              <option key={option.value} value={option.value}>
+                {`${option.label} (${statusFilterCounts[option.value]})`}
+              </option>
+            ))}
+          </select>
+        ) : (
+          <select
+            value={managementFilter}
+            onChange={(event) => onManagementFilterChange(event.target.value as ToolSkillManagementFilter)}
+            aria-label={t("skills.source.filter.aria")}
+          >
+            {managementFilterOptions.map((option) => (
+              <option key={option.value} value={option.value}>
+                {`${option.label} (${managementFilterCounts[option.value]})`}
+              </option>
+            ))}
+          </select>
+        )}
       </label>
       <button
         className={`secondary-button secondary-button--compact skills-toolbar-button skills-toolbar-button--refresh${isWorkspaceRefreshing ? " is-loading" : ""}`}
@@ -249,28 +288,33 @@ export function SkillListToolbar(props: SkillToolbarProps) {
         </span>
         <span>{t("skills.refresh")}</span>
       </button>
-      <button
-        className={`secondary-button secondary-button--compact skills-toolbar-button skills-toolbar-button--update-all${isUpdatingAllSkills ? " is-loading" : ""}`}
-        type="button"
-        onClick={() => void handleUpdateAllSkills()}
-        disabled={isLoading || isUpdatingAllSkills || updatableSkillCount === 0}
-      >
-        <span aria-hidden="true" className="skills-toolbar-button__icon">
-          <UpdateAllIcon isSpinning={isUpdatingAllSkills} />
-        </span>
-        <span>{isUpdatingAllSkills ? t("skills.updating") : updateAllButtonLabel}</span>
-      </button>
+      {activeSourceId === MANAGED_SKILL_SOURCE_ID ? (
+        <button
+          className={`secondary-button secondary-button--compact skills-toolbar-button skills-toolbar-button--update-all${isUpdatingAllSkills ? " is-loading" : ""}`}
+          type="button"
+          onClick={() => void handleUpdateAllSkills()}
+          disabled={isLoading || isUpdatingAllSkills || updatableSkillCount === 0}
+        >
+          <span aria-hidden="true" className="skills-toolbar-button__icon">
+            <UpdateAllIcon isSpinning={isUpdatingAllSkills} />
+          </span>
+          <span>{isUpdatingAllSkills ? t("skills.updating") : updateAllButtonLabel}</span>
+        </button>
+      ) : null}
       {onGoInstall ? <ToolbarGoInstallButton onClick={onGoInstall} /> : null}
     </div>
   );
 }
 
 type SkillListPageProps = {
+  activeSourceId?: SkillSourceId;
+  onActiveSourceIdChange?: (sourceId: SkillSourceId) => void;
   onImportFromLocal?: () => void;
   onInstallFromGit?: () => void;
   onInstallFromMarketplace?: () => void;
   query: string;
   statusFilter: SkillStatusFilter;
+  managementFilter?: ToolSkillManagementFilter;
   showGroupView: boolean;
 };
 
@@ -282,7 +326,10 @@ export function SkillListPage(props: SkillListPageProps) {
     onInstallFromMarketplace,
     query,
     statusFilter,
+    managementFilter = "all",
     showGroupView,
+    activeSourceId = MANAGED_SKILL_SOURCE_ID,
+    onActiveSourceIdChange = () => undefined,
   } = props;
   const { installedSkills, isLoading } = useSkillWorkspace();
   const deferredQuery = useDeferredValue(query);
@@ -318,7 +365,13 @@ export function SkillListPage(props: SkillListPageProps) {
 
   return (
     <div className="skills-page">
-      <div className="card-list">
+      <SkillSourceView
+        activeSourceId={activeSourceId}
+        onActiveSourceIdChange={onActiveSourceIdChange}
+        managementFilter={managementFilter}
+        query={deferredQuery}
+      />
+      {activeSourceId === MANAGED_SKILL_SOURCE_ID ? <div className="card-list">
         {isLoading ? (
           <div className="panel-card empty-state">
             <h3>{t("skills.loadingTitle")}</h3>
@@ -445,7 +498,7 @@ export function SkillListPage(props: SkillListPageProps) {
             )}
           </div>
         )}
-      </div>
+      </div> : null}
     </div>
   );
 }

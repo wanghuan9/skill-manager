@@ -7,9 +7,11 @@ import { useSkillWorkspace } from "@/features/skills/state/skill-workspace";
 import type { SkillFileEntry, SkillSummary } from "@/features/skills/state/skill-store";
 
 type SkillFileDialogProps = {
-  skill: SkillSummary;
+  skill: Pick<SkillSummary, "name">;
   isOpen: boolean;
   onClose: () => void;
+  toolId?: string;
+  readOnly?: boolean;
 };
 
 const MARKDOWN_FILE_PATTERN = /\.(md|markdown)$/i;
@@ -320,12 +322,14 @@ export function SkillFileContentSurface({
   );
 }
 
-export function SkillFileDialog({ skill, isOpen, onClose }: SkillFileDialogProps) {
+export function SkillFileDialog({ skill, isOpen, onClose, toolId, readOnly = false }: SkillFileDialogProps) {
   const { t } = useTranslate();
   const reportFailure = useFailureReporter();
   const {
     loadSkillFileBrowser,
     loadSkillFileContent,
+    loadToolSkillFileBrowser,
+    loadToolSkillFileContent,
     markSkillAsActive,
     refreshSkillLocalGitState,
     saveSkillFileContent,
@@ -364,7 +368,7 @@ export function SkillFileDialog({ skill, isOpen, onClose }: SkillFileDialogProps
     return childCounts;
   }, [entries]);
   const handleSave = useCallback(async () => {
-    if (!selectedPath || isSaving) {
+    if (readOnly || !selectedPath || isSaving) {
       return;
     }
 
@@ -395,6 +399,7 @@ export function SkillFileDialog({ skill, isOpen, onClose }: SkillFileDialogProps
     content,
     isSaving,
     refreshSkillLocalGitState,
+    readOnly,
     reportFailure,
     saveSkillFileContent,
     selectedPath,
@@ -407,8 +412,10 @@ export function SkillFileDialog({ skill, isOpen, onClose }: SkillFileDialogProps
       return;
     }
 
-    markSkillAsActive(skill.name);
-  }, [isOpen, markSkillAsActive, skill.name]);
+    if (!toolId) {
+      markSkillAsActive(skill.name);
+    }
+  }, [isOpen, markSkillAsActive, skill.name, toolId]);
 
   useEffect(() => {
     if (!isOpen) {
@@ -422,7 +429,9 @@ export function SkillFileDialog({ skill, isOpen, onClose }: SkillFileDialogProps
       setErrorMessage("");
 
       try {
-        const snapshot = await loadSkillFileBrowser(skill.name);
+        const snapshot = toolId
+          ? await loadToolSkillFileBrowser({ toolId, skillName: skill.name })
+          : await loadSkillFileBrowser(skill.name);
         if (!active) {
           return;
         }
@@ -435,10 +444,16 @@ export function SkillFileDialog({ skill, isOpen, onClose }: SkillFileDialogProps
         setViewMode("preview");
 
         if (initialPath) {
-          const document = await loadSkillFileContent({
-            skillName: skill.name,
-            relativePath: initialPath,
-          });
+          const document = toolId
+            ? await loadToolSkillFileContent({
+                toolId,
+                skillName: skill.name,
+                relativePath: initialPath,
+              })
+            : await loadSkillFileContent({
+                skillName: skill.name,
+                relativePath: initialPath,
+              });
           if (!active) {
             return;
           }
@@ -468,7 +483,16 @@ export function SkillFileDialog({ skill, isOpen, onClose }: SkillFileDialogProps
     return () => {
       active = false;
     };
-  }, [isOpen, loadSkillFileBrowser, loadSkillFileContent, skill.name, t]);
+  }, [
+    isOpen,
+    loadSkillFileBrowser,
+    loadSkillFileContent,
+    loadToolSkillFileBrowser,
+    loadToolSkillFileContent,
+    skill.name,
+    t,
+    toolId,
+  ]);
 
   useEffect(() => {
     if (!isOpen) {
@@ -489,7 +513,7 @@ export function SkillFileDialog({ skill, isOpen, onClose }: SkillFileDialogProps
 
     function handleKeyDown(event: KeyboardEvent) {
       const isSaveShortcut = event.key.toLowerCase() === "s" && (event.metaKey || event.ctrlKey);
-      if (!isSaveShortcut) {
+      if (readOnly || !isSaveShortcut) {
         return;
       }
 
@@ -502,7 +526,7 @@ export function SkillFileDialog({ skill, isOpen, onClose }: SkillFileDialogProps
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, [handleSave, isOpen]);
+  }, [handleSave, isOpen, readOnly]);
 
   if (!isOpen) {
     return null;
@@ -517,10 +541,16 @@ export function SkillFileDialog({ skill, isOpen, onClose }: SkillFileDialogProps
     setErrorMessage("");
 
     try {
-      const document = await loadSkillFileContent({
-        skillName: skill.name,
-        relativePath: path,
-      });
+      const document = toolId
+        ? await loadToolSkillFileContent({
+            toolId,
+            skillName: skill.name,
+            relativePath: path,
+          })
+        : await loadSkillFileContent({
+            skillName: skill.name,
+            relativePath: path,
+          });
       setSelectedPath(path);
       setCollapsedDirectories((current) => {
         const next = { ...current };
@@ -559,24 +589,26 @@ export function SkillFileDialog({ skill, isOpen, onClose }: SkillFileDialogProps
             <h3 id={dialogTitleId}>{skill.name}</h3>
           </div>
           <div className="skill-file-dialog__toolbar">
-            <div className="skill-file-dialog__actions">
-              <SkillFileViewModeToggle
-                viewMode={viewMode}
-                groupLabel={t("skill.files.viewMode")}
-                previewLabel={t("skill.files.preview")}
-                editLabel={t("skill.files.edit")}
-                onViewModeChange={setViewMode}
-              />
-              <button
-                className="secondary-button secondary-button--compact"
-                type="button"
-                onClick={() => void handleSave()}
-                disabled={!selectedPath || isSaving}
-              >
-                <span aria-hidden="true">⌘</span>
-                <span>{isSaving ? t("skill.files.saving") : t("skill.files.save")}</span>
-              </button>
-            </div>
+            {!readOnly ? (
+              <div className="skill-file-dialog__actions">
+                <SkillFileViewModeToggle
+                  viewMode={viewMode}
+                  groupLabel={t("skill.files.viewMode")}
+                  previewLabel={t("skill.files.preview")}
+                  editLabel={t("skill.files.edit")}
+                  onViewModeChange={setViewMode}
+                />
+                <button
+                  className="secondary-button secondary-button--compact"
+                  type="button"
+                  onClick={() => void handleSave()}
+                  disabled={!selectedPath || isSaving}
+                >
+                  <span aria-hidden="true">⌘</span>
+                  <span>{isSaving ? t("skill.files.saving") : t("skill.files.save")}</span>
+                </button>
+              </div>
+            ) : null}
             <button className="skill-file-dialog__close" type="button" onClick={onClose} aria-label={t("skill.files.close")}>
               <span aria-hidden="true">×</span>
             </button>

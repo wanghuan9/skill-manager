@@ -14,6 +14,7 @@ import type {
   SkillFileBrowserSnapshot,
   SkillFileDocument,
   ToolConfig,
+  ToolSkillEntry,
   McpWorkspaceSnapshot,
   WorkspaceSnapshot,
 } from "@/features/skills/state/skill-store";
@@ -363,6 +364,51 @@ export const toolConfigFixtures: ToolConfig[] = [
   { id: "trae-cn", name: "Trae CN", skillsPath: "/Users/demo/.trae-cn/skills", mcpConfigPath: "/Users/demo/Library/Application Support/Trae CN/User/mcp.json", supportsMcp: true, mcpConfigPathRecognized: true, statusLabel: "未安装", isEnabled: false, primaryType: "editor", surfaceTypes: ["editor"], supportsDirectOpen: false },
   { id: "hermes", name: "Hermes", skillsPath: "/Users/demo/.hermes/skills", mcpConfigPath: "/Users/demo/.hermes/config.yaml", supportsMcp: true, mcpConfigPathRecognized: true, statusLabel: "未安装", isEnabled: false, primaryType: "cli", surfaceTypes: ["cli"], supportsDirectOpen: false },
   { id: "github-copilot", name: "GitHub Copilot", skillsPath: "/Users/demo/.copilot/skills", mcpConfigPath: "/Users/demo/.copilot/mcp-config.json", supportsMcp: true, mcpConfigPathRecognized: true, statusLabel: "未安装", isEnabled: false, primaryType: "editor", surfaceTypes: ["editor", "ide-plugin"], supportsDirectOpen: false },
+];
+
+const managedToolSkillEntryFixtures: ToolSkillEntry[] = toolConfigFixtures.flatMap((tool) =>
+  installedSkillFixtures.flatMap((skill) => {
+    const toolStatus = skill.tools.find((entry) => entry.name === tool.name);
+    if (!toolStatus || !["已同步", "已启用", "需要重同步"].includes(toolStatus.statusLabel)) {
+      return [];
+    }
+
+    return [{
+      toolId: tool.id,
+      toolName: tool.name,
+      name: skill.name,
+      description: skill.description,
+      localPath: `${tool.skillsPath.replace(/[\\/]+$/, "")}/${skill.name}`,
+      resolvedPath: skill.localPath,
+      managementStatus: toolStatus.statusLabel === "需要重同步" ? "mismatch" as const : "managed" as const,
+      entryKind: "symlink" as const,
+    }];
+  }),
+);
+
+export const toolSkillEntryFixtures: ToolSkillEntry[] = [
+  ...managedToolSkillEntryFixtures,
+  ...localSkillFixtures.flatMap((candidate) => {
+    const tool = toolConfigFixtures.find((entry) => (
+      entry.skillsPath.replace(/[\\/]+$/, "") === candidate.detectedFrom.replace(/[\\/]+$/, "")
+    ));
+    if (!tool || managedToolSkillEntryFixtures.some((entry) => (
+      entry.toolId === tool.id && entry.name === candidate.name
+    ))) {
+      return [];
+    }
+
+    return [{
+      toolId: tool.id,
+      toolName: tool.name,
+      name: candidate.name,
+      description: candidate.description,
+      localPath: candidate.localPath,
+      resolvedPath: candidate.localPath,
+      managementStatus: "unmanaged" as const,
+      entryKind: candidate.sourceHint === "符号链接" ? "symlink" as const : "directory" as const,
+    }];
+  }),
 ];
 
 export const pluginFixtures: PluginSummary[] = [
@@ -767,6 +813,7 @@ export const appSettingsFixture: AppSettings = {
   defaultOpenToolId: "",
   skillInstallActivation: "apply-all-tools",
   mcpInstallActivation: "apply-all-tools",
+  skillSourceViewStyle: "flat",
   language: "zh-CN",
   languageSource: "user",
 };
@@ -886,6 +933,7 @@ export const workspaceSnapshotFixture: WorkspaceSnapshot = {
   marketplaceSkills: marketplaceSkillFixtures,
   localCandidates: localSkillFixtures,
   toolConfigs: toolConfigFixtures,
+  toolSkillEntries: toolSkillEntryFixtures,
   gitAccount: gitAccountFixture,
 };
 

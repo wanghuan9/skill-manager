@@ -228,6 +228,20 @@ pub struct LocalSkillCandidate {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ToolSkillEntry {
+    pub tool_id: String,
+    pub tool_name: String,
+    pub name: String,
+    pub description: String,
+    pub local_path: String,
+    pub resolved_path: String,
+    pub management_status: String,
+    #[serde(default)]
+    pub entry_kind: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RepoSkillCandidate {
     pub id: String,
     pub name: String,
@@ -283,6 +297,7 @@ pub struct WorkspaceSnapshot {
     pub marketplace_skills: Vec<MarketplaceSkill>,
     pub local_candidates: Vec<LocalSkillCandidate>,
     pub tool_configs: Vec<ToolConfig>,
+    pub tool_skill_entries: Vec<ToolSkillEntry>,
     pub git_account: GitAccountSummary,
 }
 
@@ -293,6 +308,8 @@ pub struct AppSettings {
     pub default_open_tool_id: String,
     pub skill_install_activation: String,
     pub mcp_install_activation: String,
+    #[serde(default)]
+    pub skill_source_view_style: String,
     pub language: String,
     pub language_source: String,
 }
