@@ -16,13 +16,14 @@ use toml_edit::{DocumentMut, Item, Table};
 
 use crate::library::{
     configure_git_network_command, configure_hidden_subprocess, git_command,
-    parse_market_source_url, resolve_clone_url_http_first, resolve_command_in_path,
-    resolve_git_clone_url_with_instead_of, run_git_clone_with_progress, sanitize_storage_name,
-    tree_relative_path_for_branch, with_temporary_discovery_repo_resolved, CloneProgressCallback,
+    parse_market_source_url, remote_clone_candidates, repo_cache_directory,
+    resolve_command_in_path, resolve_git_clone_url_with_instead_of, run_git_clone_with_progress,
+    sanitize_storage_name, summarize_git_error, tree_relative_path_for_branch,
+    with_temporary_discovery_repo_resolved, CloneProgressCallback,
 };
 use crate::models::{
     CliToolSummary, PluginComponentPreview, PluginComponentSummary, PluginProbeResult,
-    PluginScopeSummary, PluginSummary,
+    PluginScopeSummary, PluginSummary, SkillFileEntry,
 };
 use crate::state;
 use crate::workspace::{
@@ -543,7 +544,6 @@ fn install_selected_plugin_probes_blocking(
     host_tools: Vec<String>,
     on_progress: Option<&CloneProgressCallback>,
 ) -> Result<Vec<PluginSummary>, String> {
-    let cleanup_roots = plugin_probe_cleanup_roots(&probes);
     let home_dir = workspace::home_dir_option().ok_or_else(|| "无法定位用户主目录".to_string())?;
     let install_result = (|| {
         let mut installed_roots = Vec::new();
@@ -560,36 +560,45 @@ fn install_selected_plugin_probes_blocking(
             for host_tool in &selected_host_tools {
                 ensure_plugin_host_tool_installed(host_tool)?;
             }
-            let package = ensure_shared_plugin_package(&probe, on_progress)?;
-            let source_root = canonicalize_existing_dir(&package.plugin_root)?;
-            let package_root = managed_plugin_package_root_for_path(&source_root)
-                .unwrap_or_else(|| source_root.clone());
-
-            let install_threads = selected_host_tools
+            let cursor_selected = selected_host_tools
+                .iter()
+                .any(|host_tool| host_tool == "cursor");
+            let shared_host_tools = selected_host_tools
                 .into_iter()
-                .map(|host_tool| {
-                    let home_dir = home_dir.clone();
-                    let source_root = source_root.clone();
-                    let package_root = package_root.clone();
-                    let probe = probe.clone();
-                    std::thread::spawn(move || {
-                        install_plugin_probe_for_host(
-                            &home_dir,
-                            &source_root,
-                            &package_root,
-                            &probe,
-                            &host_tool,
-                        )
-                        .map(|installed_root| (host_tool, installed_root))
-                    })
-                })
+                .filter(|host_tool| host_tool != "cursor")
                 .collect::<Vec<_>>();
+            let progress = on_progress.cloned();
+            let mut install_threads = Vec::new();
+
+            if cursor_selected {
+                let home_dir = home_dir.clone();
+                let probe = probe.clone();
+                let progress = progress.clone();
+                install_threads.push(std::thread::spawn(move || {
+                    install_cursor_plugin_probe_independent(&home_dir, &probe, progress.as_ref())
+                        .map(|installed_root| vec![("cursor".to_string(), installed_root)])
+                }));
+            }
+
+            if !shared_host_tools.is_empty() {
+                let home_dir = home_dir.clone();
+                let probe = probe.clone();
+                let progress = progress.clone();
+                install_threads.push(std::thread::spawn(move || {
+                    install_shared_plugin_probe_for_hosts(
+                        &home_dir,
+                        &probe,
+                        shared_host_tools,
+                        progress.as_ref(),
+                    )
+                }));
+            }
 
             for install_thread in install_threads {
-                let installed_root = install_thread
+                let installed = install_thread
                     .join()
                     .map_err(|_| "插件安装线程意外中断".to_string())??;
-                installed_roots.push(installed_root);
+                installed_roots.extend(installed);
             }
         }
 
@@ -607,8 +616,49 @@ fn install_selected_plugin_probes_blocking(
         Ok(installed)
     })();
 
-    cleanup_plugin_probe_repo_roots(&cleanup_roots);
     install_result
+}
+
+fn install_shared_plugin_probe_for_hosts(
+    home_dir: &Path,
+    probe: &PluginProbeResult,
+    host_tools: Vec<String>,
+    on_progress: Option<&CloneProgressCallback>,
+) -> Result<Vec<(String, PathBuf)>, String> {
+    let package = ensure_shared_plugin_package(probe, &host_tools, on_progress)?;
+    let source_root = canonicalize_existing_dir(&package.plugin_root)?;
+    let package_root =
+        managed_plugin_package_root_for_path(&source_root).unwrap_or_else(|| source_root.clone());
+
+    let install_threads = host_tools
+        .into_iter()
+        .map(|host_tool| {
+            let home_dir = home_dir.to_path_buf();
+            let source_root = source_root.clone();
+            let package_root = package_root.clone();
+            let probe = probe.clone();
+            std::thread::spawn(move || {
+                install_plugin_probe_for_host(
+                    &home_dir,
+                    &source_root,
+                    &package_root,
+                    &probe,
+                    &host_tool,
+                )
+                .map(|installed_root| (host_tool, installed_root))
+            })
+        })
+        .collect::<Vec<_>>();
+
+    let mut installed_roots = Vec::new();
+    for install_thread in install_threads {
+        installed_roots.push(
+            install_thread
+                .join()
+                .map_err(|_| "插件安装线程意外中断".to_string())??,
+        );
+    }
+    Ok(installed_roots)
 }
 
 #[tauri::command]
@@ -720,17 +770,13 @@ pub fn get_plugin_component_preview(
             preview_path.display()
         )
     })?;
-    let relative_path = preview_path
-        .strip_prefix(&root)
-        .map(normalize_relative_path)
-        .unwrap_or_else(|_| path_to_string(&preview_path));
-
-    Ok(PluginComponentPreview {
-        path: relative_path.clone(),
-        title: component_preview_title(&component_id, &relative_path),
+    Ok(build_plugin_component_preview(
+        &root,
+        &component_id,
         asset_type,
+        &preview_path,
         content,
-    })
+    ))
 }
 
 #[tauri::command]
@@ -751,17 +797,13 @@ pub fn save_plugin_component_preview(
     let preview_path = resolve_component_preview_path(&root, &component_id, &asset_type)?;
     fs::write(&preview_path, &content)
         .map_err(|error| format!("保存插件组件失败（{}）: {error}", preview_path.display()))?;
-    let relative_path = preview_path
-        .strip_prefix(&root)
-        .map(normalize_relative_path)
-        .unwrap_or_else(|_| path_to_string(&preview_path));
-
-    Ok(PluginComponentPreview {
-        path: relative_path.clone(),
-        title: component_preview_title(&component_id, &relative_path),
+    Ok(build_plugin_component_preview(
+        &root,
+        &component_id,
         asset_type,
+        &preview_path,
         content,
-    })
+    ))
 }
 
 fn mcp_server_component_preview(
@@ -793,12 +835,12 @@ fn mcp_server_component_preview(
     let preview_content = serde_json::to_string_pretty(&serde_json::Value::Object(preview))
         .map_err(|error| format!("序列化 MCP 组件预览失败: {error}"))?;
 
-    Ok(Some(PluginComponentPreview {
-        path: format!("{config_relative_path}/{server_name}"),
-        title: server_name,
-        asset_type: asset_type.to_string(),
-        content: preview_content,
-    }))
+    Ok(Some(build_virtual_plugin_component_preview(
+        &format!("{config_relative_path}/{server_name}"),
+        &server_name,
+        asset_type,
+        preview_content,
+    )))
 }
 
 fn save_mcp_server_component_preview(
@@ -850,12 +892,12 @@ fn save_mcp_server_component_preview(
     let preview_content = serde_json::to_string_pretty(&serde_json::Value::Object(preview))
         .map_err(|error| format!("序列化 MCP 组件预览失败: {error}"))?;
 
-    Ok(Some(PluginComponentPreview {
-        path: format!("{config_relative_path}/{server_name}"),
-        title: server_name,
-        asset_type: asset_type.to_string(),
-        content: preview_content,
-    }))
+    Ok(Some(build_virtual_plugin_component_preview(
+        &format!("{config_relative_path}/{server_name}"),
+        &server_name,
+        asset_type,
+        preview_content,
+    )))
 }
 
 fn scan_codex_installed_plugins(scan_mode: PluginScanMode) -> Vec<PluginSummary> {
@@ -2448,7 +2490,14 @@ fn delete_claude_plugin(root_path: &str) -> Result<(), String> {
         !managed_package_has_other_shared_host_installations(package_root, "claude-code")
     });
     let mut roots_to_remove = BTreeMap::<String, PathBuf>::new();
-    roots_to_remove.insert(path_to_string(&requested_root), requested_root.clone());
+    let requested_root_is_managed_package_path =
+        managed_package_root.as_ref().is_some_and(|package_root| {
+            requested_root.strip_prefix(package_root).is_ok()
+                || target_root.strip_prefix(package_root).is_ok()
+        });
+    if !requested_root_is_managed_package_path || requested_root != target_root {
+        roots_to_remove.insert(path_to_string(&requested_root), requested_root.clone());
+    }
     if should_remove_managed_package {
         if let Some(ref package_root) = managed_package_root {
             insert_managed_plugin_package_roots_to_remove(&mut roots_to_remove, package_root);
@@ -3168,6 +3217,7 @@ fn install_plugin_probe_for_host(
 
 fn ensure_shared_plugin_package(
     probe: &PluginProbeResult,
+    host_tools: &[String],
     on_progress: Option<&CloneProgressCallback>,
 ) -> Result<SharedPluginPackage, String> {
     let source_root = canonicalize_existing_dir(Path::new(&probe.plugin_root))
@@ -3201,7 +3251,7 @@ fn ensure_shared_plugin_package(
                 repo_root.join(&plugin_relative_path)
             };
             if plugin_root.is_dir() {
-                ensure_host_manifests_for_probe(&plugin_root, probe)?;
+                ensure_host_manifests_for_hosts(&plugin_root, probe, host_tools)?;
                 return Ok(SharedPluginPackage { plugin_root });
             }
             ensure_shared_plugin_repo(
@@ -3212,7 +3262,7 @@ fn ensure_shared_plugin_package(
                 false,
                 on_progress,
             )?;
-            ensure_host_manifests_for_probe(&plugin_root, probe)?;
+            ensure_host_manifests_for_hosts(&plugin_root, probe, host_tools)?;
             return Ok(SharedPluginPackage { plugin_root });
         }
         return Err(format!(
@@ -3254,7 +3304,7 @@ fn ensure_shared_plugin_package(
         } else {
             repo_root.join(&plugin_relative_path)
         };
-        ensure_host_manifests_for_probe(&plugin_root, probe)?;
+        ensure_host_manifests_for_hosts(&plugin_root, probe, host_tools)?;
         return Ok(SharedPluginPackage { plugin_root });
     }
 
@@ -3282,7 +3332,7 @@ fn ensure_shared_plugin_package(
                     &source_spec.clone_url,
                     &plugin_relative_path,
                 )?;
-                ensure_host_manifests_for_probe(&plugin_root, probe)?;
+                ensure_host_manifests_for_hosts(&plugin_root, probe, host_tools)?;
                 cleanup_duplicate_plugin_package_roots(
                     &repo_root,
                     &source_spec.clone_url,
@@ -3308,7 +3358,7 @@ fn ensure_shared_plugin_package(
             } else {
                 repo_root.join(&plugin_relative_path)
             };
-            ensure_host_manifests_for_probe(&plugin_root, probe)?;
+            ensure_host_manifests_for_hosts(&plugin_root, probe, host_tools)?;
             return Ok(SharedPluginPackage { plugin_root });
         }
     }
@@ -3321,7 +3371,7 @@ fn ensure_shared_plugin_package(
     let repo_root = shared_plugin_package_repo_root(&package_id)?;
     copy_plugin_dir(&source_root, &repo_root)?;
     write_plugin_package_identity(&repo_root, &path_to_string(&source_root), Path::new(""))?;
-    ensure_host_manifests_for_probe(&repo_root, probe)?;
+    ensure_host_manifests_for_hosts(&repo_root, probe, host_tools)?;
     cleanup_duplicate_plugin_package_roots(
         &repo_root,
         &path_to_string(&source_root),
@@ -3423,19 +3473,60 @@ fn nearest_manifest_root_for_host(
     None
 }
 
-fn ensure_host_manifests_for_probe(
+fn ensure_host_manifests_for_hosts(
     plugin_root: &Path,
     probe: &PluginProbeResult,
+    host_tools: &[String],
 ) -> Result<(), String> {
-    let mut host_tools = probe.compatible_host_tools.clone();
-    if !host_tools.iter().any(|tool| tool == &probe.tool) {
-        host_tools.push(probe.tool.clone());
-    }
-
     for host_tool in host_tools {
-        materialize_missing_host_manifest(plugin_root, &host_tool, probe)?;
+        repair_host_manifest_copied_from_generic_manifest(plugin_root, host_tool)?;
+        materialize_missing_host_manifest(plugin_root, host_tool, probe)?;
     }
 
+    Ok(())
+}
+
+fn repair_host_manifest_copied_from_generic_manifest(
+    plugin_root: &Path,
+    host_tool: &str,
+) -> Result<(), String> {
+    let generic_manifest_path = plugin_root.join("plugin.json");
+    if !generic_manifest_path.is_file()
+        || !json_manifest_schema_contains(&generic_manifest_path, "antigravity.google")
+    {
+        return Ok(());
+    }
+
+    let host_manifest_path = plugin_manifest_path_for_host(host_tool, plugin_root)?;
+    if !host_manifest_path.is_file()
+        || !json_files_have_same_value(&host_manifest_path, &generic_manifest_path)?
+    {
+        return Ok(());
+    }
+
+    let Some(repo_root) = find_git_root(plugin_root) else {
+        return Ok(());
+    };
+    let Ok(relative_manifest_path) = host_manifest_path.strip_prefix(&repo_root) else {
+        return Ok(());
+    };
+    let relative_manifest_path = normalize_relative_path(relative_manifest_path);
+    if relative_manifest_path.is_empty() {
+        return Ok(());
+    }
+
+    let head_spec = format!("HEAD:{relative_manifest_path}");
+    let head_content = match run_git_at(&repo_root, &["show", &head_spec]) {
+        Ok(content) => content,
+        Err(_) => return Ok(()),
+    };
+    if head_content.trim().is_empty()
+        || json_content_has_same_value_as_file(&head_content, &generic_manifest_path)?
+    {
+        return Ok(());
+    }
+
+    run_git_at(&repo_root, &["checkout", "--", &relative_manifest_path])?;
     Ok(())
 }
 
@@ -3487,7 +3578,22 @@ fn materialize_missing_host_manifest(
 fn manifest_template_path_for_probe(plugin_root: &Path, probe: &PluginProbeResult) -> PathBuf {
     let probe_manifest_path = Path::new(&probe.manifest_path);
     if probe_manifest_path.is_file() {
-        return probe_manifest_path.to_path_buf();
+        if plugin_root_from_manifest_path(probe_manifest_path)
+            .is_some_and(|manifest_root| paths_refer_to_same_dir(&manifest_root, plugin_root))
+        {
+            return probe_manifest_path.to_path_buf();
+        }
+        if probe_manifest_path
+            .file_name()
+            .and_then(|value| value.to_str())
+            == Some("plugin.json")
+            && probe_manifest_path
+                .parent()
+                .is_some_and(|manifest_root| paths_refer_to_same_dir(manifest_root, plugin_root))
+            && !json_manifest_schema_contains(probe_manifest_path, "antigravity.google")
+        {
+            return probe_manifest_path.to_path_buf();
+        }
     }
 
     for candidate in manifest_template_candidates_for_probe(plugin_root, probe) {
@@ -3496,7 +3602,44 @@ fn manifest_template_path_for_probe(plugin_root: &Path, probe: &PluginProbeResul
         }
     }
 
-    plugin_root.join("plugin.json")
+    let generic_manifest_path = plugin_root.join("plugin.json");
+    if generic_manifest_path.is_file()
+        && !json_manifest_schema_contains(&generic_manifest_path, "antigravity.google")
+    {
+        return generic_manifest_path;
+    }
+    PathBuf::new()
+}
+
+fn json_manifest_schema_contains(path: &Path, needle: &str) -> bool {
+    let Ok(content) = fs::read_to_string(path) else {
+        return false;
+    };
+    let Ok(value) = serde_json::from_str::<JsonValue>(&content) else {
+        return false;
+    };
+    value
+        .get("$schema")
+        .and_then(JsonValue::as_str)
+        .is_some_and(|schema| schema.contains(needle))
+}
+
+fn json_files_have_same_value(left: &Path, right: &Path) -> Result<bool, String> {
+    let left_content = fs::read_to_string(left)
+        .map_err(|error| format!("读取 JSON 文件失败（{}）: {error}", left.display()))?;
+    json_content_has_same_value_as_file(&left_content, right)
+}
+
+fn json_content_has_same_value_as_file(content: &str, path: &Path) -> Result<bool, String> {
+    let Ok(left_value) = serde_json::from_str::<JsonValue>(content) else {
+        return Ok(false);
+    };
+    let right_content = fs::read_to_string(path)
+        .map_err(|error| format!("读取 JSON 文件失败（{}）: {error}", path.display()))?;
+    let Ok(right_value) = serde_json::from_str::<JsonValue>(&right_content) else {
+        return Ok(false);
+    };
+    Ok(left_value == right_value)
 }
 
 fn manifest_template_candidates_for_probe(
@@ -3575,6 +3718,10 @@ fn resolve_shared_plugin_package_id(
         if read_plugin_package_identity(&candidate_root).as_ref() == Some(&identity) {
             return Ok(candidate);
         }
+        if legacy_git_package_matches_identity(&candidate_root, &identity) {
+            write_plugin_package_identity(&candidate_root, source, plugin_relative_path)?;
+            return Ok(candidate);
+        }
         if is_unidentified_plugin_package_placeholder(&candidate_root) {
             remove_path(&candidate_root)?;
             return Ok(candidate);
@@ -3593,6 +3740,27 @@ fn resolve_shared_plugin_package_id(
         }
         index += 1;
     }
+}
+
+fn legacy_git_package_matches_identity(
+    candidate_root: &Path,
+    identity: &ManagedPluginPackageIdentity,
+) -> bool {
+    if read_plugin_package_identity(candidate_root).is_some()
+        || !candidate_root.join(".git").exists()
+    {
+        return false;
+    }
+
+    let Ok(remote_url) = run_git_at(candidate_root, &["remote", "get-url", "origin"]) else {
+        return false;
+    };
+    if normalize_plugin_package_source(&remote_url) != identity.source {
+        return false;
+    }
+
+    let relative_path = Path::new(&identity.plugin_relative_path);
+    relative_path.as_os_str().is_empty() || candidate_root.join(relative_path).exists()
 }
 
 fn shared_plugin_package_id_candidates(
@@ -3792,6 +3960,15 @@ fn cleanup_duplicate_plugin_package_roots(
                     candidate_root.display()
                 )
             })?;
+            continue;
+        }
+        if legacy_git_package_matches_identity(&candidate_root, &active_identity) {
+            remove_path(&candidate_root).map_err(|error| {
+                format!(
+                    "清理重复插件共享目录失败（{}）: {error}",
+                    candidate_root.display()
+                )
+            })?;
         }
     }
     Ok(())
@@ -3979,6 +4156,13 @@ fn configure_plugin_sparse_checkout(
 ) -> Result<(), String> {
     ensure_managed_plugin_repo_git_excludes(repo_root)?;
     if plugin_relative_path.as_os_str().is_empty() {
+        let sparse_enabled = run_git_at(repo_root, &["config", "--bool", "core.sparseCheckout"])
+            .map(|value| value == "true")
+            .unwrap_or(false);
+        if sparse_enabled {
+            run_git_at(repo_root, &["sparse-checkout", "disable"])?;
+            run_git_at(repo_root, &["checkout", "--quiet"])?;
+        }
         return Ok(());
     }
     let relative_path = normalize_relative_path(plugin_relative_path);
@@ -4895,6 +5079,146 @@ fn install_cursor_plugin_probe(
     Ok(target_repo_root)
 }
 
+fn install_cursor_plugin_probe_independent(
+    home_dir: &Path,
+    probe: &PluginProbeResult,
+    on_progress: Option<&CloneProgressCallback>,
+) -> Result<PathBuf, String> {
+    if let Ok(installed_root) =
+        install_cursor_plugin_probe_from_existing_git_source(home_dir, probe, on_progress)
+    {
+        return Ok(installed_root);
+    }
+
+    if let Ok((clone_url, source_ref, plugin_relative_path)) = cursor_remote_clone_spec(probe) {
+        return install_cursor_plugin_probe_from_remote(
+            home_dir,
+            probe,
+            &clone_url,
+            source_ref.as_deref(),
+            &plugin_relative_path,
+            on_progress,
+        );
+    }
+
+    let host_tools = vec!["cursor".to_string()];
+    let package = ensure_shared_plugin_package(probe, &host_tools, on_progress)?;
+    let source_root = canonicalize_existing_dir(&package.plugin_root)?;
+    let package_root =
+        managed_plugin_package_root_for_path(&source_root).unwrap_or_else(|| source_root.clone());
+    install_cursor_plugin_probe(home_dir, &source_root, &package_root, probe)
+}
+
+fn install_cursor_plugin_probe_from_existing_git_source(
+    home_dir: &Path,
+    probe: &PluginProbeResult,
+    on_progress: Option<&CloneProgressCallback>,
+) -> Result<PathBuf, String> {
+    let source_root = canonicalize_existing_dir(Path::new(&probe.plugin_root))
+        .ok()
+        .map(|root| resolve_effective_probe_plugin_root(probe, &root))
+        .ok_or_else(|| "插件本地源目录不存在".to_string())?;
+    let source_git_root = non_empty_trimmed_string(&probe.git_root)
+        .and_then(|value| canonicalize_existing_dir(Path::new(&value)).ok())
+        .filter(|path| path.join(".git").is_dir())
+        .or_else(|| find_git_root(&source_root))
+        .ok_or_else(|| "插件本地源目录不是 Git 仓库".to_string())?;
+    if !source_git_root.join(".git").is_dir() {
+        return Err("插件本地源目录不是 Git 仓库".to_string());
+    }
+    let repo_cache_root = workspace::managed_workspace_root_option()
+        .map(|root| root.join("repo-cache"))
+        .and_then(|root| canonicalize_existing_dir(&root).ok())
+        .ok_or_else(|| "插件本地源不是 SkillDock repo-cache".to_string())?;
+    if source_git_root.strip_prefix(&repo_cache_root).is_err() {
+        return Err("插件本地源不是 SkillDock repo-cache".to_string());
+    }
+
+    let host_tools = vec!["cursor".to_string()];
+    let package = ensure_shared_plugin_package(probe, &host_tools, on_progress)?;
+    let source_root = canonicalize_existing_dir(&package.plugin_root)?;
+    let package_root =
+        managed_plugin_package_root_for_path(&source_root).unwrap_or_else(|| source_root.clone());
+    install_cursor_plugin_probe(home_dir, &source_root, &package_root, probe)
+}
+
+fn install_cursor_plugin_probe_from_remote(
+    home_dir: &Path,
+    probe: &PluginProbeResult,
+    clone_url: &str,
+    source_ref: Option<&str>,
+    plugin_relative_path: &Path,
+    on_progress: Option<&CloneProgressCallback>,
+) -> Result<PathBuf, String> {
+    let cursor_local_root = home_dir.join(".cursor/plugins/local");
+    fs::create_dir_all(&cursor_local_root).map_err(|error| {
+        format!(
+            "创建 Cursor 插件目录失败（{}）: {error}",
+            cursor_local_root.display()
+        )
+    })?;
+    let temp_repo_root = cursor_local_root.join(format!(
+        ".skilldock-install-{}",
+        short_stable_hash(&format!(
+            "{}#{}#{}",
+            clone_url,
+            source_ref.unwrap_or_default(),
+            normalize_relative_path(plugin_relative_path)
+        ))
+    ));
+    if temp_repo_root.exists() || fs::symlink_metadata(&temp_repo_root).is_ok() {
+        remove_path(&temp_repo_root)?;
+    }
+
+    clone_cursor_plugin_remote_repo(
+        &clone_url,
+        source_ref,
+        &temp_repo_root,
+        plugin_relative_path,
+        on_progress,
+    )
+    .map_err(|error| {
+        let _ = remove_path(&temp_repo_root);
+        error
+    })?;
+
+    let plugin_root = cursor_plugin_root_from_repo(&temp_repo_root, plugin_relative_path)?;
+    ensure_host_manifests_for_hosts(&plugin_root, probe, &["cursor".to_string()]).map_err(
+        |error| {
+            let _ = remove_path(&temp_repo_root);
+            error
+        },
+    )?;
+    let manifest =
+        read_plugin_manifest(&plugin_root.join(CURSOR_PLUGIN_MANIFEST)).map_err(|error| {
+            let _ = remove_path(&temp_repo_root);
+            error
+        })?;
+    let plugin_name = plugin_install_name(&manifest, &plugin_root);
+    let target_repo_root = cursor_local_root.join(plugin_name);
+
+    if paths_refer_to_same_dir(&temp_repo_root, &target_repo_root) {
+        ensure_cursor_plugin_root_overlay(&target_repo_root, plugin_relative_path)?;
+        write_cursor_plugin_remote_metadata(&target_repo_root, probe, plugin_relative_path)?;
+        return canonicalize_existing_dir(&target_repo_root);
+    }
+    if target_repo_root.exists() || fs::symlink_metadata(&target_repo_root).is_ok() {
+        remove_path(&target_repo_root)?;
+    }
+    fs::rename(&temp_repo_root, &target_repo_root).map_err(|error| {
+        let _ = remove_path(&temp_repo_root);
+        format!(
+            "替换 Cursor 插件目录失败（{} -> {}）: {error}",
+            temp_repo_root.display(),
+            target_repo_root.display()
+        )
+    })?;
+
+    ensure_cursor_plugin_root_overlay(&target_repo_root, plugin_relative_path)?;
+    write_cursor_plugin_remote_metadata(&target_repo_root, probe, plugin_relative_path)?;
+    canonicalize_existing_dir(&target_repo_root)
+}
+
 fn legacy_skilldock_plugin_source_metadata_path(plugin_root: &Path) -> PathBuf {
     plugin_root.join(".skilldock/plugin-source.json")
 }
@@ -5106,6 +5430,88 @@ fn cursor_plugin_should_use_git_clone(
     package_root.join(".git").exists() || find_git_root(source_root).is_some()
 }
 
+fn cursor_remote_clone_spec(
+    probe: &PluginProbeResult,
+) -> Result<(String, Option<String>, PathBuf), String> {
+    let plugin_relative_path = non_empty_trimmed_string(&probe.plugin_relative_path)
+        .map(PathBuf::from)
+        .or_else(|| {
+            parse_market_source_url(&probe.source_url)
+                .ok()
+                .and_then(|spec| spec.relative_path)
+        })
+        .unwrap_or_default();
+    let source_ref = non_empty_trimmed_string(&probe.source_ref).or_else(|| {
+        parse_market_source_url(&probe.source_url)
+            .ok()
+            .and_then(|spec| spec.branch)
+    });
+    let clone_url = cursor_remote_clone_url(probe)
+        .ok_or_else(|| "Cursor 插件缺少可独立克隆的 Git 来源，回退到本地目录安装".to_string())?;
+    Ok((clone_url, source_ref, plugin_relative_path))
+}
+
+fn cursor_remote_clone_url(probe: &PluginProbeResult) -> Option<String> {
+    remote_clone_url_from_source(&probe.source_url)
+        .or_else(|| local_git_clone_url_from_source(&probe.source_url))
+        .or_else(|| {
+            non_empty_trimmed_string(&probe.git_root)
+                .and_then(|git_root| cursor_git_remote_or_local_path(Path::new(&git_root)))
+        })
+        .or_else(|| {
+            find_git_root(Path::new(&probe.plugin_root))
+                .and_then(|git_root| cursor_git_remote_or_local_path(&git_root))
+        })
+}
+
+fn cursor_git_remote_or_local_path(git_root: &Path) -> Option<String> {
+    run_git_at(git_root, &["remote", "get-url", "origin"])
+        .ok()
+        .and_then(|url| non_empty_trimmed_string(&url))
+        .or_else(|| Some(path_to_string(git_root)))
+}
+
+fn local_git_clone_url_from_source(source: &str) -> Option<String> {
+    let trimmed = source.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let path = Path::new(trimmed);
+    if path.join(".git").is_dir() || path.is_dir() {
+        return Some(path_to_string(path));
+    }
+    None
+}
+
+fn clone_cursor_plugin_remote_repo(
+    clone_url: &str,
+    source_ref: Option<&str>,
+    target_repo_root: &Path,
+    plugin_relative_path: &Path,
+    on_progress: Option<&CloneProgressCallback>,
+) -> Result<(), String> {
+    let mut command = git_command();
+    configure_git_network_command(&mut command);
+    command.arg("clone").arg("--no-tags");
+    if !plugin_relative_path.as_os_str().is_empty() {
+        command.arg("--sparse").arg("--no-checkout");
+    }
+    if on_progress.is_some() {
+        command.arg("--progress");
+    }
+    if let Some(branch) = source_ref.and_then(non_empty_trimmed_string) {
+        command.arg("--branch").arg(branch);
+    }
+    command
+        .arg(clone_url.trim())
+        .arg(target_repo_root.to_string_lossy().as_ref());
+    run_git_clone_with_progress(&mut command, on_progress, "git clone (cursor plugin)")?;
+    if plugin_relative_path.as_os_str().is_empty() {
+        return Ok(());
+    }
+    configure_plugin_sparse_checkout(target_repo_root, plugin_relative_path)
+}
+
 fn ensure_cursor_local_git_clone(
     source_root: &Path,
     package_root: &Path,
@@ -5314,6 +5720,18 @@ fn cursor_clone_origin_url(probe: &PluginProbeResult, package_root: &Path) -> Op
         })
 }
 
+fn write_cursor_plugin_remote_metadata(
+    plugin_root: &Path,
+    probe: &PluginProbeResult,
+    plugin_relative_path: &Path,
+) -> Result<(), String> {
+    write_skilldock_plugin_source_metadata(plugin_root, probe)?;
+    if let Some(source) = cursor_remote_clone_url(probe) {
+        write_plugin_package_identity(plugin_root, &source, plugin_relative_path)?;
+    }
+    Ok(())
+}
+
 fn remote_clone_url_from_source(source: &str) -> Option<String> {
     let trimmed = source.trim();
     if trimmed.is_empty() {
@@ -5322,7 +5740,8 @@ fn remote_clone_url_from_source(source: &str) -> Option<String> {
     if !(trimmed.starts_with("http://")
         || trimmed.starts_with("https://")
         || trimmed.starts_with("ssh://")
-        || trimmed.starts_with("git@"))
+        || trimmed.starts_with("git@")
+        || trimmed.starts_with("file://"))
     {
         return None;
     }
@@ -6558,6 +6977,10 @@ fn prune_stale_plugin_update_cache(cache: &mut PluginUpdateCache) -> bool {
     cache
         .hash_entries
         .retain(|entry| plugin_cache_root_exists(&entry.root_path));
+    let git_entries = cache.git_entries.clone();
+    cache
+        .git_pending_entries
+        .retain(|entry| plugin_pending_push_cache_entry_is_current(entry, &git_entries));
 
     cache.git_entries.len() != original_git_len
         || cache.git_pending_entries.len() != original_pending_len
@@ -6617,12 +7040,14 @@ fn cached_pending_push_entry(
 ) -> Option<PluginPendingPushCacheEntry> {
     let _guard = lock_plugin_update_cache();
     let cache = load_plugin_update_cache();
+    let git_entries = cache.git_entries;
     cache.git_pending_entries.into_iter().find(|entry| {
         entry.host_tool == plugin.host_tool
             && entry.root_path == plugin_root_cache_key(plugin)
             && entry.branch == branch
             && entry.head == head
             && entry.working_tree_signature == working_tree_signature
+            && plugin_pending_push_cache_entry_is_current(entry, &git_entries)
     })
 }
 
@@ -6682,6 +7107,35 @@ fn save_pending_push_cache_entry(
         ahead,
     });
     let _ = save_plugin_update_cache(&cache);
+}
+
+fn clear_plugin_pending_push_cache_entry(plugin: &PluginSummary) {
+    let _guard = lock_plugin_update_cache();
+    let mut cache = load_plugin_update_cache();
+    let root_key = plugin_root_cache_key(plugin);
+    cache
+        .git_pending_entries
+        .retain(|entry| !(entry.host_tool == plugin.host_tool && entry.root_path == root_key));
+    let _ = save_plugin_update_cache(&cache);
+}
+
+fn plugin_pending_push_cache_entry_is_current(
+    entry: &PluginPendingPushCacheEntry,
+    git_entries: &[PluginGitCacheEntry],
+) -> bool {
+    if !entry.working_tree_signature.trim().is_empty() {
+        return true;
+    }
+    if entry.ahead == 0 {
+        return false;
+    }
+    !git_entries.iter().any(|git_entry| {
+        git_entry.host_tool == entry.host_tool
+            && git_entry.root_path == entry.root_path
+            && git_entry.branch == entry.branch
+            && git_entry.head == entry.head
+            && git_entry.ahead == 0
+    })
 }
 
 fn save_hash_cache_entry(
@@ -6913,6 +7367,8 @@ fn enrich_git_plugin_summary(
                 &working_tree_signature,
                 ahead,
             );
+        } else {
+            clear_plugin_pending_push_cache_entry(&plugin);
         }
     } else if working_tree_dirty {
         save_pending_push_cache_entry(&plugin, &branch, &head, &working_tree_signature, 0);
@@ -7348,11 +7804,6 @@ fn probe_plugin_source_blocking(
         }
     }
 
-    let repository_url = repository_url_from_clone_url(&source_spec.clone_url);
-    let resolved_clone_url = resolve_clone_url_http_first(&source_spec.clone_url, &repository_url)?;
-    source_spec.clone_url = resolved_clone_url;
-    let resolved_source_url = plugin_probe_source_url(&source_spec);
-
     let repo_key = plugin_discovery_repo_key(
         &source_spec.clone_url,
         source_spec.branch.as_deref(),
@@ -7363,21 +7814,30 @@ fn probe_plugin_source_blocking(
         .as_ref()
         .map(|path| vec![normalize_relative_path(path)])
         .unwrap_or_default();
-    with_temporary_discovery_repo_resolved(
-        &source_spec.clone_url,
-        source_spec.branch.as_deref(),
+
+    if let Some(probe) = probe_cached_plugin_source(
+        &source_spec,
         &repo_key,
+        hint_host_tool.clone(),
+        |root, hint| Ok(probe_plugin_root(root, hint)),
+    ) {
+        return Ok(probe);
+    }
+
+    with_remote_plugin_discovery_repo(
+        &source_spec,
         &sparse_paths,
         on_progress,
-        |repo_root| {
-            let probe_root = source_spec
+        |repo_root, spec| {
+            let resolved_source_url = plugin_probe_source_url(spec);
+            let probe_root = spec
                 .relative_path
                 .as_ref()
                 .map(|path| repo_root.join(path))
                 .unwrap_or_else(|| repo_root.to_path_buf());
             canonicalize_existing_dir(&probe_root).map(|root| {
                 annotate_plugin_probe_source(
-                    probe_plugin_root(&root, hint_host_tool),
+                    probe_plugin_root(&root, hint_host_tool.clone()),
                     &resolved_source_url,
                     repo_root,
                 )
@@ -7428,12 +7888,6 @@ fn probe_plugin_source_candidates_blocking(
         return Ok(probes);
     }
 
-    // GitHub API 未命中时才解析/探测 clone URL，再做 git clone
-    let repository_url = repository_url_from_clone_url(&source_spec.clone_url);
-    let resolved_clone_url = resolve_clone_url_http_first(&source_spec.clone_url, &repository_url)?;
-    source_spec.clone_url = resolved_clone_url;
-    let resolved_source_url = plugin_probe_source_url(&source_spec);
-
     let repo_key = plugin_discovery_repo_key(
         &source_spec.clone_url,
         source_spec.branch.as_deref(),
@@ -7444,20 +7898,30 @@ fn probe_plugin_source_candidates_blocking(
         .as_ref()
         .map(|path| vec![normalize_relative_path(path)])
         .unwrap_or_default();
-    with_temporary_discovery_repo_resolved(
-        &source_spec.clone_url,
-        source_spec.branch.as_deref(),
+
+    if let Some(probes) = probe_cached_plugin_source(
+        &source_spec,
         &repo_key,
+        hint_host_tool.clone(),
+        |root, hint| Ok(probe_plugin_candidates(root, hint)),
+    ) {
+        return Ok(probes);
+    }
+
+    // GitHub API 和本地发现缓存均未命中时再做实际 clone；HTTP 失败后再尝试 SSH。
+    with_remote_plugin_discovery_repo(
+        &source_spec,
         &sparse_paths,
         on_progress,
-        |repo_root| {
-            let probe_root = source_spec
+        |repo_root, spec| {
+            let resolved_source_url = plugin_probe_source_url(spec);
+            let probe_root = spec
                 .relative_path
                 .as_ref()
                 .map(|path| repo_root.join(path))
                 .unwrap_or_else(|| repo_root.to_path_buf());
             canonicalize_existing_dir(&probe_root).map(|root| {
-                probe_plugin_candidates(&root, hint_host_tool)
+                probe_plugin_candidates(&root, hint_host_tool.clone())
                     .into_iter()
                     .map(|probe| {
                         annotate_plugin_probe_source(probe, &resolved_source_url, repo_root)
@@ -7466,6 +7930,124 @@ fn probe_plugin_source_candidates_blocking(
             })
         },
     )
+}
+
+fn with_remote_plugin_discovery_repo<T, F>(
+    source_spec: &crate::library::MarketSourceSpec,
+    sparse_paths: &[String],
+    on_progress: Option<&CloneProgressCallback>,
+    mut callback: F,
+) -> Result<T, String>
+where
+    F: FnMut(&Path, &crate::library::MarketSourceSpec) -> Result<T, String>,
+{
+    let repository_url = repository_url_from_clone_url(&source_spec.clone_url);
+    let candidates = remote_clone_candidates(&source_spec.clone_url, &repository_url);
+    if candidates.is_empty() {
+        return Err("仓库地址解析失败: clone URL 为空".to_string());
+    }
+
+    let mut failures = Vec::new();
+    for candidate in candidates {
+        let candidate_spec = crate::library::MarketSourceSpec {
+            clone_url: candidate.url.clone(),
+            branch: source_spec.branch.clone(),
+            relative_path: source_spec.relative_path.clone(),
+            tree_segments: source_spec.tree_segments.clone(),
+        };
+        let repo_key = plugin_discovery_repo_key(
+            &candidate_spec.clone_url,
+            candidate_spec.branch.as_deref(),
+            candidate_spec.relative_path.as_ref(),
+        );
+        match with_temporary_discovery_repo_resolved(
+            &candidate_spec.clone_url,
+            candidate_spec.branch.as_deref(),
+            &repo_key,
+            sparse_paths,
+            on_progress,
+            |repo_root| callback(repo_root, &candidate_spec),
+        ) {
+            Ok(result) => return Ok(result),
+            Err(error) => failures.push(format!(
+                "{} {}: {}",
+                candidate.label,
+                candidate.url,
+                summarize_git_error(&error)
+            )),
+        }
+    }
+
+    Err(format!(
+        "无法克隆远端仓库。已先尝试 HTTP，失败后尝试 SSH，均未成功。\n{}",
+        failures.join("\n")
+    ))
+}
+
+fn probe_cached_plugin_source<T, F>(
+    source_spec: &crate::library::MarketSourceSpec,
+    repo_key: &str,
+    hint_host_tool: Option<String>,
+    probe: F,
+) -> Option<T>
+where
+    F: FnOnce(&Path, Option<String>) -> Result<T, String>,
+    T: AnnotateCachedPluginProbeSource,
+{
+    let repo_root = repo_cache_directory(repo_key).ok()?;
+    if !repo_root.join(".git").is_dir() {
+        return None;
+    }
+
+    let probe_root = source_spec
+        .relative_path
+        .as_ref()
+        .map(|path| repo_root.join(path))
+        .unwrap_or_else(|| repo_root.clone());
+    let canonical_probe_root = canonicalize_existing_dir(&probe_root).ok()?;
+    let source_url = plugin_probe_source_url(source_spec);
+    let source_ref = source_spec.branch.as_deref().unwrap_or_default();
+    probe(&canonical_probe_root, hint_host_tool)
+        .ok()
+        .map(|result| {
+            annotate_cached_plugin_probe_source(result, &source_url, source_ref, &repo_root)
+        })
+}
+
+trait AnnotateCachedPluginProbeSource {
+    fn annotate_cached(self, source_url: &str, source_ref: &str, repo_root: &Path) -> Self;
+}
+
+impl AnnotateCachedPluginProbeSource for PluginProbeResult {
+    fn annotate_cached(self, source_url: &str, source_ref: &str, repo_root: &Path) -> Self {
+        let mut probe = annotate_plugin_probe_source(self, source_url, repo_root);
+        probe.source_ref = source_ref.to_string();
+        probe
+    }
+}
+
+impl AnnotateCachedPluginProbeSource for Vec<PluginProbeResult> {
+    fn annotate_cached(self, source_url: &str, source_ref: &str, repo_root: &Path) -> Self {
+        self.into_iter()
+            .map(|probe| {
+                let mut probe = annotate_plugin_probe_source(probe, source_url, repo_root);
+                probe.source_ref = source_ref.to_string();
+                probe
+            })
+            .collect()
+    }
+}
+
+fn annotate_cached_plugin_probe_source<T>(
+    result: T,
+    source_url: &str,
+    source_ref: &str,
+    repo_root: &Path,
+) -> T
+where
+    T: AnnotateCachedPluginProbeSource,
+{
+    result.annotate_cached(source_url, source_ref, repo_root)
 }
 
 fn annotate_plugin_probe_source(
@@ -8045,35 +8627,6 @@ fn detect_remote_github_plugin_candidates(
     )?]))
 }
 
-fn plugin_probe_cleanup_roots(probes: &[PluginProbeResult]) -> Vec<PathBuf> {
-    let Some(repo_cache_root) =
-        workspace::managed_workspace_root_option().map(|root| root.join("repo-cache"))
-    else {
-        return Vec::new();
-    };
-    let repo_cache_root = canonicalize_existing_dir(&repo_cache_root).unwrap_or(repo_cache_root);
-    let mut cleanup_roots = BTreeSet::new();
-    for probe in probes {
-        let Some(repo_root) = non_empty_trimmed_string(&probe.repo_root) else {
-            continue;
-        };
-        let Ok(repo_root) = canonicalize_existing_dir(Path::new(&repo_root)) else {
-            continue;
-        };
-        if repo_root.strip_prefix(&repo_cache_root).is_ok() {
-            cleanup_roots.insert(repo_root);
-        }
-    }
-
-    cleanup_roots.into_iter().collect()
-}
-
-fn cleanup_plugin_probe_repo_roots(roots: &[PathBuf]) {
-    for root in roots {
-        let _ = fs::remove_dir_all(root);
-    }
-}
-
 fn canonicalize_existing_dir(path: &Path) -> Result<PathBuf, String> {
     if !path.exists() {
         return Err(format!(
@@ -8512,6 +9065,248 @@ fn resolve_component_preview_path(
     Err("未找到可预览的插件组件文件。".into())
 }
 
+fn build_plugin_component_preview(
+    root: &Path,
+    component_id: &str,
+    asset_type: String,
+    preview_path: &Path,
+    content: String,
+) -> PluginComponentPreview {
+    let relative_path = preview_path
+        .strip_prefix(root)
+        .map(normalize_relative_path)
+        .unwrap_or_else(|_| path_to_string(preview_path));
+    let (root_name, entries, initial_file_path) =
+        plugin_component_file_browser(root, component_id, &asset_type, preview_path)
+            .unwrap_or_else(|| single_file_plugin_component_browser(&relative_path));
+
+    PluginComponentPreview {
+        path: relative_path.clone(),
+        title: component_preview_title(component_id, &relative_path),
+        asset_type,
+        content,
+        root_name,
+        entries,
+        initial_file_path,
+    }
+}
+
+fn build_virtual_plugin_component_preview(
+    path: &str,
+    title: &str,
+    asset_type: &str,
+    content: String,
+) -> PluginComponentPreview {
+    let file_name = Path::new(path)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or(path)
+        .to_string();
+    PluginComponentPreview {
+        path: path.to_string(),
+        title: title.to_string(),
+        asset_type: asset_type.to_string(),
+        content,
+        root_name: title.to_string(),
+        entries: vec![SkillFileEntry {
+            path: path.to_string(),
+            name: file_name,
+            entry_type: "file".to_string(),
+            depth: 0,
+        }],
+        initial_file_path: Some(path.to_string()),
+    }
+}
+
+fn single_file_plugin_component_browser(
+    relative_path: &str,
+) -> (String, Vec<SkillFileEntry>, Option<String>) {
+    let file_name = Path::new(relative_path)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or(relative_path)
+        .to_string();
+    (
+        file_name.clone(),
+        vec![SkillFileEntry {
+            path: relative_path.to_string(),
+            name: file_name,
+            entry_type: "file".to_string(),
+            depth: 0,
+        }],
+        Some(relative_path.to_string()),
+    )
+}
+
+fn plugin_component_file_browser(
+    root: &Path,
+    component_id: &str,
+    asset_type: &str,
+    preview_path: &Path,
+) -> Option<(String, Vec<SkillFileEntry>, Option<String>)> {
+    let component_root = component_browser_root_path(root, component_id, asset_type, preview_path)?;
+    let root_name = component_root
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or(component_id)
+        .to_string();
+    let root_relative_path = component_root
+        .strip_prefix(root)
+        .map(normalize_relative_path)
+        .unwrap_or_default();
+    let mut entries = vec![SkillFileEntry {
+        path: root_relative_path,
+        name: root_name.clone(),
+        entry_type: "directory".to_string(),
+        depth: 0,
+    }];
+    collect_plugin_component_entries(root, &component_root, 1, &mut entries).ok()?;
+    let preview_relative_path = preview_path
+        .strip_prefix(root)
+        .map(normalize_relative_path)
+        .ok();
+    let initial_file_path = preview_relative_path
+        .filter(|path| {
+            entries
+                .iter()
+                .any(|entry| entry.entry_type == "file" && entry.path == *path)
+        })
+        .or_else(|| {
+            entries
+                .iter()
+                .find(|entry| entry.entry_type == "file")
+                .map(|entry| entry.path.clone())
+        });
+
+    Some((root_name, entries, initial_file_path))
+}
+
+fn component_browser_root_path(
+    root: &Path,
+    component_id: &str,
+    asset_type: &str,
+    preview_path: &Path,
+) -> Option<PathBuf> {
+    if asset_type == "skill" {
+        let mut current = if preview_path.is_file() {
+            preview_path.parent()?.to_path_buf()
+        } else {
+            preview_path.to_path_buf()
+        };
+        while current.starts_with(root) {
+            if current.join("SKILL.md").is_file() {
+                return Some(current);
+            }
+            if !current.pop() {
+                break;
+            }
+        }
+    }
+
+    let relative_path = safe_relative_path(component_id).ok()?;
+    let candidate = root.join(relative_path);
+    if candidate.is_dir() {
+        return Some(candidate);
+    }
+    preview_path.parent().map(Path::to_path_buf)
+}
+
+fn is_supported_plugin_component_text_file(path: &Path) -> bool {
+    let Some(file_name) = path.file_name().and_then(|value| value.to_str()) else {
+        return false;
+    };
+    if file_name == "SKILL.md" {
+        return true;
+    }
+
+    matches!(
+        path.extension().and_then(|value| value.to_str()),
+        Some(
+            "md" | "txt"
+                | "json"
+                | "yaml"
+                | "yml"
+                | "toml"
+                | "xml"
+                | "js"
+                | "ts"
+                | "tsx"
+                | "jsx"
+                | "py"
+                | "rs"
+        )
+    )
+}
+
+fn collect_plugin_component_entries(
+    root: &Path,
+    current_path: &Path,
+    depth: usize,
+    entries: &mut Vec<SkillFileEntry>,
+) -> Result<bool, String> {
+    let mut child_paths = fs::read_dir(current_path)
+        .map_err(|error| format!("读取插件组件目录失败: {error}"))?
+        .flatten()
+        .map(|entry| entry.path())
+        .collect::<Vec<_>>();
+    child_paths.sort();
+
+    let mut has_visible_child = false;
+
+    for child_path in child_paths {
+        let Some(name) = child_path.file_name().and_then(|value| value.to_str()) else {
+            continue;
+        };
+        if name.starts_with('.') || matches!(name, "node_modules" | "dist" | "target") {
+            continue;
+        }
+
+        if child_path.is_dir() {
+            let directory_index = entries.len();
+            let relative_path = child_path
+                .strip_prefix(root)
+                .map_err(|error| format!("解析插件组件目录路径失败: {error}"))
+                .map(normalize_relative_path)?;
+            entries.push(SkillFileEntry {
+                path: relative_path,
+                name: name.to_string(),
+                entry_type: "directory".to_string(),
+                depth,
+            });
+            let before_children = entries.len();
+            let child_has_visible =
+                collect_plugin_component_entries(root, &child_path, depth + 1, entries)?;
+            if child_has_visible {
+                has_visible_child = true;
+            } else {
+                entries.truncate(directory_index);
+            }
+            if child_has_visible || entries.len() > before_children {
+                has_visible_child = true;
+            }
+            continue;
+        }
+
+        if !is_supported_plugin_component_text_file(&child_path) {
+            continue;
+        }
+
+        let relative_path = child_path
+            .strip_prefix(root)
+            .map_err(|error| format!("解析插件组件文件路径失败: {error}"))
+            .map(normalize_relative_path)?;
+        entries.push(SkillFileEntry {
+            path: relative_path,
+            name: name.to_string(),
+            entry_type: "file".to_string(),
+            depth,
+        });
+        has_visible_child = true;
+    }
+
+    Ok(has_visible_child)
+}
+
 fn mcp_config_path_for_component_id(root: &Path, relative_path: &Path) -> Option<PathBuf> {
     mcp_component_config_and_server(root, relative_path).map(|(config_path, _, _)| config_path)
 }
@@ -8909,17 +9704,16 @@ mod tests {
         build_plugin_scope_summary, cleanup_duplicate_plugin_package_roots,
         configure_plugin_sparse_checkout, copy_plugin_dir, current_timestamp_rfc3339,
         dedupe_and_sort_plugins, delete_plugin, ensure_skilldock_claude_marketplace,
-        ensure_skilldock_codex_cache_link,
-        ensure_skilldock_codex_marketplace, get_plugin_component_preview,
-        install_selected_plugin_probes_blocking, legacy_plugin_package_identity_path,
-        legacy_skilldock_plugin_source_metadata_path, list_cli_tools,
-        list_installed_plugins_blocking as list_installed_plugins, paths_refer_to_same_dir,
-        plugin_git_state, plugin_probe_source_url, probe_plugin_repo,
-        probe_plugin_source_candidates_blocking, read_plugin_package_identity,
-        read_skilldock_plugin_source_metadata, resolve_shared_plugin_package_id,
-        set_plugin_enabled, shared_plugin_package_id_candidates, shared_plugin_package_repo_root,
-        write_plugin_package_identity, write_skilldock_plugin_source_metadata,
-        PLUGIN_STATUS_PENDING_PUSH,
+        ensure_skilldock_codex_cache_link, ensure_skilldock_codex_marketplace,
+        get_plugin_component_preview, install_selected_plugin_probes_blocking,
+        legacy_plugin_package_identity_path, legacy_skilldock_plugin_source_metadata_path,
+        list_cli_tools, list_installed_plugins_blocking as list_installed_plugins,
+        paths_refer_to_same_dir, plugin_discovery_repo_key, plugin_git_state,
+        plugin_probe_source_url, probe_plugin_repo, probe_plugin_source_candidates_blocking,
+        read_plugin_package_identity, read_skilldock_plugin_source_metadata,
+        resolve_shared_plugin_package_id, set_plugin_enabled, shared_plugin_package_id_candidates,
+        shared_plugin_package_repo_root, write_plugin_package_identity,
+        write_skilldock_plugin_source_metadata, PLUGIN_STATUS_PENDING_PUSH,
     };
     use crate::library::parse_market_source_url;
     use crate::models::{PluginComponentSummary, PluginProbeResult, PluginSummary};
@@ -9060,6 +9854,42 @@ mod tests {
     }
 
     #[test]
+    fn prunes_clean_pending_push_plugin_cache_entries() {
+        let temp_dir = temp_test_dir("plugin-clean-pending-cache-prune");
+        let existing_root = temp_dir.join("existing-plugin");
+        fs::create_dir_all(&existing_root).expect("create existing plugin root");
+        let existing_root = existing_root.to_string_lossy().to_string();
+
+        let mut cache = super::PluginUpdateCache {
+            git_entries: vec![super::PluginGitCacheEntry {
+                host_tool: "claude-code".to_string(),
+                root_path: existing_root.clone(),
+                branch: "main".to_string(),
+                head: "clean-head".to_string(),
+                behind: 0,
+                ahead: 0,
+                remote_updated_at: String::new(),
+                last_editor: String::new(),
+            }],
+            git_pending_entries: vec![super::PluginPendingPushCacheEntry {
+                host_tool: "claude-code".to_string(),
+                root_path: existing_root,
+                branch: "main".to_string(),
+                head: "clean-head".to_string(),
+                working_tree_signature: String::new(),
+                ahead: 2,
+            }],
+            hash_entries: Vec::new(),
+        };
+
+        assert!(super::prune_stale_plugin_update_cache(&mut cache));
+        assert!(cache.git_pending_entries.is_empty());
+        assert!(!super::prune_stale_plugin_update_cache(&mut cache));
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
     fn shared_plugin_package_id_prefers_plugin_name_without_hash() {
         let package_id = shared_plugin_package_id_candidates(
             "https://github.com/everyinc/compound-engineering-plugin.git",
@@ -9137,6 +9967,124 @@ mod tests {
         assert_eq!(package_id, "coding-tutor");
         assert!(active_root.exists());
         assert!(!duplicate_root.exists());
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn cleanup_duplicate_plugin_package_roots_removes_legacy_git_duplicate_without_identity() {
+        let _guard = TEST_ENV_LOCK.lock().expect("lock test env");
+        let temp_dir = temp_test_dir("plugin-package-legacy-git-duplicate-cleanup");
+        let home_dir = temp_dir.join("home");
+        let previous_home = env::var_os("HOME");
+        env::set_var("HOME", &home_dir);
+        let source = "https://github.com/everyinc/compound-engineering-plugin.git";
+        let active_root = home_dir.join(".skilldock/plugins/compound-engineering-plugin");
+        let duplicate_root = home_dir
+            .join(".skilldock/plugins/compound-engineering-plugin-compound-engineering-plugin");
+
+        fs::create_dir_all(active_root.join(".codex-plugin")).expect("create active manifest dir");
+        fs::write(
+            active_root.join(".codex-plugin/plugin.json"),
+            r#"{"name":"compound-engineering","version":"1.0.0"}"#,
+        )
+        .expect("write active manifest");
+        commit_test_repo(&active_root, Some(source));
+        write_plugin_package_identity(&active_root, source, Path::new(""))
+            .expect("write active identity");
+
+        fs::create_dir_all(duplicate_root.join(".codex-plugin"))
+            .expect("create duplicate manifest dir");
+        fs::write(
+            duplicate_root.join(".codex-plugin/plugin.json"),
+            r#"{"name":"compound-engineering","version":"1.0.0"}"#,
+        )
+        .expect("write duplicate manifest");
+        commit_test_repo(&duplicate_root, Some(source));
+
+        cleanup_duplicate_plugin_package_roots(&active_root, source, Path::new(""))
+            .expect("cleanup legacy duplicate");
+
+        match previous_home {
+            Some(value) => env::set_var("HOME", value),
+            None => env::remove_var("HOME"),
+        }
+
+        assert!(active_root.exists());
+        assert!(!duplicate_root.exists());
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn resolves_legacy_git_package_without_identity_by_remote() {
+        let _guard = TEST_ENV_LOCK.lock().expect("lock test env");
+        let temp_dir = temp_test_dir("plugin-package-legacy-git-identity");
+        let home_dir = temp_dir.join("home");
+        let previous_home = env::var_os("HOME");
+        env::set_var("HOME", &home_dir);
+        let source = "https://github.com/everyinc/compound-engineering-plugin.git";
+        let legacy_root = home_dir.join(".skilldock/plugins/compound-engineering-plugin");
+        fs::create_dir_all(legacy_root.join(".codex-plugin")).expect("create codex manifest dir");
+        fs::write(
+            legacy_root.join(".codex-plugin/plugin.json"),
+            r#"{"name":"compound-engineering","version":"1.0.0"}"#,
+        )
+        .expect("write codex manifest");
+        commit_test_repo(&legacy_root, Some(source));
+
+        let package_id =
+            resolve_shared_plugin_package_id(source, Path::new(""), None).expect("resolve id");
+        let identity = read_plugin_package_identity(&legacy_root).expect("read package identity");
+
+        match previous_home {
+            Some(value) => env::set_var("HOME", value),
+            None => env::remove_var("HOME"),
+        }
+
+        assert_eq!(package_id, "compound-engineering-plugin");
+        assert_eq!(
+            identity.source,
+            "https://github.com/everyinc/compound-engineering-plugin"
+        );
+        assert_eq!(identity.plugin_relative_path, "");
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn root_plugin_sparse_checkout_is_disabled_when_reused() {
+        let _guard = TEST_ENV_LOCK.lock().expect("lock test env");
+        let temp_dir = temp_test_dir("root-plugin-sparse-disable");
+        let repo_root = temp_dir.join("repo");
+        fs::create_dir_all(repo_root.join(".codex-plugin")).expect("create codex manifest dir");
+        fs::write(
+            repo_root.join(".codex-plugin/plugin.json"),
+            r#"{"name":"compound-engineering","version":"1.0.0"}"#,
+        )
+        .expect("write codex manifest");
+        fs::write(
+            repo_root.join("plugin.json"),
+            r#"{"name":"compound-engineering"}"#,
+        )
+        .expect("write generic manifest");
+        commit_test_repo(&repo_root, None);
+        run_git_test(&repo_root, &["sparse-checkout", "init", "--no-cone"]);
+        run_git_test(
+            &repo_root,
+            &["sparse-checkout", "set", "--no-cone", "/*", "!/*/"],
+        );
+        run_git_test(&repo_root, &["checkout", "--quiet"]);
+        assert!(!repo_root.join(".codex-plugin/plugin.json").exists());
+
+        configure_plugin_sparse_checkout(&repo_root, Path::new(""))
+            .expect("disable sparse checkout for root plugin");
+
+        assert!(repo_root.join(".codex-plugin/plugin.json").is_file());
+        assert_ne!(
+            run_git_test_output(&repo_root, &["config", "--bool", "core.sparseCheckout"]),
+            "true"
+        );
 
         let _ = fs::remove_dir_all(temp_dir);
     }
@@ -9663,12 +10611,26 @@ exit 0
         let temp_dir = temp_test_dir("standalone-assets-probe");
         let repo_root = temp_dir.join("repo");
         fs::create_dir_all(repo_root.join("skills/example-skill")).expect("create skill dir");
+        fs::create_dir_all(repo_root.join("skills/example-skill/reference"))
+            .expect("create skill reference dir");
+        fs::create_dir_all(repo_root.join("skills/example-skill/scripts"))
+            .expect("create skill scripts dir");
         fs::create_dir_all(repo_root.join("agents")).expect("create agents dir");
         fs::write(
             repo_root.join("skills/example-skill/SKILL.md"),
             "---\ndescription: Example description\n---\n# Example",
         )
         .expect("write skill file");
+        fs::write(
+            repo_root.join("skills/example-skill/reference/company-standards.md"),
+            "# Company Standards",
+        )
+        .expect("write skill reference file");
+        fs::write(
+            repo_root.join("skills/example-skill/scripts/format-check.py"),
+            "print('ok')",
+        )
+        .expect("write skill script file");
         fs::write(
             repo_root.join("agents/codebase-researcher.md"),
             "---\ndescription: Codebase researcher\n---\n# Agent",
@@ -9705,6 +10667,26 @@ exit 0
         .expect("preview skill component");
         assert_eq!(preview.path, "skills/example-skill/SKILL.md");
         assert!(preview.content.contains("# Example"));
+        assert_eq!(preview.root_name, "example-skill");
+        assert_eq!(
+            preview
+                .entries
+                .iter()
+                .map(|entry| entry.path.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "skills/example-skill",
+                "skills/example-skill/SKILL.md",
+                "skills/example-skill/reference",
+                "skills/example-skill/reference/company-standards.md",
+                "skills/example-skill/scripts",
+                "skills/example-skill/scripts/format-check.py",
+            ]
+        );
+        assert_eq!(
+            preview.initial_file_path.as_deref(),
+            Some("skills/example-skill/SKILL.md")
+        );
 
         let _ = fs::remove_dir_all(temp_dir);
     }
@@ -9783,6 +10765,68 @@ exit 0
         assert!(!results
             .iter()
             .any(|result| result.kind == "marketplace-root"));
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn probes_gitlab_plugin_candidates_from_existing_repo_cache_before_remote_access() {
+        let _guard = TEST_ENV_LOCK.lock().expect("lock test env");
+        let temp_dir = temp_test_dir("gitlab-plugin-candidates-cache");
+        let home_dir = temp_dir.join("home");
+        let source = "https://git.example.com/example-org/example-repo.git";
+        let source_spec = parse_market_source_url(source).expect("parse source");
+        let repo_key = plugin_discovery_repo_key(
+            &source_spec.clone_url,
+            Some("master"),
+            source_spec.relative_path.as_ref(),
+        );
+        let repo_root = home_dir.join(".skilldock/repo-cache").join(&repo_key);
+        let plugin_root = repo_root.join("example-plugin");
+
+        fs::create_dir_all(plugin_root.join(".codex-plugin")).expect("create codex manifest dir");
+        fs::create_dir_all(plugin_root.join("skills/workflow-code-generation"))
+            .expect("create skill dir");
+        fs::write(
+            plugin_root.join(".codex-plugin/plugin.json"),
+            r#"{"name":"example-plugin","version":"0.1.0"}"#,
+        )
+        .expect("write plugin manifest");
+        fs::write(
+            plugin_root.join("skills/workflow-code-generation/SKILL.md"),
+            "# workflow",
+        )
+        .expect("write skill");
+        commit_test_repo(
+            &repo_root,
+            Some("https://git.example.com/example-org/example-repo.git"),
+        );
+
+        let previous_home = env::var_os("HOME");
+        env::set_var("HOME", &home_dir);
+        let results = probe_plugin_source_candidates_blocking(
+            source,
+            Some("master"),
+            None,
+            Some("codex".into()),
+            None,
+        )
+        .expect("probe plugin candidates from cache");
+        match previous_home {
+            Some(value) => env::set_var("HOME", value),
+            None => env::remove_var("HOME"),
+        }
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].name, "example-plugin");
+        assert_eq!(results[0].tool, "codex");
+        assert_eq!(
+            results[0].source_url,
+            "https://git.example.com/example-org/example-repo/tree/master"
+        );
+        assert_eq!(results[0].source_ref, "master");
+        assert_eq!(results[0].plugin_relative_path, "example-plugin");
+        assert!(Path::new(&results[0].repo_root).ends_with(&repo_key));
 
         let _ = fs::remove_dir_all(temp_dir);
     }
@@ -10495,12 +11539,12 @@ source = "__SOURCE__"
         assert!(managed_plugin_root
             .join(".codex-plugin/plugin.json")
             .is_file());
-        assert!(managed_plugin_root
+        assert!(!managed_plugin_root
             .join(".claude-plugin/plugin.json")
-            .is_file());
-        assert!(managed_plugin_root
+            .exists());
+        assert!(!managed_plugin_root
             .join(".cursor-plugin/plugin.json")
-            .is_file());
+            .exists());
         let marketplace_plugin_root =
             home_dir.join(".codex/marketplaces/skilldock/plugins/shopify-plugin");
         let installed_root = home_dir.join(".codex/plugins/cache/skilldock/shopify-plugin/latest");
@@ -10696,7 +11740,79 @@ source = "__SOURCE__"
             .join(".claude/plugins/installed_plugins.json")
             .is_file());
         assert!(home_dir.join(".claude/settings.json").is_file());
-        assert!(!repo_root.exists());
+        assert!(repo_root.exists());
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn installs_cursor_plugin_from_repo_cache_before_remote_clone() {
+        let _guard = TEST_ENV_LOCK.lock().expect("lock test env");
+        let temp_dir = temp_test_dir("cursor-install-from-repo-cache");
+        let home_dir = temp_dir.join("home");
+        let repo_root = home_dir.join(".skilldock/repo-cache/cursor-cache-install");
+        let plugin_root = repo_root.join("plugins/coding-tutor");
+        fs::create_dir_all(plugin_root.join(".cursor-plugin")).expect("create cursor manifest dir");
+        fs::create_dir_all(plugin_root.join("commands")).expect("create command dir");
+        fs::write(
+            plugin_root.join(".cursor-plugin/plugin.json"),
+            r#"{"name":"coding-tutor","displayName":"Coding Tutor","version":"1.0.0","description":"Tutor plugin"}"#,
+        )
+        .expect("write cursor manifest");
+        fs::write(plugin_root.join("commands/teach.md"), "# teach").expect("write command");
+        let source_url = "https://example.invalid/org/coding-tutor.git".to_string();
+        commit_test_repo(&repo_root, Some(&source_url));
+
+        let previous_home = env::var_os("HOME");
+        env::set_var("HOME", &home_dir);
+        let installed = install_selected_plugin_probes_blocking(
+            vec![PluginProbeResult {
+                tool: "cursor".to_string(),
+                compatible_host_tools: vec!["cursor".to_string()],
+                kind: "plugin-repo".to_string(),
+                manifest_name: "coding-tutor".to_string(),
+                name: "Coding Tutor".to_string(),
+                description: "Tutor plugin".to_string(),
+                plugin_root: plugin_root.to_string_lossy().into_owned(),
+                manifest_path: plugin_root
+                    .join(".cursor-plugin/plugin.json")
+                    .to_string_lossy()
+                    .into_owned(),
+                marketplace_manifest_path: String::new(),
+                components: Vec::new(),
+                source_type: "git".to_string(),
+                source_url: source_url.clone(),
+                source_ref: String::new(),
+                is_git_repo: true,
+                repo_root: repo_root.to_string_lossy().into_owned(),
+                plugin_relative_path: "plugins/coding-tutor".to_string(),
+                git_root: repo_root.to_string_lossy().into_owned(),
+                confidence: "high".to_string(),
+                install_strategy: "cursor-plugin-dir".to_string(),
+                warnings: Vec::new(),
+            }],
+            vec!["cursor".to_string()],
+            None,
+        )
+        .expect("install cursor plugin from repo cache");
+
+        match previous_home {
+            Some(value) => env::set_var("HOME", value),
+            None => env::remove_var("HOME"),
+        }
+
+        let installed_repo_root = home_dir.join(".cursor/plugins/local/coding-tutor");
+        assert_eq!(installed.len(), 1);
+        assert!(repo_root.exists());
+        assert!(installed_repo_root.join(".git").is_dir());
+        assert!(installed_repo_root
+            .join(".cursor-plugin/plugin.json")
+            .is_file());
+        assert!(installed_repo_root.join("commands/teach.md").is_file());
+        assert_eq!(
+            run_git_test_output(&installed_repo_root, &["remote", "get-url", "origin"]),
+            source_url
+        );
 
         let _ = fs::remove_dir_all(temp_dir);
     }
@@ -11442,10 +12558,8 @@ source = "__SOURCE__"
             "# Review checklist",
         )
         .expect("write cursor rule");
-        commit_test_repo(
-            &repo_root,
-            Some("https://github.com/example/example-plugin.git"),
-        );
+        commit_test_repo(&repo_root, None);
+        let source_url = repo_root.to_string_lossy().into_owned();
 
         let previous_home = env::var_os("HOME");
         env::set_var("HOME", &home_dir);
@@ -11466,7 +12580,7 @@ source = "__SOURCE__"
                 marketplace_manifest_path: String::new(),
                 components: Vec::new(),
                 source_type: "git".to_string(),
-                source_url: "https://github.com/example/example-plugin".to_string(),
+                source_url: source_url.clone(),
                 source_ref: String::new(),
                 is_git_repo: true,
                 repo_root: repo_root.to_string_lossy().into_owned(),
@@ -11533,7 +12647,7 @@ source = "__SOURCE__"
         );
         assert_eq!(
             run_git_test_output(&installed_repo_root, &["remote", "get-url", "origin"]),
-            "https://github.com/example/example-plugin.git"
+            source_url
         );
         assert_eq!(
             run_git_test_output(
@@ -11571,7 +12685,7 @@ source = "__SOURCE__"
     }
 
     #[test]
-    fn installs_cloudflare_skills_with_matching_managed_and_cursor_directory_names() {
+    fn installs_cursor_plugin_directly_without_shared_package() {
         let _guard = TEST_ENV_LOCK.lock().expect("lock test env");
         let temp_dir = temp_test_dir("cloudflare-skills-name-alignment");
         let home_dir = temp_dir.join("home");
@@ -11584,10 +12698,8 @@ source = "__SOURCE__"
         )
         .expect("write cursor manifest");
         fs::write(source_root.join("skills/browser/SKILL.md"), "# Browser").expect("write skill");
-        commit_test_repo(
-            &source_root,
-            Some("https://github.com/cloudflare/skills.git"),
-        );
+        commit_test_repo(&source_root, None);
+        let source_url = source_root.to_string_lossy().into_owned();
 
         let previous_home = env::var_os("HOME");
         env::set_var("HOME", &home_dir);
@@ -11608,7 +12720,7 @@ source = "__SOURCE__"
                 marketplace_manifest_path: String::new(),
                 components: Vec::new(),
                 source_type: "git".to_string(),
-                source_url: "https://github.com/cloudflare/skills".to_string(),
+                source_url,
                 source_ref: String::new(),
                 is_git_repo: true,
                 repo_root: source_root.to_string_lossy().into_owned(),
@@ -11631,9 +12743,8 @@ source = "__SOURCE__"
         let managed_root = home_dir.join(".skilldock/plugins/cloudflare");
         let cursor_root = home_dir.join(".cursor/plugins/local/cloudflare");
         assert_eq!(installed.len(), 1);
-        assert!(managed_root.join(".cursor-plugin/plugin.json").is_file());
+        assert!(!managed_root.exists());
         assert!(cursor_root.join(".cursor-plugin/plugin.json").is_file());
-        assert!(managed_root.join("skills/browser/SKILL.md").is_file());
         assert!(cursor_root.join("skills/browser/SKILL.md").is_file());
         assert!(cursor_root.join(".git").is_dir());
 
@@ -11709,6 +12820,87 @@ source = "__SOURCE__"
     }
 
     #[test]
+    fn repairs_shared_host_manifest_polluted_by_generic_manifest() {
+        let _guard = TEST_ENV_LOCK.lock().expect("lock test env");
+        let temp_dir = temp_test_dir("repair-shared-host-manifest-pollution");
+        let home_dir = temp_dir.join("home");
+        let source_root = temp_dir.join("repo");
+        fs::create_dir_all(source_root.join(".claude-plugin")).expect("create claude manifest dir");
+        fs::write(
+            source_root.join("plugin.json"),
+            r#"{"$schema":"https://antigravity.google/schemas/v1/plugin.json","name":"compound-engineering","version":"3.19.0","description":"Compound"}"#,
+        )
+        .expect("write generic manifest");
+        let claude_manifest = r#"{"name":"compound-engineering","version":"3.19.0","description":"Compound","author":{"name":"Every"}}"#;
+        fs::write(
+            source_root.join(".claude-plugin/plugin.json"),
+            claude_manifest,
+        )
+        .expect("write claude manifest");
+        fs::create_dir_all(source_root.join("commands")).expect("create command dir");
+        fs::write(source_root.join("commands/compound.md"), "# Compound").expect("write command");
+        commit_test_repo(&source_root, None);
+        fs::write(
+            source_root.join(".claude-plugin/plugin.json"),
+            fs::read_to_string(source_root.join("plugin.json")).expect("read generic manifest"),
+        )
+        .expect("pollute claude manifest");
+
+        let previous_home = env::var_os("HOME");
+        env::set_var("HOME", &home_dir);
+
+        let installed = install_selected_plugin_probes_blocking(
+            vec![PluginProbeResult {
+                tool: "claude-code".to_string(),
+                compatible_host_tools: vec!["claude-code".to_string()],
+                kind: "plugin-repo".to_string(),
+                manifest_name: "compound-engineering".to_string(),
+                name: "Compound Engineering".to_string(),
+                description: "Compound".to_string(),
+                plugin_root: source_root.to_string_lossy().into_owned(),
+                manifest_path: source_root
+                    .join(".claude-plugin/plugin.json")
+                    .to_string_lossy()
+                    .into_owned(),
+                marketplace_manifest_path: String::new(),
+                components: Vec::new(),
+                source_type: "git".to_string(),
+                source_url: source_root.to_string_lossy().into_owned(),
+                source_ref: String::new(),
+                is_git_repo: true,
+                repo_root: source_root.to_string_lossy().into_owned(),
+                plugin_relative_path: String::new(),
+                git_root: source_root.to_string_lossy().into_owned(),
+                confidence: "high".to_string(),
+                install_strategy: "claude-plugin-dir".to_string(),
+                warnings: Vec::new(),
+            }],
+            vec!["claude-code".to_string()],
+            None,
+        )
+        .expect("install polluted plugin");
+
+        match previous_home {
+            Some(value) => env::set_var("HOME", value),
+            None => env::remove_var("HOME"),
+        }
+
+        let managed_root = home_dir.join(".skilldock/plugins/compound-engineering");
+        assert_eq!(installed.len(), 1);
+        assert_eq!(
+            fs::read_to_string(managed_root.join(".claude-plugin/plugin.json"))
+                .expect("read repaired managed manifest"),
+            claude_manifest
+        );
+        assert_eq!(
+            run_git_test_output(&managed_root, &["status", "--porcelain"]),
+            ""
+        );
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
     fn installs_selected_plugin_probe_into_multiple_hosts() {
         let _guard = TEST_ENV_LOCK.lock().expect("lock test env");
         let temp_dir = temp_test_dir("selected-plugin-multi-host-install");
@@ -11727,7 +12919,16 @@ source = "__SOURCE__"
             r#"{"name":"coding-tutor","version":"1.3.0","description":"Tutor plugin","interface":{"displayName":"Coding Tutor"}}"#,
         )
         .expect("write codex manifest");
+        fs::create_dir_all(source_root.join(".cursor-plugin")).expect("create cursor manifest dir");
+        fs::write(
+            source_root.join(".cursor-plugin/plugin.json"),
+            r#"{"name":"coding-tutor","displayName":"Coding Tutor","version":"1.3.0","description":"Tutor plugin"}"#,
+        )
+        .expect("write cursor manifest");
         fs::write(source_root.join("commands/teach-me.md"), "# Teach me").expect("write command");
+        let repo_root = temp_dir.join("repo");
+        commit_test_repo(&repo_root, None);
+        let source_url = repo_root.to_string_lossy().into_owned();
 
         let previous_home = env::var_os("HOME");
         env::set_var("HOME", &home_dir);
@@ -11735,7 +12936,11 @@ source = "__SOURCE__"
         let installed = install_selected_plugin_probes_blocking(
             vec![PluginProbeResult {
                 tool: "claude-code".to_string(),
-                compatible_host_tools: vec!["claude-code".to_string(), "codex".to_string()],
+                compatible_host_tools: vec![
+                    "claude-code".to_string(),
+                    "codex".to_string(),
+                    "cursor".to_string(),
+                ],
                 kind: "plugin-repo".to_string(),
                 manifest_name: "coding-tutor".to_string(),
                 name: "Coding Tutor".to_string(),
@@ -11748,18 +12953,21 @@ source = "__SOURCE__"
                 marketplace_manifest_path: String::new(),
                 components: Vec::new(),
                 source_type: "git".to_string(),
-                source_url: "https://github.com/everyinc/compound-engineering-plugin/tree/main"
-                    .to_string(),
-                source_ref: "main".to_string(),
+                source_url: source_url.clone(),
+                source_ref: String::new(),
                 is_git_repo: true,
-                repo_root: temp_dir.join("repo").to_string_lossy().into_owned(),
+                repo_root: repo_root.to_string_lossy().into_owned(),
                 plugin_relative_path: "plugins/coding-tutor".to_string(),
-                git_root: temp_dir.join("repo").to_string_lossy().into_owned(),
+                git_root: repo_root.to_string_lossy().into_owned(),
                 confidence: "high".to_string(),
                 install_strategy: "claude-plugin-dir".to_string(),
                 warnings: Vec::new(),
             }],
-            vec!["claude-code".to_string(), "codex".to_string()],
+            vec![
+                "claude-code".to_string(),
+                "codex".to_string(),
+                "cursor".to_string(),
+            ],
             None,
         )
         .expect("install selected plugin");
@@ -11771,19 +12979,42 @@ source = "__SOURCE__"
             None => env::remove_var("HOME"),
         }
 
-        assert_eq!(installed.len(), 2);
+        assert_eq!(installed.len(), 3);
         assert!(installed
             .iter()
             .any(|plugin| plugin.host_tool == "claude-code"));
         assert!(installed.iter().any(|plugin| plugin.host_tool == "codex"));
+        assert!(installed.iter().any(|plugin| plugin.host_tool == "cursor"));
         assert!(plugins
             .iter()
             .any(|plugin| plugin.host_tool == "claude-code"));
         assert!(plugins.iter().any(|plugin| plugin.host_tool == "codex"));
+        assert!(plugins.iter().any(|plugin| plugin.host_tool == "cursor"));
         assert!(home_dir
             .join(".claude/plugins/installed_plugins.json")
             .is_file());
         assert!(home_dir.join(".codex/config.toml").is_file());
+        let cursor_root = home_dir.join(".cursor/plugins/local/coding-tutor");
+        assert!(cursor_root.join(".git").is_dir());
+        assert!(cursor_root.join(".cursor-plugin/plugin.json").is_file());
+        assert_eq!(
+            run_git_test_output(&cursor_root, &["remote", "get-url", "origin"]),
+            source_url
+        );
+        let claude_root = installed
+            .iter()
+            .find(|plugin| plugin.host_tool == "claude-code")
+            .map(|plugin| PathBuf::from(&plugin.root_path))
+            .expect("find claude install root");
+        let codex_root = installed
+            .iter()
+            .find(|plugin| plugin.host_tool == "codex")
+            .map(|plugin| PathBuf::from(&plugin.root_path))
+            .expect("find codex install root");
+        assert!(claude_root.join(".claude-plugin/plugin.json").is_file());
+        assert!(codex_root.join(".codex-plugin/plugin.json").is_file());
+        assert!(!paths_refer_to_same_dir(&claude_root, &cursor_root));
+        assert!(!paths_refer_to_same_dir(&codex_root, &cursor_root));
 
         let _ = fs::remove_dir_all(temp_dir);
     }
@@ -11867,10 +13098,8 @@ source = "__SOURCE__"
         )
         .expect("write cursor manifest");
         fs::write(source_root.join("skills/SKILL.md"), "# Shopify").expect("write skill");
-        commit_test_repo(
-            &repo_root,
-            Some("https://github.com/Shopify/Shopify-AI-Toolkit.git"),
-        );
+        commit_test_repo(&repo_root, None);
+        let source_url = repo_root.to_string_lossy().into_owned();
 
         let previous_home = env::var_os("HOME");
         env::set_var("HOME", &home_dir);
@@ -11891,7 +13120,7 @@ source = "__SOURCE__"
                 marketplace_manifest_path: String::new(),
                 components: Vec::new(),
                 source_type: "git".to_string(),
-                source_url: "https://github.com/Shopify/Shopify-AI-Toolkit".to_string(),
+                source_url,
                 source_ref: String::new(),
                 is_git_repo: true,
                 repo_root: repo_root.to_string_lossy().into_owned(),
@@ -11947,10 +13176,8 @@ source = "__SOURCE__"
         )
         .expect("write cursor manifest");
         fs::write(source_root.join("commands/teach-me.md"), "# Teach me").expect("write command");
-        commit_test_repo(
-            &repo_root,
-            Some("https://github.com/everyinc/compound-engineering-plugin.git"),
-        );
+        commit_test_repo(&repo_root, None);
+        let source_url = repo_root.to_string_lossy().into_owned();
 
         let previous_home = env::var_os("HOME");
         env::set_var("HOME", &home_dir);
@@ -11971,7 +13198,7 @@ source = "__SOURCE__"
                 marketplace_manifest_path: String::new(),
                 components: Vec::new(),
                 source_type: "git".to_string(),
-                source_url: "https://github.com/everyinc/compound-engineering-plugin".to_string(),
+                source_url: source_url.clone(),
                 source_ref: String::new(),
                 is_git_repo: true,
                 repo_root: repo_root.to_string_lossy().into_owned(),
@@ -12023,7 +13250,7 @@ source = "__SOURCE__"
             .is_symlink());
         assert_eq!(
             run_git_test_output(&installed_repo_root, &["remote", "get-url", "origin"]),
-            "https://github.com/everyinc/compound-engineering-plugin.git"
+            source_url
         );
         assert_eq!(
             run_git_test_output(
@@ -12050,6 +13277,89 @@ source = "__SOURCE__"
             installed_repo_root_canonical.to_string_lossy().into_owned()
         );
         assert_eq!(plugins[0].plugin_relative_path, "plugins/coding-tutor");
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn updates_cursor_git_plugin_in_local_repo_without_managed_copy() {
+        let _guard = TEST_ENV_LOCK.lock().expect("lock test env");
+        let temp_dir = temp_test_dir("cursor-git-update-local-repo");
+        let home_dir = temp_dir.join("home");
+        let repo_root = temp_dir.join("repo");
+        let source_root = repo_root.join("plugins/coding-tutor");
+        fs::create_dir_all(source_root.join(".cursor-plugin")).expect("create cursor manifest dir");
+        fs::create_dir_all(source_root.join("commands")).expect("create commands dir");
+        fs::write(
+            source_root.join(".cursor-plugin/plugin.json"),
+            r#"{"name":"coding-tutor","displayName":"Coding Tutor","version":"1.3.0","description":"Tutor plugin"}"#,
+        )
+        .expect("write cursor manifest");
+        fs::write(source_root.join("commands/teach-me.md"), "# v1").expect("write command");
+        commit_test_repo(&repo_root, None);
+        let source_url = repo_root.to_string_lossy().into_owned();
+
+        let previous_home = env::var_os("HOME");
+        env::set_var("HOME", &home_dir);
+
+        let installed = install_selected_plugin_probes_blocking(
+            vec![PluginProbeResult {
+                tool: "cursor".to_string(),
+                compatible_host_tools: vec!["cursor".to_string()],
+                kind: "plugin-repo".to_string(),
+                manifest_name: "coding-tutor".to_string(),
+                name: "Coding Tutor".to_string(),
+                description: "Tutor plugin".to_string(),
+                plugin_root: source_root.to_string_lossy().into_owned(),
+                manifest_path: source_root
+                    .join(".cursor-plugin/plugin.json")
+                    .to_string_lossy()
+                    .into_owned(),
+                marketplace_manifest_path: String::new(),
+                components: Vec::new(),
+                source_type: "git".to_string(),
+                source_url: source_url.clone(),
+                source_ref: String::new(),
+                is_git_repo: true,
+                repo_root: repo_root.to_string_lossy().into_owned(),
+                plugin_relative_path: "plugins/coding-tutor".to_string(),
+                git_root: repo_root.to_string_lossy().into_owned(),
+                confidence: "high".to_string(),
+                install_strategy: "cursor-plugin-dir".to_string(),
+                warnings: Vec::new(),
+            }],
+            vec!["cursor".to_string()],
+            None,
+        )
+        .expect("install cursor plugin");
+        let installed_root = PathBuf::from(&installed[0].root_path);
+
+        fs::write(source_root.join("commands/teach-me.md"), "# v2").expect("update command");
+        run_git_test(&repo_root, &["add", "."]);
+        run_git_test(&repo_root, &["commit", "-m", "update cursor plugin"]);
+
+        let updated = tauri::async_runtime::block_on(super::update_plugin(
+            "cursor".to_string(),
+            installed_root.to_string_lossy().into_owned(),
+        ))
+        .expect("update cursor plugin");
+
+        match previous_home {
+            Some(value) => env::set_var("HOME", value),
+            None => env::remove_var("HOME"),
+        }
+
+        assert_eq!(updated.host_tool, "cursor");
+        assert!(
+            fs::read_to_string(installed_root.join("commands/teach-me.md"))
+                .expect("read updated command")
+                .contains("v2")
+        );
+        assert_eq!(
+            run_git_test_output(&installed_root, &["remote", "get-url", "origin"]),
+            source_url
+        );
+        assert!(!home_dir.join(".skilldock/plugins/coding-tutor").exists());
 
         let _ = fs::remove_dir_all(temp_dir);
     }
@@ -13179,6 +14489,45 @@ source = "__SOURCE__"
         }
 
         assert!(!shared_package_root.exists());
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn deleting_shared_claude_plugin_with_canonical_root_keeps_package_for_codex() {
+        let _guard = TEST_ENV_LOCK.lock().expect("lock test env");
+        let temp_dir = temp_test_dir("delete-shared-claude-canonical-root");
+        let home_dir = temp_dir.join("home");
+        let (shared_package_root, claude_install_root, codex_install_root) =
+            create_shared_claude_codex_plugin_fixture(&home_dir);
+        let canonical_claude_root =
+            fs::canonicalize(&claude_install_root).expect("canonicalize claude install root");
+
+        let previous_home = env::var_os("HOME");
+        env::set_var("HOME", &home_dir);
+
+        delete_plugin(
+            "claude-code".to_string(),
+            canonical_claude_root.to_string_lossy().into_owned(),
+        )
+        .expect("delete shared claude plugin by canonical root");
+        let installed_content =
+            fs::read_to_string(home_dir.join(".claude/plugins/installed_plugins.json"))
+                .expect("read installed plugins state");
+        let settings_content =
+            fs::read_to_string(home_dir.join(".claude/settings.json")).expect("read settings");
+
+        match previous_home {
+            Some(value) => env::set_var("HOME", value),
+            None => env::remove_var("HOME"),
+        }
+
+        assert!(!claude_install_root.exists());
+        assert!(codex_install_root.exists());
+        assert!(shared_package_root.exists());
+        assert!(!installed_content.contains("coding-tutor@skilldock"));
+        assert!(!settings_content.contains("coding-tutor@skilldock"));
 
         let _ = fs::remove_dir_all(temp_dir);
     }

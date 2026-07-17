@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::env;
 use std::fs;
-use std::path::{Path, PathBuf};
 use std::io::{BufRead, BufReader};
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::thread;
@@ -25,6 +25,7 @@ const GIT_CLONE_HISTORY_DEPTH: &str = "10";
 const GIT_NETWORK_TIMEOUT: Duration = Duration::from_secs(120);
 const GIT_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 const GIT_REMOTE_PROBE_TIMEOUT: Duration = Duration::from_secs(8);
+const GIT_LS_REMOTE_EMPTY_REVISION_ERROR: &str = "远端仓库没有返回 revision";
 static REPO_CACHE_LOCKS: OnceLock<Mutex<HashMap<String, Arc<Mutex<()>>>>> = OnceLock::new();
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -983,12 +984,21 @@ fn clone_repo_for_discovery_with_ref_and_sparse_paths_internal(
     let _repo_guard = repo_lock.lock().unwrap_or_else(|error| error.into_inner());
     let repo_dir = repo_cache_directory(repo_key)?;
 
-    // 尝试复用缓存：cache 存在时用 git fetch 更新，避免重新 clone
+    // 尝试复用缓存：先比较远端 revision，只有变化时才 fetch/reset。
     if repo_dir.exists() && repo_dir.join(".git").is_dir() {
-        if try_update_discovery_cache(&repo_dir, git_ref, sparse_paths, on_progress).is_ok() {
+        if try_update_discovery_cache(
+            repo_url,
+            apply_instead_of,
+            &repo_dir,
+            git_ref,
+            sparse_paths,
+            on_progress,
+        )
+        .is_ok()
+        {
             return Ok(repo_dir);
         }
-        // fetch 失败则清理缓存后重新 clone
+        // 缓存本身不可用才清理后重新 clone
         let _ = fs::remove_dir_all(&repo_dir);
     }
 
@@ -998,7 +1008,14 @@ fn clone_repo_for_discovery_with_ref_and_sparse_paths_internal(
     fs::create_dir_all(parent_dir).map_err(|error| format!("创建仓库缓存目录失败: {error}"))?;
 
     let clone_result = if sparse_paths.is_empty() {
-        clone_repo_with_optional_branch_internal(repo_url, git_ref, &repo_dir, apply_instead_of, false, on_progress)
+        clone_repo_with_optional_branch_internal(
+            repo_url,
+            git_ref,
+            &repo_dir,
+            apply_instead_of,
+            false,
+            on_progress,
+        )
     } else {
         let sparse_paths = sparse_paths.iter().map(PathBuf::from).collect::<Vec<_>>();
         clone_repo_with_sparse_paths_internal(
@@ -1018,13 +1035,34 @@ fn clone_repo_for_discovery_with_ref_and_sparse_paths_internal(
     Ok(repo_dir)
 }
 
-/// 复用已有的发现缓存：fetch 最新内容并更新工作区。
+/// 复用已有的发现缓存：先比较 revision，只有远端变化时才更新工作区。
 fn try_update_discovery_cache(
+    repo_url: &str,
+    apply_instead_of: bool,
     repo_dir: &Path,
     git_ref: Option<&str>,
     sparse_paths: &[String],
     on_progress: Option<&CloneProgressCallback>,
 ) -> Result<(), String> {
+    let local_revision = run_git_output(repo_dir, &["rev-parse", "HEAD"])?;
+    let remote_url = if apply_instead_of {
+        resolve_git_clone_url_with_instead_of(repo_url)
+    } else {
+        repo_url.trim().to_string()
+    };
+    match remote_revision_for_ref(&remote_url, git_ref) {
+        Ok(remote_revision) if remote_revision == local_revision => {
+            apply_discovery_cache_sparse_paths(repo_dir, sparse_paths)?;
+            return Ok(());
+        }
+        Ok(_) => {}
+        Err(error) if error == GIT_LS_REMOTE_EMPTY_REVISION_ERROR => return Err(error),
+        Err(_) => {
+            apply_discovery_cache_sparse_paths(repo_dir, sparse_paths)?;
+            return Ok(());
+        }
+    }
+
     if let Some(cb) = on_progress {
         cb("正在更新本地缓存...");
     }
@@ -1044,12 +1082,49 @@ fn try_update_discovery_cache(
     }
     run_git_in_dir(repo_dir, &fetch_args)?;
     run_git_in_dir(repo_dir, &["reset", "--hard", "FETCH_HEAD"])?;
-    // 稀疏检出：重新应用路径过滤
+    apply_discovery_cache_sparse_paths(repo_dir, sparse_paths)
+}
+
+fn apply_discovery_cache_sparse_paths(
+    repo_dir: &Path,
+    sparse_paths: &[String],
+) -> Result<(), String> {
     if !sparse_paths.is_empty() {
-        let _ = configure_sparse_checkout(repo_dir, sparse_paths, false);
-        let _ = run_git_in_dir(repo_dir, &["checkout", "--quiet"]);
+        configure_sparse_checkout(repo_dir, sparse_paths, false)?;
+        run_git_in_dir(repo_dir, &["checkout", "--quiet"])?;
     }
     Ok(())
+}
+
+fn remote_revision_for_ref(clone_url: &str, git_ref: Option<&str>) -> Result<String, String> {
+    let mut command = Command::new("git");
+    configure_git_network_command(&mut command);
+    command.arg("ls-remote").arg(clone_url.trim());
+    let ref_arg;
+    if let Some(value) = git_ref.filter(|value| !value.trim().is_empty()) {
+        ref_arg = if value.starts_with("refs/") {
+            value.trim().to_string()
+        } else {
+            format!("refs/heads/{}", value.trim())
+        };
+        command.arg(&ref_arg);
+    } else {
+        command.arg("HEAD");
+    }
+    let output = output_with_timeout(command, GIT_COMMAND_TIMEOUT, "git ls-remote")?;
+    if !output.status.success() {
+        return Err(format!(
+            "执行 git ls-remote 失败: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    stdout
+        .lines()
+        .filter_map(|line| line.split_whitespace().next())
+        .find(|revision| !revision.trim().is_empty())
+        .map(|revision| revision.to_string())
+        .ok_or_else(|| GIT_LS_REMOTE_EMPTY_REVISION_ERROR.to_string())
 }
 
 #[allow(dead_code)]
@@ -1173,7 +1248,14 @@ fn ensure_repo_skill_with_ref_and_sparse_paths_internal(
         .map_err(|error| format!("创建 skill library 目录失败: {error}"))?;
 
     if sparse_paths.is_empty() {
-        clone_repo_with_optional_branch_internal(repo_url, git_ref, &skill_dir, apply_instead_of, true, on_progress)?;
+        clone_repo_with_optional_branch_internal(
+            repo_url,
+            git_ref,
+            &skill_dir,
+            apply_instead_of,
+            true,
+            on_progress,
+        )?;
     } else {
         let path_bufs = sparse_paths.iter().map(PathBuf::from).collect::<Vec<_>>();
         clone_repo_with_sparse_paths_internal(
@@ -1201,21 +1283,34 @@ pub fn clone_shared_install_batch_repo(
     let _repo_guard = repo_lock.lock().unwrap_or_else(|error| error.into_inner());
     let batch_dir = repo_cache_directory(batch_cache_key)?;
     if batch_dir.exists() {
-        fs::remove_dir_all(&batch_dir)
-            .map_err(|error| format!("清理共享安装缓存失败: {error}"))?;
+        fs::remove_dir_all(&batch_dir).map_err(|error| format!("清理共享安装缓存失败: {error}"))?;
     }
 
     let parent_dir = batch_dir
         .parent()
         .ok_or_else(|| "无法确定共享安装缓存的父目录".to_string())?;
-    fs::create_dir_all(parent_dir)
-        .map_err(|error| format!("创建共享安装缓存目录失败: {error}"))?;
+    fs::create_dir_all(parent_dir).map_err(|error| format!("创建共享安装缓存目录失败: {error}"))?;
 
     let clone_result = if sparse_paths.is_empty() {
-        clone_repo_with_optional_branch_internal(clone_url, git_ref, &batch_dir, false, true, on_progress)
+        clone_repo_with_optional_branch_internal(
+            clone_url,
+            git_ref,
+            &batch_dir,
+            false,
+            true,
+            on_progress,
+        )
     } else {
         let path_bufs = sparse_paths.iter().map(PathBuf::from).collect::<Vec<_>>();
-        clone_repo_with_sparse_paths_internal(clone_url, git_ref, &batch_dir, &path_bufs, false, true, on_progress)
+        clone_repo_with_sparse_paths_internal(
+            clone_url,
+            git_ref,
+            &batch_dir,
+            &path_bufs,
+            false,
+            true,
+            on_progress,
+        )
     };
     if let Err(error) = clone_result {
         let _ = fs::remove_dir_all(&batch_dir);
@@ -1574,7 +1669,15 @@ fn clone_repo_with_sparse_paths(
     target_dir: &Path,
     sparse_paths: &[PathBuf],
 ) -> Result<(), String> {
-    clone_repo_with_sparse_paths_internal(source, branch, target_dir, sparse_paths, true, false, None)
+    clone_repo_with_sparse_paths_internal(
+        source,
+        branch,
+        target_dir,
+        sparse_paths,
+        true,
+        false,
+        None,
+    )
 }
 
 fn clone_repo_with_sparse_paths_internal(
@@ -1645,24 +1748,13 @@ fn materialize_repo_from_local_batch_internal(
 }
 
 fn copy_skill_repo_dir_all(source: &Path, target: &Path) -> Result<(), String> {
-    fs::create_dir_all(target).map_err(|error| {
-        format!(
-            "创建 skill 目录失败（{}）: {error}",
-            target.display()
-        )
-    })?;
-    let entries = fs::read_dir(source).map_err(|error| {
-        format!(
-            "读取 skill 源目录失败（{}）: {error}",
-            source.display()
-        )
-    })?;
+    fs::create_dir_all(target)
+        .map_err(|error| format!("创建 skill 目录失败（{}）: {error}", target.display()))?;
+    let entries = fs::read_dir(source)
+        .map_err(|error| format!("读取 skill 源目录失败（{}）: {error}", source.display()))?;
     for entry in entries {
         let entry = entry.map_err(|error| {
-            format!(
-                "读取 skill 源目录条目失败（{}）: {error}",
-                source.display()
-            )
+            format!("读取 skill 源目录条目失败（{}）: {error}", source.display())
         })?;
         let source_path = entry.path();
         let target_path = target.join(entry.file_name());
@@ -2885,8 +2977,9 @@ fn git_worktree_root(path: &Path) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::{
-        clone_branch_for_resolved_path, configure_hidden_subprocess, create_skill_symlink,
-        get_tool_skills_path, git_executable, ignore_unnecessary_files,
+        clone_branch_for_resolved_path,
+        clone_repo_for_discovery_resolved_with_ref_and_sparse_paths, configure_hidden_subprocess,
+        create_skill_symlink, get_tool_skills_path, git_executable, ignore_unnecessary_files,
         migrate_legacy_skill_symlinks, parse_git_url_instead_of_rules, parse_market_source_url,
         reconcile_tool_skill_symlinks, remote_clone_candidates, remove_reserved_workspace_entries,
         remove_skill_symlink, repo_cache_lock, rewrite_git_clone_url_with_instead_of_rules,
@@ -2901,6 +2994,7 @@ mod tests {
     use crate::workspace::TEST_ENV_LOCK;
     use std::fs;
     use std::path::{Path, PathBuf};
+    use std::process::Command;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Barrier};
     use std::thread;
@@ -2918,6 +3012,46 @@ mod tests {
         ));
         fs::create_dir_all(&temp_dir).expect("create temp test dir");
         temp_dir
+    }
+
+    fn run_git_test(current_dir: &std::path::Path, args: &[&str]) {
+        let status = Command::new("git")
+            .current_dir(current_dir)
+            .args(args)
+            .status()
+            .expect("git command should run");
+        assert!(status.success(), "git {:?} should succeed", args);
+    }
+
+    fn seed_remote_repo(temp_dir: &std::path::Path, label: &str) -> (PathBuf, PathBuf) {
+        let remote_dir = temp_dir.join(format!("{label}.git"));
+        let seed_dir = temp_dir.join(format!("{label}-seed"));
+        fs::create_dir_all(&seed_dir).expect("create seed repo dir");
+        run_git_test(
+            temp_dir,
+            &["init", "--bare", remote_dir.to_string_lossy().as_ref()],
+        );
+        run_git_test(&remote_dir, &["symbolic-ref", "HEAD", "refs/heads/main"]);
+        run_git_test(&seed_dir, &["init", "-b", "main"]);
+        run_git_test(&seed_dir, &["config", "user.name", "SkillDock Test"]);
+        run_git_test(
+            &seed_dir,
+            &["config", "user.email", "skilldock@example.com"],
+        );
+        fs::write(seed_dir.join("README.md"), "# v1").expect("write seed readme");
+        run_git_test(&seed_dir, &["add", "."]);
+        run_git_test(&seed_dir, &["commit", "-m", "v1"]);
+        run_git_test(
+            &seed_dir,
+            &[
+                "remote",
+                "add",
+                "origin",
+                remote_dir.to_string_lossy().as_ref(),
+            ],
+        );
+        run_git_test(&seed_dir, &["push", "origin", "main"]);
+        (remote_dir, seed_dir)
     }
 
     #[test]
@@ -3070,6 +3204,105 @@ mod tests {
         first.join().expect("first thread should finish");
         second.join().expect("second thread should finish");
         assert!(!second_entered_during_first_hold.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn discovery_repo_cache_skips_fetch_when_remote_revision_matches() {
+        let _guard = TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let temp_dir = temp_test_dir("discovery-cache-same-revision");
+        let home_dir = temp_dir.join("home");
+        fs::create_dir_all(&home_dir).expect("create home dir");
+        let (remote_dir, _) = seed_remote_repo(&temp_dir, "remote");
+        let previous_home = std::env::var_os("HOME");
+        unsafe {
+            std::env::set_var("HOME", &home_dir);
+        }
+
+        let repo_dir = clone_repo_for_discovery_resolved_with_ref_and_sparse_paths(
+            remote_dir.to_string_lossy().as_ref(),
+            Some("main"),
+            "same-revision",
+            &[],
+            None,
+        )
+        .expect("clone discovery cache");
+        let fetch_head = repo_dir.join(".git/FETCH_HEAD");
+        let _ = fs::remove_file(&fetch_head);
+
+        clone_repo_for_discovery_resolved_with_ref_and_sparse_paths(
+            remote_dir.to_string_lossy().as_ref(),
+            Some("main"),
+            "same-revision",
+            &[],
+            None,
+        )
+        .expect("reuse discovery cache");
+
+        match previous_home {
+            Some(value) => unsafe {
+                std::env::set_var("HOME", value);
+            },
+            None => unsafe {
+                std::env::remove_var("HOME");
+            },
+        }
+
+        assert!(!fetch_head.exists());
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn discovery_repo_cache_fetches_and_resets_when_remote_revision_changes() {
+        let _guard = TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let temp_dir = temp_test_dir("discovery-cache-new-revision");
+        let home_dir = temp_dir.join("home");
+        fs::create_dir_all(&home_dir).expect("create home dir");
+        let (remote_dir, seed_dir) = seed_remote_repo(&temp_dir, "remote");
+        let previous_home = std::env::var_os("HOME");
+        unsafe {
+            std::env::set_var("HOME", &home_dir);
+        }
+
+        let repo_dir = clone_repo_for_discovery_resolved_with_ref_and_sparse_paths(
+            remote_dir.to_string_lossy().as_ref(),
+            Some("main"),
+            "new-revision",
+            &[],
+            None,
+        )
+        .expect("clone discovery cache");
+        fs::write(seed_dir.join("README.md"), "# v2").expect("write updated readme");
+        run_git_test(&seed_dir, &["add", "."]);
+        run_git_test(&seed_dir, &["commit", "-m", "v2"]);
+        run_git_test(&seed_dir, &["push", "origin", "main"]);
+
+        clone_repo_for_discovery_resolved_with_ref_and_sparse_paths(
+            remote_dir.to_string_lossy().as_ref(),
+            Some("main"),
+            "new-revision",
+            &[],
+            None,
+        )
+        .expect("update discovery cache");
+
+        match previous_home {
+            Some(value) => unsafe {
+                std::env::set_var("HOME", value);
+            },
+            None => unsafe {
+                std::env::remove_var("HOME");
+            },
+        }
+
+        assert_eq!(
+            fs::read_to_string(repo_dir.join("README.md")).expect("read updated cache"),
+            "# v2"
+        );
+        let _ = fs::remove_dir_all(temp_dir);
     }
 
     #[test]

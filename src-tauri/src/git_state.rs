@@ -159,7 +159,10 @@ pub fn enrich_skill_with_git_state(skill: &SkillSummary) -> SkillSummary {
 
 /// 刚 clone 完的 skill 快速 enrich：仅跑一次 `git log`。
 /// 跳过 `git status`（工作区刚 clone 必定 clean）和 remote 元数据查询（remote == local HEAD）。
-pub fn enrich_freshly_installed_skill(skill: &SkillSummary, known_branch: Option<&str>) -> SkillSummary {
+pub fn enrich_freshly_installed_skill(
+    skill: &SkillSummary,
+    known_branch: Option<&str>,
+) -> SkillSummary {
     let skill_path = Path::new(&skill.local_path);
 
     // 取 known_branch 作为分支名，无需再跑 rev-parse --abbrev-ref HEAD
@@ -185,9 +188,21 @@ pub fn enrich_freshly_installed_skill(skill: &SkillSummary, known_branch: Option
         .as_deref()
         .map(|raw| {
             let mut parts = raw.splitn(3, '\x00');
-            let hash = parts.next().map(str::trim).filter(|s| !s.is_empty()).map(ToOwned::to_owned);
-            let date = parts.next().map(str::trim).filter(|s| !s.is_empty()).map(ToOwned::to_owned);
-            let author = parts.next().map(str::trim).filter(|s| !s.is_empty()).map(ToOwned::to_owned);
+            let hash = parts
+                .next()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(ToOwned::to_owned);
+            let date = parts
+                .next()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(ToOwned::to_owned);
+            let author = parts
+                .next()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(ToOwned::to_owned);
             (hash, date, author)
         })
         .unwrap_or((None, None, None));

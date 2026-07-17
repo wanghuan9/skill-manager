@@ -23,6 +23,11 @@ import {
   updatePlugin,
 } from "@/features/skills/api/skill-client";
 import {
+  buildInitialCollapsedDirectories,
+  collectAncestorDirectoryPaths,
+  entryIndent,
+  hasCollapsedAncestor,
+  parentDirectoryPath,
   SkillFileContentSurface,
   SkillFileViewModeToggle,
   type SkillFileViewMode,
@@ -1095,10 +1100,6 @@ function getPluginDisplayDirectoryPath(
   return getPluginOpenRootPath(plugin, activeHost, allPlugins);
 }
 
-function shouldShowPluginBranch(plugin: PluginSummary) {
-  return plugin.sourceType !== "marketplace" && Boolean(plugin.sourceRef);
-}
-
 function shouldShowPluginGitBadge(plugin: PluginSummary, sourceValue: string) {
   return plugin.sourceType !== "marketplace" && isGitSourceValue(sourceValue);
 }
@@ -1389,24 +1390,6 @@ function getPluginPreviewPath(
   return component.id;
 }
 
-function getPluginPreviewItemLabel(path: string, fallbackLabel: string) {
-  const segments = path.split("/").filter(Boolean);
-  if (segments.length === 0) {
-    return fallbackLabel;
-  }
-
-  const fileName = segments.at(-1) ?? "";
-  if (
-    fileName === "SKILL.md"
-    || fileName === "README.md"
-    || fileName === "README.mdx"
-  ) {
-    return segments.at(-2) ?? fallbackLabel;
-  }
-
-  return fileName;
-}
-
 function isHttpUrl(value: string) {
   try {
     const parsedUrl = new URL(value);
@@ -1453,6 +1436,7 @@ export function PluginsRoute(props: { onGoInstall?: () => void } = {}) {
   const [actionErrorMessage, setActionErrorMessage] = useState("");
   const [previewState, setPreviewState] = useState<PreviewState | null>(null);
   const [previewViewMode, setPreviewViewMode] = useState<SkillFileViewMode>("preview");
+  const [previewCollapsedDirectories, setPreviewCollapsedDirectories] = useState<Record<string, boolean>>({});
   const [isPreviewDirty, setIsPreviewDirty] = useState(false);
   const [isPreviewSaving, setIsPreviewSaving] = useState(false);
   const [query, setQuery] = useState("");
@@ -2135,6 +2119,7 @@ export function PluginsRoute(props: { onGoInstall?: () => void } = {}) {
   ) {
     setPreviewViewMode("preview");
     setIsPreviewDirty(false);
+    setPreviewCollapsedDirectories({});
     setPreviewState({
       plugin,
       component,
@@ -2156,6 +2141,7 @@ export function PluginsRoute(props: { onGoInstall?: () => void } = {}) {
         isLoading: false,
         errorMessage: "",
       });
+      setPreviewCollapsedDirectories(buildInitialCollapsedDirectories(preview.entries, preview.path));
     } catch (error) {
       console.warn("Failed to load plugin component preview", error);
       setPreviewState({
@@ -2198,7 +2184,7 @@ export function PluginsRoute(props: { onGoInstall?: () => void } = {}) {
     try {
       const savedPreview = await savePluginComponentPreview({
         pluginRoot: previewState.plugin.rootPath,
-        componentId: previewState.component.id,
+        componentId: previewState.preview.path,
         assetType: previewState.component.assetType,
         content: previewState.preview.content,
       });
@@ -2297,6 +2283,69 @@ export function PluginsRoute(props: { onGoInstall?: () => void } = {}) {
           next.delete(targetPluginKey);
         }
         return next;
+      });
+    }
+  }
+
+  function handleTogglePreviewDirectory(path: string) {
+    setPreviewCollapsedDirectories((current) => ({
+      ...current,
+      [path]: !current[path],
+    }));
+  }
+
+  async function handleSelectPreviewFile(path: string) {
+    if (
+      !previewState
+      || !previewState.preview
+      || path === previewState.preview.path
+      || isPreviewSaving
+    ) {
+      return;
+    }
+
+    const { plugin, component } = previewState;
+    setPreviewState({
+      plugin,
+      component,
+      preview: previewState.preview,
+      isLoading: true,
+      errorMessage: "",
+    });
+
+    try {
+      const preview = await fetchPluginComponentPreview({
+        pluginRoot: plugin.rootPath,
+        componentId: path,
+        assetType: component.assetType,
+      });
+      setPreviewState({
+        plugin,
+        component,
+        preview,
+        isLoading: false,
+        errorMessage: "",
+      });
+      setPreviewCollapsedDirectories((current) => {
+        const next = { ...current };
+        for (const directoryPath of collectAncestorDirectoryPaths(path)) {
+          next[directoryPath] = false;
+        }
+        return next;
+      });
+      setIsPreviewDirty(false);
+    } catch (error) {
+      console.warn("Failed to load plugin component preview file", error);
+      setPreviewState((current) => {
+        if (!current) {
+          return current;
+        }
+
+        return {
+          ...current,
+          isLoading: false,
+          errorMessage: t("plugins.preview.error.load"),
+        };
       });
     }
   }
@@ -2565,9 +2614,7 @@ export function PluginsRoute(props: { onGoInstall?: () => void } = {}) {
       plugins,
       activeHost === "all",
     );
-    const shouldShowPluginMetadataGrid = shouldShowPluginBranch(plugin)
-      || !isAllTabAggregate
-      || (!isAllTabAggregate && relatedHostCoverageEntries.length > 1);
+    const shouldShowPluginMetadataGrid = !isAllTabAggregate;
 
     return (
       <div className="plugins-page__detail-panel">
@@ -2617,12 +2664,6 @@ export function PluginsRoute(props: { onGoInstall?: () => void } = {}) {
           </dl>
           {shouldShowPluginMetadataGrid ? (
             <dl className="tool-list-row__detail-grid plugins-page__metadata-grid">
-              {shouldShowPluginBranch(plugin) ? (
-                <div>
-                  <dt>{t("plugins.details.branch")}</dt>
-                  <dd>{plugin.sourceRef}</dd>
-                </div>
-              ) : null}
               {!isAllTabAggregate ? (
                 <div>
                   <dt>{t("plugins.details.pluginDirectory")}</dt>
@@ -2758,9 +2799,20 @@ export function PluginsRoute(props: { onGoInstall?: () => void } = {}) {
   const selectedPreviewPath = previewState
     ? getPluginPreviewPath(previewState.preview, previewState.component)
     : "";
-  const selectedPreviewLabel = previewState
-    ? getPluginPreviewItemLabel(selectedPreviewPath, previewState.component.name)
-    : "";
+  const previewEntries = previewState?.preview?.entries ?? [];
+  const previewFileEntries = previewEntries.filter((entry) => entry.entryType === "file");
+  const visiblePreviewEntries = previewEntries.filter(
+    (entry) => entry.depth === 0 || !hasCollapsedAncestor(entry, previewCollapsedDirectories),
+  );
+  const previewDirectoryChildCounts = new Map<string, number>();
+  for (const entry of previewEntries) {
+    if (!entry.path) {
+      continue;
+    }
+
+    const parentPath = parentDirectoryPath(entry.path);
+    previewDirectoryChildCounts.set(parentPath, (previewDirectoryChildCounts.get(parentPath) ?? 0) + 1);
+  }
 
   return (
     <div className="skills-page plugins-page">
@@ -3045,39 +3097,55 @@ export function PluginsRoute(props: { onGoInstall?: () => void } = {}) {
             </div>
             <div className="skill-file-dialog__body plugins-page__preview-body">
               <aside className="skill-file-dialog__sidebar">
-                <div
-                  className="skill-file-dialog__tree-item skill-file-dialog__tree-item--directory is-root"
-                  style={{ paddingLeft: "16px" }}
-                >
-                  <span aria-hidden="true">⌄</span>
-                  <span>{getPluginDisplayName(previewState.plugin)}</span>
-                </div>
-                <button
-                  className="skill-file-dialog__tree-item skill-file-dialog__tree-item--file is-selected"
-                  style={{ paddingLeft: "30px" }}
-                  type="button"
-                >
-                  <span aria-hidden="true">📄</span>
-                  <span>{selectedPreviewLabel}</span>
-                </button>
+                {visiblePreviewEntries.map((entry) =>
+                  entry.entryType === "directory" ? (
+                    entry.depth === 0 ? (
+                      <div
+                        key={`${entry.path}-${entry.entryType}`}
+                        className="skill-file-dialog__tree-item skill-file-dialog__tree-item--directory is-root"
+                        style={entryIndent(entry)}
+                      >
+                        <span aria-hidden="true">⌄</span>
+                        <span>{entry.name}</span>
+                      </div>
+                    ) : (
+                      <button
+                        key={`${entry.path}-${entry.entryType}`}
+                        className="skill-file-dialog__tree-item skill-file-dialog__tree-item--directory"
+                        style={entryIndent(entry)}
+                        type="button"
+                        onClick={() => handleTogglePreviewDirectory(entry.path)}
+                        aria-expanded={!previewCollapsedDirectories[entry.path]}
+                        aria-label={t(previewCollapsedDirectories[entry.path] ? "skill.files.expand" : "skill.files.collapse", { name: entry.name })}
+                      >
+                        <span aria-hidden="true">
+                          {previewDirectoryChildCounts.get(entry.path) ? (previewCollapsedDirectories[entry.path] ? "›" : "⌄") : "•"}
+                        </span>
+                        <span>{entry.name}</span>
+                      </button>
+                    )
+                  ) : (
+                    <button
+                      key={entry.path}
+                      className={`skill-file-dialog__tree-item skill-file-dialog__tree-item--file${
+                        entry.path === selectedPreviewPath ? " is-selected" : ""
+                      }`}
+                      style={entryIndent(entry)}
+                      type="button"
+                      onClick={() => void handleSelectPreviewFile(entry.path)}
+                    >
+                      <span aria-hidden="true">📄</span>
+                      <span>{entry.name}</span>
+                    </button>
+                  ),
+                )}
               </aside>
               <section className="skill-file-dialog__editor">
                 <SkillFileContentSurface
                   selectedPath={selectedPreviewPath}
                   content={previewState.preview?.content ?? ""}
                   viewMode={previewViewMode}
-                  fileEntries={
-                    previewState.preview
-                      ? [
-                          {
-                            path: selectedPreviewPath,
-                            name: selectedPreviewLabel,
-                            entryType: "file",
-                            depth: 0,
-                          },
-                        ]
-                      : []
-                  }
+                  fileEntries={previewFileEntries}
                   isLoading={previewState.isLoading}
                   isSaving={false}
                   hasDirtyChanges={isPreviewDirty}
@@ -3086,7 +3154,7 @@ export function PluginsRoute(props: { onGoInstall?: () => void } = {}) {
                   emptyLabel={t("plugins.preview.empty")}
                   emptyMarkdownLabel={t("plugins.preview.emptyMarkdown")}
                   onContentChange={updatePreviewContent}
-                  onSelectFile={() => undefined}
+                  onSelectFile={(path) => void handleSelectPreviewFile(path)}
                 />
                 {previewState.isLoading ? (
                   <p className="dialog-note">{t("plugins.preview.loading")}</p>
