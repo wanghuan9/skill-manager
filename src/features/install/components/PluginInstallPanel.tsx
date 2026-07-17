@@ -17,6 +17,10 @@ import { cachePlugins, getCachedPlugins } from "@/features/skills/utils/plugin-c
 import { formatSkillDescription } from "@/features/skills/utils/skill-description";
 import { getToolLogoUrl } from "@/features/skills/utils/tool-logo";
 import { isToolInstalledStatus } from "@/features/skills/utils/tool-status";
+import {
+  normalizePluginAggregateIdentity,
+  normalizePluginSourceIdentity,
+} from "@/features/skills/utils/plugin-identity";
 import type {
   GitBranchOption,
   PluginAssetType,
@@ -283,16 +287,6 @@ function defaultSelectedHostsByPluginRoot(
   );
 }
 
-function normalizePluginAggregateIdentity(value: string | undefined) {
-  const normalized = value?.trim().toLowerCase();
-  if (!normalized) {
-    return "";
-  }
-  return normalized
-    .replace(/\.git$/u, "")
-    .replace(/\/+$/u, "");
-}
-
 function getPluginInstallInstanceKey(plugin: PluginSummary) {
   const instancePath = plugin.displayRootPath?.trim() || plugin.rootPath.trim() || plugin.id;
   return `${plugin.hostTool}::${instancePath}::${plugin.id}`;
@@ -353,7 +347,7 @@ function relativePluginPath(probe: PluginProbeResult) {
 function buildProbeAggregateKeys(probe: PluginProbeResult) {
   const keys = new Set<string>();
   const canonicalName = probeCanonicalName(probe);
-  const sourceIdentity = normalizePluginAggregateIdentity(probe.sourceUrl);
+  const sourceIdentity = normalizePluginSourceIdentity(probe.sourceUrl);
   const repoIdentity = normalizePluginAggregateIdentity(probe.repoRoot || probe.gitRoot);
   const relativePath = normalizePluginAggregateIdentity(relativePluginPath(probe));
 
@@ -376,7 +370,7 @@ function buildProbeAggregateKeys(probe: PluginProbeResult) {
 function buildInstalledPluginAggregateKeys(plugin: PluginSummary) {
   const keys = new Set<string>();
   const canonicalName = installedPluginCanonicalName(plugin);
-  const sourceIdentity = normalizePluginAggregateIdentity(plugin.sourceUrl);
+  const sourceIdentity = normalizePluginSourceIdentity(plugin.sourceUrl);
   const packageIdentity = normalizePluginAggregateIdentity(plugin.packageId);
   const repoIdentity = normalizePluginAggregateIdentity(plugin.repoRootPath);
   const sourceLabelIdentity = normalizePluginAggregateIdentity(plugin.sourceLabel);
@@ -414,8 +408,8 @@ function keysIntersect(left: Set<string>, right: Set<string>) {
 }
 
 function hasStrongIdentityMatch(probe: PluginProbeResult, plugin: PluginSummary) {
-  const probeSourceIdentity = normalizePluginAggregateIdentity(probe.sourceUrl);
-  const pluginSourceIdentity = normalizePluginAggregateIdentity(plugin.sourceUrl);
+  const probeSourceIdentity = normalizePluginSourceIdentity(probe.sourceUrl);
+  const pluginSourceIdentity = normalizePluginSourceIdentity(plugin.sourceUrl);
   if (probeSourceIdentity && pluginSourceIdentity) {
     return probeSourceIdentity === pluginSourceIdentity;
   }
@@ -445,10 +439,11 @@ function buildInstalledPluginHostsByProbeRoot(
     probes.map((probe) => {
       const probeKeys = buildProbeAggregateKeys(probe);
       const matchedHostTools = installedPlugins
-        .filter((plugin) => probe.compatibleHostTools.includes(plugin.hostTool))
         .filter((plugin) => hasStrongIdentityMatch(probe, plugin))
         .filter((plugin) => keysIntersect(probeKeys, buildInstalledPluginAggregateKeys(plugin)))
-        .map((plugin) => plugin.hostTool);
+        .flatMap((plugin) => [plugin.hostTool, ...(plugin.relatedHostTools ?? [])])
+        .filter(isPluginHostTool)
+        .filter((hostTool) => probe.compatibleHostTools.includes(hostTool));
       return [probe.pluginRoot, new Set<PluginHostTool>(matchedHostTools)];
     }),
   );

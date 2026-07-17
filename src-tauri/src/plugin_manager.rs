@@ -337,6 +337,7 @@ const PLUGIN_STATUS_CLEAN: &str = "clean";
 const PLUGIN_STATUS_UPDATE_AVAILABLE: &str = "update-available";
 const PLUGIN_STATUS_PENDING_PUSH: &str = "pending-push";
 const PLUGIN_STATUS_DIVERGED: &str = "diverged";
+const CODEX_APP_NAMES: &[&str] = &["Codex", "ChatGPT"];
 
 #[derive(Debug, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -4306,7 +4307,7 @@ fn plugin_host_detection_spec(host_tool: &str) -> Option<PluginHostDetectionSpec
         }),
         "codex" => Some(PluginHostDetectionSpec {
             label: "Codex",
-            app_names: &["Codex"],
+            app_names: CODEX_APP_NAMES,
             executable_names: &["codex"],
         }),
         "cursor" => Some(PluginHostDetectionSpec {
@@ -9743,6 +9744,12 @@ mod tests {
         let value = current_timestamp_rfc3339();
         assert!(value.ends_with('Z'));
         assert!(value.contains('T'));
+    }
+
+    #[test]
+    fn codex_plugin_host_accepts_chatgpt_app_name() {
+        let spec = super::plugin_host_detection_spec("codex").expect("resolve Codex host");
+        assert_eq!(spec.app_names, &["Codex", "ChatGPT"]);
     }
 
     fn run_git_test(current_dir: &Path, args: &[&str]) {

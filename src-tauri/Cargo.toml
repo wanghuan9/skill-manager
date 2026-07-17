@@ -1,8 +1,8 @@
 [package]
-name = "skill-manager"
+name = "skilldock"
 version = "0.1.20"
-description = "macOS skill manager"
-authors = ["wanghuan"]
+description = "SkillDock desktop app"
+authors = ["SkillDock"]
 license = ""
 repository = ""
 edition = "2021"
@@ -11,7 +11,7 @@ rust-version = "1.77.2"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [lib]
-name = "skill_manager_lib"
+name = "skilldock_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

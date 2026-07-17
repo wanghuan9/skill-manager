@@ -225,64 +225,22 @@ test("marks already installed plugin hosts and still allows installing remaining
   }]);
   const installedPlugins: PluginSummary[] = [
     {
-      id: "codex:example-plugin",
+      id: "claude-code:example-plugin",
       packageId: "example-plugin",
       manifestName: "example-plugin",
       name: "example-plugin",
       description: "",
-      hostTool: "codex",
-      relatedHostTools: ["claude-code"],
-      kind: "plugin-repo",
-      rootPath: "/Users/demo/.codex/plugins/example-plugin",
-      displayRootPath: "/Users/demo/.codex/plugins/example-plugin",
-      repoRootPath: "/Users/demo/.codex/plugins/example-plugin",
-      pluginRelativePath: "example-plugin",
-      manifestPath: "/Users/demo/.codex/plugins/example-plugin/.codex-plugin/plugin.json",
-      sourceType: "git",
-      sourceLabel: "skilldock",
-      sourceUrl: "https://git.example.com/example-org/example-repo",
-      sourceRef: "master",
-      sourceRevision: "abc123",
-      currentVersion: "1.0.0",
-      currentBranch: "master",
-      currentCommit: "abc123",
-      collabStatus: "clean",
-      statusText: "",
-      isGitRepo: true,
-      updateMode: "auto",
-      updateStrategy: "git",
-      updateAvailable: false,
-      baselineHash: "",
-      localModified: false,
-      installedAt: "1",
-      updatedAt: "1",
-      remoteUpdatedAt: "",
-      localUpdatedAt: "",
-      lastEditor: "",
-      lastScannedAt: "1",
-      status: "ready",
-      installState: "installed",
-      installSource: "skilldock",
-      enabledState: "enabled",
-      scopes: [],
-      components: [],
-    },
-    {
-      id: "claude-code:example-plugin",
-      packageId: "example-plugin",
-      name: "example-plugin",
-      description: "",
       hostTool: "claude-code",
-      relatedHostTools: ["codex"],
+      relatedHostTools: ["cursor"],
       kind: "plugin-repo",
-      rootPath: "/Users/demo/.claude/plugins/example-plugin",
-      displayRootPath: "/Users/demo/.claude/plugins/example-plugin",
-      repoRootPath: "/Users/demo/.claude/plugins/example-plugin",
+      rootPath: "/Users/demo/.skilldock/plugins/example-plugin/example-plugin",
+      displayRootPath: "/Users/demo/.claude/plugins/marketplaces/skilldock/plugins/example-plugin",
+      repoRootPath: "/Users/demo/.skilldock/plugins/example-plugin",
       pluginRelativePath: "example-plugin",
-      manifestPath: "/Users/demo/.claude/plugins/example-plugin/.claude-plugin/plugin.json",
+      manifestPath: "/Users/demo/.skilldock/plugins/example-plugin/example-plugin/.claude-plugin/plugin.json",
       sourceType: "git",
       sourceLabel: "skilldock",
-      sourceUrl: "https://git.example.com/example-org/example-repo",
+      sourceUrl: "https://git.example.com/example-org/example-repo/tree/master/example-plugin",
       sourceRef: "master",
       sourceRevision: "abc123",
       currentVersion: "1.0.0",
@@ -322,16 +280,16 @@ test("marks already installed plugin hosts and still allows installing remaining
   });
   await userEvent.click(screen.getByRole("button", { name: "识别插件" }));
 
-  const codexButton = await screen.findByRole("button", { name: "example-plugin 已安装到 Codex" });
+  const codexButton = await screen.findByRole("button", { name: /选择 Codex 作为 example-plugin 安装宿主/ });
   const claudeButton = screen.getByRole("button", { name: "example-plugin 已安装到 Claude Code" });
-  const cursorButton = screen.getByRole("button", { name: /选择 Cursor 作为 example-plugin 安装宿主/ });
+  const cursorButton = screen.getByRole("button", { name: "example-plugin 已安装到 Cursor" });
 
-  expect(codexButton).toHaveAttribute("aria-disabled", "true");
-  expect(codexButton).toHaveAttribute("data-tooltip", "Codex · 已安装");
+  expect(codexButton).toHaveAttribute("aria-disabled", "false");
+  expect(codexButton).toHaveAttribute("aria-pressed", "true");
   expect(claudeButton).toHaveAttribute("aria-disabled", "true");
   expect(claudeButton).toHaveAttribute("data-tooltip", "Claude Code · 已安装");
-  expect(cursorButton).toHaveAttribute("aria-disabled", "false");
-  expect(cursorButton).toHaveAttribute("aria-pressed", "true");
+  expect(cursorButton).toHaveAttribute("aria-disabled", "true");
+  expect(cursorButton).toHaveAttribute("data-tooltip", "Cursor · 已安装");
   expect(screen.getByRole("button", { name: "选择插件 example-plugin" })).toHaveClass("is-selected");
   expect(screen.getByRole("button", { name: "安装到选中宿主" })).toBeEnabled();
 
@@ -340,7 +298,7 @@ test("marks already installed plugin hosts and still allows installing remaining
   await waitFor(() => {
     expect(installSpy).toHaveBeenCalledWith({
       probes: [expect.objectContaining({ pluginRoot: "/tmp/example-repo/example-plugin" })],
-      hostTools: ["cursor"],
+      hostTools: ["codex"],
     });
   });
 

@@ -38,11 +38,11 @@ fn run_probe() -> Result<(), String> {
     let result = (|| {
         fs::create_dir_all(&target).map_err(|error| error.to_string())?;
         fs::write(target.join("SKILL.md"), "# research").map_err(|error| error.to_string())?;
-        skill_manager_lib::create_windows_directory_junction(&target, &junction)?;
+        skilldock_lib::create_windows_directory_junction(&target, &junction)?;
         if !junction.join("SKILL.md").is_file() {
             return Err("junction target file is not readable".to_string());
         }
-        skill_manager_lib::remove_skill_symlink(
+        skilldock_lib::remove_skill_symlink(
             junction
                 .parent()
                 .ok_or_else(|| "junction parent is missing".to_string())?
@@ -60,7 +60,7 @@ fn run_probe() -> Result<(), String> {
         fs::create_dir_all(&command_dir).map_err(|error| error.to_string())?;
         let command_path = command_dir.join("skilldock-probe.cmd");
         fs::write(&command_path, "@echo off\r\necho %1\r\n").map_err(|error| error.to_string())?;
-        let resolved = skill_manager_lib::resolve_command_path(
+        let resolved = skilldock_lib::resolve_command_path(
             "skilldock-probe",
             std::slice::from_ref(&command_dir),
         )
@@ -71,7 +71,7 @@ fn run_probe() -> Result<(), String> {
                 resolved.display()
             ));
         }
-        let output = skill_manager_lib::command_for_executable(&resolved)
+        let output = skilldock_lib::command_for_executable(&resolved)
             .arg("probe-value")
             .output()
             .map_err(|error| format!("failed to run Windows .cmd probe: {error}"))?;
@@ -85,7 +85,7 @@ fn run_probe() -> Result<(), String> {
             (std::env::var_os("USERPROFILE"), std::env::var_os("APPDATA"))
         {
             let resolved_appdata =
-                skill_manager_lib::application_support_dir_for_home(&PathBuf::from(home));
+                skilldock_lib::application_support_dir_for_home(&PathBuf::from(home));
             if resolved_appdata != PathBuf::from(appdata) {
                 return Err("Windows application support directory did not use APPDATA".to_string());
             }

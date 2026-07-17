@@ -38,6 +38,10 @@ import {
 } from "@/features/skills/components/ToolListRows";
 import { buildOpenToolOptions } from "@/features/skills/utils/open-tools";
 import { getToolLogoUrl } from "@/features/skills/utils/tool-logo";
+import {
+  normalizePluginAggregateIdentity,
+  normalizePluginSourceIdentity,
+} from "@/features/skills/utils/plugin-identity";
 import { getMonogramLabel } from "@/features/skills/utils/monogram";
 import { useSkillWorkspace } from "@/features/skills/state/skill-workspace";
 import {
@@ -454,13 +458,6 @@ function getPluginDisplayName(plugin: PluginSummary) {
   return plugin.name.trim() || plugin.id;
 }
 
-function normalizePluginAggregateIdentity(value: string) {
-  return value.trim().toLowerCase()
-    .replace(/\/+$/, "")
-    .replace(/\/(?:-\/)?tree\/[^/]+$/, "")
-    .replace(/\.git$/, "");
-}
-
 function normalizePluginAlias(value: string) {
   const normalizedValue = normalizePluginAggregateIdentity(value);
   if (normalizedValue === "launchdarkly-mcp") {
@@ -497,7 +494,7 @@ function getPluginCanonicalName(plugin: PluginSummary) {
 
 function buildPluginAggregateKey(plugin: PluginSummary) {
   const canonicalName = getPluginCanonicalName(plugin);
-  const sourceIdentity = normalizePluginAggregateIdentity(plugin.sourceUrl);
+  const sourceIdentity = normalizePluginSourceIdentity(plugin.sourceUrl);
   const packageIdentity = normalizePluginAggregateIdentity(plugin.packageId);
   const repoIdentity = normalizePluginAggregateIdentity(plugin.repoRootPath);
   const sourceLabelIdentity = normalizePluginAggregateIdentity(plugin.sourceLabel);

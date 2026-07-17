@@ -158,6 +158,7 @@ fn source_label_for_type(source_type: &str) -> &'static str {
 }
 
 const MARKETPLACE_FETCH_LIMIT: usize = 36;
+const MARKETPLACE_CACHE_VERSION: u64 = 3;
 static SKILLS_SH_DESCRIPTION_CACHE: OnceLock<HashMap<String, String>> = OnceLock::new();
 static SKILLS_SH_LIVE_DESCRIPTION_CACHE: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
 static SKILLS_SH_HOMEPAGE_CACHE: OnceLock<Mutex<Option<Vec<SkillsShSkill>>>> = OnceLock::new();
@@ -606,7 +607,7 @@ fn parse_skills_sh_homepage_items(html: &str) -> Vec<SkillsShSkill> {
     let section = &html[start..end];
     let row_regex = LEADERBOARD_ROW_REGEX.get_or_init(|| {
         RegexBuilder::new(
-            r##"href="/(?P<href>[^"#?]+)"[^>]*>\s*<div class="lg:col-span-1 text-left">\s*<span[^>]*>(?P<rank>\d+)</span>\s*</div>\s*<div class="lg:col-span-13[^>]*>\s*<h3[^>]*>(?P<name>[^<]+)</h3>\s*<p[^>]*>(?P<source>[^<]+)</p>\s*</div>\s*<div class="lg:col-span-2[^>]*>.*?<span class="font-mono text-sm text-foreground">(?P<installs>[^<]+)</span>"##,
+            r##"href="/(?P<href>[^"#?]+)"[^>]*>\s*<div class="lg:col-span-1 text-left">\s*<span[^>]*>(?P<rank>\d+)</span>\s*</div>\s*<div class="lg:col-span-(?:11|13)[^>]*>\s*<h3[^>]*>(?P<name>[^<]+)</h3>\s*<p[^>]*>(?P<source>[^<]+)</p>\s*</div>.*?<div class="lg:col-span-2 text-right[^>]*>.*?<span class="font-mono text-sm text-foreground">(?P<installs>[^<]+)</span>"##,
         )
         .dot_matches_new_line(true)
         .build()
@@ -1195,7 +1196,7 @@ fn load_marketplace_cache(source: &str) -> Option<Vec<MarketplaceSkill>> {
         .get("version")
         .and_then(|value| value.as_u64())
         .unwrap_or_default();
-    if version < 2 {
+    if version < MARKETPLACE_CACHE_VERSION {
         return None;
     }
     let sources = cached.get("sources")?.as_object()?;
@@ -1279,7 +1280,10 @@ fn save_marketplace_cache(source: &str, skills: &[MarketplaceSkill]) {
     let Some(cache_object) = cache_data.as_object_mut() else {
         return;
     };
-    cache_object.insert("version".into(), serde_json::json!(2_u64));
+    cache_object.insert(
+        "version".into(),
+        serde_json::json!(MARKETPLACE_CACHE_VERSION),
+    );
     cache_object.insert("timestamp".into(), serde_json::json!(timestamp));
     let sources_value = cache_object
         .entry("sources")
@@ -1474,6 +1478,7 @@ const EDITOR_HOST_APPS: &[&str] = &[
 ];
 
 const EDITOR_HOST_EXECUTABLES: &[&str] = &["cursor", "code", "windsurf", "devin", "trae", "idea"];
+const CODEX_APP_NAMES: &[&str] = &["Codex", "ChatGPT"];
 
 #[cfg(windows)]
 fn windows_well_known_executable_candidates(executable_name: &str) -> Vec<PathBuf> {
@@ -1705,7 +1710,7 @@ fn build_tool_configs() -> Vec<ToolConfig> {
             vec!["desktop", "cli"],
             false,
             vec![home_path.join(".codex")],
-            software_spec(&["Codex"], &["codex"]),
+            software_spec(CODEX_APP_NAMES, &["codex"]),
         ),
         (
             "opencode",
@@ -7024,6 +7029,32 @@ mod tests {
     }
 
     #[test]
+    fn ignores_legacy_marketplace_cache_versions() {
+        let _guard = TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let temp_dir = temp_test_dir("legacy-marketplace-cache");
+        let home_dir = temp_dir.join("home");
+        let cache_dir = home_dir.join(".skilldock/cache");
+        fs::create_dir_all(&cache_dir).expect("create marketplace cache dir");
+        fs::write(
+            cache_dir.join("marketplace.json"),
+            r#"{"version":2,"sources":{"skills.sh":{"skills":[]}}}"#,
+        )
+        .expect("write legacy marketplace cache");
+        let original_home = env::var_os("HOME");
+        unsafe {
+            env::set_var("HOME", &home_dir);
+        }
+
+        let cached = load_marketplace_cache_page("skills.sh", 1, 18);
+
+        restore_env_var("HOME", original_home);
+        assert!(cached.is_none());
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
     fn preferred_app_language_follows_system_locale() {
         let _guard = TEST_ENV_LOCK
             .lock()
@@ -7078,30 +7109,35 @@ mod tests {
           <div>
             <a href="/vercel-labs/skills/find-skills">
               <div class="lg:col-span-1 text-left"><span>1</span></div>
-              <div class="lg:col-span-13 min-w-1 flex flex-col lg:flex-row lg:items-baseline lg:gap-2">
+              <div class="lg:col-span-11 min-w-1 flex flex-col lg:flex-row lg:items-baseline lg:gap-2">
                 <h3>find-skills</h3>
                 <p>vercel-labs/skills</p>
               </div>
+              <div class="hidden lg:flex lg:col-span-2 items-center justify-end">
+                <svg aria-label="Weekly installs: 116,561, 111,669"></svg>
+              </div>
               <div class="lg:col-span-2 text-right flex items-center justify-end gap-2">
-                <span class="font-mono text-sm text-foreground">1.4M</span>
+                <span class="font-mono text-sm text-foreground">2.5M</span>
               </div>
             </a>
             <a href="/anthropics/skills/frontend-design">
               <div class="lg:col-span-1 text-left"><span>2</span></div>
-              <div class="lg:col-span-13 min-w-1 flex flex-col lg:flex-row lg:items-baseline lg:gap-2">
+              <div class="lg:col-span-11 min-w-1 flex flex-col lg:flex-row lg:items-baseline lg:gap-2">
                 <h3>frontend-design</h3>
                 <p>anthropics/skills</p>
               </div>
+              <div class="hidden lg:flex lg:col-span-2 items-center justify-end"></div>
               <div class="lg:col-span-2 text-right flex items-center justify-end gap-2">
                 <span class="font-mono text-sm text-foreground">380.5K</span>
               </div>
             </a>
             <a href="/vercel-labs/agent-skills/vercel-react-best-practices">
               <div class="lg:col-span-1 text-left"><span>3</span></div>
-              <div class="lg:col-span-13 min-w-1 flex flex-col lg:flex-row lg:items-baseline lg:gap-2">
+              <div class="lg:col-span-11 min-w-1 flex flex-col lg:flex-row lg:items-baseline lg:gap-2">
                 <h3>vercel-react-best-practices</h3>
                 <p>vercel-labs/agent-skills</p>
               </div>
+              <div class="hidden lg:flex lg:col-span-2 items-center justify-end"></div>
               <div class="lg:col-span-2 text-right flex items-center justify-end gap-2">
                 <span class="font-mono text-sm text-foreground">380.3K</span>
               </div>
@@ -7137,7 +7173,7 @@ mod tests {
                 "vercel-labs/agent-skills"
             ]
         );
-        assert_eq!(installs, vec![1_400_000, 380_500, 380_300]);
+        assert_eq!(installs, vec![2_500_000, 380_500, 380_300]);
     }
 
     #[test]
@@ -8343,6 +8379,11 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn codex_app_names_include_chatgpt_rename() {
+        assert_eq!(super::CODEX_APP_NAMES, &["Codex", "ChatGPT"]);
     }
 
     #[test]

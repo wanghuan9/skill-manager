@@ -429,7 +429,7 @@ test("aggregates cross-host plugins by canonical plugin name instead of display 
   expect(row?.querySelector('[data-tooltip="Claude Code 已安装（已启用）"]')).toBeInTheDocument();
 });
 
-test("aggregates cross-host plugins when source URL includes a git web branch path", async () => {
+test("aggregates cross-host plugins when source URL includes a git web branch and plugin path", async () => {
   const plugins: PluginSummary[] = [
     {
       ...pluginFixtures[0],
@@ -457,7 +457,7 @@ test("aggregates cross-host plugins when source URL includes a git web branch pa
       name: "example-plugin",
       hostTool: "claude-code",
       sourceLabel: "skilldock",
-      sourceUrl: "https://git.example.com/example-org/example-repo/tree/master",
+      sourceUrl: "https://git.example.com/example-org/example-repo/tree/master/example-plugin",
       repoRootPath: "/Users/demo/.skilldock/plugins/example-plugin",
       rootPath: "/Users/demo/.claude/plugins/marketplaces/skilldock/plugins/example-plugin",
       manifestPath: "/Users/demo/.claude/plugins/marketplaces/skilldock/plugins/example-plugin/.claude-plugin/plugin.json",

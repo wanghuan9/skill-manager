@@ -3336,7 +3336,7 @@ code {
 
 .install-card__title-row {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 8px;
 }
 
@@ -3364,9 +3364,9 @@ code {
 }
 
 .install-card__link {
-  width: 28px;
-  height: 28px;
-  border-radius: 8px;
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
   flex-shrink: 0;
   display: inline-flex;
   align-items: center;
@@ -3387,6 +3387,11 @@ code {
   width: 16px;
   height: 16px;
   display: block;
+}
+
+.install-card__link svg {
+  width: 14px;
+  height: 14px;
 }
 
 .install-card__install-button {
