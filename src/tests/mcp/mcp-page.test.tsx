@@ -31,7 +31,9 @@ test("renders MCP toolbar in the page header and hides the app matrix", async ()
   expect(toolbar).not.toHaveTextContent("工具可同步");
   expect(screen.getByRole("searchbox", { name: "搜索 MCP" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "刷新" })).toBeInTheDocument();
-  expect(within(toolbar).getByRole("button", { name: "去安装" })).toHaveClass("skills-toolbar-button--go-install");
+  const goInstallButton = within(toolbar).getByRole("button", { name: "去安装" });
+  expect(goInstallButton).toHaveClass("skills-toolbar-button--go-install");
+  expect(toolbar.lastElementChild).toBe(goInstallButton);
 });
 
 test("opens MCP install page from the toolbar go-install action", async () => {

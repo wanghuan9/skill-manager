@@ -2065,7 +2065,6 @@ export function PluginsRoute(props: { onGoInstall?: () => void } = {}) {
           onChange={(event) => setQuery(event.target.value)}
         />
       </label>
-      {props.onGoInstall ? <ToolbarGoInstallButton onClick={props.onGoInstall} /> : null}
       <div className="plugins-page__toolbar-actions">
         <label className="skill-status-filter plugins-page__toolbar-filter">
           <span className="sr-only">{t("plugins.toolbar.filterLabel")}</span>
@@ -2107,6 +2106,7 @@ export function PluginsRoute(props: { onGoInstall?: () => void } = {}) {
           <span>{isRefreshing ? t("plugins.toolbar.scanning") : t("plugins.toolbar.scanImport")}</span>
         </button>
       </div>
+      {props.onGoInstall ? <ToolbarGoInstallButton onClick={props.onGoInstall} /> : null}
     </section>
   );
 

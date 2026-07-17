@@ -710,6 +710,7 @@ test("renders go-install action in the plugin toolbar", async () => {
 
   const goInstallButton = screen.getByRole("button", { name: "去安装" });
   expect(goInstallButton).toHaveClass("skills-toolbar-button--go-install");
+  expect(goInstallButton.parentElement?.lastElementChild).toBe(goInstallButton);
   await userEvent.click(goInstallButton);
   expect(onGoInstall).toHaveBeenCalledOnce();
 });

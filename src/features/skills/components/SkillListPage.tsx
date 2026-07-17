@@ -210,7 +210,6 @@ export function SkillListToolbar(props: SkillToolbarProps) {
           onChange={(event) => onQueryChange(event.target.value)}
         />
       </label>
-      {onGoInstall ? <ToolbarGoInstallButton onClick={onGoInstall} /> : null}
       <button
         className={`secondary-button secondary-button--compact skills-toolbar-button skills-toolbar-button--toggle${showGroupView ? " is-active" : ""}`}
         type="button"
@@ -261,6 +260,7 @@ export function SkillListToolbar(props: SkillToolbarProps) {
         </span>
         <span>{isUpdatingAllSkills ? t("skills.updating") : updateAllButtonLabel}</span>
       </button>
+      {onGoInstall ? <ToolbarGoInstallButton onClick={onGoInstall} /> : null}
     </div>
   );
 }

@@ -84,7 +84,7 @@ test("starts update-all from the toolbar", () => {
     </NotificationProvider>,
   );
 
-  fireEvent.click(screen.getByRole("button", { name: "全部更新 (1)" }));
+  fireEvent.click(screen.getByRole("button", { name: "更新 (1)" }));
   expect(updateAllSkills).toHaveBeenCalledOnce();
 });
 
@@ -115,6 +115,7 @@ test("renders go-install action when handler is provided", () => {
 
   const goInstallButton = screen.getByRole("button", { name: "去安装" });
   expect(goInstallButton).toHaveClass("skills-toolbar-button--go-install");
+  expect(goInstallButton.parentElement?.lastElementChild).toBe(goInstallButton);
   fireEvent.click(goInstallButton);
   expect(onGoInstall).toHaveBeenCalledOnce();
 });

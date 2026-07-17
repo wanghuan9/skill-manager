@@ -1249,9 +1249,6 @@ export function McpRoute(props: McpRouteProps = {}) {
           onChange={(event) => setQuery(event.target.value)}
         />
       </label>
-      {props.onInstallFromMarketplace ? (
-        <ToolbarGoInstallButton onClick={props.onInstallFromMarketplace} />
-      ) : null}
       <button
         className={`secondary-button secondary-button--compact skills-toolbar-button skills-toolbar-button--refresh${isRefreshing ? " is-loading" : ""}`}
         type="button"
@@ -1290,6 +1287,9 @@ export function McpRoute(props: McpRouteProps = {}) {
         </span>
         <span>{t("mcp.toolbar.add")}</span>
       </button>
+      {props.onInstallFromMarketplace ? (
+        <ToolbarGoInstallButton onClick={props.onInstallFromMarketplace} />
+      ) : null}
     </section>
   );
 
