@@ -1169,6 +1169,7 @@ code {
 
 .page-content::-webkit-scrollbar,
 .sidebar::-webkit-scrollbar,
+.local-install-workspace::-webkit-scrollbar,
 .mcp-edit-dialog__body::-webkit-scrollbar,
 .mcp-market-config-preview::-webkit-scrollbar {
   width: 10px;
@@ -1177,6 +1178,7 @@ code {
 
 .page-content::-webkit-scrollbar-track,
 .sidebar::-webkit-scrollbar-track,
+.local-install-workspace::-webkit-scrollbar-track,
 .mcp-edit-dialog__body::-webkit-scrollbar-track,
 .mcp-market-config-preview::-webkit-scrollbar-track {
   background: transparent;
@@ -1184,6 +1186,7 @@ code {
 
 .page-content::-webkit-scrollbar-thumb,
 .sidebar::-webkit-scrollbar-thumb,
+.local-install-workspace::-webkit-scrollbar-thumb,
 .mcp-edit-dialog__body::-webkit-scrollbar-thumb,
 .mcp-market-config-preview::-webkit-scrollbar-thumb {
   border: 2px solid transparent;
@@ -1194,6 +1197,7 @@ code {
 
 .page-content::-webkit-scrollbar-thumb:hover,
 .sidebar::-webkit-scrollbar-thumb:hover,
+.local-install-workspace::-webkit-scrollbar-thumb:hover,
 .mcp-edit-dialog__body::-webkit-scrollbar-thumb:hover,
 .mcp-market-config-preview::-webkit-scrollbar-thumb:hover {
   background: rgba(100, 116, 139, 0.66);
@@ -4361,6 +4365,7 @@ code {
   align-content: start;
   min-height: 360px;
   max-width: none;
+  overflow-y: auto;
   padding: 16px;
 }
 
