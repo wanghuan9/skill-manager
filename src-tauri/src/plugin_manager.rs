@@ -47,6 +47,7 @@ const SKILLDOCK_PLUGIN_UPDATE_METADATA_DIR: &str = "update";
 const PLUGIN_PACKAGE_HASH_LEN: usize = 8;
 const PLUGIN_UPDATE_CACHE_FILE_NAME: &str = "plugin-update-cache.json";
 const PLUGIN_LIST_CACHE_FILE_NAME: &str = "plugin-list-cache.json";
+const CURSOR_DISABLED_PLUGIN_DIR: &str = ".skilldock/disabled-plugins/cursor";
 
 static PLUGIN_UPDATE_CACHE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 static PLUGIN_GIT_FETCH_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -682,7 +683,7 @@ pub fn set_plugin_enabled(
     match host_tool.as_str() {
         "codex" => set_codex_plugin_enabled(&root_path, enabled),
         "claude-code" => set_claude_plugin_enabled(&root_path, enabled),
-        "cursor" => Err("Cursor 插件暂不支持在 SkillDock 内切换启用状态".to_string()),
+        "cursor" => set_cursor_plugin_enabled(&root_path, enabled),
         _ => Err(format!("不支持的插件宿主: {host_tool}")),
     }
 }
@@ -1672,16 +1673,30 @@ fn scan_cursor_installed_plugins(scan_mode: PluginScanMode) -> Vec<PluginSummary
     };
     let home_dir = canonicalize_existing_dir(&home_dir).unwrap_or(home_dir);
 
-    let mut plugin_roots = Vec::new();
+    let mut enabled_plugin_roots = Vec::new();
     collect_cursor_plugin_roots(
         &home_dir.join(".cursor/plugins/local"),
         0,
-        &mut plugin_roots,
+        &mut enabled_plugin_roots,
     );
+    let mut disabled_plugin_roots = Vec::new();
+    collect_cursor_plugin_roots(
+        &cursor_disabled_plugins_root(&home_dir),
+        0,
+        &mut disabled_plugin_roots,
+    );
+    let plugin_roots = enabled_plugin_roots
+        .into_iter()
+        .map(|root| (root, "enabled"))
+        .chain(
+            disabled_plugin_roots
+                .into_iter()
+                .map(|root| (root, "disabled")),
+        );
 
     let mut installed = Vec::new();
     let mut seen_roots = BTreeSet::new();
-    for plugin_root in plugin_roots {
+    for (plugin_root, enabled_state) in plugin_roots {
         let Ok(canonical_root) = canonicalize_existing_dir(&plugin_root) else {
             continue;
         };
@@ -1693,7 +1708,7 @@ fn scan_cursor_installed_plugins(scan_mode: PluginScanMode) -> Vec<PluginSummary
         let manifest_path = canonical_root.join(CURSOR_PLUGIN_MANIFEST);
         let source_metadata = read_skilldock_plugin_source_metadata(&canonical_root);
         let cursor_git_root = find_git_root(&canonical_root)
-            .filter(|root| is_under_cursor_local_plugins(&home_dir, root))
+            .filter(|root| is_under_cursor_plugin_storage(&home_dir, root))
             .filter(|root| !is_synthetic_cursor_git_repo(root));
         let local_git_plugin_relative_path = cursor_git_root.as_ref().and_then(|repo_root| {
             read_plugin_package_identity(&canonical_root)
@@ -1718,7 +1733,7 @@ fn scan_cursor_installed_plugins(scan_mode: PluginScanMode) -> Vec<PluginSummary
         let source_type = resolve_plugin_source_type(
             &canonical_root,
             source_metadata.as_ref(),
-            if is_under_cursor_local_plugins(&home_dir, &canonical_root) {
+            if is_under_cursor_plugin_storage(&home_dir, &canonical_root) {
                 "local"
             } else {
                 "marketplace"
@@ -1771,7 +1786,7 @@ fn scan_cursor_installed_plugins(scan_mode: PluginScanMode) -> Vec<PluginSummary
                 scopes: vec![build_plugin_scope_summary(
                     "user",
                     "用户级",
-                    "enabled",
+                    enabled_state,
                     &manifest_path,
                 )],
             },
@@ -1782,6 +1797,98 @@ fn scan_cursor_installed_plugins(scan_mode: PluginScanMode) -> Vec<PluginSummary
     }
 
     installed
+}
+
+fn set_cursor_plugin_enabled(root_path: &str, enabled: bool) -> Result<PluginSummary, String> {
+    let home_dir = workspace::home_dir_option().ok_or_else(|| "无法定位用户主目录".to_string())?;
+    let home_dir = canonicalize_existing_dir(&home_dir).unwrap_or(home_dir);
+    let target_root = canonicalize_existing_dir(Path::new(root_path))?;
+    ensure_plugin_manifest_for_host("cursor", &target_root)?;
+
+    let active_install_root = cursor_local_install_root_for_path(&home_dir, &target_root);
+    let disabled_install_root = cursor_disabled_install_root_for_path(&home_dir, &target_root);
+    if (enabled && active_install_root.is_some()) || (!enabled && disabled_install_root.is_some()) {
+        return find_cursor_plugin_summary(&target_root);
+    }
+
+    let source_install_root = if enabled {
+        disabled_install_root
+    } else {
+        active_install_root
+    }
+    .ok_or_else(|| "Cursor 插件不在 SkillDock 可管理的本地插件目录中".to_string())?;
+    ensure_single_cursor_plugin_install(&source_install_root)?;
+
+    let plugin_relative_path = target_root
+        .strip_prefix(&source_install_root)
+        .map(Path::to_path_buf)
+        .unwrap_or_default();
+    let install_name = source_install_root
+        .file_name()
+        .ok_or_else(|| "Cursor 插件安装目录无效".to_string())?;
+    let destination_parent = if enabled {
+        home_dir.join(".cursor/plugins/local")
+    } else {
+        cursor_disabled_plugins_root(&home_dir)
+    };
+    let destination_install_root = destination_parent.join(install_name);
+    if destination_install_root.exists() || fs::symlink_metadata(&destination_install_root).is_ok()
+    {
+        return Err(format!(
+            "Cursor 插件目标目录已存在，无法{}: {}",
+            if enabled { "启用" } else { "停用" },
+            destination_install_root.display()
+        ));
+    }
+
+    fs::create_dir_all(&destination_parent).map_err(|error| {
+        format!(
+            "创建 Cursor 插件状态目录失败（{}）: {error}",
+            destination_parent.display()
+        )
+    })?;
+    fs::rename(&source_install_root, &destination_install_root).map_err(|error| {
+        format!(
+            "移动 Cursor 插件目录失败（{} -> {}）: {error}",
+            source_install_root.display(),
+            destination_install_root.display()
+        )
+    })?;
+
+    let destination_plugin_root = destination_install_root.join(plugin_relative_path);
+    let updated_plugin = canonicalize_existing_dir(&destination_plugin_root)
+        .and_then(|plugin_root| find_cursor_plugin_summary(&plugin_root));
+    match updated_plugin {
+        Ok(plugin) => Ok(plugin),
+        Err(error) => {
+            let rollback_result = fs::rename(&destination_install_root, &source_install_root);
+            match rollback_result {
+                Ok(()) => Err(error),
+                Err(rollback_error) => Err(format!(
+                    "{error}；回滚 Cursor 插件目录失败（{} -> {}）: {rollback_error}",
+                    destination_install_root.display(),
+                    source_install_root.display()
+                )),
+            }
+        }
+    }
+}
+
+fn find_cursor_plugin_summary(plugin_root: &Path) -> Result<PluginSummary, String> {
+    let root_path = path_to_string(plugin_root);
+    list_installed_plugins_blocking_with_mode(PluginScanMode::Local)?
+        .into_iter()
+        .find(|plugin| plugin.host_tool == "cursor" && plugin.root_path == root_path)
+        .ok_or_else(|| "切换后未能重新识别 Cursor 插件".to_string())
+}
+
+fn ensure_single_cursor_plugin_install(install_root: &Path) -> Result<(), String> {
+    let mut plugin_roots = Vec::new();
+    collect_cursor_plugin_roots(install_root, 0, &mut plugin_roots);
+    if plugin_roots.len() > 1 {
+        return Err("Cursor 插件安装目录包含多个插件，暂不支持单独切换".to_string());
+    }
+    Ok(())
 }
 
 fn set_codex_plugin_enabled(root_path: &str, enabled: bool) -> Result<PluginSummary, String> {
@@ -2543,6 +2650,14 @@ fn delete_cursor_plugin(root_path: &str) -> Result<(), String> {
         {
             roots_to_remove.insert(path_to_string(&local_install_root), local_install_root);
         }
+        if let Some(disabled_install_root) =
+            cursor_disabled_install_root_for_path(&home_dir, &target_root)
+        {
+            roots_to_remove.insert(
+                path_to_string(&disabled_install_root),
+                disabled_install_root,
+            );
+        }
     }
     if should_remove_managed_package {
         if let Some(ref package_root) = managed_package_root {
@@ -2563,6 +2678,15 @@ fn delete_cursor_plugin(root_path: &str) -> Result<(), String> {
 
 fn cursor_local_install_root_for_path(home_dir: &Path, path: &Path) -> Option<PathBuf> {
     let cursor_root = home_dir.join(".cursor/plugins/local");
+    cursor_install_root_for_path(&cursor_root, path)
+}
+
+fn cursor_disabled_install_root_for_path(home_dir: &Path, path: &Path) -> Option<PathBuf> {
+    let cursor_root = cursor_disabled_plugins_root(home_dir);
+    cursor_install_root_for_path(&cursor_root, path)
+}
+
+fn cursor_install_root_for_path(cursor_root: &Path, path: &Path) -> Option<PathBuf> {
     let relative_path = path.strip_prefix(&cursor_root).ok()?;
     let install_name = relative_path.components().next()?.as_os_str();
     Some(cursor_root.join(install_name))
@@ -5053,7 +5177,8 @@ fn install_cursor_plugin_probe(
 ) -> Result<PathBuf, String> {
     let manifest = read_plugin_manifest(&source_root.join(CURSOR_PLUGIN_MANIFEST))?;
     let plugin_name = plugin_install_name(&manifest, source_root);
-    let target_repo_root = home_dir.join(".cursor/plugins/local").join(plugin_name);
+    ensure_cursor_plugin_not_disabled(home_dir, &plugin_name)?;
+    let target_repo_root = home_dir.join(".cursor/plugins/local").join(&plugin_name);
     let plugin_relative_path = cursor_plugin_relative_path(package_root, source_root, probe);
 
     if cursor_plugin_should_use_git_clone(package_root, source_root, probe) {
@@ -5078,6 +5203,16 @@ fn install_cursor_plugin_probe(
         &plugin_relative_path,
     )?;
     Ok(target_repo_root)
+}
+
+fn ensure_cursor_plugin_not_disabled(home_dir: &Path, plugin_name: &str) -> Result<(), String> {
+    let disabled_root = cursor_disabled_plugins_root(home_dir).join(plugin_name);
+    if disabled_root.exists() || fs::symlink_metadata(&disabled_root).is_ok() {
+        return Err(format!(
+            "Cursor 插件 {plugin_name} 已停用，请先重新启用后再安装"
+        ));
+    }
+    Ok(())
 }
 
 fn install_cursor_plugin_probe_independent(
@@ -5196,7 +5331,11 @@ fn install_cursor_plugin_probe_from_remote(
             error
         })?;
     let plugin_name = plugin_install_name(&manifest, &plugin_root);
-    let target_repo_root = cursor_local_root.join(plugin_name);
+    ensure_cursor_plugin_not_disabled(home_dir, &plugin_name).map_err(|error| {
+        let _ = remove_path(&temp_repo_root);
+        error
+    })?;
+    let target_repo_root = cursor_local_root.join(&plugin_name);
 
     if paths_refer_to_same_dir(&temp_repo_root, &target_repo_root) {
         ensure_cursor_plugin_root_overlay(&target_repo_root, plugin_relative_path)?;
@@ -6010,6 +6149,21 @@ fn is_under_cursor_local_plugins(home_dir: &Path, plugin_root: &Path) -> bool {
         .is_ok()
 }
 
+fn cursor_disabled_plugins_root(home_dir: &Path) -> PathBuf {
+    home_dir.join(CURSOR_DISABLED_PLUGIN_DIR)
+}
+
+fn is_under_cursor_disabled_plugins(home_dir: &Path, plugin_root: &Path) -> bool {
+    plugin_root
+        .strip_prefix(cursor_disabled_plugins_root(home_dir))
+        .is_ok()
+}
+
+fn is_under_cursor_plugin_storage(home_dir: &Path, plugin_root: &Path) -> bool {
+    is_under_cursor_local_plugins(home_dir, plugin_root)
+        || is_under_cursor_disabled_plugins(home_dir, plugin_root)
+}
+
 fn cursor_plugin_source_label(home_dir: &Path, plugin_root: &Path) -> String {
     let cache_root = home_dir.join(".cursor/plugins/cache");
     if let Ok(relative_path) = plugin_root.strip_prefix(cache_root) {
@@ -6022,8 +6176,19 @@ fn cursor_plugin_source_label(home_dir: &Path, plugin_root: &Path) -> String {
     }
 
     let local_root = home_dir.join(".cursor/plugins/local");
-    plugin_root
+    let local_label = plugin_root
         .strip_prefix(local_root)
+        .ok()
+        .and_then(|relative_path| relative_path.components().next())
+        .and_then(|component| component.as_os_str().to_str())
+        .unwrap_or_default()
+        .to_string();
+    if !local_label.is_empty() {
+        return local_label;
+    }
+
+    plugin_root
+        .strip_prefix(cursor_disabled_plugins_root(home_dir))
         .ok()
         .and_then(|relative_path| relative_path.components().next())
         .and_then(|component| component.as_os_str().to_str())
@@ -13996,6 +14161,57 @@ source = "__SOURCE__"
         assert_eq!(plugins.len(), 1);
         assert_eq!(plugins[0].host_tool, "codex");
         assert_eq!(plugins[0].enabled_state, "disabled");
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn toggles_cursor_plugin_by_moving_install_directory() {
+        let _guard = TEST_ENV_LOCK.lock().expect("lock test env");
+        let temp_dir = temp_test_dir("cursor-toggle-enabled");
+        let home_dir = temp_dir.join("home");
+        let install_root = home_dir.join(".cursor/plugins/local/example-plugin");
+        let disabled_root = home_dir.join(".skilldock/disabled-plugins/cursor/example-plugin");
+
+        fs::create_dir_all(install_root.join(".cursor-plugin"))
+            .expect("create cursor plugin manifest dir");
+        fs::create_dir_all(install_root.join("skills/reviewer")).expect("create cursor skill dir");
+        fs::write(
+            install_root.join(".cursor-plugin/plugin.json"),
+            r#"{"name":"example-plugin","displayName":"Example Plugin","version":"1.0.0"}"#,
+        )
+        .expect("write cursor plugin manifest");
+        fs::write(install_root.join("skills/reviewer/SKILL.md"), "# Reviewer")
+            .expect("write cursor skill");
+
+        let previous_home = env::var_os("HOME");
+        env::set_var("HOME", &home_dir);
+
+        let disabled_plugin = set_plugin_enabled(
+            "cursor".to_string(),
+            install_root.to_string_lossy().into_owned(),
+            false,
+        )
+        .expect("disable cursor plugin");
+        assert_eq!(disabled_plugin.enabled_state, "disabled");
+        assert!(!install_root.exists());
+        assert!(disabled_root.join("skills/reviewer/SKILL.md").is_file());
+
+        let enabled_plugin =
+            set_plugin_enabled("cursor".to_string(), disabled_plugin.root_path, true)
+                .expect("enable cursor plugin");
+        let plugins = list_installed_plugins().expect("list cursor plugins");
+
+        match previous_home {
+            Some(value) => env::set_var("HOME", value),
+            None => env::remove_var("HOME"),
+        }
+
+        assert_eq!(enabled_plugin.enabled_state, "enabled");
+        assert!(install_root.join("skills/reviewer/SKILL.md").is_file());
+        assert!(!disabled_root.exists());
+        assert_eq!(plugins.len(), 1);
+        assert_eq!(plugins[0].enabled_state, "enabled");
 
         let _ = fs::remove_dir_all(temp_dir);
     }

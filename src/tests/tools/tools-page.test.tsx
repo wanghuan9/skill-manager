@@ -3,7 +3,8 @@ import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 import { App } from "@/app/App";
 import * as skillClient from "@/features/skills/api/skill-client";
-import { appSettingsFixture } from "@/features/skills/state/skill-fixtures";
+import { appSettingsFixture, pluginFixtures } from "@/features/skills/state/skill-fixtures";
+import type { PluginSummary } from "@/features/skills/state/skill-store";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -108,8 +109,85 @@ test("can toggle MCP servers from tool manage dialog", async () => {
   expect(await screen.findByText("context7")).toBeInTheDocument();
   await userEvent.click(screen.getByRole("button", { name: "关闭 context7" }));
 
-  expect(await screen.findByText("Skills 3/4 · MCP 0/2")).toBeInTheDocument();
+  expect(await screen.findByText("Skills 3/4 · MCP 0/2 · 插件 0/1")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "启用 context7" })).toBeInTheDocument();
+});
+
+test("can manage plugins for a supported tool", async () => {
+  window.localStorage.clear();
+  render(<App />);
+
+  await userEvent.click(screen.getByRole("button", { name: "工具" }));
+  const claudeToolCard = screen.getByText("Claude Code").closest("article");
+  expect(claudeToolCard).not.toBeNull();
+  await userEvent.click(within(claudeToolCard as HTMLElement).getByRole("button", { name: "管理" }));
+
+  expect(screen.getByRole("tab", { name: "Plugins" })).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("tab", { name: "Plugins" }));
+
+  expect(await screen.findByText("ecc")).toBeInTheDocument();
+  expect(screen.getByText(/插件 0\/1/)).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "全部开启" }));
+
+  expect(await screen.findByText(/插件 1\/1/)).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "关闭 ecc" }));
+
+  expect(await screen.findByText(/插件 0\/1/)).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "启用 ecc" })).toBeInTheDocument();
+});
+
+test("can toggle Cursor plugins with a reload hint", async () => {
+  window.localStorage.clear();
+  const cursorPlugin: PluginSummary = {
+    ...pluginFixtures[0],
+    id: "cursor:example-plugin",
+    name: "Example Plugin",
+    hostTool: "cursor",
+    relatedHostTools: [],
+    rootPath: "/Users/demo/.cursor/plugins/local/example-plugin",
+    manifestPath: "/Users/demo/.cursor/plugins/local/example-plugin/.cursor-plugin/plugin.json",
+    enabledState: "enabled",
+  };
+  vi.spyOn(skillClient, "fetchStartupInstalledPlugins").mockResolvedValue([cursorPlugin]);
+  const setPluginEnabledSpy = vi.spyOn(skillClient, "setPluginEnabled").mockImplementation(async (input) => ({
+    ...cursorPlugin,
+    enabledState: input.enabled ? "enabled" : "disabled",
+  }));
+  render(<App />);
+
+  await userEvent.click(screen.getByRole("button", { name: "工具" }));
+  const cursorToolCard = screen.getByText("Cursor").closest("article");
+  expect(cursorToolCard).not.toBeNull();
+  await userEvent.click(within(cursorToolCard as HTMLElement).getByRole("button", { name: "管理" }));
+
+  await userEvent.click(screen.getByRole("tab", { name: "Plugins" }));
+
+  expect(await screen.findByText("Example Plugin")).toBeInTheDocument();
+  expect(screen.getByText(/插件 1\/1/)).toBeInTheDocument();
+  expect(screen.getByText("Cursor 插件启停将在重载 Cursor 窗口后生效。")).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "关闭 Example Plugin" }));
+
+  expect(setPluginEnabledSpy).toHaveBeenCalledWith({
+    pluginId: cursorPlugin.id,
+    hostTool: "cursor",
+    rootPath: cursorPlugin.rootPath,
+    enabled: false,
+  });
+  expect(await screen.findByText(/插件 0\/1/)).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "启用 Example Plugin" })).toBeEnabled();
+});
+
+test("does not show plugin management for an unsupported tool", async () => {
+  window.localStorage.clear();
+  render(<App />);
+
+  await userEvent.click(screen.getByRole("button", { name: "工具" }));
+  const openCodeToolCard = screen.getByText("OpenCode").closest("article");
+  expect(openCodeToolCard).not.toBeNull();
+  await userEvent.click(within(openCodeToolCard as HTMLElement).getByRole("button", { name: "管理" }));
+
+  expect(screen.queryByRole("tab", { name: "Plugins" })).not.toBeInTheDocument();
+  expect(screen.queryByText(/插件 \d+\/\d+/)).not.toBeInTheDocument();
 });
 
 test("shows managed MCP state for Antigravity", async () => {

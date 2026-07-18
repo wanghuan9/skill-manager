@@ -1843,6 +1843,34 @@ test("toggles plugin enabled state from the plugin list", async () => {
   expect(screen.getAllByText("已启用").length).toBeGreaterThan(0);
 });
 
+test("toggles Cursor plugin enabled state from the plugin list", async () => {
+  const cursorPlugin = buildCursorPlugin(
+    "Example Plugin",
+    "/Users/demo/.cursor/plugins/local/example-plugin",
+  );
+  vi.spyOn(skillClient, "fetchStartupInstalledPlugins").mockResolvedValueOnce([cursorPlugin]);
+  const setPluginEnabledSpy = vi.spyOn(skillClient, "setPluginEnabled").mockResolvedValue({
+    ...cursorPlugin,
+    rootPath: "/Users/demo/.skilldock/disabled-plugins/cursor/example-plugin",
+    enabledState: "disabled",
+    scopes: cursorPlugin.scopes.map((scope) => ({ ...scope, enabledState: "disabled" })),
+  });
+
+  renderWithI18n(<PluginsRoute />);
+
+  await screen.findByRole("tab", { name: /全部/ });
+  await userEvent.click(screen.getByRole("tab", { name: /Cursor/ }));
+  await userEvent.click(screen.getByRole("button", { name: "关闭 Example Plugin 插件" }));
+
+  expect(setPluginEnabledSpy).toHaveBeenCalledWith({
+    pluginId: cursorPlugin.id,
+    hostTool: "cursor",
+    rootPath: cursorPlugin.rootPath,
+    enabled: false,
+  });
+  expect(await screen.findByRole("button", { name: "开启 Example Plugin 插件" })).toBeInTheDocument();
+});
+
 test("keeps unknown plugins disabled from toggle actions", async () => {
   const setPluginEnabledSpy = vi.spyOn(skillClient, "setPluginEnabled");
   const unknownPlugin: PluginSummary = {

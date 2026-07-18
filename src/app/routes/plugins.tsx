@@ -907,7 +907,7 @@ function getPluginCollabBadge(
 function canTogglePlugin(plugin: PluginSummary) {
   return (
     plugin.enabledState !== "unknown"
-    && (plugin.hostTool === "codex" || plugin.hostTool === "claude-code")
+    && (plugin.hostTool === "codex" || plugin.hostTool === "claude-code" || plugin.hostTool === "cursor")
   );
 }
 
@@ -2295,9 +2295,9 @@ export function PluginsRoute(props: PluginsRouteProps = {}) {
         enabled,
       })));
       setPlugins((current) => {
-        const updatedPluginMap = new Map(updatedPlugins.map((updatedPlugin) => [
-          getPluginInstanceKey(updatedPlugin),
-          updatedPlugin,
+        const updatedPluginMap = new Map(targetPluginKeys.map((targetPluginKey, index) => [
+          targetPluginKey,
+          updatedPlugins[index],
         ]));
         const nextPlugins = current.map((candidate) => (
           updatedPluginMap.get(getPluginInstanceKey(candidate)) ?? candidate
