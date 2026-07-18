@@ -7312,6 +7312,13 @@ button.settings-form-item:disabled {
   background: rgba(255, 255, 255, 0.94);
 }
 
+.tool-manage-dialog__hint {
+  grid-column: 1 / -1;
+  padding: 2px 4px;
+  color: var(--muted);
+  font-size: 0.76rem;
+}
+
 .tool-manage-dialog__item.is-enabled {
   background: rgba(255, 255, 255, 0.94);
 }
