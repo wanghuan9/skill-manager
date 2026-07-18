@@ -170,6 +170,96 @@ export function hasCollapsedAncestor(entry: SkillFileEntry, collapsedDirectories
   return false;
 }
 
+type SkillFileTreeSidebarProps = {
+  entries: SkillFileEntry[];
+  selectedPath: string;
+  collapsedDirectories: Record<string, boolean>;
+  onToggleDirectory: (path: string) => void;
+  onSelectFile: (path: string) => void;
+};
+
+export function SkillFileTreeSidebar({
+  entries,
+  selectedPath,
+  collapsedDirectories,
+  onToggleDirectory,
+  onSelectFile,
+}: SkillFileTreeSidebarProps) {
+  const { t } = useTranslate();
+  const visibleEntries = useMemo(
+    () =>
+      entries.filter(
+        (entry) => entry.depth === 0 || !hasCollapsedAncestor(entry, collapsedDirectories),
+      ),
+    [collapsedDirectories, entries],
+  );
+  const directoryChildCounts = useMemo(() => {
+    const childCounts = new Map<string, number>();
+
+    for (const entry of entries) {
+      if (!entry.path) {
+        continue;
+      }
+      const parentPath = parentDirectoryPath(entry.path);
+      childCounts.set(parentPath, (childCounts.get(parentPath) ?? 0) + 1);
+    }
+
+    return childCounts;
+  }, [entries]);
+
+  return (
+    <aside className="skill-file-dialog__sidebar">
+      {visibleEntries.map((entry) =>
+        entry.entryType === "directory" ? (
+          entry.depth === 0 ? (
+            <div
+              key={`${entry.path}-${entry.entryType}`}
+              className="skill-file-dialog__tree-item skill-file-dialog__tree-item--directory is-root"
+              style={entryIndent(entry)}
+            >
+              <span aria-hidden="true">⌄</span>
+              <span>{entry.name}</span>
+            </div>
+          ) : (
+            <button
+              key={`${entry.path}-${entry.entryType}`}
+              className="skill-file-dialog__tree-item skill-file-dialog__tree-item--directory"
+              style={entryIndent(entry)}
+              type="button"
+              onClick={() => onToggleDirectory(entry.path)}
+              aria-expanded={!collapsedDirectories[entry.path]}
+              aria-label={t(
+                collapsedDirectories[entry.path] ? "skill.files.expand" : "skill.files.collapse",
+                { name: entry.name },
+              )}
+            >
+              <span aria-hidden="true">
+                {directoryChildCounts.get(entry.path)
+                  ? (collapsedDirectories[entry.path] ? "›" : "⌄")
+                  : "•"}
+              </span>
+              <span>{entry.name}</span>
+            </button>
+          )
+        ) : (
+          <button
+            key={entry.path}
+            className={`skill-file-dialog__tree-item skill-file-dialog__tree-item--file${
+              entry.path === selectedPath ? " is-selected" : ""
+            }`}
+            style={entryIndent(entry)}
+            type="button"
+            onClick={() => onSelectFile(entry.path)}
+          >
+            <span aria-hidden="true">📄</span>
+            <span>{entry.name}</span>
+          </button>
+        ),
+      )}
+    </aside>
+  );
+}
+
 function splitFrontmatter(content: string) {
   const frontmatterMatch = FRONTMATTER_PATTERN.exec(content);
   if (!frontmatterMatch) {
@@ -273,7 +363,7 @@ export function SkillFileContentSurface({
         />
       ) : (
         <div className="skill-file-dialog__preview" ref={previewRef}>
-          {isMarkdownFile ? (
+          {isLoading ? null : isMarkdownFile ? (
             <>
               {previewDocument.frontmatter ? (
                 <pre className="skill-file-dialog__frontmatter">
@@ -349,24 +439,6 @@ export function SkillFileDialog({ skill, isOpen, onClose, toolId, readOnly = fal
     () => entries.filter((entry) => entry.entryType === "file"),
     [entries],
   );
-  const visibleEntries = useMemo(
-    () => entries.filter((entry) => entry.depth === 0 || !hasCollapsedAncestor(entry, collapsedDirectories)),
-    [collapsedDirectories, entries],
-  );
-  const directoryChildCounts = useMemo(() => {
-    const childCounts = new Map<string, number>();
-
-    for (const entry of entries) {
-      if (!entry.path) {
-        continue;
-      }
-
-      const parentPath = parentDirectoryPath(entry.path);
-      childCounts.set(parentPath, (childCounts.get(parentPath) ?? 0) + 1);
-    }
-
-    return childCounts;
-  }, [entries]);
   const handleSave = useCallback(async () => {
     if (readOnly || !selectedPath || isSaving) {
       return;
@@ -615,50 +687,13 @@ export function SkillFileDialog({ skill, isOpen, onClose, toolId, readOnly = fal
           </div>
         </div>
         <div className="skill-file-dialog__body">
-          <aside className="skill-file-dialog__sidebar">
-            {visibleEntries.map((entry) =>
-              entry.entryType === "directory" ? (
-                entry.depth === 0 ? (
-                  <div
-                    key={`${entry.path}-${entry.entryType}`}
-                    className="skill-file-dialog__tree-item skill-file-dialog__tree-item--directory is-root"
-                    style={entryIndent(entry)}
-                  >
-                    <span aria-hidden="true">⌄</span>
-                    <span>{entry.name}</span>
-                  </div>
-                ) : (
-                  <button
-                    key={`${entry.path}-${entry.entryType}`}
-                    className="skill-file-dialog__tree-item skill-file-dialog__tree-item--directory"
-                    style={entryIndent(entry)}
-                    type="button"
-                    onClick={() => handleToggleDirectory(entry.path)}
-                    aria-expanded={!collapsedDirectories[entry.path]}
-                    aria-label={t(collapsedDirectories[entry.path] ? "skill.files.expand" : "skill.files.collapse", { name: entry.name })}
-                  >
-                    <span aria-hidden="true">
-                      {directoryChildCounts.get(entry.path) ? (collapsedDirectories[entry.path] ? "›" : "⌄") : "•"}
-                    </span>
-                    <span>{entry.name}</span>
-                  </button>
-                )
-              ) : (
-                <button
-                  key={entry.path}
-                  className={`skill-file-dialog__tree-item skill-file-dialog__tree-item--file${
-                    entry.path === selectedPath ? " is-selected" : ""
-                  }`}
-                  style={entryIndent(entry)}
-                  type="button"
-                  onClick={() => void handleSelectFile(entry.path)}
-                >
-                  <span aria-hidden="true">📄</span>
-                  <span>{entry.name}</span>
-                </button>
-              ),
-            )}
-          </aside>
+          <SkillFileTreeSidebar
+            entries={entries}
+            selectedPath={selectedPath}
+            collapsedDirectories={collapsedDirectories}
+            onToggleDirectory={handleToggleDirectory}
+            onSelectFile={(path) => void handleSelectFile(path)}
+          />
           <section className="skill-file-dialog__editor">
             <SkillFileContentSurface
               selectedPath={selectedPath}

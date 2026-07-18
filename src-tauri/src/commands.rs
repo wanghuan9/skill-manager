@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -159,11 +159,15 @@ fn source_label_for_type(source_type: &str) -> &'static str {
 
 const MARKETPLACE_FETCH_LIMIT: usize = 36;
 const MARKETPLACE_CACHE_VERSION: u64 = 3;
+const MARKETPLACE_SKILL_FILE_LIMIT: usize = 200;
+const MARKETPLACE_SKILL_FILE_SIZE_LIMIT: u64 = 512 * 1024;
+const MARKETPLACE_SKILL_ROOT_CACHE_LIMIT: usize = 64;
 static SKILLS_SH_DESCRIPTION_CACHE: OnceLock<HashMap<String, String>> = OnceLock::new();
 static SKILLS_SH_LIVE_DESCRIPTION_CACHE: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
 static SKILLS_SH_HOMEPAGE_CACHE: OnceLock<Mutex<Option<Vec<SkillsShSkill>>>> = OnceLock::new();
 static SKILLS_SH_PAGE_CACHE: OnceLock<Mutex<HashMap<usize, SkillsShPagePayload>>> = OnceLock::new();
 static SKILLS_MANAGER_SKILLS_CACHE: OnceLock<Vec<SkillsManagerCachedSkill>> = OnceLock::new();
+static MARKETPLACE_SKILL_ROOT_CACHE: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -210,6 +214,21 @@ struct SkillsMpSkill {
     stars: u64,
     #[serde(default, alias = "updated_at")]
     updated_at: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct GitHubContentEntry {
+    name: String,
+    path: String,
+    #[serde(rename = "type")]
+    entry_type: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct GitHubMarketplaceSource {
+    owner: String,
+    repository: String,
+    branch: Option<String>,
 }
 
 fn default_marketplace_skills() -> Vec<MarketplaceSkill> {
@@ -282,6 +301,416 @@ fn skills_sh_source_url(source: &str, skill_id: &str) -> String {
     }
 
     format!("https://skills.sh/")
+}
+
+fn parse_github_marketplace_source(source_url: &str) -> Result<GitHubMarketplaceSource, String> {
+    let parsed = url::Url::parse(source_url).map_err(|_| "Skill 仓库地址无效".to_string())?;
+    let host = parsed.host_str().unwrap_or_default();
+    if !matches!(host, "github.com" | "www.github.com") {
+        return Err("当前仅支持预览 GitHub Skill 文件".into());
+    }
+
+    let segments = parsed
+        .path_segments()
+        .map(|items| items.filter(|item| !item.is_empty()).collect::<Vec<_>>())
+        .unwrap_or_default();
+    if segments.len() < 2 {
+        return Err("Skill 仓库地址缺少仓库信息".into());
+    }
+
+    let repository = segments[1].trim_end_matches(".git");
+    if repository.is_empty() {
+        return Err("Skill 仓库地址缺少仓库信息".into());
+    }
+
+    let branch = if segments.len() >= 4 && matches!(segments[2], "tree" | "blob") {
+        let value = segments[3].trim();
+        if value.is_empty() || value.eq_ignore_ascii_case("HEAD") {
+            None
+        } else {
+            Some(value.to_string())
+        }
+    } else {
+        None
+    };
+
+    Ok(GitHubMarketplaceSource {
+        owner: segments[0].to_string(),
+        repository: repository.to_string(),
+        branch,
+    })
+}
+
+fn normalize_marketplace_file_path(path: &str, allow_empty: bool) -> Result<String, String> {
+    let normalized = path.trim().trim_matches('/');
+    if normalized.is_empty() {
+        return if allow_empty {
+            Ok(String::new())
+        } else {
+            Err("文件路径不能为空".into())
+        };
+    }
+    if normalized.contains('\\')
+        || normalized
+            .split('/')
+            .any(|segment| segment.is_empty() || matches!(segment, "." | ".."))
+    {
+        return Err("不允许访问 Skill 目录之外的文件".into());
+    }
+
+    Ok(normalized.to_string())
+}
+
+fn marketplace_skill_path_candidates(skill_path: &str) -> Result<Vec<String>, String> {
+    let normalized = normalize_marketplace_file_path(skill_path, true)?;
+    let mut candidates = vec![normalized.clone()];
+    if let Some(path_without_prefix) = normalized.strip_prefix("skills/") {
+        candidates.push(path_without_prefix.to_string());
+    } else if !normalized.is_empty() {
+        candidates.push(format!("skills/{normalized}"));
+    }
+
+    Ok(candidates)
+}
+
+fn marketplace_skill_root_cache_key(source: &GitHubMarketplaceSource, skill_path: &str) -> String {
+    format!(
+        "{}/{}#{}#{}",
+        source.owner,
+        source.repository,
+        source.branch.as_deref().unwrap_or("HEAD"),
+        skill_path
+    )
+}
+
+fn cached_marketplace_skill_root(cache_key: &str) -> Option<String> {
+    let cache = MARKETPLACE_SKILL_ROOT_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    cache.lock().ok()?.get(cache_key).cloned()
+}
+
+fn cache_marketplace_skill_root(cache_key: String, root_path: String) {
+    let cache = MARKETPLACE_SKILL_ROOT_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Ok(mut guard) = cache.lock() {
+        if guard.len() >= MARKETPLACE_SKILL_ROOT_CACHE_LIMIT && !guard.contains_key(&cache_key) {
+            guard.clear();
+        }
+        guard.insert(cache_key, root_path);
+    }
+}
+
+fn marketplace_skill_root_from_tree(
+    tree_output: &str,
+    skill_path: &str,
+    skill_name: &str,
+) -> Option<String> {
+    let normalized_path = normalize_marketplace_file_path(skill_path, true).ok()?;
+    let expected_name = normalized_path
+        .rsplit('/')
+        .find(|segment| !segment.is_empty())
+        .unwrap_or_else(|| skill_name.trim());
+    if expected_name.is_empty() {
+        return None;
+    }
+
+    let normalized_path_lower = normalized_path.to_lowercase();
+    let expected_name_lower = expected_name.to_lowercase();
+    let mut candidates = tree_output
+        .lines()
+        .filter_map(|entry_path| {
+            let (parent_path, file_name) = entry_path.rsplit_once('/')?;
+            if !file_name.eq_ignore_ascii_case("SKILL.md")
+                || !parent_path
+                    .rsplit('/')
+                    .next()
+                    .is_some_and(|name| name.eq_ignore_ascii_case(&expected_name_lower))
+            {
+                return None;
+            }
+
+            let parent_path_lower = parent_path.to_lowercase();
+            let exact_match =
+                !normalized_path_lower.is_empty() && parent_path_lower == normalized_path_lower;
+            let suffix_match = normalized_path_lower.contains('/')
+                && parent_path_lower.ends_with(&format!("/{normalized_path_lower}"));
+            let is_skills_directory =
+                parent_path_lower.starts_with("skills/") || parent_path_lower.contains("/skills/");
+            let priority = if exact_match {
+                0
+            } else if suffix_match {
+                1
+            } else if is_skills_directory {
+                2
+            } else {
+                3
+            };
+            let depth = parent_path.split('/').count();
+            Some((priority, depth, parent_path_lower, parent_path.to_string()))
+        })
+        .collect::<Vec<_>>();
+    candidates.sort();
+    candidates.into_iter().next().map(|(_, _, _, path)| path)
+}
+
+fn github_contents_api_url(
+    source: &GitHubMarketplaceSource,
+    path: &str,
+) -> Result<url::Url, String> {
+    let mut api_url = url::Url::parse("https://api.github.com")
+        .map_err(|error| format!("构建 GitHub 请求地址失败: {error}"))?;
+    {
+        let mut segments = api_url
+            .path_segments_mut()
+            .map_err(|_| "构建 GitHub 请求地址失败".to_string())?;
+        segments.push("repos");
+        segments.push(&source.owner);
+        segments.push(&source.repository);
+        segments.push("contents");
+        for segment in path.split('/').filter(|segment| !segment.is_empty()) {
+            segments.push(segment);
+        }
+    }
+    if let Some(branch) = source.branch.as_deref() {
+        api_url.query_pairs_mut().append_pair("ref", branch);
+    }
+
+    Ok(api_url)
+}
+
+fn github_clone_url(source: &GitHubMarketplaceSource) -> Result<String, String> {
+    let mut clone_url = url::Url::parse("https://github.com")
+        .map_err(|error| format!("构建 GitHub 仓库地址失败: {error}"))?;
+    {
+        let mut segments = clone_url
+            .path_segments_mut()
+            .map_err(|_| "构建 GitHub 仓库地址失败".to_string())?;
+        segments.push(&source.owner);
+        segments.push(&format!("{}.git", source.repository));
+    }
+
+    Ok(clone_url.to_string())
+}
+
+async fn fetch_github_directory_entries(
+    client: &Client,
+    source: &GitHubMarketplaceSource,
+    path: &str,
+) -> Result<Vec<GitHubContentEntry>, String> {
+    let api_url = github_contents_api_url(source, path)?;
+    let response = client
+        .get(api_url)
+        .send()
+        .await
+        .map_err(|error| format!("读取 GitHub Skill 目录失败: {error}"))?;
+    if response.status().as_u16() == 403 {
+        return Err("GitHub API 请求受限，请稍后重试".into());
+    }
+    let response = response
+        .error_for_status()
+        .map_err(|error| format!("读取 GitHub Skill 目录失败: {error}"))?;
+
+    response
+        .json::<Vec<GitHubContentEntry>>()
+        .await
+        .map_err(|error| format!("解析 GitHub Skill 目录失败: {error}"))
+}
+
+fn discover_marketplace_skill_root_blocking(
+    source: &GitHubMarketplaceSource,
+    skill_path: &str,
+    skill_name: &str,
+) -> Result<String, String> {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let temp_dir = env::temp_dir().join(format!(
+        "skilldock-marketplace-tree-{}-{timestamp}",
+        std::process::id()
+    ));
+    let clone_url = github_clone_url(source)?;
+    let target_path = temp_dir.to_string_lossy().to_string();
+    let mut clone_args = vec![
+        "clone".to_string(),
+        "--filter=blob:none".to_string(),
+        "--no-checkout".to_string(),
+        "--depth".to_string(),
+        "1".to_string(),
+        "--no-tags".to_string(),
+    ];
+    if let Some(branch) = source.branch.as_deref() {
+        clone_args.extend(["--branch".to_string(), branch.to_string()]);
+    }
+    clone_args.extend([clone_url, target_path.clone()]);
+    let clone_arg_refs = clone_args.iter().map(String::as_str).collect::<Vec<_>>();
+
+    let result = (|| {
+        run_git_remote_command(&clone_arg_refs)
+            .map_err(|error| format!("搜索 GitHub Skill 目录失败: {error}"))?;
+        let mut command = git_command();
+        let output = command
+            .args(["-C", &target_path, "ls-tree", "-r", "--name-only", "HEAD"])
+            .output()
+            .map_err(|error| format!("读取 GitHub 仓库目录失败: {error}"))?;
+        if !output.status.success() {
+            let message = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            return Err(format!("读取 GitHub 仓库目录失败: {message}"));
+        }
+        let tree_output = String::from_utf8_lossy(&output.stdout);
+        marketplace_skill_root_from_tree(&tree_output, skill_path, skill_name)
+            .ok_or_else(|| format!("未在 GitHub 仓库中找到 {skill_name}/SKILL.md"))
+    })();
+    let _ = fs::remove_dir_all(temp_dir);
+
+    result
+}
+
+async fn discover_marketplace_skill_root(
+    source: &GitHubMarketplaceSource,
+    skill_path: &str,
+    skill_name: &str,
+) -> Result<String, String> {
+    let source = source.clone();
+    let skill_path = skill_path.to_string();
+    let skill_name = skill_name.to_string();
+    tauri::async_runtime::spawn_blocking(move || {
+        discover_marketplace_skill_root_blocking(&source, &skill_path, &skill_name)
+    })
+    .await
+    .map_err(|error| format!("搜索 GitHub Skill 目录失败: {error}"))?
+}
+
+fn marketplace_entry_relative_path(full_path: &str, skill_path: &str) -> Result<String, String> {
+    if skill_path.is_empty() {
+        return normalize_marketplace_file_path(full_path, false);
+    }
+
+    let prefix = format!("{skill_path}/");
+    let relative_path = full_path
+        .strip_prefix(&prefix)
+        .ok_or_else(|| "GitHub 返回了 Skill 目录之外的文件".to_string())?;
+    normalize_marketplace_file_path(relative_path, false)
+}
+
+fn marketplace_initial_file_path(entries: &[SkillFileEntry]) -> Option<String> {
+    let files = entries
+        .iter()
+        .filter(|entry| entry.entry_type == "file")
+        .collect::<Vec<_>>();
+    files
+        .iter()
+        .find(|entry| entry.path.eq_ignore_ascii_case("SKILL.md"))
+        .or_else(|| {
+            files.iter().find(|entry| {
+                matches!(
+                    Path::new(&entry.path)
+                        .extension()
+                        .and_then(|value| value.to_str()),
+                    Some("md" | "markdown")
+                )
+            })
+        })
+        .or_else(|| files.first())
+        .map(|entry| entry.path.clone())
+}
+
+fn marketplace_entry_sort_key(entry: &SkillFileEntry) -> String {
+    entry.path.to_lowercase().replace('/', "\0")
+}
+
+fn sort_github_content_entries(entries: &mut [GitHubContentEntry]) {
+    entries.sort_by(|left, right| {
+        let left_is_directory = left.entry_type == "dir";
+        let right_is_directory = right.entry_type == "dir";
+        right_is_directory
+            .cmp(&left_is_directory)
+            .then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase()))
+    });
+}
+
+async fn fetch_marketplace_skill_entries(
+    client: &Client,
+    source: &GitHubMarketplaceSource,
+    root_path: &str,
+    root_name: &str,
+) -> Result<Vec<SkillFileEntry>, String> {
+    let mut pending_directories = VecDeque::from([root_path.to_string()]);
+    let mut entries = vec![SkillFileEntry {
+        path: String::new(),
+        name: root_name.to_string(),
+        entry_type: "directory".into(),
+        depth: 0,
+    }];
+
+    while let Some(directory_path) = pending_directories.pop_front() {
+        let mut children = fetch_github_directory_entries(client, source, &directory_path).await?;
+        sort_github_content_entries(&mut children);
+        for child in children {
+            let relative_path = marketplace_entry_relative_path(&child.path, root_path)?;
+            let is_directory = child.entry_type == "dir";
+            let depth = relative_path.split('/').count();
+            entries.push(SkillFileEntry {
+                path: relative_path,
+                name: child.name,
+                entry_type: if is_directory { "directory" } else { "file" }.into(),
+                depth,
+            });
+            if entries.len() > MARKETPLACE_SKILL_FILE_LIMIT + 1 {
+                return Err(format!(
+                    "Skill 文件数量超过 {} 个，暂不支持在线预览",
+                    MARKETPLACE_SKILL_FILE_LIMIT
+                ));
+            }
+            if is_directory {
+                pending_directories.push_back(child.path);
+            }
+        }
+    }
+
+    Ok(entries)
+}
+
+async fn fetch_marketplace_skill_file_document(
+    client: &Client,
+    source: &GitHubMarketplaceSource,
+    root_path: &str,
+    relative_path: &str,
+) -> Result<SkillFileDocument, String> {
+    let full_path = [root_path, relative_path]
+        .into_iter()
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>()
+        .join("/");
+    let api_url = github_contents_api_url(source, &full_path)?;
+    let response = client
+        .get(api_url)
+        .header("Accept", "application/vnd.github.raw+json")
+        .send()
+        .await
+        .map_err(|error| format!("读取 GitHub Skill 文件失败: {error}"))?;
+    if response.status().as_u16() == 403 {
+        return Err("GitHub API 请求受限，请稍后重试".into());
+    }
+    let response = response
+        .error_for_status()
+        .map_err(|error| format!("读取 GitHub Skill 文件失败: {error}"))?;
+    if response.content_length().unwrap_or_default() > MARKETPLACE_SKILL_FILE_SIZE_LIMIT {
+        return Err("文件超过 512 KB，暂不支持在线预览".into());
+    }
+
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|error| format!("读取 GitHub Skill 文件失败: {error}"))?;
+    if bytes.len() as u64 > MARKETPLACE_SKILL_FILE_SIZE_LIMIT {
+        return Err("文件超过 512 KB，暂不支持在线预览".into());
+    }
+    let content =
+        String::from_utf8(bytes.to_vec()).map_err(|_| "该文件不是可预览的文本文件".to_string())?;
+
+    Ok(SkillFileDocument {
+        path: relative_path.to_string(),
+        content,
+    })
 }
 
 fn skills_sh_marketplace_id(source: &str, skill_id: &str) -> String {
@@ -4960,6 +5389,111 @@ pub async fn get_marketplace_skill_description(
 }
 
 #[tauri::command]
+pub async fn get_marketplace_skill_file_browser(
+    source_url: String,
+    skill_path: String,
+    skill_name: String,
+) -> Result<SkillFileBrowserSnapshot, String> {
+    let source = parse_github_marketplace_source(&source_url)?;
+    let cache_key = marketplace_skill_root_cache_key(&source, &skill_path);
+    let mut root_paths = marketplace_skill_path_candidates(&skill_path)?;
+    if let Some(cached_root) = cached_marketplace_skill_root(&cache_key) {
+        if !root_paths.contains(&cached_root) {
+            root_paths.insert(0, cached_root);
+        }
+    }
+    let client = marketplace_http_client()?;
+    let mut last_error = "Skill 目录中没有可预览文件".to_string();
+
+    for root_path in &root_paths {
+        match fetch_marketplace_skill_entries(&client, &source, &root_path, &skill_name).await {
+            Ok(mut entries) if entries.len() > 1 => {
+                cache_marketplace_skill_root(cache_key, root_path.clone());
+                let root_entry = entries.remove(0);
+                entries.sort_by_key(marketplace_entry_sort_key);
+                entries.insert(0, root_entry);
+                let initial_file_path = marketplace_initial_file_path(&entries);
+                return Ok(SkillFileBrowserSnapshot {
+                    skill_name,
+                    root_name: entries[0].name.clone(),
+                    entries,
+                    initial_file_path,
+                });
+            }
+            Ok(_) => {}
+            Err(error) => last_error = error,
+        }
+    }
+
+    let discovered_root = discover_marketplace_skill_root(&source, &skill_path, &skill_name)
+        .await
+        .map_err(|error| format!("{last_error}；{error}"))?;
+    if root_paths.contains(&discovered_root) {
+        return Err(last_error);
+    }
+    let mut entries =
+        fetch_marketplace_skill_entries(&client, &source, &discovered_root, &skill_name).await?;
+    if entries.len() <= 1 {
+        return Err("Skill 目录中没有可预览文件".into());
+    }
+    cache_marketplace_skill_root(cache_key, discovered_root);
+    let root_entry = entries.remove(0);
+    entries.sort_by_key(marketplace_entry_sort_key);
+    entries.insert(0, root_entry);
+    let initial_file_path = marketplace_initial_file_path(&entries);
+
+    Ok(SkillFileBrowserSnapshot {
+        skill_name,
+        root_name: entries[0].name.clone(),
+        entries,
+        initial_file_path,
+    })
+}
+
+#[tauri::command]
+pub async fn get_marketplace_skill_file_content(
+    source_url: String,
+    skill_path: String,
+    relative_path: String,
+) -> Result<SkillFileDocument, String> {
+    let source = parse_github_marketplace_source(&source_url)?;
+    let cache_key = marketplace_skill_root_cache_key(&source, &skill_path);
+    let mut root_paths = marketplace_skill_path_candidates(&skill_path)?;
+    if let Some(cached_root) = cached_marketplace_skill_root(&cache_key) {
+        if !root_paths.contains(&cached_root) {
+            root_paths.insert(0, cached_root);
+        }
+    }
+    let relative_path = normalize_marketplace_file_path(&relative_path, false)?;
+    let client = marketplace_http_client()?;
+    let mut last_error = "Skill 文件不存在或路径无效".to_string();
+    for root_path in &root_paths {
+        match fetch_marketplace_skill_file_document(&client, &source, &root_path, &relative_path)
+            .await
+        {
+            Ok(document) => {
+                cache_marketplace_skill_root(cache_key, root_path.clone());
+                return Ok(document);
+            }
+            Err(error) => last_error = error,
+        }
+    }
+
+    let skill_name = skill_path.rsplit('/').next().unwrap_or_default();
+    let discovered_root = discover_marketplace_skill_root(&source, &skill_path, skill_name)
+        .await
+        .map_err(|error| format!("{last_error}；{error}"))?;
+    if root_paths.contains(&discovered_root) {
+        return Err(last_error);
+    }
+    let document =
+        fetch_marketplace_skill_file_document(&client, &source, &discovered_root, &relative_path)
+            .await?;
+    cache_marketplace_skill_root(cache_key, discovered_root);
+    Ok(document)
+}
+
+#[tauri::command]
 pub fn list_local_skill_candidates() -> Vec<LocalSkillCandidate> {
     let _ = remove_reserved_workspace_symlinks_from_all_tools();
     let installed_skills = load_installed_skills(&default_installed_skills());
@@ -6792,7 +7326,9 @@ mod tests {
         selected_repo_path_hint, should_use_skills_sh_homepage_page, tool_name_to_id,
         update_skill_repo, REFRESH_GIT_STATES_CONCURRENCY,
     };
-    use crate::models::{MarketplaceSkill, SkillSummary, ToolConfig, WorkspacePersistence};
+    use crate::models::{
+        MarketplaceSkill, SkillFileEntry, SkillSummary, ToolConfig, WorkspacePersistence,
+    };
     use crate::workspace::TEST_ENV_LOCK;
     use std::env;
     use std::fs;
@@ -6816,6 +7352,133 @@ mod tests {
         ));
         fs::create_dir_all(&temp_dir).expect("create temp test dir");
         temp_dir
+    }
+
+    #[test]
+    fn parses_github_marketplace_source_and_branch() {
+        let source = super::parse_github_marketplace_source(
+            "https://github.com/example/skills/tree/main/skills/demo",
+        )
+        .expect("parse GitHub marketplace source");
+
+        assert_eq!(source.owner, "example");
+        assert_eq!(source.repository, "skills");
+        assert_eq!(source.branch.as_deref(), Some("main"));
+    }
+
+    #[test]
+    fn uses_default_branch_for_head_marketplace_source() {
+        let source = super::parse_github_marketplace_source(
+            "https://github.com/example/skills/tree/HEAD/skills/demo",
+        )
+        .expect("parse GitHub marketplace source");
+        let api_url =
+            super::github_contents_api_url(&source, "skills/demo").expect("build API url");
+
+        assert_eq!(source.branch, None);
+        assert_eq!(
+            api_url.as_str(),
+            "https://api.github.com/repos/example/skills/contents/skills/demo"
+        );
+    }
+
+    #[test]
+    fn rejects_marketplace_file_path_traversal() {
+        assert!(super::normalize_marketplace_file_path("../secret.txt", false).is_err());
+        assert!(
+            super::normalize_marketplace_file_path("reference/../../secret.txt", false).is_err()
+        );
+        assert!(super::normalize_marketplace_file_path("reference\\secret.txt", false).is_err());
+    }
+
+    #[test]
+    fn falls_back_to_standard_skills_directory_for_marketplace_preview() {
+        assert_eq!(
+            super::marketplace_skill_path_candidates("frontend-design")
+                .expect("build marketplace path candidates"),
+            vec!["frontend-design", "skills/frontend-design"]
+        );
+        assert_eq!(
+            super::marketplace_skill_path_candidates("skills/frontend-design")
+                .expect("build marketplace path candidates"),
+            vec!["skills/frontend-design", "frontend-design"]
+        );
+    }
+
+    #[test]
+    fn discovers_marketplace_skill_in_nested_repository_directory() {
+        let tree_output = concat!(
+            "archive/typescript-advanced-types/SKILL.md\n",
+            "plugins/languages/skills/typescript-advanced-types/SKILL.md\n",
+            "plugins/languages/skills/typescript-advanced-types/reference.md\n",
+        );
+
+        assert_eq!(
+            super::marketplace_skill_root_from_tree(
+                tree_output,
+                "typescript-advanced-types",
+                "typescript-advanced-types",
+            )
+            .as_deref(),
+            Some("plugins/languages/skills/typescript-advanced-types")
+        );
+    }
+
+    #[test]
+    fn prefers_root_skill_manifest_for_marketplace_preview() {
+        let entries = vec![
+            SkillFileEntry {
+                path: "reference/guide.md".into(),
+                name: "guide.md".into(),
+                entry_type: "file".into(),
+                depth: 2,
+            },
+            SkillFileEntry {
+                path: "SKILL.md".into(),
+                name: "SKILL.md".into(),
+                entry_type: "file".into(),
+                depth: 1,
+            },
+        ];
+
+        assert_eq!(
+            super::marketplace_initial_file_path(&entries).as_deref(),
+            Some("SKILL.md")
+        );
+    }
+
+    #[test]
+    fn keeps_marketplace_directory_children_before_later_siblings() {
+        let mut entries = vec![
+            SkillFileEntry {
+                path: "reference/guide.md".into(),
+                name: "guide.md".into(),
+                entry_type: "file".into(),
+                depth: 2,
+            },
+            SkillFileEntry {
+                path: "reference.md".into(),
+                name: "reference.md".into(),
+                entry_type: "file".into(),
+                depth: 1,
+            },
+            SkillFileEntry {
+                path: "reference".into(),
+                name: "reference".into(),
+                entry_type: "directory".into(),
+                depth: 1,
+            },
+        ];
+
+        entries.sort_by_key(super::marketplace_entry_sort_key);
+
+        assert_eq!(
+            entries
+                .iter()
+                .map(|entry| entry.path.as_str())
+                .collect::<Vec<_>>(),
+            vec!["reference", "reference/guide.md", "reference.md"]
+        );
     }
 
     #[test]

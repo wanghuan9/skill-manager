@@ -3700,6 +3700,51 @@ code {
   color: #4b5563;
 }
 
+.skill-file-dialog.marketplace-skill-file-dialog {
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 12px;
+  padding: 16px;
+}
+
+.marketplace-skill-file-dialog__header {
+  align-items: flex-start;
+}
+
+.marketplace-skill-file-dialog .skill-detail-modal__title-group p {
+  font-size: 0.78rem;
+}
+
+.marketplace-skill-file-dialog__state h4,
+.marketplace-skill-file-dialog__state p {
+  margin: 0;
+}
+
+.marketplace-skill-file-dialog > .skill-file-dialog__body {
+  overflow: hidden;
+  border: 1px solid #dbe5f2;
+  border-radius: 14px;
+}
+
+.marketplace-skill-file-dialog__editor {
+  grid-template-rows: auto minmax(0, 1fr) auto auto;
+}
+
+.marketplace-skill-file-dialog__state {
+  grid-row: 1 / -1;
+  min-height: 0;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 10px;
+  padding: 18px;
+  border: 1px dashed var(--line);
+  border-radius: 14px;
+  background: rgba(246, 249, 252, 0.7);
+  color: #6b7280;
+  font-size: 0.84rem;
+  text-align: center;
+}
+
 .skill-detail-modal__content {
   min-height: 0;
   overflow: auto;

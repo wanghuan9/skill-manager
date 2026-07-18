@@ -198,6 +198,19 @@ type SaveSkillFileInput = SkillFileInput & {
   content: string;
 };
 
+type MarketplaceSkillFileInput = {
+  sourceUrl: string;
+  skillPath: string;
+  skillName: string;
+};
+
+type MarketplaceSkillFileContentInput = Pick<
+  MarketplaceSkillFileInput,
+  "sourceUrl" | "skillPath"
+> & {
+  relativePath: string;
+};
+
 type ToggleSkillToolInput = {
   skillName: string;
   toolName: string;
@@ -1151,6 +1164,34 @@ export async function fetchMarketplaceSkillDescription(input: {
       fallbackDescription: input.fallbackDescription,
     },
     fallback,
+  );
+}
+
+export async function fetchMarketplaceSkillFileBrowser(
+  input: MarketplaceSkillFileInput,
+): Promise<SkillFileBrowserSnapshot> {
+  return invokeOrFallback(
+    "get_marketplace_skill_file_browser",
+    input,
+    {
+      skillName: input.skillName,
+      rootName: input.skillName,
+      entries: [],
+      initialFilePath: null,
+    },
+  );
+}
+
+export async function fetchMarketplaceSkillFileContent(
+  input: MarketplaceSkillFileContentInput,
+): Promise<SkillFileDocument> {
+  return invokeOrFallback(
+    "get_marketplace_skill_file_content",
+    input,
+    {
+      path: input.relativePath,
+      content: "",
+    },
   );
 }
 

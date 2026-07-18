@@ -1201,9 +1201,8 @@ test("shows store and repository actions in skill marketplace detail", async () 
   const detailDialog = screen.getByRole("dialog", { name: "workflow-critic 详情" });
   expect(within(detailDialog).getByRole("link", { name: "查看商店" })).toBeInTheDocument();
   expect(within(detailDialog).getByRole("link", { name: "打开仓库" })).toBeInTheDocument();
-  expect(within(detailDialog).getByText("来源: skills.sh")).toBeInTheDocument();
-  expect(within(detailDialog).getByText("作者: skills.sh")).toBeInTheDocument();
-  expect(within(detailDialog).getByText(marketplaceSkillFixtures[0].popularityLabel)).toBeInTheDocument();
+  expect(within(detailDialog).getByText("来源 skills.sh · 作者 skills.sh · 731.2K 次下载")).toBeInTheDocument();
+  expect(detailDialog.querySelector(".skill-detail-modal__meta")).not.toBeInTheDocument();
 });
 
 test("keeps MCP marketplace card and detail metadata consistent", async () => {

@@ -2,11 +2,10 @@ import { useEffect, useState, type KeyboardEvent as ReactKeyboardEvent } from "r
 import { useTranslate } from "@/app/i18n";
 import { useFailureReporter } from "@/app/failure-feedback";
 import { useNotifications } from "@/app/notifications";
-import { fetchMarketplaceSkillDescription, openExternalLink } from "@/features/skills/api/skill-client";
+import { MarketplaceSkillDetailPreview } from "@/features/install/components/MarketplaceSkillDetailPreview";
+import { openExternalLink } from "@/features/skills/api/skill-client";
 import type { MarketplaceSkill, MarketplaceSourceSite } from "@/features/skills/state/skill-store";
 import { useSkillWorkspace } from "@/features/skills/state/skill-workspace";
-
-const marketplaceSkillDescriptionCache = new Map<string, string>();
 
 type MarketplaceInstallPanelProps = {
   activeSourceSite: MarketplaceSourceSite;
@@ -226,53 +225,6 @@ type SkillDetailModalProps = {
 function SkillDetailModal(props: SkillDetailModalProps) {
   const { skill, onClose } = props;
   const { t } = useTranslate();
-  const [description, setDescription] = useState(skill.description);
-  const [isDescriptionLoading, setIsDescriptionLoading] = useState(false);
-  const [descriptionNotice, setDescriptionNotice] = useState("");
-
-  useEffect(() => {
-    const cached = marketplaceSkillDescriptionCache.get(skill.id);
-    if (cached) {
-      setDescription(cached);
-      setDescriptionNotice("");
-      return;
-    }
-
-    let active = true;
-    setDescription(skill.description);
-    setDescriptionNotice("");
-    setIsDescriptionLoading(true);
-    void fetchMarketplaceSkillDescription({
-      sourceSite: skill.sourceSite,
-      sourceUrl: skill.sourceUrl,
-      skillId: skill.id,
-      skillName: skill.name,
-      fallbackDescription: skill.description,
-    })
-      .then((value) => {
-        if (!active) {
-          return;
-        }
-        marketplaceSkillDescriptionCache.set(skill.id, value);
-        setDescription(value);
-      })
-      .catch(() => {
-        if (!active) {
-          return;
-        }
-        setDescription(skill.description);
-        setDescriptionNotice(t("install.market.detail.loadFailed"));
-      })
-      .finally(() => {
-        if (active) {
-          setIsDescriptionLoading(false);
-        }
-      });
-
-    return () => {
-      active = false;
-    };
-  }, [skill]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -293,18 +245,24 @@ function SkillDetailModal(props: SkillDetailModalProps) {
   const marketplaceUrl = resolveMarketplaceSkillUrl(skill);
 
   return (
-    <div className="skill-detail-modal__backdrop" role="presentation" onClick={onClose}>
+    <div className="dialog-backdrop" role="presentation" onClick={onClose}>
       <section
-        className="skill-detail-modal"
+        className="skill-file-dialog marketplace-skill-file-dialog"
         role="dialog"
         aria-modal="true"
         aria-label={t("install.market.detail.aria", { name: skill.name })}
         onClick={(event) => event.stopPropagation()}
       >
-        <header className="skill-detail-modal__header">
+        <header className="skill-detail-modal__header marketplace-skill-file-dialog__header">
           <div className="skill-detail-modal__title-group">
             <h3>{skill.name}</h3>
-            <p>{t("install.market.detail.meta", { source: skill.sourceSite, author: skill.maintainer })}</p>
+            <p>
+              {t("install.market.detail.meta", {
+                source: skill.sourceSite,
+                author: skill.maintainer,
+                downloads: skill.popularityLabel,
+              })}
+            </p>
           </div>
           <div className="skill-detail-modal__actions">
             {marketplaceUrl ? (
@@ -331,25 +289,17 @@ function SkillDetailModal(props: SkillDetailModalProps) {
               <ExternalLinkIcon />
               {t("install.market.detail.openRepo")}
             </a>
-            <button className="skill-detail-modal__close" type="button" onClick={onClose} aria-label={t("install.market.detail.close")}>
+            <button
+              className="skill-detail-modal__close"
+              type="button"
+              onClick={onClose}
+              aria-label={t("install.market.detail.close")}
+            >
               ×
             </button>
           </div>
         </header>
-        <div className="skill-detail-modal__meta">
-          <span className="install-card__chip">{t("install.market.source")}: {skill.sourceSite}</span>
-          <span className="install-card__chip">{t("install.market.author")}: {skill.maintainer}</span>
-          <span className="install-card__chip install-card__chip--metric">
-            <DownloadIcon />
-            {skill.popularityLabel}
-          </span>
-        </div>
-        <article className="skill-detail-modal__content">
-          <h4>{t("install.market.detail.intro")}</h4>
-          {isDescriptionLoading ? <p>{t("install.market.detail.loading")}</p> : null}
-          {descriptionNotice ? <p>{descriptionNotice}</p> : null}
-          <p>{description}</p>
-        </article>
+        <MarketplaceSkillDetailPreview key={skill.id} skill={skill} />
       </section>
     </div>
   );

@@ -54,6 +54,8 @@ pub fn run() {
             commands::list_installed_skills,
             commands::list_marketplace_skills,
             commands::get_marketplace_skill_description,
+            commands::get_marketplace_skill_file_browser,
+            commands::get_marketplace_skill_file_content,
             commands::list_local_skill_candidates,
             commands::list_tool_skill_entries,
             commands::list_tool_configs,
