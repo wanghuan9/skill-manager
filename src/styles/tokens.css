@@ -1588,6 +1588,10 @@ code {
   gap: 8px;
 }
 
+.main-panel[data-active-route="skills"] .skills-page > .card-list {
+  padding-top: 4px;
+}
+
 .skill-group-section {
   --group-accent: #2f78ff;
   --group-accent-soft: rgba(47, 120, 255, 0.08);
@@ -7276,19 +7280,13 @@ button.settings-form-item:disabled {
 
 .plugins-page {
   display: grid;
-  gap: 16px;
+  gap: 14px;
 }
 
 .plugins-page__toolbar {
   display: grid;
   gap: 14px;
   padding: 4px 0 2px;
-}
-
-.plugins-page__host-tabs-row {
-  display: flex;
-  justify-content: flex-start;
-  padding: 0 0 4px;
 }
 
 .plugins-page__toolbar-primary,
@@ -7307,104 +7305,6 @@ button.settings-form-item:disabled {
 .plugins-page__search {
   flex: 0 1 230px;
   min-width: 180px;
-}
-
-.plugins-page__host-tabs {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 5px;
-  min-width: 0;
-  padding: 5px;
-  border: 1px solid rgba(203, 213, 225, 0.9);
-  border-radius: 22px;
-  background: rgba(255, 255, 255, 0.78);
-  box-shadow:
-    0 14px 30px rgba(15, 23, 42, 0.1),
-    0 1px 0 rgba(255, 255, 255, 0.82) inset;
-  backdrop-filter: blur(18px) saturate(1.08);
-}
-
-.plugins-page__host-tab {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  justify-content: center;
-  min-width: 74px;
-  min-height: 38px;
-  padding: 0 12px;
-  border: 0;
-  border-radius: 17px;
-  background: transparent;
-  color: #475569;
-  font-size: 0.8125rem;
-  font-weight: 500;
-  box-shadow: none;
-  transition:
-    background-color var(--motion-base) var(--ease-standard),
-    box-shadow var(--motion-base) var(--ease-standard),
-    color var(--motion-base) var(--ease-standard),
-    transform var(--motion-base) var(--ease-standard);
-}
-
-.plugins-page__host-tab:hover {
-  color: #344054;
-  background: rgba(148, 163, 184, 0.1);
-  transform: translateY(-1px);
-}
-
-.plugins-page__host-tab:active {
-  transform: translateY(0) scale(0.98);
-}
-
-.plugins-page__host-tab.is-selected {
-  background: rgba(47, 120, 255, 0.12);
-  color: #1d4ed8;
-  box-shadow: 0 8px 20px rgba(47, 120, 255, 0.12);
-}
-
-.plugins-page__host-tab.is-selected:hover {
-  background: rgba(47, 120, 255, 0.14);
-  color: #1d4ed8;
-}
-
-.plugins-page__host-tab-logo {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 22px;
-  overflow: hidden;
-  border-radius: 7px;
-  background: rgba(255, 255, 255, 0.7);
-  color: inherit;
-  font-size: 0.72rem;
-  font-weight: 800;
-  line-height: 1;
-  white-space: nowrap;
-  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.72) inset;
-}
-
-.plugins-page__host-tab-logo--all {
-  width: auto;
-  min-width: 34px;
-  padding: 0 8px;
-  font-size: 0.88rem;
-  font-weight: 700;
-}
-
-.plugins-page__host-tab-logo img {
-  display: block;
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
-}
-
-.plugins-page__host-tab-count {
-  color: inherit;
-  min-width: 12px;
-  font-size: 0.8rem;
-  opacity: 0.78;
 }
 
 .skills-source-header-slot {
@@ -7447,7 +7347,7 @@ button.settings-form-item:disabled {
   border-radius: 16px;
   background: transparent;
   color: var(--muted);
-  font-size: 0.8125rem;
+  font-size: 0.78rem;
   font-weight: 500;
   box-shadow: none;
   transition:
@@ -7470,7 +7370,7 @@ button.settings-form-item:disabled {
 .skills-source-tab.is-selected {
   color: var(--accent);
   background: rgba(47, 120, 255, 0.12);
-  font-weight: 600;
+  font-weight: 500;
   box-shadow: none;
 }
 
@@ -7506,8 +7406,9 @@ button.settings-form-item:disabled {
 .skills-source-tab__count {
   min-width: 12px;
   color: inherit;
-  font-size: 0.78rem;
-  opacity: 0.72;
+  font-size: 0.75rem;
+  font-weight: 500;
+  opacity: 0.68;
 }
 
 .skills-source-menu {
@@ -7527,7 +7428,7 @@ button.settings-form-item:disabled {
   border-radius: 16px;
   background: rgba(255, 255, 255, 0.72);
   color: var(--ink);
-  font-size: 0.8rem;
+  font-size: 0.78rem;
   font-weight: 500;
   box-shadow: none;
 }
@@ -7550,7 +7451,8 @@ button.settings-form-item:disabled {
   z-index: 30;
   display: grid;
   gap: 1px;
-  min-width: 210px;
+  width: 184px;
+  min-width: 184px;
   max-height: 320px;
   padding: 4px;
   overflow-y: auto;
@@ -7569,11 +7471,11 @@ button.settings-form-item:disabled {
 
 .skills-source-menu-item {
   display: grid;
-  grid-template-columns: 22px minmax(0, 1fr) auto;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
   align-items: center;
-  gap: 9px;
+  gap: 7px;
   min-height: 32px;
-  padding: 0 9px;
+  padding: 0 8px;
   border: 0;
   border-radius: 8px;
   background: transparent;
@@ -7600,9 +7502,14 @@ button.settings-form-item:disabled {
   min-height: 34px;
 }
 
+.skills-source-select-row .skills-source-menu {
+  width: 168px;
+}
+
 .skills-source-select-trigger {
   gap: 5px;
-  min-width: 184px;
+  width: 168px;
+  min-width: 168px;
   min-height: 32px;
   padding: 0 9px;
   justify-content: flex-start;
@@ -7629,7 +7536,8 @@ button.settings-form-item:disabled {
 .skills-source-select-row .skills-source-menu__popover {
   top: calc(100% + 5px);
   gap: 0;
-  min-width: 184px;
+  width: 168px;
+  min-width: 168px;
   max-height: 280px;
   padding: 3px;
   border-radius: 10px;
@@ -7637,9 +7545,9 @@ button.settings-form-item:disabled {
 
 .skills-source-select-row .skills-source-menu-item {
   grid-template-columns: 18px minmax(0, 1fr) auto;
-  gap: 7px;
+  gap: 6px;
   min-height: 28px;
-  padding: 0 8px;
+  padding: 0 7px;
   border-radius: 7px;
   font-size: 0.76rem;
 }
@@ -8929,17 +8837,6 @@ button.settings-form-item:disabled {
 
   .install-category-tab {
     flex: 1 1 0;
-  }
-
-  .plugins-page__host-tabs {
-    width: auto;
-    max-width: 100%;
-    overflow-x: auto;
-  }
-
-  .plugins-page__host-tab {
-    flex: 0 0 auto;
-    justify-content: center;
   }
 
   .skills-source-tab {

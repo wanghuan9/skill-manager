@@ -76,6 +76,7 @@ type RouteErrorBoundaryState = {
 };
 
 const ROUTE_LOCAL_ALIGN_COOLDOWN_MS = 10_000;
+const MANAGED_SKILL_DIRECTORY = "~/.skilldock/skills";
 
 class RouteErrorBoundary extends Component<
   RouteErrorBoundaryProps,
@@ -165,6 +166,10 @@ function isMacOSWindow() {
   const platform = window.navigator.platform || "";
   const userAgent = window.navigator.userAgent || "";
   return /mac|iphone|ipad|ipod/i.test(`${platform} ${userAgent}`);
+}
+
+function formatSkillDirectoryPath(path: string) {
+  return path.trim().replace(/^\/Users\/[^/]+(?=\/|$)/, "~");
 }
 
 function NavRouteIcon(props: { route: RouteKey }) {
@@ -284,6 +289,7 @@ function renderRoute(
   onInstallSkillFromMarketplace: () => void,
   onInstallMcpFromMarketplace: () => void,
   onInstallPluginFromMarketplace: () => void,
+  onPluginHostChange: (hostName: string | null) => void,
   activeSkillsSection: SkillsSectionKey,
 ) {
   if (route === "tools") {
@@ -300,7 +306,12 @@ function renderRoute(
     );
   }
   if (route === "plugins") {
-    return <PluginsRoute onGoInstall={onInstallPluginFromMarketplace} />;
+    return (
+      <PluginsRoute
+        onGoInstall={onInstallPluginFromMarketplace}
+        onActiveHostChange={onPluginHostChange}
+      />
+    );
   }
   if (route === "settings") {
     return <SettingsRoute />;
@@ -424,6 +435,7 @@ function AppContent() {
   const initialSkillViewMode = readSkillViewModePreference();
   const isMacOS = isMacOSWindow();
   const brandIconRef = useRef<HTMLDivElement | null>(null);
+  const pageContentRef = useRef<HTMLElement | null>(null);
   const [activeRoute, setActiveRoute] = useState<RouteKey>("skills");
   const [activeSkillsSection, setActiveSkillsSection] =
     useState<SkillsSectionKey>("skills");
@@ -448,6 +460,7 @@ function AppContent() {
     useState<InstallCategory>("skill");
   const [activeInstallTab, setActiveInstallTab] =
     useState<InstallTab>("market");
+  const [activePluginHostName, setActivePluginHostName] = useState<string | null>(null);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [sidebarHandleTop, setSidebarHandleTop] = useState<number | null>(null);
   const [mcpServerCount, setMcpServerCount] = useState(
@@ -473,6 +486,8 @@ function AppContent() {
         toolSkillEntries,
       }))
     : null;
+  const activeSkillPageTitle = activeSkillSourceTool?.name
+    ?? tx(language, "app.nav.skills.label");
   const installedToolCount = toolConfigs.filter((tool) =>
     isToolInstalledStatus(tool.statusLabel),
   ).length;
@@ -486,14 +501,13 @@ function AppContent() {
     activeRoute === "skills" && activeSkillsSection === "skills"
       ? activeSkillSourceTool && activeToolSkillCounts
         ? tx(language, "app.header.skills.sourceSummary", {
-            tool: activeSkillSourceTool.name,
-            total: activeToolSkillCounts.all,
+            path: formatSkillDirectoryPath(activeSkillSourceTool.skillsPath),
             managed: activeToolSkillCounts.managed,
             unmanaged: activeToolSkillCounts.unmanaged,
             mismatch: activeToolSkillCounts.mismatch,
           })
         : tx(language, "app.header.skills.summary", {
-            managed: installedSkills.length,
+            path: MANAGED_SKILL_DIRECTORY,
             installed: enabledManagedSkillCount,
             updatable: updatableSkillCount,
             pending: pendingPushSkillCount,
@@ -510,6 +524,9 @@ function AppContent() {
           : tx(language, activeDefinition.descriptionKey);
 
   function handleActiveSkillSourceIdChange(sourceId: SkillSourceId) {
+    if (pageContentRef.current) {
+      pageContentRef.current.scrollTop = 0;
+    }
     setActiveSkillSourceId(sourceId);
     setSkillManagementFilter("all");
   }
@@ -796,7 +813,7 @@ function AppContent() {
                 <h1>
                   {activeSkillsSection === "mcp"
                     ? "MCP"
-                    : tx(language, activeDefinition.labelKey)}
+                    : activeSkillPageTitle}
                 </h1>
                 {activeSkillsSection === "skills" ? (
                   <SkillListToolbar
@@ -899,13 +916,17 @@ function AppContent() {
           ) : activeRoute === "plugins" ? (
             <div className="page-header--split">
               <div className="page-header__row">
-                <h1>{tx(language, activeDefinition.labelKey)}</h1>
+                <h1>{activePluginHostName ?? tx(language, activeDefinition.labelKey)}</h1>
                 <div
                   className="mcp-header-toolbar-slot"
                   id="plugins-header-toolbar-slot"
                 />
               </div>
               <p>{activeDescription}</p>
+              <div
+                className="skills-source-header-slot"
+                id="plugins-source-header-slot"
+              />
             </div>
           ) : (
             <div className="page-header--split">
@@ -916,13 +937,14 @@ function AppContent() {
         </header>
         <div
           className={`page-header-divider${
-            activeRoute === "skills" && activeSkillsSection === "skills"
+            (activeRoute === "skills" && activeSkillsSection === "skills")
+              || activeRoute === "plugins"
               ? " page-header-divider--skills"
               : ""
           }`}
           aria-hidden="true"
         />
-        <section className="page-content">
+        <section ref={pageContentRef} className="page-content">
           <RouteErrorBoundary route={activeRoute}>
             {renderRoute(
               activeRoute,
@@ -941,6 +963,7 @@ function AppContent() {
               () => handleOpenSkillInstall("market"),
               handleOpenMcpInstall,
               handleOpenPluginInstall,
+              setActivePluginHostName,
               activeSkillsSection,
             )}
           </RouteErrorBoundary>

@@ -691,14 +691,14 @@ function PluginHostLogo({ hostTool, label }: { hostTool: PluginHostTool; label: 
 
   if (!logoUrl || logoLoadFailed) {
     return (
-      <span className="plugins-page__host-tab-logo" aria-hidden="true">
+      <span className="skills-source-tab__logo" aria-hidden="true">
         {fallbackLabel}
       </span>
     );
   }
 
   return (
-    <span className="plugins-page__host-tab-logo" aria-hidden="true">
+    <span className="skills-source-tab__logo" aria-hidden="true">
       <img
         src={logoUrl}
         alt=""
@@ -1421,7 +1421,12 @@ function isGitSourceValue(value: string) {
   }
 }
 
-export function PluginsRoute(props: { onGoInstall?: () => void } = {}) {
+type PluginsRouteProps = {
+  onGoInstall?: () => void;
+  onActiveHostChange?: (hostName: string | null) => void;
+};
+
+export function PluginsRoute(props: PluginsRouteProps = {}) {
   const { t } = useTranslate();
   const { defaultOpenToolId, language, toolConfigs } = useSkillWorkspace();
   const { notify } = useNotifications();
@@ -1467,6 +1472,7 @@ export function PluginsRoute(props: { onGoInstall?: () => void } = {}) {
   const [toolbarContainer, setToolbarContainer] = useState<HTMLElement | null>(
     null,
   );
+  const [sourceHeaderContainer, setSourceHeaderContainer] = useState<HTMLElement | null>(null);
   const { expandedId, handleExpandedChange } = useSingleExpandedRow();
   const localizedPluginTabs: { key: PluginTabKey; label: string }[] = [
     { key: "all", label: t("plugins.tabs.all") },
@@ -1927,7 +1933,13 @@ export function PluginsRoute(props: { onGoInstall?: () => void } = {}) {
 
   useEffect(() => {
     setToolbarContainer(document.getElementById("plugins-header-toolbar-slot"));
+    setSourceHeaderContainer(document.getElementById("plugins-source-header-slot"));
   }, []);
+
+  useEffect(() => {
+    props.onActiveHostChange?.(activeHost === "all" ? null : getHostLabel(activeHost));
+    return () => props.onActiveHostChange?.(null);
+  }, [activeHost, props.onActiveHostChange]);
 
   useEffect(() => {
     if (!actionErrorMessage) {
@@ -2108,6 +2120,39 @@ export function PluginsRoute(props: { onGoInstall?: () => void } = {}) {
       </div>
       {props.onGoInstall ? <ToolbarGoInstallButton onClick={props.onGoInstall} /> : null}
     </section>
+  );
+  const sourceHeader = (
+    <div className="skills-source-header">
+      <div className="skills-source-tabs-row">
+        <div className="skills-source-tabs" role="tablist" aria-label={t("plugins.tabs.aria")}>
+          {localizedPluginTabs.map((tab) => {
+            const selected = tab.key === activeHost;
+            const count = tab.key === "all"
+              ? buildAllTabPlugins(plugins).length
+              : plugins.filter((plugin) => plugin.hostTool === tab.key).length;
+
+            return (
+              <button
+                key={tab.key}
+                className={`skills-source-tab${selected ? " is-selected" : ""}`}
+                type="button"
+                role="tab"
+                aria-selected={selected}
+                aria-label={`${tab.label} ${count}`}
+                title={tab.label}
+                onClick={() => setActiveHost(tab.key)}
+              >
+                {tab.key === "all" ? <span>{t("plugins.tabs.all")}</span> : (
+                  <PluginHostLogo hostTool={tab.key} label={tab.label} />
+                )}
+                <span className="skills-source-tab__count">{count}</span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+      <div className="skills-source-divider" aria-hidden="true" />
+    </div>
   );
 
   async function openComponentPreview(
@@ -2788,6 +2833,7 @@ export function PluginsRoute(props: { onGoInstall?: () => void } = {}) {
     return (
       <div className="plugins-page">
         {toolbarContainer ? createPortal(toolbar, toolbarContainer) : toolbar}
+        {sourceHeaderContainer ? createPortal(sourceHeader, sourceHeaderContainer) : sourceHeader}
         <p>{t("plugins.loading")}</p>
       </div>
     );
@@ -2814,45 +2860,7 @@ export function PluginsRoute(props: { onGoInstall?: () => void } = {}) {
   return (
     <div className="skills-page plugins-page">
       {toolbarContainer ? createPortal(toolbar, toolbarContainer) : toolbar}
-      <div className="plugins-page__host-tabs-row">
-        <div
-          className="plugins-page__host-tabs"
-          role="tablist"
-          aria-label={t("plugins.tabs.aria")}
-        >
-          {localizedPluginTabs.map((tab) => {
-            const selected = tab.key === activeHost;
-            const count = tab.key === "all"
-              ? buildAllTabPlugins(plugins).length
-              : plugins.filter((plugin) => plugin.hostTool === tab.key).length;
-
-            return (
-              <button
-                key={tab.key}
-                className={`plugins-page__host-tab${selected ? " is-selected" : ""}`}
-                type="button"
-                role="tab"
-                aria-selected={selected}
-                aria-label={`${tab.label} ${count}`}
-                title={tab.label}
-                onClick={() => setActiveHost(tab.key)}
-              >
-                {tab.key === "all" ? (
-                  <span
-                    className="plugins-page__host-tab-logo plugins-page__host-tab-logo--all"
-                    aria-hidden="true"
-                  >
-                    {t("plugins.tabs.all")}
-                  </span>
-                ) : (
-                  <PluginHostLogo hostTool={tab.key} label={tab.label} />
-                )}
-                <span className="plugins-page__host-tab-count">{count}</span>
-              </button>
-            );
-          })}
-        </div>
-      </div>
+      {sourceHeaderContainer ? createPortal(sourceHeader, sourceHeaderContainer) : sourceHeader}
       {actionErrorMessage ? (
         <div className="plugins-page__inline-error" role="status">
           {actionErrorMessage}

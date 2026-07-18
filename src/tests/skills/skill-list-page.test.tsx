@@ -12,6 +12,7 @@ test("renders installed skill page header and search input", () => {
   render(<App />);
   expect(screen.getByRole("button", { name: /Skills/ })).toBeInTheDocument();
   expect(screen.getByRole("heading", { name: "Skills", level: 1 })).toBeInTheDocument();
+  expect(screen.getByText("~/.skilldock/skills · 已启用 4 · 可更新 1 · 待推送 2")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "刷新" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "更新 (1)" })).toBeInTheDocument();
   expect(screen.getByPlaceholderText("搜索技能名称、描述、来源...")).toBeInTheDocument();
@@ -25,7 +26,8 @@ test("switches from the managed library to a tool's real Skill directory", async
   expect(screen.getByRole("tab", { name: "已托管 4" })).toHaveAttribute("aria-selected", "true");
   await user.click(screen.getByRole("tab", { name: "Codex 5" }));
 
-  expect(screen.getByText("Codex 已安装 5 个，已托管 3 个，未托管 1 个，冲突 1 个")).toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: "Codex", level: 1 })).toBeInTheDocument();
+  expect(screen.getByText("~/.codex/skills · 已托管 3 · 未托管 1 · 冲突 1")).toBeInTheDocument();
   const managementFilter = screen.getByLabelText("按托管状态筛选 Skill");
   expect(managementFilter).toHaveValue("all");
   expect(screen.getByRole("option", { name: "全部 (5)" })).toBeInTheDocument();

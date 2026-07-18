@@ -32,10 +32,28 @@ test("switches to plugins route", async () => {
 
   await userEvent.click(screen.getByRole("button", { name: "Plugins" }));
   await screen.findByRole("tab", { name: /Claude Code/ });
+  expect(screen.getByRole("heading", { name: "Plugins", level: 1 })).toBeInTheDocument();
   expect(await screen.findByText("ecc")).toBeInTheDocument();
 
   await userEvent.click(screen.getByRole("tab", { name: /Codex/ }));
+  expect(screen.getByRole("heading", { name: "Codex", level: 1 })).toBeInTheDocument();
+  expect(screen.getByText("查看已纳入管理的插件及其归属组件")).toBeInTheDocument();
   expect(await screen.findByText("Repo Scout")).toBeInTheDocument();
+});
+
+test("resets the skills list scroll position when switching source", async () => {
+  const { container } = render(<App />);
+  const pageContent = container.querySelector<HTMLElement>(".page-content");
+  expect(pageContent).not.toBeNull();
+
+  if (!pageContent) {
+    return;
+  }
+
+  pageContent.scrollTop = 160;
+  await userEvent.click(await screen.findByRole("tab", { name: /Claude Code/ }));
+
+  expect(pageContent.scrollTop).toBe(0);
 });
 
 test("renders about page project links", async () => {
