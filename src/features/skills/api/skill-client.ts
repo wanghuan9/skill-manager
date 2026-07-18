@@ -20,6 +20,7 @@ import {
   skillFileBrowserFixtures,
   skillFileDocumentFixtures,
   toolConfigFixtures,
+  toolSkillEntryFixtures,
   workspaceSnapshotFixture,
 } from "@/features/skills/state/skill-fixtures";
 import type {
@@ -59,6 +60,7 @@ import type {
   SkillFileEntry,
   SkillSummary,
   ToolConfig,
+  ToolSkillEntry,
   WorkspaceSnapshot,
 } from "@/features/skills/state/skill-store";
 import {
@@ -180,6 +182,15 @@ type UpdateSkillInput = {
 
 type SkillFileInput = {
   skillName: string;
+  relativePath: string;
+};
+
+type ToolSkillInput = {
+  toolId: string;
+  skillName: string;
+};
+
+type ToolSkillFileInput = ToolSkillInput & {
   relativePath: string;
 };
 
@@ -1147,6 +1158,10 @@ export async function fetchLocalSkillCandidates(): Promise<LocalSkillCandidate[]
   return invokeOrFallback("list_local_skill_candidates", {}, localSkillFixtures);
 }
 
+export async function fetchToolSkillEntries(): Promise<ToolSkillEntry[]> {
+  return invokeOrFallback("list_tool_skill_entries", {}, toolSkillEntryFixtures);
+}
+
 export async function fetchToolConfigs(): Promise<ToolConfig[]> {
   const toolConfigs = await invokeOrFallback("list_tool_configs", {}, toolConfigFixtures);
   return normalizeToolConfigs(toolConfigs);
@@ -1561,6 +1576,31 @@ export async function fetchSkillFileContent(input: SkillFileInput): Promise<Skil
   return invokeOrFallback("get_skill_file_content", input, fallback);
 }
 
+export async function fetchToolSkillFileBrowser(input: ToolSkillInput): Promise<SkillFileBrowserSnapshot> {
+  const fallback =
+    skillFileBrowserFixtures[input.skillName] ?? {
+      skillName: input.skillName,
+      rootName: input.skillName,
+      entries: [
+        { path: "", name: input.skillName, entryType: "directory" as const, depth: 0 },
+        { path: "SKILL.md", name: "SKILL.md", entryType: "file" as const, depth: 1 },
+      ],
+      initialFilePath: "SKILL.md",
+    };
+
+  return invokeOrFallback("get_tool_skill_file_browser", input, fallback);
+}
+
+export async function fetchToolSkillFileContent(input: ToolSkillFileInput): Promise<SkillFileDocument> {
+  const fallback =
+    skillFileDocumentFixtures[input.skillName]?.[input.relativePath] ?? {
+      path: input.relativePath,
+      content: "",
+    };
+
+  return invokeOrFallback("get_tool_skill_file_content", input, fallback);
+}
+
 export async function saveSkillFileContent(input: SaveSkillFileInput): Promise<SkillFileDocument> {
   const fallback = {
     path: input.relativePath,
@@ -1572,6 +1612,10 @@ export async function saveSkillFileContent(input: SaveSkillFileInput): Promise<S
 
 export async function deleteSkill(skillName: string): Promise<void> {
   return invokeOrFallback("delete_skill", { skillName }, undefined);
+}
+
+export async function deleteToolSkill(input: ToolSkillInput): Promise<void> {
+  return invokeOrFallback("delete_tool_skill", input, undefined);
 }
 
 export async function toggleSkillTool(input: ToggleSkillToolInput): Promise<SkillSummary> {

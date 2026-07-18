@@ -2659,6 +2659,33 @@ pub fn remove_skill_symlink(tool_skills_path: &str, skill_name: &str) -> Result<
     Ok(())
 }
 
+pub fn remove_tool_skill_entry(tool_skills_path: &str, skill_name: &str) -> Result<(), String> {
+    let skill_path = Path::new(skill_name);
+    if skill_name.trim().is_empty()
+        || !matches!(
+            skill_path.components().next(),
+            Some(std::path::Component::Normal(_))
+        )
+        || skill_path.components().count() != 1
+    {
+        return Err("Skill 名称无效".into());
+    }
+
+    let entry_path = PathBuf::from(tool_skills_path).join(skill_name);
+    let metadata = fs::symlink_metadata(&entry_path)
+        .map_err(|error| format!("读取 Skill 目录失败: {error}"))?;
+    if is_skill_link_entry(&entry_path) {
+        return remove_skill_link_entry(&entry_path)
+            .map_err(|error| format!("移除 Skill 链接失败: {error}"));
+    }
+    if metadata.is_dir() {
+        return fs::remove_dir_all(&entry_path)
+            .map_err(|error| format!("删除 Skill 目录失败: {error}"));
+    }
+
+    Err("目标不是有效的 Skill 目录".into())
+}
+
 pub fn remove_reserved_workspace_entries(tool_skills_path: &str) -> Result<(), String> {
     if sync_trace_enabled() {
         eprintln!(
@@ -2982,11 +3009,11 @@ mod tests {
         create_skill_symlink, get_tool_skills_path, git_executable, ignore_unnecessary_files,
         migrate_legacy_skill_symlinks, parse_git_url_instead_of_rules, parse_market_source_url,
         reconcile_tool_skill_symlinks, remote_clone_candidates, remove_reserved_workspace_entries,
-        remove_skill_symlink, repo_cache_lock, rewrite_git_clone_url_with_instead_of_rules,
-        run_git_in_dir, run_git_output, sanitize_storage_name, skill_dir_match_score,
-        ssh_clone_url_for_repository_url, summarize_git_error, tool_skills_path_for_home,
-        tree_relative_path_for_branch, MarketSourceSpec, RemoteCloneCandidate,
-        ResolvedRemoteSkillPath,
+        remove_skill_symlink, remove_tool_skill_entry, repo_cache_lock,
+        rewrite_git_clone_url_with_instead_of_rules, run_git_in_dir, run_git_output,
+        sanitize_storage_name, skill_dir_match_score, ssh_clone_url_for_repository_url,
+        summarize_git_error, tool_skills_path_for_home, tree_relative_path_for_branch,
+        MarketSourceSpec, RemoteCloneCandidate, ResolvedRemoteSkillPath,
     };
     #[cfg(windows)]
     use super::{create_windows_directory_junction, decode_windows_cmd_output, windows_cmd_path};
@@ -3152,6 +3179,41 @@ mod tests {
 
         remove_skill_symlink(tool_skills_dir.to_string_lossy().as_ref(), "research")
             .expect("remove skill symlink");
+
+        assert!(fs::symlink_metadata(&symlink_path).is_err());
+        assert!(target_dir.join("SKILL.md").is_file());
+        fs::remove_dir_all(&temp_dir).expect("remove test directory");
+    }
+
+    #[test]
+    fn remove_tool_skill_entry_deletes_real_directory() {
+        let temp_dir = temp_test_dir("remove-tool-skill-directory");
+        let tool_skills_dir = temp_dir.join("tool-skills");
+        let skill_dir = tool_skills_dir.join("research");
+        fs::create_dir_all(&skill_dir).expect("create tool skill directory");
+        fs::write(skill_dir.join("SKILL.md"), "# research").expect("write skill file");
+
+        remove_tool_skill_entry(tool_skills_dir.to_string_lossy().as_ref(), "research")
+            .expect("remove real tool skill directory");
+
+        assert!(!skill_dir.exists());
+        fs::remove_dir_all(&temp_dir).expect("remove test directory");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn remove_tool_skill_entry_unlinks_without_deleting_target() {
+        let temp_dir = temp_test_dir("remove-tool-skill-link");
+        let target_dir = temp_dir.join("target");
+        let tool_skills_dir = temp_dir.join("tool-skills");
+        let symlink_path = tool_skills_dir.join("research");
+        fs::create_dir_all(&target_dir).expect("create skill target");
+        fs::create_dir_all(&tool_skills_dir).expect("create tool skills directory");
+        fs::write(target_dir.join("SKILL.md"), "# research").expect("write skill target");
+        std::os::unix::fs::symlink(&target_dir, &symlink_path).expect("create skill symlink");
+
+        remove_tool_skill_entry(tool_skills_dir.to_string_lossy().as_ref(), "research")
+            .expect("remove tool skill link");
 
         assert!(fs::symlink_metadata(&symlink_path).is_err());
         assert!(target_dir.join("SKILL.md").is_file());

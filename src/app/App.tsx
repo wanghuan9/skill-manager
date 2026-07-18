@@ -41,6 +41,15 @@ import {
   subscribeMcpWorkspaceChange,
 } from "@/features/skills/utils/mcp-workspace-cache";
 import { isToolInstalledStatus } from "@/features/skills/utils/tool-status";
+import { hasEnabledTool } from "@/features/skills/state/skill-selectors";
+import {
+  buildToolSkillViewItems,
+  countToolSkillStatuses,
+  listSkillSourceTools,
+  MANAGED_SKILL_SOURCE_ID,
+  type SkillSourceId,
+  type ToolSkillManagementFilter,
+} from "@/features/skills/utils/skill-source-view";
 
 type RouteKey =
   | "skills"
@@ -67,6 +76,7 @@ type RouteErrorBoundaryState = {
 };
 
 const ROUTE_LOCAL_ALIGN_COOLDOWN_MS = 10_000;
+const MANAGED_SKILL_DIRECTORY = "~/.skilldock/skills";
 
 class RouteErrorBoundary extends Component<
   RouteErrorBoundaryProps,
@@ -156,6 +166,10 @@ function isMacOSWindow() {
   const platform = window.navigator.platform || "";
   const userAgent = window.navigator.userAgent || "";
   return /mac|iphone|ipad|ipod/i.test(`${platform} ${userAgent}`);
+}
+
+function formatSkillDirectoryPath(path: string) {
+  return path.trim().replace(/^\/Users\/[^/]+(?=\/|$)/, "~");
 }
 
 function NavRouteIcon(props: { route: RouteKey }) {
@@ -260,8 +274,13 @@ function NavRouteIcon(props: { route: RouteKey }) {
 
 function renderRoute(
   route: RouteKey,
+  activeSkillSourceId: SkillSourceId,
+  onActiveSkillSourceIdChange: (sourceId: SkillSourceId) => void,
+  focusedManagedSkillName: string,
+  onShowManagedSkill: (skillName: string) => void,
   skillQuery: string,
   skillStatusFilter: SkillStatusFilter,
+  skillManagementFilter: ToolSkillManagementFilter,
   showGroupView: boolean,
   activeInstallCategory: InstallCategory,
   activeInstallTab: InstallTab,
@@ -272,6 +291,7 @@ function renderRoute(
   onInstallSkillFromMarketplace: () => void,
   onInstallMcpFromMarketplace: () => void,
   onInstallPluginFromMarketplace: () => void,
+  onPluginHostChange: (hostName: string | null) => void,
   activeSkillsSection: SkillsSectionKey,
 ) {
   if (route === "tools") {
@@ -288,7 +308,12 @@ function renderRoute(
     );
   }
   if (route === "plugins") {
-    return <PluginsRoute onGoInstall={onInstallPluginFromMarketplace} />;
+    return (
+      <PluginsRoute
+        onGoInstall={onInstallPluginFromMarketplace}
+        onActiveHostChange={onPluginHostChange}
+      />
+    );
   }
   if (route === "settings") {
     return <SettingsRoute />;
@@ -303,11 +328,16 @@ function renderRoute(
 
   return (
     <SkillsRoute
+      activeSourceId={activeSkillSourceId}
+      onActiveSourceIdChange={onActiveSkillSourceIdChange}
+      focusedManagedSkillName={focusedManagedSkillName}
+      onShowManagedSkill={onShowManagedSkill}
       onImportFromLocal={onInstallSkillFromLocal}
       onInstallFromGit={onInstallSkillFromGit}
       onInstallFromMarketplace={onInstallSkillFromMarketplace}
       query={skillQuery}
       statusFilter={skillStatusFilter}
+      managementFilter={skillManagementFilter}
       showGroupView={showGroupView}
     />
   );
@@ -400,6 +430,7 @@ function AppContent() {
     installedSkills,
     isWorkspaceRefreshing,
     language,
+    toolSkillEntries,
     refreshWorkspace,
     toolConfigs,
   } = useSkillWorkspace();
@@ -408,12 +439,19 @@ function AppContent() {
   const initialSkillViewMode = readSkillViewModePreference();
   const isMacOS = isMacOSWindow();
   const brandIconRef = useRef<HTMLDivElement | null>(null);
+  const pageContentRef = useRef<HTMLElement | null>(null);
   const [activeRoute, setActiveRoute] = useState<RouteKey>("skills");
   const [activeSkillsSection, setActiveSkillsSection] =
     useState<SkillsSectionKey>("skills");
   const [skillQuery, setSkillQuery] = useState("");
+  const [activeSkillSourceId, setActiveSkillSourceId] = useState<SkillSourceId>(
+    MANAGED_SKILL_SOURCE_ID,
+  );
+  const [focusedManagedSkillName, setFocusedManagedSkillName] = useState("");
   const [skillStatusFilter, setSkillStatusFilter] =
     useState<SkillStatusFilter>("all");
+  const [skillManagementFilter, setSkillManagementFilter] =
+    useState<ToolSkillManagementFilter>("all");
   const [showGroupView, setShowGroupView] = useState(
     () =>
       resolveSkillViewModePreference(
@@ -427,6 +465,7 @@ function AppContent() {
     useState<InstallCategory>("skill");
   const [activeInstallTab, setActiveInstallTab] =
     useState<InstallTab>("market");
+  const [activePluginHostName, setActivePluginHostName] = useState<string | null>(null);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [sidebarHandleTop, setSidebarHandleTop] = useState<number | null>(null);
   const [mcpServerCount, setMcpServerCount] = useState(
@@ -442,6 +481,18 @@ function AppContent() {
   const pendingPushSkillCount = installedSkills.filter(
     (skill) => skill.collabStatus === "pending-push",
   ).length;
+  const enabledManagedSkillCount = installedSkills.filter(hasEnabledTool).length;
+  const activeSkillSourceTool = listSkillSourceTools(toolConfigs)
+    .find((tool) => tool.id === activeSkillSourceId);
+  const activeToolSkillCounts = activeSkillSourceTool
+    ? countToolSkillStatuses(buildToolSkillViewItems({
+        tool: activeSkillSourceTool,
+        installedSkills,
+        toolSkillEntries,
+      }))
+    : null;
+  const activeSkillPageTitle = activeSkillSourceTool?.name
+    ?? tx(language, "app.nav.skills.label");
   const installedToolCount = toolConfigs.filter((tool) =>
     isToolInstalledStatus(tool.statusLabel),
   ).length;
@@ -453,11 +504,19 @@ function AppContent() {
   ).length;
   const activeDescription =
     activeRoute === "skills" && activeSkillsSection === "skills"
-      ? tx(language, "app.header.skills.summary", {
-          installed: installedSkills.length,
-          updatable: updatableSkillCount,
-          pending: pendingPushSkillCount,
-        })
+      ? activeSkillSourceTool && activeToolSkillCounts
+        ? tx(language, "app.header.skills.sourceSummary", {
+            path: formatSkillDirectoryPath(activeSkillSourceTool.skillsPath),
+            managed: activeToolSkillCounts.managed,
+            unmanaged: activeToolSkillCounts.unmanaged,
+            mismatch: activeToolSkillCounts.mismatch,
+          })
+        : tx(language, "app.header.skills.summary", {
+            path: MANAGED_SKILL_DIRECTORY,
+            installed: enabledManagedSkillCount,
+            updatable: updatableSkillCount,
+            pending: pendingPushSkillCount,
+          })
       : activeRoute === "skills"
         ? tx(language, "app.header.mcp.summary", {
             count: mcpServerCount,
@@ -468,6 +527,23 @@ function AppContent() {
               count: installedToolCount,
             })
           : tx(language, activeDefinition.descriptionKey);
+
+  function handleActiveSkillSourceIdChange(sourceId: SkillSourceId) {
+    if (pageContentRef.current) {
+      pageContentRef.current.scrollTop = 0;
+    }
+    setActiveSkillSourceId(sourceId);
+    setFocusedManagedSkillName("");
+    setSkillManagementFilter("all");
+  }
+
+  function handleShowManagedSkill(skillName: string) {
+    setActiveSkillSourceId(MANAGED_SKILL_SOURCE_ID);
+    setFocusedManagedSkillName(skillName);
+    setSkillQuery("");
+    setSkillStatusFilter("all");
+    setSkillManagementFilter("all");
+  }
 
   useEffect(
     () =>
@@ -751,14 +827,18 @@ function AppContent() {
                 <h1>
                   {activeSkillsSection === "mcp"
                     ? "MCP"
-                    : tx(language, activeDefinition.labelKey)}
+                    : activeSkillPageTitle}
                 </h1>
                 {activeSkillsSection === "skills" ? (
                   <SkillListToolbar
+                    activeSourceId={activeSkillSourceId}
                     query={skillQuery}
                     statusFilter={skillStatusFilter}
+                    managementFilter={skillManagementFilter}
+                    managementFilterCounts={activeToolSkillCounts ?? undefined}
                     onQueryChange={setSkillQuery}
                     onStatusFilterChange={setSkillStatusFilter}
+                    onManagementFilterChange={setSkillManagementFilter}
                     showGroupView={showGroupView}
                     onShowGroupViewChange={handleShowGroupViewChange}
                     onGoInstall={() => handleOpenSkillInstall("market")}
@@ -771,6 +851,12 @@ function AppContent() {
                 )}
               </div>
               <p>{activeDescription}</p>
+              {activeSkillsSection === "skills" ? (
+                <div
+                  className="skills-source-header-slot"
+                  id="skills-source-header-slot"
+                />
+              ) : null}
             </div>
           ) : activeRoute === "tools" ? (
             <div className="page-header--split">
@@ -844,13 +930,17 @@ function AppContent() {
           ) : activeRoute === "plugins" ? (
             <div className="page-header--split">
               <div className="page-header__row">
-                <h1>{tx(language, activeDefinition.labelKey)}</h1>
+                <h1>{activePluginHostName ?? tx(language, activeDefinition.labelKey)}</h1>
                 <div
                   className="mcp-header-toolbar-slot"
                   id="plugins-header-toolbar-slot"
                 />
               </div>
               <p>{activeDescription}</p>
+              <div
+                className="skills-source-header-slot"
+                id="plugins-source-header-slot"
+              />
             </div>
           ) : (
             <div className="page-header--split">
@@ -859,13 +949,26 @@ function AppContent() {
             </div>
           )}
         </header>
-        <div className="page-header-divider" aria-hidden="true" />
-        <section className="page-content">
+        <div
+          className={`page-header-divider${
+            (activeRoute === "skills" && activeSkillsSection === "skills")
+              || activeRoute === "plugins"
+              ? " page-header-divider--skills"
+              : ""
+          }`}
+          aria-hidden="true"
+        />
+        <section ref={pageContentRef} className="page-content">
           <RouteErrorBoundary route={activeRoute}>
             {renderRoute(
               activeRoute,
+              activeSkillSourceId,
+              handleActiveSkillSourceIdChange,
+              focusedManagedSkillName,
+              handleShowManagedSkill,
               skillQuery,
               skillStatusFilter,
+              skillManagementFilter,
               showGroupView,
               activeInstallCategory,
               activeInstallTab,
@@ -876,6 +979,7 @@ function AppContent() {
               () => handleOpenSkillInstall("market"),
               handleOpenMcpInstall,
               handleOpenPluginInstall,
+              setActivePluginHostName,
               activeSkillsSection,
             )}
           </RouteErrorBoundary>

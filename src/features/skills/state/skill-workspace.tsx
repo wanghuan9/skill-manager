@@ -13,6 +13,7 @@ import {
   detectPreferredAppLanguage,
   fetchAppSettings,
   deleteSkill,
+  deleteToolSkill,
   discoverLocalInstallSkills,
   fetchGitAccount,
   fetchGitStates,
@@ -20,9 +21,12 @@ import {
   fetchMarketplaceSkillsByPage,
   fetchSkillFileBrowser,
   fetchSkillFileContent,
+  fetchToolSkillFileBrowser,
+  fetchToolSkillFileContent,
   fetchPushPreviewSnapshot,
   fetchPushTargetSnapshot,
   fetchToolConfigs,
+  fetchToolSkillEntries,
   fetchStartupInstalledSkills,
   importLocalSkill,
   installLocalSkill,
@@ -65,7 +69,9 @@ import type {
   SkillFileBrowserSnapshot,
   SkillFileDocument,
   SkillSummary,
+  SkillSourceViewStyle,
   ToolConfig,
+  ToolSkillEntry,
 } from "@/features/skills/state/skill-store";
 import { buildOpenToolOptions, resolveDefaultOpenToolId } from "@/features/skills/utils/open-tools";
 import {
@@ -99,6 +105,7 @@ type SkillWorkspaceContextValue = {
   marketplaceSkills: MarketplaceSkill[];
   localCandidates: LocalSkillCandidate[];
   toolConfigs: ToolConfig[];
+  toolSkillEntries: ToolSkillEntry[];
   gitAccount: GitAccountSummary | null;
   isLoading: boolean;
   isWorkspaceRefreshing: boolean;
@@ -123,9 +130,19 @@ type SkillWorkspaceContextValue = {
   updateSkill: (skillName: string) => Promise<void>;
   updateAllSkills: () => Promise<void>;
   deleteSkill: (skillName: string) => Promise<void>;
+  deleteToolSkill: (input: { toolId: string; skillName: string }) => Promise<void>;
   markSkillAsActive: (skillName: string) => void;
   loadSkillFileBrowser: (skillName: string) => Promise<SkillFileBrowserSnapshot>;
   loadSkillFileContent: (input: {
+    skillName: string;
+    relativePath: string;
+  }) => Promise<SkillFileDocument>;
+  loadToolSkillFileBrowser: (input: {
+    toolId: string;
+    skillName: string;
+  }) => Promise<SkillFileBrowserSnapshot>;
+  loadToolSkillFileContent: (input: {
+    toolId: string;
     skillName: string;
     relativePath: string;
   }) => Promise<SkillFileDocument>;
@@ -162,6 +179,7 @@ type SkillWorkspaceContextValue = {
   setLanguage: (language: AppLanguage) => Promise<void>;
   setSkillInstallActivation: (mode: InstallActivationMode) => Promise<void>;
   setMcpInstallActivation: (mode: InstallActivationMode) => Promise<void>;
+  setSkillSourceViewStyle: (style: SkillSourceViewStyle) => Promise<void>;
   openSkillWithDefaultTool: (skillName: string) => Promise<void>;
   openPathInFinder: (path: string) => Promise<void>;
 };
@@ -410,6 +428,9 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       ? workspaceSnapshotFixture.toolConfigs
       : startupCache?.toolConfigs ?? [],
   );
+  const [toolSkillEntries, setToolSkillEntries] = useState<ToolSkillEntry[]>(
+    usesFixtureData ? workspaceSnapshotFixture.toolSkillEntries : [],
+  );
   const [gitAccount, setGitAccount] = useState<GitAccountSummary | null>(
     usesFixtureData
       ? workspaceSnapshotFixture.gitAccount
@@ -423,6 +444,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
           defaultOpenToolId: "",
           skillInstallActivation: "apply-all-tools",
           mcpInstallActivation: "apply-all-tools",
+          skillSourceViewStyle: "flat",
           language: "zh-CN",
           languageSource: "auto",
         },
@@ -582,6 +604,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
   function applyWorkspaceAncillaryData(input: {
     candidates?: LocalSkillCandidate[];
     tools?: ToolConfig[];
+    toolSkills?: ToolSkillEntry[];
     account?: GitAccountSummary | null;
     settings?: AppSettings;
   }) {
@@ -590,6 +613,9 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
     }
     if (input.tools) {
       setToolConfigs(input.tools);
+    }
+    if (input.toolSkills) {
+      setToolSkillEntries(input.toolSkills);
     }
     if (input.account) {
       setGitAccount(input.account);
@@ -600,10 +626,11 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
   }
 
   async function loadWorkspaceCore() {
-    const [skills, candidates, tools, account, settings] = await Promise.all([
+    const [skills, candidates, tools, toolSkills, account, settings] = await Promise.all([
       fetchStartupInstalledSkills(),
       fetchLocalSkillCandidates(),
       fetchToolConfigs(),
+      fetchToolSkillEntries().catch(() => []),
       fetchGitAccount(),
       fetchAppSettings(),
     ]);
@@ -612,6 +639,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       skills,
       candidates,
       tools,
+      toolSkills,
       account,
       settings,
     };
@@ -646,6 +674,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
         applyWorkspaceAncillaryData({
           candidates: workspace.candidates,
           tools: workspace.tools,
+          toolSkills: workspace.toolSkills,
           account: workspace.account,
           settings: resolvedSettings,
         });
@@ -698,6 +727,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       applyWorkspaceAncillaryData({
         candidates: workspace.candidates,
         tools: workspace.tools,
+        toolSkills: workspace.toolSkills,
         account: workspace.account,
         settings: resolvedSettings,
       });
@@ -1087,6 +1117,17 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
     const importedSkill = await importLocalSkill(localPath);
     setInstalledSkills((current) => [importedSkill, ...current.filter((item) => item.name !== importedSkill.name)]);
     setLocalCandidates((current) => removeImportedCandidate(current, importedSkill));
+    setToolSkillEntries((current) => current.map((entry) => (
+      entry.localPath === localPath
+        ? {
+            ...entry,
+            name: importedSkill.name,
+            description: importedSkill.description,
+            resolvedPath: importedSkill.localPath,
+            managementStatus: "managed",
+          }
+        : entry
+    )));
   }
 
   async function handleRefreshLocalCandidates() {
@@ -1159,6 +1200,13 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
   async function handleDeleteSkill(skillName: string) {
     await deleteSkill(skillName);
     setInstalledSkills((current) => current.filter((skill) => skill.name !== skillName));
+  }
+
+  async function handleDeleteToolSkill(input: { toolId: string; skillName: string }) {
+    await deleteToolSkill(input);
+    setToolSkillEntries((current) => current.filter((entry) => (
+      entry.toolId !== input.toolId || entry.name !== input.skillName
+    )));
   }
 
   async function handleToggleSkillTool(input: { skillName: string; toolName: string; toolNames: string[] }) {
@@ -1282,6 +1330,13 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
     });
   }
 
+  async function handleSetSkillSourceViewStyle(style: SkillSourceViewStyle) {
+    await persistAppSettings({
+      ...appSettings,
+      skillSourceViewStyle: style,
+    });
+  }
+
   async function handleOpenPathInFinder(path: string) {
     const normalizedPath = path.trim();
     if (!normalizedPath) {
@@ -1302,6 +1357,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       marketplaceSkills,
       localCandidates,
       toolConfigs,
+      toolSkillEntries,
       gitAccount,
       isLoading,
       isWorkspaceRefreshing,
@@ -1326,9 +1382,12 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       updateSkill: handleUpdateSkill,
       updateAllSkills: handleUpdateAllSkills,
       deleteSkill: handleDeleteSkill,
+      deleteToolSkill: handleDeleteToolSkill,
       markSkillAsActive,
       loadSkillFileBrowser: fetchSkillFileBrowser,
       loadSkillFileContent: fetchSkillFileContent,
+      loadToolSkillFileBrowser: fetchToolSkillFileBrowser,
+      loadToolSkillFileContent: fetchToolSkillFileContent,
       saveSkillFileContent,
       refreshSkillLocalGitState: handleRefreshSkillLocalGitState,
       toggleSkillTool: handleToggleSkillTool,
@@ -1345,6 +1404,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       setLanguage: handleSetLanguage,
       setSkillInstallActivation: handleSetSkillInstallActivation,
       setMcpInstallActivation: handleSetMcpInstallActivation,
+      setSkillSourceViewStyle: handleSetSkillSourceViewStyle,
       openSkillWithDefaultTool: handleOpenSkillWithDefaultTool,
       openPathInFinder: handleOpenPathInFinder,
     }),
@@ -1366,6 +1426,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       marketplacePageBySource,
       marketplaceSkills,
       toolConfigs,
+      toolSkillEntries,
       handleSetSkillAllToolStatuses,
       handleSetToolSkillStatuses,
     ],

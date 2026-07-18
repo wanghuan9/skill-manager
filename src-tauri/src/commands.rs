@@ -25,17 +25,17 @@ use crate::library::{
     install_market_skill_from_source, is_ssh_git_url, parse_market_source_url,
     reconcile_tool_skill_symlinks, remote_clone_candidates, remove_reserved_workspace_entries,
     remove_reserved_workspace_symlinks_from_all_tools, remove_skill_symlink,
-    remove_skill_symlinks_from_all_tools, repo_cache_directory_root, resolve_clone_url_http_first,
-    resolve_git_clone_url_with_instead_of, sanitize_storage_name, skill_directory,
-    summarize_git_error, tree_relative_path_for_branch, with_temporary_discovery_repo_resolved,
-    CloneProgressCallback, RemoteCloneCandidate,
+    remove_skill_symlinks_from_all_tools, remove_tool_skill_entry, repo_cache_directory_root,
+    resolve_clone_url_http_first, resolve_git_clone_url_with_instead_of, sanitize_storage_name,
+    skill_directory, summarize_git_error, tree_relative_path_for_branch,
+    with_temporary_discovery_repo_resolved, CloneProgressCallback, RemoteCloneCandidate,
 };
 use crate::models::{
     AppSettings, GitAccountSummary, GitBranchOption, GitChangeFile, LocalInstallSkillCandidate,
     LocalSkillCandidate, MarketplaceSkill, PushBranchOption, PushPreviewSnapshot,
     PushTargetSnapshot, RepoSkillCandidate, SkillFileBrowserSnapshot, SkillFileDocument,
-    SkillFileEntry, SkillSummary, ToolConfig, ToolSyncStatus, UpdatePreviewSnapshot,
-    WorkspaceSnapshot,
+    SkillFileEntry, SkillSummary, ToolConfig, ToolSkillEntry, ToolSyncStatus,
+    UpdatePreviewSnapshot, WorkspaceSnapshot,
 };
 use crate::state::{
     load_app_settings, load_installed_skills, normalize_skill_install_activation,
@@ -255,7 +255,7 @@ where
 }
 
 fn source_type_for_url(source_url: &str) -> &'static str {
-    if source_url.contains("gitlab.com") {
+    if source_url.contains("gitlab.com") || source_url.contains("git.example.com") {
         "gitlab"
     } else if source_url.contains("gitee.com") {
         "gitee"
@@ -1433,6 +1433,86 @@ fn build_local_candidates(installed_skills: &[SkillSummary]) -> Vec<LocalSkillCa
         .collect()
 }
 
+fn build_tool_skill_entries(
+    tool_configs: &[ToolConfig],
+    installed_skills: &[SkillSummary],
+) -> Vec<ToolSkillEntry> {
+    let installed_skill_paths = installed_skills
+        .iter()
+        .filter_map(|skill| {
+            Path::new(&skill.local_path)
+                .canonicalize()
+                .ok()
+                .map(|path| (path, skill.name.as_str()))
+        })
+        .collect::<Vec<_>>();
+    let installed_skill_names = installed_skills
+        .iter()
+        .map(|skill| skill.name.as_str())
+        .collect::<BTreeSet<_>>();
+    let mut entries = Vec::new();
+
+    for tool in tool_configs {
+        let skills_root = PathBuf::from(tool.skills_path.trim());
+        if tool.status_label != "已安装"
+            || tool.skills_path.trim().is_empty()
+            || !skills_root.is_dir()
+        {
+            continue;
+        }
+
+        let Ok(children) = fs::read_dir(&skills_root) else {
+            continue;
+        };
+        for child in children.flatten() {
+            let local_path = child.path();
+            let entry_kind = fs::symlink_metadata(&local_path)
+                .ok()
+                .filter(|metadata| metadata.file_type().is_symlink())
+                .map(|_| "symlink")
+                .unwrap_or("directory");
+            if !local_path.is_dir() || !local_path.join("SKILL.md").is_file() {
+                continue;
+            }
+            let Some(name) = local_path.file_name().and_then(|value| value.to_str()) else {
+                continue;
+            };
+            let resolved_path = local_path
+                .canonicalize()
+                .unwrap_or_else(|_| local_path.clone());
+            let management_status = if installed_skill_paths
+                .iter()
+                .any(|(managed_path, _)| *managed_path == resolved_path)
+            {
+                "managed"
+            } else if installed_skill_names.contains(name) {
+                "mismatch"
+            } else {
+                "unmanaged"
+            };
+
+            entries.push(ToolSkillEntry {
+                tool_id: tool.id.clone(),
+                tool_name: tool.name.clone(),
+                name: name.to_string(),
+                description: read_skill_description(&local_path.join("SKILL.md")),
+                local_path: local_path.to_string_lossy().to_string(),
+                resolved_path: resolved_path.to_string_lossy().to_string(),
+                management_status: management_status.to_string(),
+                entry_kind: entry_kind.to_string(),
+            });
+        }
+    }
+
+    entries.sort_by(|left, right| {
+        left.tool_id
+            .cmp(&right.tool_id)
+            .then_with(|| left.name.cmp(&right.name))
+            .then_with(|| left.local_path.cmp(&right.local_path))
+    });
+    entries
+}
+
 fn local_candidate_source_hint(local_path: &str) -> &'static str {
     fs::symlink_metadata(Path::new(local_path))
         .map(|metadata| {
@@ -2431,9 +2511,123 @@ fn enable_skill_for_all_installed_tools(
     Ok(updated_skill)
 }
 
+fn recover_missing_managed_skills(
+    mut installed_skills: Vec<SkillSummary>,
+    tool_configs: &[ToolConfig],
+) -> Vec<SkillSummary> {
+    let Ok(managed_root) = workspace::managed_skill_library_root() else {
+        return installed_skills;
+    };
+    let Ok(entries) = fs::read_dir(&managed_root) else {
+        return installed_skills;
+    };
+
+    let mut existing_names = installed_skills
+        .iter()
+        .map(|skill| skill.name.clone())
+        .collect::<BTreeSet<_>>();
+    let mut entry_paths = entries
+        .flatten()
+        .map(|entry| entry.path())
+        .collect::<Vec<_>>();
+    entry_paths.sort();
+    let original_count = installed_skills.len();
+
+    for entry_path in entry_paths {
+        if !entry_path.is_dir() {
+            continue;
+        }
+        let Some(name) = entry_path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .map(ToOwned::to_owned)
+        else {
+            continue;
+        };
+        if is_reserved_workspace_name(&name) || existing_names.contains(&name) {
+            continue;
+        }
+
+        let direct_path = entry_path.clone();
+        let nested_path = entry_path.join("skills").join(&name);
+        let skill_path = if direct_path.join("SKILL.md").is_file() {
+            direct_path
+        } else if nested_path.join("SKILL.md").is_file() {
+            nested_path
+        } else {
+            continue;
+        };
+        let skill_path_label = skill_path.to_string_lossy().to_string();
+        let git_root = git_repo_root(&skill_path_label);
+        let git_linked = git_root.is_some();
+        let branch = current_branch_name(&skill_path_label).unwrap_or_else(|_| "local".into());
+        let repository_url =
+            run_git_command(&skill_path_label, &["config", "--get", "remote.origin.url"])
+                .ok()
+                .and_then(|remote_url| normalize_git_remote_repository_url(&remote_url));
+        let source_type = repository_url
+            .as_deref()
+            .map(source_type_for_url)
+            .unwrap_or(if git_linked { "git" } else { "local" });
+        let source_url = repository_url
+            .as_deref()
+            .map(|repository_url| {
+                let relative_path = git_root
+                    .as_ref()
+                    .and_then(|root| skill_path.strip_prefix(root).ok())
+                    .map(|path| path.to_string_lossy().replace('\\', "/"))
+                    .unwrap_or_default();
+                build_tree_source_url(repository_url, source_type, Some(&branch), &relative_path)
+            })
+            .unwrap_or_default();
+        let local_updated_at = fs::metadata(skill_path.join("SKILL.md"))
+            .and_then(|metadata| metadata.modified())
+            .ok()
+            .and_then(format_system_time_label)
+            .unwrap_or_default();
+        let recovered = SkillSummary {
+            name: name.clone(),
+            source_label: source_label_for_type(source_type).into(),
+            source_type: source_type.into(),
+            source_url,
+            description: read_skill_description(&skill_path.join("SKILL.md")),
+            local_path: skill_path_label,
+            branch,
+            collab_status: "clean".into(),
+            status_text: "已从本地托管目录恢复。".into(),
+            remote_updated_at: local_updated_at.clone(),
+            local_updated_at: local_updated_at.clone(),
+            last_synced_at: local_updated_at,
+            last_checked_at: "刚刚检查".into(),
+            synced_tool_count: 0,
+            last_editor: String::new(),
+            commit_label: String::new(),
+            git_linked,
+            lifecycle_source: String::new(),
+            owner_plugin_id: String::new(),
+            owner_plugin_name: String::new(),
+            tools: Vec::new(),
+        };
+        let tool_entries = installed_tool_sync_entries_for_skill(&recovered, tool_configs);
+        installed_skills.push(reconcile_skill_tools_with_entries(
+            &recovered,
+            &tool_entries,
+        ));
+        existing_names.insert(name);
+    }
+
+    if installed_skills.len() != original_count {
+        let _ = save_installed_skills(&installed_skills);
+    }
+    installed_skills
+}
+
 fn resolve_startup_installed_skills() -> Vec<SkillSummary> {
     let tool_configs = build_tool_configs();
-    let installed_skills = load_installed_skills(&default_installed_skills());
+    let installed_skills = recover_missing_managed_skills(
+        load_installed_skills(&default_installed_skills()),
+        &tool_configs,
+    );
     let normalized_skills = installed_skills
         .iter()
         .map(normalize_installed_skill_source_url)
@@ -3176,6 +3370,65 @@ fn relative_file_path(skill_name: &str, relative_path: &str) -> Result<PathBuf, 
     }
 
     Ok(full_path)
+}
+
+fn tool_skill_base_path(tool_id: &str, skill_name: &str) -> Result<PathBuf, String> {
+    let skill_name_path = Path::new(skill_name);
+    if skill_name.trim().is_empty()
+        || !matches!(
+            skill_name_path.components().next(),
+            Some(std::path::Component::Normal(_))
+        )
+        || skill_name_path.components().count() != 1
+    {
+        return Err("Skill 名称无效".into());
+    }
+
+    let tool = build_tool_configs()
+        .into_iter()
+        .find(|tool| tool.id == tool_id && tool.status_label == "已安装")
+        .ok_or_else(|| "未找到已安装的软件".to_string())?;
+    if tool.skills_path.trim().is_empty() {
+        return Err("软件未配置 Skill 目录".into());
+    }
+
+    let skill_path = PathBuf::from(tool.skills_path).join(skill_name);
+    fs::symlink_metadata(&skill_path).map_err(|error| format!("读取 Skill 目录失败: {error}"))?;
+    if !skill_path.is_dir() || !skill_path.join("SKILL.md").is_file() {
+        return Err("目标不是有效的 Skill 目录".into());
+    }
+
+    Ok(skill_path)
+}
+
+fn tool_skill_relative_file_path(
+    tool_id: &str,
+    skill_name: &str,
+    relative_path: &str,
+) -> Result<PathBuf, String> {
+    if relative_path.trim().is_empty() {
+        return Err("文件路径不能为空".into());
+    }
+    let relative = Path::new(relative_path);
+    if relative.is_absolute()
+        || relative
+            .components()
+            .any(|component| !matches!(component, std::path::Component::Normal(_)))
+    {
+        return Err("不允许访问 Skill 目录之外的文件".into());
+    }
+
+    let base_path = tool_skill_base_path(tool_id, skill_name)?;
+    let full_path = base_path.join(relative);
+    let canonical_base =
+        fs::canonicalize(&base_path).map_err(|error| format!("读取 Skill 目录失败: {error}"))?;
+    let canonical_file =
+        fs::canonicalize(&full_path).map_err(|error| format!("读取 Skill 文件失败: {error}"))?;
+    if !canonical_file.starts_with(&canonical_base) {
+        return Err("不允许访问 Skill 目录之外的文件".into());
+    }
+
+    Ok(canonical_file)
 }
 
 fn is_supported_text_file(path: &Path) -> bool {
@@ -4576,6 +4829,8 @@ pub async fn get_workspace_snapshot() -> WorkspaceSnapshot {
     }
     let _ = remove_reserved_workspace_symlinks_from_all_tools();
     let installed_skills = resolve_installed_skills();
+    let tool_configs = build_tool_configs();
+    let tool_skill_entries = build_tool_skill_entries(&tool_configs, &installed_skills);
 
     WorkspaceSnapshot {
         local_candidates: build_local_candidates(&installed_skills),
@@ -4589,7 +4844,8 @@ pub async fn get_workspace_snapshot() -> WorkspaceSnapshot {
             false,
         )
         .await,
-        tool_configs: build_tool_configs(),
+        tool_configs,
+        tool_skill_entries,
         git_account: build_git_account(),
     }
 }
@@ -4708,6 +4964,12 @@ pub fn list_local_skill_candidates() -> Vec<LocalSkillCandidate> {
     let _ = remove_reserved_workspace_symlinks_from_all_tools();
     let installed_skills = load_installed_skills(&default_installed_skills());
     build_local_candidates(&installed_skills)
+}
+
+#[tauri::command]
+pub fn list_tool_skill_entries() -> Vec<ToolSkillEntry> {
+    let installed_skills = load_installed_skills(&default_installed_skills());
+    build_tool_skill_entries(&build_tool_configs(), &installed_skills)
 }
 
 #[tauri::command]
@@ -6195,6 +6457,57 @@ pub fn get_skill_file_content(
 }
 
 #[tauri::command]
+pub fn get_tool_skill_file_browser(
+    tool_id: &str,
+    skill_name: &str,
+) -> Result<SkillFileBrowserSnapshot, String> {
+    let base_path = tool_skill_base_path(tool_id, skill_name)?;
+    let mut entries = vec![SkillFileEntry {
+        path: String::new(),
+        name: skill_name.to_string(),
+        entry_type: "directory".into(),
+        depth: 0,
+    }];
+    collect_skill_entries(&base_path, &base_path, 1, &mut entries)?;
+    let initial_file_path = entries
+        .iter()
+        .find(|entry| entry.entry_type == "file")
+        .map(|entry| entry.path.clone());
+
+    Ok(SkillFileBrowserSnapshot {
+        skill_name: skill_name.into(),
+        root_name: skill_name.into(),
+        entries,
+        initial_file_path,
+    })
+}
+
+#[tauri::command]
+pub fn get_tool_skill_file_content(
+    tool_id: &str,
+    skill_name: &str,
+    relative_path: &str,
+) -> Result<SkillFileDocument, String> {
+    let full_path = tool_skill_relative_file_path(tool_id, skill_name, relative_path)?;
+    let content =
+        fs::read_to_string(&full_path).map_err(|error| format!("读取文件失败: {error}"))?;
+
+    Ok(SkillFileDocument {
+        path: relative_path.into(),
+        content,
+    })
+}
+
+#[tauri::command]
+pub fn delete_tool_skill(tool_id: &str, skill_name: &str) -> Result<(), String> {
+    let skill_path = tool_skill_base_path(tool_id, skill_name)?;
+    let skills_root = skill_path
+        .parent()
+        .ok_or_else(|| "无法确定软件 Skill 目录".to_string())?;
+    remove_tool_skill_entry(skills_root.to_string_lossy().as_ref(), skill_name)
+}
+
+#[tauri::command]
 pub fn save_skill_file_content(
     skill_name: &str,
     relative_path: &str,
@@ -6464,7 +6777,7 @@ mod tests {
 
     use super::{
         apply_skill_install_activation, build_local_candidates, build_repo_skill_source_url,
-        cleanup_local_skill_install_on_error, collect_local_skill_dirs,
+        build_tool_skill_entries, cleanup_local_skill_install_on_error, collect_local_skill_dirs,
         collect_skills_manager_cached_items, collect_skillsmp_items, copy_local_skill_dir,
         detect_preferred_app_language_from_system, ensure_intellij_git_project_files,
         import_local_skill, insert_trusted_project_path, inspect_skill_tool_status,
@@ -6472,12 +6785,12 @@ mod tests {
         load_marketplace_cache_page, map_in_parallel_preserving_order,
         map_skillsmp_items_to_marketplace, normalize_installed_skill_source_url,
         normalize_skill_tools, open_target_path_for_skill, parse_apple_languages_output,
-        parse_repo_install_spec, parse_skills_sh_homepage_items, refresh_installed_skill_git_state,
-        remove_trusted_project_paths, repo_clone_candidates, resolve_skill_install_name,
-        resolve_startup_installed_skills, run_git_command, save_marketplace_cache,
-        scan_local_install_skill_candidates, scan_repo_skill_candidates, selected_repo_path_hint,
-        should_use_skills_sh_homepage_page, tool_name_to_id, update_skill_repo,
-        REFRESH_GIT_STATES_CONCURRENCY,
+        parse_repo_install_spec, parse_skills_sh_homepage_items, recover_missing_managed_skills,
+        refresh_installed_skill_git_state, remove_trusted_project_paths, repo_clone_candidates,
+        resolve_skill_install_name, resolve_startup_installed_skills, run_git_command,
+        save_marketplace_cache, scan_local_install_skill_candidates, scan_repo_skill_candidates,
+        selected_repo_path_hint, should_use_skills_sh_homepage_page, tool_name_to_id,
+        update_skill_repo, REFRESH_GIT_STATES_CONCURRENCY,
     };
     use crate::models::{MarketplaceSkill, SkillSummary, ToolConfig, WorkspacePersistence};
     use crate::workspace::TEST_ENV_LOCK;
@@ -6503,6 +6816,62 @@ mod tests {
         ));
         fs::create_dir_all(&temp_dir).expect("create temp test dir");
         temp_dir
+    }
+
+    #[test]
+    fn recovers_direct_and_nested_skills_missing_from_managed_state() {
+        let _guard = TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let temp_dir = temp_test_dir("recover-managed-skills");
+        let home_dir = temp_dir.join("home");
+        let previous_home = env::var_os("HOME");
+        let direct_skill = home_dir.join(".skilldock/skills/direct-skill");
+        let nested_skill = home_dir.join(".skilldock/skills/nested-skill/skills/nested-skill");
+        fs::create_dir_all(&direct_skill).expect("create direct skill");
+        fs::create_dir_all(&nested_skill).expect("create nested skill");
+        fs::write(
+            direct_skill.join("SKILL.md"),
+            "---\ndescription: Direct recovery\n---\n",
+        )
+        .expect("write direct skill");
+        fs::write(
+            nested_skill.join("SKILL.md"),
+            "---\ndescription: Nested recovery\n---\n",
+        )
+        .expect("write nested skill");
+        // SAFETY: this test holds TEST_ENV_LOCK and restores HOME before returning.
+        unsafe {
+            env::set_var("HOME", &home_dir);
+        }
+
+        let recovered = recover_missing_managed_skills(Vec::new(), &[]);
+
+        restore_env_var("HOME", previous_home);
+        assert_eq!(
+            recovered
+                .iter()
+                .map(|skill| skill.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["direct-skill", "nested-skill"]
+        );
+        assert_eq!(recovered[0].description, "Direct recovery");
+        assert_eq!(recovered[1].description, "Nested recovery");
+        let persisted: WorkspacePersistence = serde_json::from_str(
+            &fs::read_to_string(home_dir.join(".skilldock/state.json"))
+                .expect("read recovered state"),
+        )
+        .expect("parse recovered state");
+        assert_eq!(persisted.installed_skills.len(), 2);
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn identifies_internal_gitlab_skill_sources() {
+        assert_eq!(
+            super::source_type_for_url("https://git.example.com/example-org/example-repo"),
+            "gitlab"
+        );
     }
 
     fn run_git_test(current_dir: &PathBuf, args: &[&str]) {
@@ -6579,6 +6948,106 @@ mod tests {
             owner_plugin_name: String::new(),
             tools: Vec::new(),
         }
+    }
+
+    #[test]
+    fn tool_skill_entries_scan_every_valid_skill_in_the_real_tool_directory() {
+        let temp_dir = temp_test_dir("tool-skill-entries");
+        let tool_skills_dir = temp_dir.join("tool-skills");
+        let managed_library_dir = temp_dir.join("managed-library");
+        fs::create_dir_all(&tool_skills_dir).expect("create tool skills directory");
+        fs::create_dir_all(&managed_library_dir).expect("create managed library directory");
+
+        for name in ["managed-skill", "changed-skill", "unmanaged-skill"] {
+            let skill_dir = tool_skills_dir.join(name);
+            fs::create_dir_all(&skill_dir).expect("create tool skill directory");
+            fs::write(
+                skill_dir.join("SKILL.md"),
+                format!("---\nname: {name}\ndescription: {name} description\n---\n"),
+            )
+            .expect("write skill markdown");
+        }
+        let changed_managed_dir = managed_library_dir.join("changed-skill");
+        fs::create_dir_all(&changed_managed_dir).expect("create changed managed skill directory");
+        fs::write(
+            changed_managed_dir.join("SKILL.md"),
+            "---\nname: changed-skill\n---\n",
+        )
+        .expect("write managed skill markdown");
+        #[cfg(unix)]
+        {
+            let symlink_target = temp_dir.join("symlink-target");
+            fs::create_dir_all(&symlink_target).expect("create symlink target");
+            fs::write(
+                symlink_target.join("SKILL.md"),
+                "---\nname: symlink-skill\ndescription: symlink skill description\n---\n",
+            )
+            .expect("write symlink skill markdown");
+            std::os::unix::fs::symlink(&symlink_target, tool_skills_dir.join("symlink-skill"))
+                .expect("create tool skill symlink");
+        }
+
+        let tool = ToolConfig {
+            id: "codex".into(),
+            name: "Codex".into(),
+            skills_path: tool_skills_dir.to_string_lossy().to_string(),
+            mcp_config_path: String::new(),
+            supports_mcp: true,
+            mcp_config_path_recognized: true,
+            status_label: "已安装".into(),
+            is_enabled: true,
+            primary_type: "cli".into(),
+            surface_types: vec!["cli".into()],
+            supports_direct_open: false,
+        };
+        let installed_skills = vec![
+            installed_skill_fixture(
+                "managed-skill",
+                "",
+                tool_skills_dir
+                    .join("managed-skill")
+                    .to_string_lossy()
+                    .as_ref(),
+            ),
+            installed_skill_fixture(
+                "changed-skill",
+                "",
+                changed_managed_dir.to_string_lossy().as_ref(),
+            ),
+        ];
+
+        let entries = build_tool_skill_entries(&[tool], &installed_skills);
+        #[cfg(unix)]
+        assert_eq!(entries.len(), 4);
+        #[cfg(not(unix))]
+        assert_eq!(entries.len(), 3);
+        let changed_entry = entries
+            .iter()
+            .find(|entry| entry.name == "changed-skill")
+            .expect("changed skill entry");
+        assert_eq!(changed_entry.management_status, "mismatch");
+        let managed_entry = entries
+            .iter()
+            .find(|entry| entry.name == "managed-skill")
+            .expect("managed skill entry");
+        assert_eq!(managed_entry.management_status, "managed");
+        let unmanaged_entry = entries
+            .iter()
+            .find(|entry| entry.name == "unmanaged-skill")
+            .expect("unmanaged skill entry");
+        assert_eq!(unmanaged_entry.management_status, "unmanaged");
+        assert_eq!(unmanaged_entry.entry_kind, "directory");
+        #[cfg(unix)]
+        {
+            let symlink_entry = entries
+                .iter()
+                .find(|entry| entry.name == "symlink-skill")
+                .expect("symlink skill entry");
+            assert_eq!(symlink_entry.management_status, "unmanaged");
+            assert_eq!(symlink_entry.entry_kind, "symlink");
+        }
+
+        let _ = fs::remove_dir_all(temp_dir);
     }
 
     #[test]

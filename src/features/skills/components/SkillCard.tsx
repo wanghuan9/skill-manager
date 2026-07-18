@@ -22,6 +22,7 @@ import { getMonogramLabel } from "@/features/skills/utils/monogram";
 type SkillCardProps = {
   skill: SkillSummary;
   expanded?: boolean;
+  autoAlignWhenExpanded?: boolean;
   onExpandedChange?: (expanded: boolean, rowElement?: HTMLElement | null) => void;
 };
 
@@ -158,7 +159,12 @@ function DeleteIcon() {
   );
 }
 
-export function SkillCard({ skill, expanded: expandedProp, onExpandedChange }: SkillCardProps) {
+export function SkillCard({
+  skill,
+  expanded: expandedProp,
+  autoAlignWhenExpanded = false,
+  onExpandedChange,
+}: SkillCardProps) {
   const { t } = useTranslate();
   const { notify } = useNotifications();
   const reportFailure = useFailureReporter();
@@ -194,6 +200,12 @@ export function SkillCard({ skill, expanded: expandedProp, onExpandedChange }: S
       : sourceLabel;
   const showRemoteMetadata = skill.gitLinked && skill.sourceType !== "local";
   const expanded = expandedProp ?? expandedState;
+
+  useEffect(() => {
+    if (autoAlignWhenExpanded && expanded) {
+      void alignExpandedRowIntoView(cardRef.current);
+    }
+  }, [autoAlignWhenExpanded, expanded]);
 
   useEffect(() => {
     if (!isDeleteConfirming) {
@@ -300,7 +312,7 @@ export function SkillCard({ skill, expanded: expandedProp, onExpandedChange }: S
       setExpandedState(nextExpanded);
     }
     onExpandedChange?.(nextExpanded, cardRef.current);
-    if (shouldAlignExpandedCard) {
+    if (shouldAlignExpandedCard && !autoAlignWhenExpanded) {
       await alignExpandedRowIntoView(cardRef.current);
     }
   }

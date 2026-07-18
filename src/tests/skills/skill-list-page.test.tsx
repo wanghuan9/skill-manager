@@ -1,7 +1,8 @@
-import { beforeEach, test } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { beforeEach, test, vi } from "vitest";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { App } from "@/app/App";
+import * as skillClient from "@/features/skills/api/skill-client";
 
 beforeEach(() => {
   window.localStorage.clear();
@@ -11,10 +12,168 @@ test("renders installed skill page header and search input", () => {
   render(<App />);
   expect(screen.getByRole("button", { name: /Skills/ })).toBeInTheDocument();
   expect(screen.getByRole("heading", { name: "Skills", level: 1 })).toBeInTheDocument();
+  expect(screen.getByText("~/.skilldock/skills · 已启用 4 · 可更新 1 · 待推送 2")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "刷新" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "更新 (1)" })).toBeInTheDocument();
   expect(screen.getByPlaceholderText("搜索技能名称、描述、来源...")).toBeInTheDocument();
   expect(screen.getByLabelText("按状态筛选技能")).toBeInTheDocument();
+});
+
+test("switches from the managed library to a tool's real Skill directory", async () => {
+  const user = userEvent.setup();
+  render(<App />);
+
+  expect(screen.getByRole("tab", { name: "已托管 4" })).toHaveAttribute("aria-selected", "true");
+  const codexSourceTab = screen.getByRole("tab", { name: "Codex 5" });
+  expect(codexSourceTab).toHaveAttribute("title", "Codex");
+  await user.click(codexSourceTab);
+
+  expect(screen.getByRole("heading", { name: "Codex", level: 1 })).toBeInTheDocument();
+  expect(screen.getByText("~/.codex/skills · 已托管 3 · 未托管 1 · 冲突 1")).toBeInTheDocument();
+  const managementFilter = screen.getByLabelText("按托管状态筛选 Skill");
+  expect(managementFilter).toHaveValue("all");
+  expect(screen.getByRole("option", { name: "全部 (5)" })).toBeInTheDocument();
+  expect(screen.getByRole("option", { name: "已托管 (3)" })).toBeInTheDocument();
+  expect(screen.getByRole("option", { name: "未托管 (1)" })).toBeInTheDocument();
+  expect(screen.getByRole("option", { name: "冲突 (1)" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "未托管 1" })).not.toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: "technical-design" })).toBeInTheDocument();
+  const managedCard = screen.getByRole("article", { name: "skill-publisher" });
+  expect(within(managedCard).getByText("已托管")).toHaveClass("tone-positive");
+  const unmanagedCard = screen.getByRole("article", { name: "technical-design" });
+  expect(within(unmanagedCard).getByText("未托管")).toHaveClass("tone-neutral");
+  expect(within(unmanagedCard).getByText("符号链接")).toHaveClass("tone-info");
+  expect(within(unmanagedCard).getByRole("button", { name: "导入 SkillDock" })).toBeInTheDocument();
+  expect(screen.getByText("根据产品文档和需求输入整理技术设计骨架。")).toHaveClass("skill-card__summary-description");
+  expect(screen.queryByText("/Users/demo/.codex/skills/technical-design")).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "查看 technical-design 文件" })).toHaveClass("skill-card__icon-button");
+  expect(screen.getByRole("button", { name: "删除 technical-design" })).toHaveClass("skill-card__icon-button");
+  expect(screen.getByRole("button", { name: "导入 SkillDock" })).toHaveClass("skill-card__icon-button");
+  expect(screen.getByPlaceholderText("搜索技能名称、描述、路径...")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "更新 (1)" })).not.toBeInTheDocument();
+});
+
+test("expands one tool Skill detail at a time with actual local metadata", async () => {
+  const user = userEvent.setup();
+  const openFinderSpy = vi.spyOn(skillClient, "openPathInFinder").mockResolvedValue(undefined);
+  render(<App />);
+
+  await user.click(screen.getByRole("tab", { name: "Codex 5" }));
+
+  const unmanagedCard = screen.getByRole("article", { name: "technical-design" });
+  expect(within(unmanagedCard).getByRole("button", { name: "展开 technical-design" })).toBeInTheDocument();
+  await user.click(within(unmanagedCard).getByRole("button", { name: "technical-design" }));
+
+  const unmanagedDetails = within(unmanagedCard).getByRole("region", { name: "基本信息" });
+  expect(within(unmanagedDetails).getByText("根据产品文档和需求输入整理技术设计骨架。")).toBeInTheDocument();
+  expect(within(unmanagedDetails).getByText("Codex")).toBeInTheDocument();
+  expect(within(unmanagedDetails).getByText("/Users/demo/shared-skills/technical-design")).toBeInTheDocument();
+  expect(within(unmanagedDetails).getByText("符号链接")).toBeInTheDocument();
+  expect(within(unmanagedDetails).getByText("未托管")).toBeInTheDocument();
+  expect(within(unmanagedDetails).queryByText("/Users/demo/.codex/skills/technical-design")).not.toBeInTheDocument();
+  const unmanagedFolderButton = within(unmanagedDetails).getByRole("button", {
+    name: "打开目录 /Users/demo/shared-skills/technical-design",
+  });
+  expect(unmanagedFolderButton).toHaveClass("skill-card__icon-button");
+  await user.click(unmanagedFolderButton);
+  expect(openFinderSpy).toHaveBeenLastCalledWith({ path: "/Users/demo/shared-skills/technical-design" });
+
+  const managedCard = screen.getByRole("article", { name: "skill-publisher" });
+  await user.click(within(managedCard).getByRole("button", { name: "skill-publisher" }));
+
+  expect(within(unmanagedCard).queryByRole("region", { name: "基本信息" })).not.toBeInTheDocument();
+  const managedDetails = within(managedCard).getByRole("region", { name: "基本信息" });
+  expect(within(managedDetails).getByText("/Users/demo/.skilldock/skills/skill-publisher")).toBeInTheDocument();
+  expect(within(managedDetails).queryByText("文件类型")).not.toBeInTheDocument();
+  expect(within(managedDetails).queryByText("真实目录")).not.toBeInTheDocument();
+  const managedVersionButton = within(managedDetails).getByRole("button", { name: "查看托管版本" });
+  expect(managedVersionButton.closest(".skill-card__section-header")).toBeInTheDocument();
+  await user.click(within(managedDetails).getByRole("button", {
+    name: "打开目录 /Users/demo/.skilldock/skills/skill-publisher",
+  }));
+  expect(openFinderSpy).toHaveBeenLastCalledWith({ path: "/Users/demo/.skilldock/skills/skill-publisher" });
+  openFinderSpy.mockRestore();
+});
+
+test("opens and focuses the corresponding managed Skill from a tool directory", async () => {
+  const user = userEvent.setup();
+  render(<App />);
+
+  await user.click(screen.getByRole("button", { name: "平铺" }));
+  await user.selectOptions(screen.getByLabelText("按状态筛选技能"), "update-available");
+  await user.click(screen.getByRole("tab", { name: "Codex 5" }));
+  await user.type(screen.getByPlaceholderText("搜索技能名称、描述、路径..."), "skill-publisher");
+
+  const sourceCard = screen.getByRole("article", { name: "skill-publisher" });
+  await user.click(within(sourceCard).getByRole("button", { name: "skill-publisher" }));
+  await user.click(within(sourceCard).getByRole("button", { name: "查看托管版本" }));
+
+  expect(screen.getByRole("tab", { name: "已托管 4" })).toHaveAttribute("aria-selected", "true");
+  expect(screen.getByLabelText("按状态筛选技能")).toHaveValue("all");
+  expect(screen.getByPlaceholderText("搜索技能名称、描述、来源...")).toHaveValue("");
+  expect(screen.getByRole("button", { name: "收起来源分组 team-skills" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "收起 skill-publisher" })).toHaveAttribute("aria-expanded", "true");
+});
+
+test("keeps a source selected from More visible in the flat source bar", async () => {
+  const user = userEvent.setup();
+  render(<App />);
+
+  expect(screen.getByRole("button", { name: /更多/ })).toBeInTheDocument();
+  expect(screen.queryByRole("tab", { name: /Antigravity/ })).not.toBeInTheDocument();
+
+  await user.click(screen.getByRole("button", { name: /更多/ }));
+  await user.click(screen.getByRole("menuitem", { name: /Antigravity/ }));
+
+  expect(screen.getByRole("tab", { name: /Antigravity/ })).toHaveAttribute("aria-selected", "true");
+  expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+});
+
+test("views a tool Skill's actual files in a read-only dialog", async () => {
+  const user = userEvent.setup();
+  render(<App />);
+
+  await user.click(screen.getByRole("tab", { name: "Codex 5" }));
+  await user.click(screen.getByRole("button", { name: "查看 technical-design 文件" }));
+
+  const dialog = await screen.findByRole("dialog");
+  expect(within(dialog).getByRole("heading", { name: "technical-design" })).toBeInTheDocument();
+  expect(within(dialog).getAllByText("SKILL.md")).toHaveLength(2);
+  expect(within(dialog).queryByRole("button", { name: "编辑" })).not.toBeInTheDocument();
+  expect(within(dialog).queryByRole("button", { name: "保存" })).not.toBeInTheDocument();
+});
+
+test("removes a Skill only from the selected tool after confirmation", async () => {
+  const user = userEvent.setup();
+  const deleteSpy = vi.spyOn(skillClient, "deleteToolSkill");
+  render(<App />);
+
+  await user.click(screen.getByRole("tab", { name: "Codex 5" }));
+  await user.click(screen.getByRole("button", { name: "删除 technical-design" }));
+  await user.click(screen.getByRole("button", { name: "确认 technical-design" }));
+
+  await waitFor(() => {
+    expect(deleteSpy).toHaveBeenCalledWith({ toolId: "codex", skillName: "technical-design" });
+  });
+  expect(screen.queryByRole("heading", { name: "technical-design" })).not.toBeInTheDocument();
+  expect(await screen.findByText("已从 Codex 移除 technical-design")).toBeInTheDocument();
+  deleteSpy.mockRestore();
+});
+
+test("imports an unmanaged tool Skill through the existing local import flow", async () => {
+  const user = userEvent.setup();
+  const importSpy = vi.spyOn(skillClient, "importLocalSkill");
+  render(<App />);
+
+  await user.click(screen.getByRole("tab", { name: "Codex 5" }));
+  await user.selectOptions(screen.getByLabelText("按托管状态筛选 Skill"), "unmanaged");
+  await user.click(screen.getByRole("button", { name: "导入 SkillDock" }));
+
+  await waitFor(() => {
+    expect(importSpy).toHaveBeenCalledWith("/Users/demo/.codex/skills/technical-design");
+  });
+  expect(await screen.findByText("technical-design 已导入 SkillDock")).toBeInTheDocument();
+  importSpy.mockRestore();
 });
 
 test("uses flat view by default when installed skill count is at or below threshold", () => {

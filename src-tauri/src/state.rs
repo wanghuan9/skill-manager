@@ -21,6 +21,8 @@ const SKILL_INSTALL_ACTIVATION_APPLY_ALL: &str = "apply-all-tools";
 const SKILL_INSTALL_ACTIVATION_DISABLE_ALL: &str = "disable-all-tools";
 const MCP_INSTALL_ACTIVATION_APPLY_ALL: &str = "apply-all-tools";
 const MCP_INSTALL_ACTIVATION_DISABLE_ALL: &str = "disable-all-tools";
+const SKILL_SOURCE_VIEW_STYLE_FLAT: &str = "flat";
+const SKILL_SOURCE_VIEW_STYLE_SELECT: &str = "select";
 const APP_LANGUAGE_ZH_CN: &str = "zh-CN";
 const APP_LANGUAGE_EN: &str = "en";
 const APP_LANGUAGE_SOURCE_AUTO: &str = "auto";
@@ -35,6 +37,8 @@ struct SettingsPersistence {
     skill_install_activation: String,
     #[serde(default)]
     mcp_install_activation: String,
+    #[serde(default)]
+    skill_source_view_style: String,
     #[serde(default)]
     language: String,
     #[serde(default)]
@@ -133,6 +137,10 @@ pub fn load_app_settings() -> AppSettings {
         .to_string(),
         mcp_install_activation: normalize_mcp_install_activation(&persisted.mcp_install_activation)
             .to_string(),
+        skill_source_view_style: normalize_skill_source_view_style(
+            &persisted.skill_source_view_style,
+        )
+        .to_string(),
         language: normalize_app_language(&persisted.language).to_string(),
         language_source: normalize_app_language_source(&persisted.language_source).to_string(),
     }
@@ -156,6 +164,8 @@ pub fn save_app_settings(input: AppSettings) -> Result<AppSettings, String> {
         .to_string(),
         mcp_install_activation: normalize_mcp_install_activation(&input.mcp_install_activation)
             .to_string(),
+        skill_source_view_style: normalize_skill_source_view_style(&input.skill_source_view_style)
+            .to_string(),
         language: normalize_app_language(&input.language).to_string(),
         language_source: normalize_app_language_source(&input.language_source).to_string(),
     };
@@ -163,6 +173,7 @@ pub fn save_app_settings(input: AppSettings) -> Result<AppSettings, String> {
         default_open_tool_id: normalized.default_open_tool_id.clone(),
         skill_install_activation: normalized.skill_install_activation.clone(),
         mcp_install_activation: normalized.mcp_install_activation.clone(),
+        skill_source_view_style: normalized.skill_source_view_style.clone(),
         language: normalized.language.clone(),
         language_source: normalized.language_source.clone(),
     };
@@ -409,6 +420,13 @@ pub fn normalize_mcp_install_activation(value: &str) -> &'static str {
     }
 }
 
+pub fn normalize_skill_source_view_style(value: &str) -> &'static str {
+    match value.trim() {
+        SKILL_SOURCE_VIEW_STYLE_SELECT => SKILL_SOURCE_VIEW_STYLE_SELECT,
+        _ => SKILL_SOURCE_VIEW_STYLE_FLAT,
+    }
+}
+
 fn hydrate_skill_description(mut skill: SkillSummary) -> SkillSummary {
     if skill.local_updated_at.trim().is_empty() {
         skill.local_updated_at = skill.last_synced_at.clone();
@@ -568,8 +586,8 @@ mod tests {
     use crate::workspace::TEST_ENV_LOCK;
 
     use super::{
-        hydrate_skill_description, load_installed_skills, save_installed_skills,
-        scan_local_skill_candidates,
+        hydrate_skill_description, load_installed_skills, normalize_skill_source_view_style,
+        save_installed_skills, scan_local_skill_candidates,
     };
 
     fn with_temp_home<F>(run: F)
@@ -671,6 +689,14 @@ mod tests {
             assert!(result.is_ok());
             assert!(temp_home.join(".skilldock/state.json").exists());
         });
+    }
+
+    #[test]
+    fn normalizes_skill_source_view_style_with_flat_fallback() {
+        assert_eq!(normalize_skill_source_view_style("flat"), "flat");
+        assert_eq!(normalize_skill_source_view_style("band"), "flat");
+        assert_eq!(normalize_skill_source_view_style("select"), "select");
+        assert_eq!(normalize_skill_source_view_style("legacy"), "flat");
     }
 
     #[test]

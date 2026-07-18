@@ -74,6 +74,29 @@ test("allows selecting default open tool in settings", async () => {
   expect(screen.queryByText("CodeBuddy")).not.toBeInTheDocument();
 });
 
+test("switches between the two Skill source bar styles", async () => {
+  const user = userEvent.setup();
+  window.localStorage.clear();
+  render(<App />);
+
+  expect(screen.getByRole("tablist", { name: "Skill 来源" })).toBeInTheDocument();
+
+  await user.click(screen.getByRole("button", { name: /设置/ }));
+  const styleSelect = screen.getByLabelText("Skill 来源栏样式");
+  expect(styleSelect).toHaveValue("flat");
+  expect(within(styleSelect).queryByRole("option", { name: "浅色工具栏" })).not.toBeInTheDocument();
+
+  await user.selectOptions(styleSelect, "select");
+  await user.click(screen.getByRole("button", { name: /Skills/ }));
+
+  expect(screen.queryByRole("tablist", { name: "Skill 来源" })).not.toBeInTheDocument();
+  const sourceTrigger = screen.getByRole("button", { name: /已托管 4/ });
+  expect(sourceTrigger.closest(".skills-source-select-row")).toBeInTheDocument();
+
+  await user.click(sourceTrigger);
+  expect(screen.getByRole("menuitem", { name: /Codex 5/ })).toBeInTheDocument();
+});
+
 test("toggles tool status from the full row", async () => {
   window.localStorage.clear();
   const alignMock = vi.mocked(alignExpandedRowIntoView);

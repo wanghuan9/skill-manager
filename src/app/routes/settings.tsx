@@ -22,6 +22,7 @@ import {
 } from "@/features/skills/utils/open-tools";
 import { getToolLogoUrl } from "@/features/skills/utils/tool-logo";
 import { clearRepoCache, getRepoCacheSize } from "@/features/skills/api/skill-client";
+import type { SkillSourceViewStyle } from "@/features/skills/state/skill-store";
 
 function FolderOpenIcon() {
   return (
@@ -109,6 +110,7 @@ export function SettingsRoute() {
     setMcpInstallActivation,
     setDefaultOpenToolId,
     setSkillInstallActivation,
+    setSkillSourceViewStyle,
     toolConfigs,
   } = useSkillWorkspace();
   const openToolOptions = useMemo(
@@ -359,6 +361,22 @@ export function SettingsRoute() {
                 {tool.name}
               </option>
             ))}
+          </select>
+        </div>
+      ),
+    },
+    {
+      label: t("settings.skillSourceView.label"),
+      description: t("settings.skillSourceView.description"),
+      value: (
+        <div className="settings-form-item__control">
+          <select
+            aria-label={t("settings.skillSourceView.label")}
+            value={appSettings.skillSourceViewStyle ?? "flat"}
+            onChange={(event) => void setSkillSourceViewStyle(event.target.value as SkillSourceViewStyle)}
+          >
+            <option value="flat">{t("settings.skillSourceView.option.flat")}</option>
+            <option value="select">{t("settings.skillSourceView.option.select")}</option>
           </select>
         </div>
       ),

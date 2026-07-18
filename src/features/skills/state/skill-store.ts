@@ -247,6 +247,19 @@ export type LocalSkillCandidate = {
   sourceHint: string;
 };
 
+export type ToolSkillEntryKind = "symlink" | "directory";
+
+export type ToolSkillEntry = {
+  toolId: string;
+  toolName: string;
+  name: string;
+  description: string;
+  localPath: string;
+  resolvedPath: string;
+  managementStatus: "managed" | "unmanaged" | "mismatch";
+  entryKind?: ToolSkillEntryKind;
+};
+
 export type RepoSkillCandidate = {
   id: string;
   name: string;
@@ -291,6 +304,7 @@ export type GitAccountSummary = {
 };
 
 export type InstallActivationMode = "apply-all-tools" | "disable-all-tools";
+export type SkillSourceViewStyle = "flat" | "select";
 export type AppLanguage = "zh-CN" | "en";
 export type AppLanguageSource = "auto" | "user";
 
@@ -299,6 +313,7 @@ export type AppSettings = {
   defaultOpenToolId: string;
   skillInstallActivation: InstallActivationMode;
   mcpInstallActivation: InstallActivationMode;
+  skillSourceViewStyle?: SkillSourceViewStyle;
   language: AppLanguage;
   languageSource: AppLanguageSource;
 };
@@ -308,6 +323,7 @@ export type WorkspaceSnapshot = {
   marketplaceSkills: MarketplaceSkill[];
   localCandidates: LocalSkillCandidate[];
   toolConfigs: ToolConfig[];
+  toolSkillEntries: ToolSkillEntry[];
   gitAccount: GitAccountSummary;
 };
 
