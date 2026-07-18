@@ -252,3 +252,32 @@ test("switches interface language to English from settings", async () => {
   expect(screen.getByText("App Preferences")).toBeInTheDocument();
   expect(screen.getByLabelText("Interface Language")).toHaveValue("en");
 });
+
+test("switches and persists the interface theme from settings", async () => {
+  const user = userEvent.setup();
+  window.localStorage.clear();
+  render(<App />);
+
+  await user.click(screen.getByRole("button", { name: /设置/ }));
+
+  const lightThemeButton = screen.getByRole("button", { name: "浅色" });
+  const darkThemeButton = screen.getByRole("button", { name: "深色" });
+  expect(lightThemeButton).toHaveAttribute("aria-pressed", "true");
+  expect(document.documentElement).toHaveAttribute("data-theme", "light");
+
+  await user.click(darkThemeButton);
+
+  expect(darkThemeButton).toHaveAttribute("aria-pressed", "true");
+  expect(document.documentElement).toHaveAttribute("data-theme", "dark");
+  expect(window.localStorage.getItem("skilldock.settings.theme")).toBe("dark");
+
+  await user.click(screen.getByRole("button", { name: "Skills" }));
+  expect(document.documentElement).toHaveAttribute("data-theme", "dark");
+  await user.click(screen.getByRole("button", { name: /设置/ }));
+
+  const restoredLightThemeButton = screen.getByRole("button", { name: "浅色" });
+  await user.click(restoredLightThemeButton);
+
+  expect(restoredLightThemeButton).toHaveAttribute("aria-pressed", "true");
+  expect(document.documentElement).toHaveAttribute("data-theme", "light");
+});

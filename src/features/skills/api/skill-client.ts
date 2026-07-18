@@ -1218,7 +1218,12 @@ export async function fetchAppSettings(): Promise<AppSettings> {
 }
 
 export async function updateAppSettings(input: UpdateAppSettingsInput): Promise<AppSettings> {
-  return invokeOrFallback("update_app_settings", input, input.settings);
+  if (shouldUseFixtureData()) {
+    Object.assign(appSettingsFixture, input.settings);
+    return { ...appSettingsFixture };
+  }
+
+  return invoke("update_app_settings", input);
 }
 
 export async function detectPreferredAppLanguage(): Promise<AppLanguage> {

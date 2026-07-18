@@ -22,7 +22,7 @@ import {
 } from "@/features/skills/utils/open-tools";
 import { getToolLogoUrl } from "@/features/skills/utils/tool-logo";
 import { clearRepoCache, getRepoCacheSize } from "@/features/skills/api/skill-client";
-import type { SkillSourceViewStyle } from "@/features/skills/state/skill-store";
+import type { AppTheme, SkillSourceViewStyle } from "@/features/skills/state/skill-store";
 
 function FolderOpenIcon() {
   return (
@@ -77,6 +77,34 @@ function TrashIcon() {
   );
 }
 
+function ThemeIcon({ theme }: { theme: AppTheme }) {
+  if (theme === "dark") {
+    return (
+      <svg viewBox="0 0 18 18" fill="none" aria-hidden="true">
+        <path
+          d="M14.2 11.2A6 6 0 0 1 6.8 3.8 5.6 5.6 0 1 0 14.2 11.2Z"
+          stroke="currentColor"
+          strokeWidth="1.45"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+    );
+  }
+
+  return (
+    <svg viewBox="0 0 18 18" fill="none" aria-hidden="true">
+      <circle cx="9" cy="9" r="2.75" stroke="currentColor" strokeWidth="1.45" />
+      <path
+        d="M9 2.2v1.4M9 14.4v1.4M15.8 9h-1.4M3.6 9H2.2M13.8 4.2l-1 1M5.2 12.8l-1 1M13.8 13.8l-1-1M5.2 5.2l-1-1"
+        stroke="currentColor"
+        strokeWidth="1.45"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
 function formatBytes(bytes: number) {
   if (bytes <= 0) {
     return "0 B";
@@ -107,6 +135,7 @@ export function SettingsRoute() {
     defaultOpenToolId,
     openPathInFinder,
     setLanguage,
+    setTheme,
     setMcpInstallActivation,
     setDefaultOpenToolId,
     setSkillInstallActivation,
@@ -341,6 +370,34 @@ export function SettingsRoute() {
             <option value="zh-CN">{t("settings.language.option.zh-CN")}</option>
             <option value="en">{t("settings.language.option.en")}</option>
           </select>
+        </div>
+      ),
+    },
+    {
+      label: t("settings.theme.label"),
+      description: t("settings.theme.description"),
+      value: (
+        <div className="settings-form-item__control">
+          <div className="settings-theme-picker" role="group" aria-label={t("settings.theme.label")}>
+            <button
+              className={`settings-theme-option${appSettings.theme === "light" ? " is-selected" : ""}`}
+              type="button"
+              aria-pressed={appSettings.theme === "light"}
+              onClick={() => void setTheme("light")}
+            >
+              <ThemeIcon theme="light" />
+              <span>{t("settings.theme.option.light")}</span>
+            </button>
+            <button
+              className={`settings-theme-option${appSettings.theme === "dark" ? " is-selected" : ""}`}
+              type="button"
+              aria-pressed={appSettings.theme === "dark"}
+              onClick={() => void setTheme("dark")}
+            >
+              <ThemeIcon theme="dark" />
+              <span>{t("settings.theme.option.dark")}</span>
+            </button>
+          </div>
         </div>
       ),
     },

@@ -3,6 +3,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -57,6 +58,7 @@ import type {
   AppLanguage,
   AppLanguageSource,
   AppSettings,
+  AppTheme,
   GitAccountSummary,
   InstallActivationMode,
   LocalSkillCandidate,
@@ -83,6 +85,7 @@ import { getToolStatusLabel, isToolEnabledStatus } from "@/features/skills/utils
 
 const STARTUP_WORKSPACE_CACHE_KEY = "skilldock.startupWorkspaceCache";
 const APP_LANGUAGE_STORAGE_KEY = "skilldock.settings.language";
+const APP_THEME_STORAGE_KEY = "skilldock.settings.theme";
 const FALLBACK_OPEN_TOOL_ID = "finder";
 const MARKETPLACE_PAGE_SIZE = 18;
 const MARKETPLACE_SOURCE_SITES: MarketplaceSourceSite[] = ["skills.sh", "skillsmp"];
@@ -177,6 +180,7 @@ type SkillWorkspaceContextValue = {
   appSettings: AppSettings;
   language: AppLanguage;
   setLanguage: (language: AppLanguage) => Promise<void>;
+  setTheme: (theme: AppTheme) => Promise<void>;
   setSkillInstallActivation: (mode: InstallActivationMode) => Promise<void>;
   setMcpInstallActivation: (mode: InstallActivationMode) => Promise<void>;
   setSkillSourceViewStyle: (style: SkillSourceViewStyle) => Promise<void>;
@@ -185,6 +189,14 @@ type SkillWorkspaceContextValue = {
 };
 
 const SkillWorkspaceContext = createContext<SkillWorkspaceContextValue | null>(null);
+
+function readStoredAppTheme(): AppTheme {
+  if (typeof window === "undefined") {
+    return "light";
+  }
+
+  return window.localStorage.getItem(APP_THEME_STORAGE_KEY) === "dark" ? "dark" : "light";
+}
 
 type SkillWorkspaceProviderProps = {
   children: ReactNode;
@@ -447,6 +459,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
           skillSourceViewStyle: "flat",
           language: "zh-CN",
           languageSource: "auto",
+          theme: readStoredAppTheme(),
         },
   );
   const [isLoading, setIsLoading] = useState(!usesFixtureData && startupCache === null);
@@ -515,6 +528,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
     const savedSettings = await updateAppSettings({ settings: nextSettings });
     if (typeof window !== "undefined") {
       window.localStorage.setItem(APP_LANGUAGE_STORAGE_KEY, savedSettings.language);
+      window.localStorage.setItem(APP_THEME_STORAGE_KEY, savedSettings.theme);
     }
     setAppSettings(savedSettings);
     return savedSettings;
@@ -563,6 +577,18 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       languageSource: "user",
     });
   }
+
+  async function handleSetTheme(theme: AppTheme) {
+    await persistAppSettings({
+      ...appSettings,
+      theme,
+    });
+  }
+
+  useLayoutEffect(() => {
+    document.documentElement.dataset.theme = appSettings.theme;
+    window.localStorage.setItem(APP_THEME_STORAGE_KEY, appSettings.theme);
+  }, [appSettings.theme]);
 
   useEffect(() => {
     if (typeof window !== "undefined") {
@@ -1402,6 +1428,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       appSettings,
       language,
       setLanguage: handleSetLanguage,
+      setTheme: handleSetTheme,
       setSkillInstallActivation: handleSetSkillInstallActivation,
       setMcpInstallActivation: handleSetMcpInstallActivation,
       setSkillSourceViewStyle: handleSetSkillSourceViewStyle,

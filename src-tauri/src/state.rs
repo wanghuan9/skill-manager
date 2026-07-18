@@ -27,6 +27,8 @@ const APP_LANGUAGE_ZH_CN: &str = "zh-CN";
 const APP_LANGUAGE_EN: &str = "en";
 const APP_LANGUAGE_SOURCE_AUTO: &str = "auto";
 const APP_LANGUAGE_SOURCE_USER: &str = "user";
+const APP_THEME_LIGHT: &str = "light";
+const APP_THEME_DARK: &str = "dark";
 
 #[derive(Clone, Debug, Deserialize, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -43,6 +45,8 @@ struct SettingsPersistence {
     language: String,
     #[serde(default)]
     language_source: String,
+    #[serde(default)]
+    theme: String,
 }
 
 pub fn load_installed_skills(default_skills: &[SkillSummary]) -> Vec<SkillSummary> {
@@ -143,6 +147,7 @@ pub fn load_app_settings() -> AppSettings {
         .to_string(),
         language: normalize_app_language(&persisted.language).to_string(),
         language_source: normalize_app_language_source(&persisted.language_source).to_string(),
+        theme: normalize_app_theme(&persisted.theme).to_string(),
     }
 }
 
@@ -168,6 +173,7 @@ pub fn save_app_settings(input: AppSettings) -> Result<AppSettings, String> {
             .to_string(),
         language: normalize_app_language(&input.language).to_string(),
         language_source: normalize_app_language_source(&input.language_source).to_string(),
+        theme: normalize_app_theme(&input.theme).to_string(),
     };
     let persistence = SettingsPersistence {
         default_open_tool_id: normalized.default_open_tool_id.clone(),
@@ -176,6 +182,7 @@ pub fn save_app_settings(input: AppSettings) -> Result<AppSettings, String> {
         skill_source_view_style: normalized.skill_source_view_style.clone(),
         language: normalized.language.clone(),
         language_source: normalized.language_source.clone(),
+        theme: normalized.theme.clone(),
     };
     let payload = serde_json::to_string_pretty(&persistence)
         .map_err(|error| format!("序列化设置失败: {error}"))?;
@@ -196,6 +203,13 @@ fn normalize_app_language_source(value: &str) -> &'static str {
     match value.trim() {
         APP_LANGUAGE_SOURCE_USER => APP_LANGUAGE_SOURCE_USER,
         _ => APP_LANGUAGE_SOURCE_AUTO,
+    }
+}
+
+fn normalize_app_theme(value: &str) -> &'static str {
+    match value.trim() {
+        APP_THEME_DARK => APP_THEME_DARK,
+        _ => APP_THEME_LIGHT,
     }
 }
 
@@ -586,8 +600,8 @@ mod tests {
     use crate::workspace::TEST_ENV_LOCK;
 
     use super::{
-        hydrate_skill_description, load_installed_skills, normalize_skill_source_view_style,
-        save_installed_skills, scan_local_skill_candidates,
+        hydrate_skill_description, load_installed_skills, normalize_app_theme,
+        normalize_skill_source_view_style, save_installed_skills, scan_local_skill_candidates,
     };
 
     fn with_temp_home<F>(run: F)
@@ -697,6 +711,14 @@ mod tests {
         assert_eq!(normalize_skill_source_view_style("band"), "flat");
         assert_eq!(normalize_skill_source_view_style("select"), "select");
         assert_eq!(normalize_skill_source_view_style("legacy"), "flat");
+    }
+
+    #[test]
+    fn normalizes_app_theme_with_light_fallback() {
+        assert_eq!(normalize_app_theme("light"), "light");
+        assert_eq!(normalize_app_theme("dark"), "dark");
+        assert_eq!(normalize_app_theme("system"), "light");
+        assert_eq!(normalize_app_theme(""), "light");
     }
 
     #[test]
