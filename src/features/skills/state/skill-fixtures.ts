@@ -404,7 +404,9 @@ export const toolSkillEntryFixtures: ToolSkillEntry[] = [
       name: candidate.name,
       description: candidate.description,
       localPath: candidate.localPath,
-      resolvedPath: candidate.localPath,
+      resolvedPath: candidate.sourceHint === "符号链接"
+        ? `/Users/demo/shared-skills/${candidate.name}`
+        : candidate.localPath,
       managementStatus: "unmanaged" as const,
       entryKind: candidate.sourceHint === "符号链接" ? "symlink" as const : "directory" as const,
     }];

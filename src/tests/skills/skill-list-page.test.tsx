@@ -24,7 +24,9 @@ test("switches from the managed library to a tool's real Skill directory", async
   render(<App />);
 
   expect(screen.getByRole("tab", { name: "已托管 4" })).toHaveAttribute("aria-selected", "true");
-  await user.click(screen.getByRole("tab", { name: "Codex 5" }));
+  const codexSourceTab = screen.getByRole("tab", { name: "Codex 5" });
+  expect(codexSourceTab).toHaveAttribute("title", "Codex");
+  await user.click(codexSourceTab);
 
   expect(screen.getByRole("heading", { name: "Codex", level: 1 })).toBeInTheDocument();
   expect(screen.getByText("~/.codex/skills · 已托管 3 · 未托管 1 · 冲突 1")).toBeInTheDocument();
@@ -41,7 +43,7 @@ test("switches from the managed library to a tool's real Skill directory", async
   const unmanagedCard = screen.getByRole("article", { name: "technical-design" });
   expect(within(unmanagedCard).getByText("未托管")).toHaveClass("tone-neutral");
   expect(within(unmanagedCard).getByText("符号链接")).toHaveClass("tone-info");
-  expect(within(unmanagedCard).getAllByRole("button")[0]).toHaveAccessibleName("导入 SkillDock");
+  expect(within(unmanagedCard).getByRole("button", { name: "导入 SkillDock" })).toBeInTheDocument();
   expect(screen.getByText("根据产品文档和需求输入整理技术设计骨架。")).toHaveClass("skill-card__summary-description");
   expect(screen.queryByText("/Users/demo/.codex/skills/technical-design")).not.toBeInTheDocument();
   expect(screen.getByRole("button", { name: "查看 technical-design 文件" })).toHaveClass("skill-card__icon-button");
@@ -49,6 +51,68 @@ test("switches from the managed library to a tool's real Skill directory", async
   expect(screen.getByRole("button", { name: "导入 SkillDock" })).toHaveClass("skill-card__icon-button");
   expect(screen.getByPlaceholderText("搜索技能名称、描述、路径...")).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "更新 (1)" })).not.toBeInTheDocument();
+});
+
+test("expands one tool Skill detail at a time with actual local metadata", async () => {
+  const user = userEvent.setup();
+  const openFinderSpy = vi.spyOn(skillClient, "openPathInFinder").mockResolvedValue(undefined);
+  render(<App />);
+
+  await user.click(screen.getByRole("tab", { name: "Codex 5" }));
+
+  const unmanagedCard = screen.getByRole("article", { name: "technical-design" });
+  expect(within(unmanagedCard).getByRole("button", { name: "展开 technical-design" })).toBeInTheDocument();
+  await user.click(within(unmanagedCard).getByRole("button", { name: "technical-design" }));
+
+  const unmanagedDetails = within(unmanagedCard).getByRole("region", { name: "基本信息" });
+  expect(within(unmanagedDetails).getByText("根据产品文档和需求输入整理技术设计骨架。")).toBeInTheDocument();
+  expect(within(unmanagedDetails).getByText("Codex")).toBeInTheDocument();
+  expect(within(unmanagedDetails).getByText("/Users/demo/shared-skills/technical-design")).toBeInTheDocument();
+  expect(within(unmanagedDetails).getByText("符号链接")).toBeInTheDocument();
+  expect(within(unmanagedDetails).getByText("未托管")).toBeInTheDocument();
+  expect(within(unmanagedDetails).queryByText("/Users/demo/.codex/skills/technical-design")).not.toBeInTheDocument();
+  const unmanagedFolderButton = within(unmanagedDetails).getByRole("button", {
+    name: "打开目录 /Users/demo/shared-skills/technical-design",
+  });
+  expect(unmanagedFolderButton).toHaveClass("skill-card__icon-button");
+  await user.click(unmanagedFolderButton);
+  expect(openFinderSpy).toHaveBeenLastCalledWith({ path: "/Users/demo/shared-skills/technical-design" });
+
+  const managedCard = screen.getByRole("article", { name: "skill-publisher" });
+  await user.click(within(managedCard).getByRole("button", { name: "skill-publisher" }));
+
+  expect(within(unmanagedCard).queryByRole("region", { name: "基本信息" })).not.toBeInTheDocument();
+  const managedDetails = within(managedCard).getByRole("region", { name: "基本信息" });
+  expect(within(managedDetails).getByText("/Users/demo/.skilldock/skills/skill-publisher")).toBeInTheDocument();
+  expect(within(managedDetails).queryByText("文件类型")).not.toBeInTheDocument();
+  expect(within(managedDetails).queryByText("真实目录")).not.toBeInTheDocument();
+  const managedVersionButton = within(managedDetails).getByRole("button", { name: "查看托管版本" });
+  expect(managedVersionButton.closest(".skill-card__section-header")).toBeInTheDocument();
+  await user.click(within(managedDetails).getByRole("button", {
+    name: "打开目录 /Users/demo/.skilldock/skills/skill-publisher",
+  }));
+  expect(openFinderSpy).toHaveBeenLastCalledWith({ path: "/Users/demo/.skilldock/skills/skill-publisher" });
+  openFinderSpy.mockRestore();
+});
+
+test("opens and focuses the corresponding managed Skill from a tool directory", async () => {
+  const user = userEvent.setup();
+  render(<App />);
+
+  await user.click(screen.getByRole("button", { name: "平铺" }));
+  await user.selectOptions(screen.getByLabelText("按状态筛选技能"), "update-available");
+  await user.click(screen.getByRole("tab", { name: "Codex 5" }));
+  await user.type(screen.getByPlaceholderText("搜索技能名称、描述、路径..."), "skill-publisher");
+
+  const sourceCard = screen.getByRole("article", { name: "skill-publisher" });
+  await user.click(within(sourceCard).getByRole("button", { name: "skill-publisher" }));
+  await user.click(within(sourceCard).getByRole("button", { name: "查看托管版本" }));
+
+  expect(screen.getByRole("tab", { name: "已托管 4" })).toHaveAttribute("aria-selected", "true");
+  expect(screen.getByLabelText("按状态筛选技能")).toHaveValue("all");
+  expect(screen.getByPlaceholderText("搜索技能名称、描述、来源...")).toHaveValue("");
+  expect(screen.getByRole("button", { name: "收起来源分组 team-skills" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "收起 skill-publisher" })).toHaveAttribute("aria-expanded", "true");
 });
 
 test("keeps a source selected from More visible in the flat source bar", async () => {

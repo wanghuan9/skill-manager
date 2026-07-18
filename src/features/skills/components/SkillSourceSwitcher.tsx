@@ -110,6 +110,7 @@ export function SkillSourceSwitcher(props: SkillSourceSwitcherProps) {
         type="button"
         role={isMenuItem ? "menuitem" : "tab"}
         aria-selected={isMenuItem ? undefined : isSelected}
+        title={t("skills.source.managedLibrary")}
         onClick={() => handleSourceChange(MANAGED_SKILL_SOURCE_ID)}
       >
         <span className="skills-source-tab__logo skills-source-tab__logo--managed" aria-hidden="true">
@@ -133,6 +134,7 @@ export function SkillSourceSwitcher(props: SkillSourceSwitcherProps) {
         role={isMenuItem ? "menuitem" : "tab"}
         aria-selected={isMenuItem ? undefined : isSelected}
         aria-label={`${tool.name} ${count}`}
+        title={tool.name}
         onClick={() => handleSourceChange(tool.id)}
       >
         <ToolSourceLogo tool={tool} />

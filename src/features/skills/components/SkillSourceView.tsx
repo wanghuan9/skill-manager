@@ -12,6 +12,7 @@ import {
   buildToolSkillViewItems,
   listSkillSourceTools,
   MANAGED_SKILL_SOURCE_ID,
+  resolveManagedSkillRootPath,
   type SkillSourceId,
   type ToolSkillManagementFilter,
   type ToolSkillManagementStatus,
@@ -21,6 +22,7 @@ import {
 type SkillSourceViewProps = {
   activeSourceId: SkillSourceId;
   onActiveSourceIdChange: (sourceId: SkillSourceId) => void;
+  onShowManagedSkill: (skillName: string) => void;
   managementFilter: ToolSkillManagementFilter;
   query: string;
 };
@@ -34,7 +36,18 @@ const statusTranslationKeys: Record<ToolSkillManagementStatus, TranslationKey> =
 function FolderIcon() {
   return (
     <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
-      <path d="M3.5 6.4c0-.9.7-1.6 1.6-1.6h3l1.35 1.55h5.45c.9 0 1.6.7 1.6 1.6v5.45c0 .9-.7 1.6-1.6 1.6H5.1c-.9 0-1.6-.7-1.6-1.6v-7Z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
+      <path
+        d="M3.5 6.6c0-.97.78-1.75 1.75-1.75h3.18c.52 0 1.01.23 1.34.63l.67.8h4.31c.97 0 1.75.78 1.75 1.75v5.37c0 .97-.78 1.75-1.75 1.75h-9.5c-.97 0-1.75-.78-1.75-1.75V6.6Z"
+        stroke="currentColor"
+        strokeWidth="1.55"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M3.75 8.1h12.5"
+        stroke="currentColor"
+        strokeWidth="1.55"
+        strokeLinecap="round"
+      />
     </svg>
   );
 }
@@ -102,20 +115,42 @@ function statusTone(status: ToolSkillManagementStatus) {
 
 function SkillSourceRow(props: {
   item: ToolSkillViewItem;
+  toolName: string;
+  isExpanded: boolean;
   isImporting: boolean;
+  onExpandedChange: (expanded: boolean) => void;
   onImport: (item: ToolSkillViewItem) => void;
-  onOpenFolder: (item: ToolSkillViewItem) => void;
+  onOpenFolder: (path: string) => void;
   onViewFiles: (item: ToolSkillViewItem) => void;
   onDelete: (item: ToolSkillViewItem) => Promise<void>;
   onShowManaged: () => void;
 }) {
   const { t } = useTranslate();
-  const { item, isImporting, onDelete, onImport, onOpenFolder, onShowManaged, onViewFiles } = props;
+  const {
+    item,
+    toolName,
+    isExpanded,
+    isImporting,
+    onDelete,
+    onExpandedChange,
+    onImport,
+    onOpenFolder,
+    onShowManaged,
+    onViewFiles,
+  } = props;
   const [isDeleteConfirming, setIsDeleteConfirming] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const deleteActionRef = useRef<HTMLButtonElement | null>(null);
   const statusLabel = t(statusTranslationKeys[item.status]);
   const description = formatSkillDescription(item.description) || t("skills.description.empty");
+  const entryKindLabel = t(item.entryKind === "symlink"
+    ? "skills.source.entryKind.symlink"
+    : "skills.source.entryKind.directory");
+  const isUnmanaged = item.status === "unmanaged";
+  const managedRootPath = item.managedSkill
+    ? resolveManagedSkillRootPath(item.managedSkill.localPath)
+    : "";
+  const detailsId = `skill-source-details-${item.id.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
 
   useEffect(() => {
     if (!isDeleteConfirming) {
@@ -161,8 +196,18 @@ function SkillSourceRow(props: {
   }
 
   return (
-    <article className="skill-card skill-source-card" aria-label={item.name}>
-      <div className="skill-card__identity">
+    <article
+      className={`skill-card skill-source-card${isExpanded ? " is-expanded" : ""}`}
+      aria-label={item.name}
+    >
+      <button
+        className="skill-card__identity skill-source-card__summary-button"
+        type="button"
+        onClick={() => onExpandedChange(!isExpanded)}
+        aria-expanded={isExpanded}
+        aria-controls={detailsId}
+        aria-label={item.name}
+      >
         <SkillSourceMonogram name={item.name} />
         <div className="skill-card__title-stack">
           <div className="skill-card__title-row">
@@ -170,15 +215,13 @@ function SkillSourceRow(props: {
             <span className={`status-badge ${statusTone(item.status)}`}>{statusLabel}</span>
             {item.status === "unmanaged" ? (
               <span className="status-badge tone-info">
-                {t(item.entryKind === "symlink"
-                  ? "skills.source.entryKind.symlink"
-                  : "skills.source.entryKind.directory")}
+                {entryKindLabel}
               </span>
             ) : null}
           </div>
           <p className="skill-card__summary-description">{description}</p>
         </div>
-      </div>
+      </button>
       <div className="skill-card__list-actions">
         {item.status === "unmanaged" ? (
           <button
@@ -204,7 +247,7 @@ function SkillSourceRow(props: {
         <button
           className="skill-card__icon-button"
           type="button"
-          onClick={() => onOpenFolder(item)}
+          onClick={() => onOpenFolder(item.localPath)}
           aria-label={t("skills.source.openFolder")}
           data-tooltip={t("skills.source.openFolder")}
         >
@@ -237,24 +280,103 @@ function SkillSourceRow(props: {
             <DeleteIcon />
           </button>
         )}
-        {item.status !== "unmanaged" ? (
-          <button
-            className="skill-card__chevron-button"
-            type="button"
-            onClick={onShowManaged}
-            aria-label={t("skills.source.showManaged")}
-            data-tooltip={t("skills.source.showManaged")}
-          >
-            <span className="skill-card__chevron" aria-hidden="true">›</span>
-          </button>
-        ) : null}
+        <button
+          className="skill-card__chevron-button"
+          type="button"
+          onClick={() => onExpandedChange(!isExpanded)}
+          aria-expanded={isExpanded}
+          aria-controls={detailsId}
+          aria-label={t("skills.source.details.toggle", {
+            state: isExpanded ? t("skill.card.collapse") : t("skill.card.expand"),
+            name: item.name,
+          })}
+        >
+          <span className="skill-card__chevron" aria-hidden="true">
+            {isExpanded ? "⌄" : "›"}
+          </span>
+        </button>
       </div>
+      {isExpanded ? (
+        <div id={detailsId} className="skill-card__details skill-source-card__details">
+          <section aria-label={t("skills.source.details.basicInfo")}>
+            <div className="skill-card__section-header">
+              <h4>{t("skills.source.details.basicInfo")}</h4>
+              {item.managedSkill ? (
+                <button
+                  className="secondary-button secondary-button--compact"
+                  type="button"
+                  onClick={onShowManaged}
+                >
+                  {t("skills.source.showManaged")}
+                </button>
+              ) : null}
+            </div>
+            <dl className="detail-grid skill-source-card__detail-grid">
+              <div className="skill-source-card__detail-wide">
+                <dt>{t("skills.source.details.description")}</dt>
+                <dd>{description}</dd>
+              </div>
+              <div className={isUnmanaged ? undefined : "skill-source-card__detail-wide"}>
+                <dt>{t("skills.source.details.tool")}</dt>
+                <dd>{toolName}</dd>
+              </div>
+              <div>
+                <dt>{t("skills.source.details.managementStatus")}</dt>
+                <dd>{statusLabel}</dd>
+              </div>
+              {isUnmanaged ? (
+                <>
+                  <div>
+                    <dt>{t("skills.source.details.entryKind")}</dt>
+                    <dd>{entryKindLabel}</dd>
+                  </div>
+                  <div>
+                    <dt>{t("skills.source.details.localPath")}</dt>
+                    <dd className="skill-source-card__directory-value">
+                      <span className="skill-source-card__directory-path" title={item.resolvedPath}>
+                        {item.resolvedPath}
+                      </span>
+                      <button
+                        className="skill-card__icon-button skill-source-card__directory-open-button"
+                        type="button"
+                        onClick={() => onOpenFolder(item.resolvedPath)}
+                        aria-label={t("skills.source.openPath", { path: item.resolvedPath })}
+                        data-tooltip={t("skills.source.openFolder")}
+                      >
+                        <FolderIcon />
+                      </button>
+                    </dd>
+                  </div>
+                </>
+              ) : managedRootPath ? (
+                <div>
+                  <dt>{t("skills.source.details.managedPath")}</dt>
+                  <dd className="skill-source-card__directory-value">
+                    <span className="skill-source-card__directory-path" title={managedRootPath}>
+                      {managedRootPath}
+                    </span>
+                    <button
+                      className="skill-card__icon-button skill-source-card__directory-open-button"
+                      type="button"
+                      onClick={() => onOpenFolder(managedRootPath)}
+                      aria-label={t("skills.source.openPath", { path: managedRootPath })}
+                      data-tooltip={t("skills.source.openFolder")}
+                    >
+                      <FolderIcon />
+                    </button>
+                  </dd>
+                </div>
+              ) : null}
+            </dl>
+          </section>
+        </div>
+      ) : null}
     </article>
   );
 }
 
 export function SkillSourceView(props: SkillSourceViewProps) {
-  const { activeSourceId, managementFilter, onActiveSourceIdChange, query } = props;
+  const { activeSourceId, managementFilter, onActiveSourceIdChange, onShowManagedSkill, query } = props;
   const { t } = useTranslate();
   const { notify } = useNotifications();
   const reportFailure = useFailureReporter();
@@ -271,6 +393,7 @@ export function SkillSourceView(props: SkillSourceViewProps) {
   const selectedTool = sourceTools.find((tool) => tool.id === activeSourceId) ?? null;
   const [sourceHeaderContainer, setSourceHeaderContainer] = useState<HTMLElement | null>(null);
   const [importingPaths, setImportingPaths] = useState<Set<string>>(new Set());
+  const [expandedItemId, setExpandedItemId] = useState("");
   const [viewingToolSkill, setViewingToolSkill] = useState<{ item: ToolSkillViewItem; toolId: string } | null>(null);
   const rowsByTool = useMemo(() => new Map(sourceTools.map((tool) => [
     tool.id,
@@ -302,14 +425,18 @@ export function SkillSourceView(props: SkillSourceViewProps) {
     }
   }, [activeSourceId, onActiveSourceIdChange, selectedTool]);
 
-  async function handleOpenFolder(item: ToolSkillViewItem) {
+  useEffect(() => {
+    setExpandedItemId("");
+  }, [activeSourceId]);
+
+  async function handleOpenFolder(item: ToolSkillViewItem, path: string) {
     try {
-      await openPathInFinder(item.localPath);
+      await openPathInFinder(path);
     } catch (error) {
       reportFailure(error, {
         operation: "open_tool_skill_folder",
         fallbackMessage: t("skills.source.error.openFolder"),
-        context: { skillName: item.name, localPath: item.localPath },
+        context: { skillName: item.name, localPath: path },
       });
     }
   }
@@ -383,12 +510,15 @@ export function SkillSourceView(props: SkillSourceViewProps) {
               <SkillSourceRow
                 key={item.id}
                 item={item}
+                toolName={selectedTool.name}
+                isExpanded={expandedItemId === item.id}
                 isImporting={importingPaths.has(item.localPath)}
+                onExpandedChange={(expanded) => setExpandedItemId(expanded ? item.id : "")}
                 onImport={(target) => void handleImport(target)}
                 onDelete={handleDelete}
-                onOpenFolder={(target) => void handleOpenFolder(target)}
+                onOpenFolder={(path) => void handleOpenFolder(item, path)}
                 onViewFiles={(target) => setViewingToolSkill({ item: target, toolId: selectedTool.id })}
-                onShowManaged={() => onActiveSourceIdChange(MANAGED_SKILL_SOURCE_ID)}
+                onShowManaged={() => onShowManagedSkill(item.managedSkill?.name ?? item.name)}
               />
             )) : (
               <div className="panel-card empty-state">

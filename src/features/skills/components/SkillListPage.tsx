@@ -1,4 +1,4 @@
-import { useDeferredValue, useMemo, useState } from "react";
+import { useDeferredValue, useEffect, useMemo, useState } from "react";
 import { useTranslate } from "@/app/i18n";
 import { useFailureReporter } from "@/app/failure-feedback";
 import { openExternalLink } from "@/features/skills/api/skill-client";
@@ -309,6 +309,8 @@ export function SkillListToolbar(props: SkillToolbarProps) {
 type SkillListPageProps = {
   activeSourceId?: SkillSourceId;
   onActiveSourceIdChange?: (sourceId: SkillSourceId) => void;
+  focusedManagedSkillName?: string;
+  onShowManagedSkill?: (skillName: string) => void;
   onImportFromLocal?: () => void;
   onInstallFromGit?: () => void;
   onInstallFromMarketplace?: () => void;
@@ -330,6 +332,8 @@ export function SkillListPage(props: SkillListPageProps) {
     showGroupView,
     activeSourceId = MANAGED_SKILL_SOURCE_ID,
     onActiveSourceIdChange = () => undefined,
+    focusedManagedSkillName = "",
+    onShowManagedSkill = () => undefined,
   } = props;
   const { installedSkills, isLoading } = useSkillWorkspace();
   const deferredQuery = useDeferredValue(query);
@@ -343,6 +347,37 @@ export function SkillListPage(props: SkillListPageProps) {
     () => groupSkillsBySource(skills, { localLabel: t("skills.source.local") }),
     [skills, t],
   );
+  const allGroupedSkills = useMemo(
+    () => groupSkillsBySource(installedSkills, { localLabel: t("skills.source.local") }),
+    [installedSkills, t],
+  );
+
+  useEffect(() => {
+    if (activeSourceId !== MANAGED_SKILL_SOURCE_ID || !focusedManagedSkillName) {
+      return;
+    }
+
+    setExpandedSkillName(focusedManagedSkillName);
+    if (!showGroupView) {
+      return;
+    }
+
+    const targetGroup = allGroupedSkills.find((group) => (
+      group.skills.some((skill) => skill.name === focusedManagedSkillName)
+    ));
+    if (!targetGroup) {
+      return;
+    }
+
+    setCollapsedGroups((current) => {
+      if (!(current[targetGroup.id] ?? true)) {
+        return current;
+      }
+      const nextState = { ...current, [targetGroup.id]: false };
+      writeSkillGroupCollapsedState(nextState);
+      return nextState;
+    });
+  }, [activeSourceId, allGroupedSkills, focusedManagedSkillName, showGroupView]);
 
   function isGroupCollapsed(groupId: string) {
     return collapsedGroups[groupId] ?? true;
@@ -368,6 +403,7 @@ export function SkillListPage(props: SkillListPageProps) {
       <SkillSourceView
         activeSourceId={activeSourceId}
         onActiveSourceIdChange={onActiveSourceIdChange}
+        onShowManagedSkill={onShowManagedSkill}
         managementFilter={managementFilter}
         query={deferredQuery}
       />
@@ -454,6 +490,7 @@ export function SkillListPage(props: SkillListPageProps) {
                         key={skill.name}
                         skill={skill}
                         expanded={expandedSkillName === skill.name}
+                        autoAlignWhenExpanded={focusedManagedSkillName === skill.name}
                         onExpandedChange={(expanded) => handleSkillExpandedChange(skill.name, expanded)}
                       />
                     ))}
@@ -468,6 +505,7 @@ export function SkillListPage(props: SkillListPageProps) {
                 key={skill.name}
                 skill={skill}
                 expanded={expandedSkillName === skill.name}
+                autoAlignWhenExpanded={focusedManagedSkillName === skill.name}
                 onExpandedChange={(expanded) => handleSkillExpandedChange(skill.name, expanded)}
               />
             ))

@@ -276,6 +276,8 @@ function renderRoute(
   route: RouteKey,
   activeSkillSourceId: SkillSourceId,
   onActiveSkillSourceIdChange: (sourceId: SkillSourceId) => void,
+  focusedManagedSkillName: string,
+  onShowManagedSkill: (skillName: string) => void,
   skillQuery: string,
   skillStatusFilter: SkillStatusFilter,
   skillManagementFilter: ToolSkillManagementFilter,
@@ -328,6 +330,8 @@ function renderRoute(
     <SkillsRoute
       activeSourceId={activeSkillSourceId}
       onActiveSourceIdChange={onActiveSkillSourceIdChange}
+      focusedManagedSkillName={focusedManagedSkillName}
+      onShowManagedSkill={onShowManagedSkill}
       onImportFromLocal={onInstallSkillFromLocal}
       onInstallFromGit={onInstallSkillFromGit}
       onInstallFromMarketplace={onInstallSkillFromMarketplace}
@@ -443,6 +447,7 @@ function AppContent() {
   const [activeSkillSourceId, setActiveSkillSourceId] = useState<SkillSourceId>(
     MANAGED_SKILL_SOURCE_ID,
   );
+  const [focusedManagedSkillName, setFocusedManagedSkillName] = useState("");
   const [skillStatusFilter, setSkillStatusFilter] =
     useState<SkillStatusFilter>("all");
   const [skillManagementFilter, setSkillManagementFilter] =
@@ -528,6 +533,15 @@ function AppContent() {
       pageContentRef.current.scrollTop = 0;
     }
     setActiveSkillSourceId(sourceId);
+    setFocusedManagedSkillName("");
+    setSkillManagementFilter("all");
+  }
+
+  function handleShowManagedSkill(skillName: string) {
+    setActiveSkillSourceId(MANAGED_SKILL_SOURCE_ID);
+    setFocusedManagedSkillName(skillName);
+    setSkillQuery("");
+    setSkillStatusFilter("all");
     setSkillManagementFilter("all");
   }
 
@@ -950,6 +964,8 @@ function AppContent() {
               activeRoute,
               activeSkillSourceId,
               handleActiveSkillSourceIdChange,
+              focusedManagedSkillName,
+              handleShowManagedSkill,
               skillQuery,
               skillStatusFilter,
               skillManagementFilter,

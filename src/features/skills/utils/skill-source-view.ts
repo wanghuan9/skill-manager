@@ -18,6 +18,7 @@ export type ToolSkillViewItem = {
   name: string;
   description: string;
   localPath: string;
+  resolvedPath: string;
   status: ToolSkillManagementStatus;
   entryKind: ToolSkillEntryKind;
   managedSkill?: SkillSummary;
@@ -25,6 +26,19 @@ export type ToolSkillViewItem = {
 
 function normalizePath(value: string) {
   return value.trim().replace(/\\/g, "/").replace(/\/+$/g, "");
+}
+
+export function resolveManagedSkillRootPath(localPath: string) {
+  const normalizedPath = normalizePath(localPath);
+  const managedSkillsMarker = "/.skilldock/skills/";
+  const markerIndex = normalizedPath.indexOf(managedSkillsMarker);
+  if (markerIndex < 0) {
+    return normalizedPath;
+  }
+
+  const managedSkillNameStart = markerIndex + managedSkillsMarker.length;
+  const managedSkillNameEnd = normalizedPath.indexOf("/", managedSkillNameStart);
+  return managedSkillNameEnd < 0 ? normalizedPath : normalizedPath.slice(0, managedSkillNameEnd);
 }
 
 export function listSkillSourceTools(toolConfigs: ToolConfig[]) {
@@ -71,6 +85,7 @@ export function buildToolSkillViewItems(input: {
       name: entry.name,
       description: entry.description,
       localPath: entry.localPath,
+      resolvedPath: entry.resolvedPath,
       status: entry.managementStatus,
       entryKind: entry.entryKind ?? "directory",
       managedSkill: installedSkillsByName.get(entry.name),

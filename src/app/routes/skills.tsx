@@ -5,6 +5,8 @@ import type { SkillSourceId, ToolSkillManagementFilter } from "@/features/skills
 type SkillsRouteProps = {
   activeSourceId: SkillSourceId;
   onActiveSourceIdChange: (sourceId: SkillSourceId) => void;
+  focusedManagedSkillName: string;
+  onShowManagedSkill: (skillName: string) => void;
   onImportFromLocal?: () => void;
   onInstallFromGit?: () => void;
   onInstallFromMarketplace?: () => void;
@@ -19,6 +21,8 @@ export function SkillsRoute(props: SkillsRouteProps) {
     <SkillListPage
       activeSourceId={props.activeSourceId}
       onActiveSourceIdChange={props.onActiveSourceIdChange}
+      focusedManagedSkillName={props.focusedManagedSkillName}
+      onShowManagedSkill={props.onShowManagedSkill}
       onImportFromLocal={props.onImportFromLocal}
       onInstallFromGit={props.onInstallFromGit}
       onInstallFromMarketplace={props.onInstallFromMarketplace}

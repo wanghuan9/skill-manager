@@ -4,6 +4,7 @@ import {
   buildToolSkillViewItems,
   countToolSkillStatuses,
   listSkillSourceTools,
+  resolveManagedSkillRootPath,
 } from "@/features/skills/utils/skill-source-view";
 
 function skill(name: string, statusLabel: string): SkillSummary {
@@ -68,7 +69,7 @@ test("combines managed, out-of-sync, and unmanaged Skills for one tool", () => {
       name: "external-skill",
       description: "unmanaged",
       localPath: "/Users/demo/.codex/skills/external-skill",
-      resolvedPath: "/Users/demo/.codex/skills/external-skill",
+      resolvedPath: "/Users/demo/shared-skills/external-skill",
       managementStatus: "unmanaged",
       entryKind: "symlink",
     },
@@ -87,12 +88,23 @@ test("combines managed, out-of-sync, and unmanaged Skills for one tool", () => {
   ]);
   expect(items.find((item) => item.name === "managed-skill")?.entryKind).toBe("directory");
   expect(items.find((item) => item.name === "external-skill")?.entryKind).toBe("symlink");
+  expect(items.find((item) => item.name === "external-skill")?.resolvedPath)
+    .toBe("/Users/demo/shared-skills/external-skill");
   expect(countToolSkillStatuses(items)).toEqual({
     all: 3,
     managed: 1,
     unmanaged: 1,
     mismatch: 1,
   });
+});
+
+test("keeps only the managed package root when a Skill is nested", () => {
+  expect(resolveManagedSkillRootPath(
+    "/Users/demo/.skilldock/skills/karpathy-guidelines/skills/karpathy-guidelines",
+  )).toBe("/Users/demo/.skilldock/skills/karpathy-guidelines");
+  expect(resolveManagedSkillRootPath(
+    "/Users/demo/.skilldock/skills/skill-publisher",
+  )).toBe("/Users/demo/.skilldock/skills/skill-publisher");
 });
 
 test("lists only installed tools that expose a real Skill directory", () => {
