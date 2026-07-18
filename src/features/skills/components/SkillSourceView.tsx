@@ -6,6 +6,7 @@ import { useNotifications } from "@/app/notifications";
 import { SkillFileDialog } from "@/features/skills/components/SkillFileDialog";
 import { SkillSourceSwitcher } from "@/features/skills/components/SkillSourceSwitcher";
 import { useSkillWorkspace } from "@/features/skills/state/skill-workspace";
+import type { SkillViewMode } from "@/features/skills/utils/skill-view-preference";
 import { formatSkillDescription } from "@/features/skills/utils/skill-description";
 import { getMonogramLabel } from "@/features/skills/utils/monogram";
 import {
@@ -25,6 +26,7 @@ type SkillSourceViewProps = {
   onShowManagedSkill: (skillName: string) => void;
   managementFilter: ToolSkillManagementFilter;
   query: string;
+  viewMode: SkillViewMode;
 };
 
 const statusTranslationKeys: Record<ToolSkillManagementStatus, TranslationKey> = {
@@ -115,6 +117,7 @@ function statusTone(status: ToolSkillManagementStatus) {
 
 function SkillSourceRow(props: {
   item: ToolSkillViewItem;
+  layout: "list" | "grid";
   toolName: string;
   isExpanded: boolean;
   isImporting: boolean;
@@ -128,6 +131,7 @@ function SkillSourceRow(props: {
   const { t } = useTranslate();
   const {
     item,
+    layout,
     toolName,
     isExpanded,
     isImporting,
@@ -151,6 +155,7 @@ function SkillSourceRow(props: {
     ? resolveManagedSkillRootPath(item.managedSkill.localPath)
     : "";
   const detailsId = `skill-source-details-${item.id.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
+  const isGridLayout = layout === "grid";
 
   useEffect(() => {
     if (!isDeleteConfirming) {
@@ -177,6 +182,27 @@ function SkillSourceRow(props: {
     };
   }, [isDeleteConfirming]);
 
+  useEffect(() => {
+    if (!isGridLayout || !isExpanded) {
+      return;
+    }
+
+    const originalOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        onExpandedChange(false);
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.body.style.overflow = originalOverflow;
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isExpanded, isGridLayout, onExpandedChange]);
+
   async function handleDeleteAction() {
     if (isDeleting) {
       return;
@@ -195,188 +221,273 @@ function SkillSourceRow(props: {
     }
   }
 
-  return (
-    <article
-      className={`skill-card skill-source-card${isExpanded ? " is-expanded" : ""}`}
-      aria-label={item.name}
-    >
-      <button
-        className="skill-card__identity skill-source-card__summary-button"
-        type="button"
-        onClick={() => onExpandedChange(!isExpanded)}
-        aria-expanded={isExpanded}
-        aria-controls={detailsId}
-        aria-label={item.name}
-      >
-        <SkillSourceMonogram name={item.name} />
-        <div className="skill-card__title-stack">
-          <div className="skill-card__title-row">
-            <h3>{item.name}</h3>
-            <span className={`status-badge ${statusTone(item.status)}`}>{statusLabel}</span>
-            {item.status === "unmanaged" ? (
-              <span className="status-badge tone-info">
-                {entryKindLabel}
-              </span>
-            ) : null}
-          </div>
-          <p className="skill-card__summary-description">{description}</p>
-        </div>
-      </button>
-      <div className="skill-card__list-actions">
-        {item.status === "unmanaged" ? (
+  const detailsContent = (
+    <section aria-label={t("skills.source.details.basicInfo")}>
+      <div className="skill-card__section-header">
+        <h4>{t("skills.source.details.basicInfo")}</h4>
+        {item.managedSkill ? (
           <button
-            className="skill-card__icon-button skill-card__icon-button--update"
+            className="secondary-button secondary-button--compact"
             type="button"
-            disabled={isImporting}
-            onClick={() => onImport(item)}
-            aria-label={isImporting ? t("skills.source.importing") : t("skills.source.import")}
-            data-tooltip={isImporting ? t("skills.source.importing") : t("skills.source.import")}
+            onClick={onShowManaged}
           >
-            <ImportIcon />
+            {t("skills.source.showManaged")}
           </button>
         ) : null}
+      </div>
+      <dl className="detail-grid skill-source-card__detail-grid">
+        <div className="skill-source-card__detail-wide">
+          <dt>{t("skills.source.details.description")}</dt>
+          <dd>{description}</dd>
+        </div>
+        <div className={isUnmanaged ? undefined : "skill-source-card__detail-wide"}>
+          <dt>{t("skills.source.details.tool")}</dt>
+          <dd>{toolName}</dd>
+        </div>
+        <div>
+          <dt>{t("skills.source.details.managementStatus")}</dt>
+          <dd>{statusLabel}</dd>
+        </div>
+        {isUnmanaged ? (
+          <>
+            <div>
+              <dt>{t("skills.source.details.entryKind")}</dt>
+              <dd>{entryKindLabel}</dd>
+            </div>
+            <div>
+              <dt>{t("skills.source.details.localPath")}</dt>
+              <dd className="skill-source-card__directory-value">
+                <span className="skill-source-card__directory-path" title={item.resolvedPath}>
+                  {item.resolvedPath}
+                </span>
+                <button
+                  className="skill-card__icon-button skill-source-card__directory-open-button"
+                  type="button"
+                  onClick={() => onOpenFolder(item.resolvedPath)}
+                  aria-label={t("skills.source.openPath", { path: item.resolvedPath })}
+                  data-tooltip={t("skills.source.openFolder")}
+                >
+                  <FolderIcon />
+                </button>
+              </dd>
+            </div>
+          </>
+        ) : managedRootPath ? (
+          <div>
+            <dt>{t("skills.source.details.managedPath")}</dt>
+            <dd className="skill-source-card__directory-value">
+              <span className="skill-source-card__directory-path" title={managedRootPath}>
+                {managedRootPath}
+              </span>
+              <button
+                className="skill-card__icon-button skill-source-card__directory-open-button"
+                type="button"
+                onClick={() => onOpenFolder(managedRootPath)}
+                aria-label={t("skills.source.openPath", { path: managedRootPath })}
+                data-tooltip={t("skills.source.openFolder")}
+              >
+                <FolderIcon />
+              </button>
+            </dd>
+          </div>
+        ) : null}
+      </dl>
+    </section>
+  );
+
+  return (
+    <>
+      <article
+        className={`skill-card skill-source-card skill-source-card--${layout}${isExpanded ? " is-expanded" : ""}`}
+        aria-label={item.name}
+      >
         <button
-          className="skill-card__icon-button"
-          type="button"
-          onClick={() => onViewFiles(item)}
-          aria-label={t("skill.card.aria.viewFiles", { name: item.name })}
-          data-tooltip={t("skill.card.tooltip.viewFiles")}
-        >
-          <ViewFileIcon />
-        </button>
-        <button
-          className="skill-card__icon-button"
-          type="button"
-          onClick={() => onOpenFolder(item.localPath)}
-          aria-label={t("skills.source.openFolder")}
-          data-tooltip={t("skills.source.openFolder")}
-        >
-          <FolderIcon />
-        </button>
-        {isDeleteConfirming || isDeleting ? (
-          <button
-            ref={deleteActionRef}
-            className="skill-card__delete-confirm-button"
-            type="button"
-            onClick={() => void handleDeleteAction()}
-            aria-label={t("skill.card.aria.deleteConfirm", {
-              state: isDeleting ? t("skill.card.deleteLoading") : t("skill.card.deleteConfirm"),
-              name: item.name,
-            })}
-            data-tooltip={isDeleting ? t("skill.card.tooltip.deleting") : t("skill.card.tooltip.deleteConfirm")}
-            disabled={isDeleting}
-          >
-            {isDeleting ? t("skill.card.deleteLoading") : t("skill.card.deleteConfirm")}
-          </button>
-        ) : (
-          <button
-            ref={deleteActionRef}
-            className="skill-card__icon-button skill-card__icon-button--delete"
-            type="button"
-            onClick={() => void handleDeleteAction()}
-            aria-label={t("skill.card.aria.delete", { name: item.name })}
-            data-tooltip={t("skill.card.tooltip.delete")}
-          >
-            <DeleteIcon />
-          </button>
-        )}
-        <button
-          className="skill-card__chevron-button"
+          className="skill-card__identity skill-source-card__summary-button"
           type="button"
           onClick={() => onExpandedChange(!isExpanded)}
           aria-expanded={isExpanded}
           aria-controls={detailsId}
-          aria-label={t("skills.source.details.toggle", {
-            state: isExpanded ? t("skill.card.collapse") : t("skill.card.expand"),
-            name: item.name,
-          })}
+          aria-label={item.name}
         >
-          <span className="skill-card__chevron" aria-hidden="true">
-            {isExpanded ? "⌄" : "›"}
-          </span>
-        </button>
-      </div>
-      {isExpanded ? (
-        <div id={detailsId} className="skill-card__details skill-source-card__details">
-          <section aria-label={t("skills.source.details.basicInfo")}>
-            <div className="skill-card__section-header">
-              <h4>{t("skills.source.details.basicInfo")}</h4>
-              {item.managedSkill ? (
-                <button
-                  className="secondary-button secondary-button--compact"
-                  type="button"
-                  onClick={onShowManaged}
-                >
-                  {t("skills.source.showManaged")}
-                </button>
+          <SkillSourceMonogram name={item.name} />
+          <div className="skill-card__title-stack">
+            <div className="skill-card__title-row">
+              <h3>{item.name}</h3>
+              <span className={`status-badge ${statusTone(item.status)}`}>{statusLabel}</span>
+              {item.status === "unmanaged" && !isGridLayout ? (
+                <span className="status-badge tone-info">
+                  {entryKindLabel}
+                </span>
               ) : null}
             </div>
-            <dl className="detail-grid skill-source-card__detail-grid">
-              <div className="skill-source-card__detail-wide">
-                <dt>{t("skills.source.details.description")}</dt>
-                <dd>{description}</dd>
-              </div>
-              <div className={isUnmanaged ? undefined : "skill-source-card__detail-wide"}>
-                <dt>{t("skills.source.details.tool")}</dt>
-                <dd>{toolName}</dd>
-              </div>
-              <div>
-                <dt>{t("skills.source.details.managementStatus")}</dt>
-                <dd>{statusLabel}</dd>
-              </div>
-              {isUnmanaged ? (
-                <>
-                  <div>
-                    <dt>{t("skills.source.details.entryKind")}</dt>
-                    <dd>{entryKindLabel}</dd>
-                  </div>
-                  <div>
-                    <dt>{t("skills.source.details.localPath")}</dt>
-                    <dd className="skill-source-card__directory-value">
-                      <span className="skill-source-card__directory-path" title={item.resolvedPath}>
-                        {item.resolvedPath}
-                      </span>
-                      <button
-                        className="skill-card__icon-button skill-source-card__directory-open-button"
-                        type="button"
-                        onClick={() => onOpenFolder(item.resolvedPath)}
-                        aria-label={t("skills.source.openPath", { path: item.resolvedPath })}
-                        data-tooltip={t("skills.source.openFolder")}
-                      >
-                        <FolderIcon />
-                      </button>
-                    </dd>
-                  </div>
-                </>
-              ) : managedRootPath ? (
-                <div>
-                  <dt>{t("skills.source.details.managedPath")}</dt>
-                  <dd className="skill-source-card__directory-value">
-                    <span className="skill-source-card__directory-path" title={managedRootPath}>
-                      {managedRootPath}
-                    </span>
-                    <button
-                      className="skill-card__icon-button skill-source-card__directory-open-button"
-                      type="button"
-                      onClick={() => onOpenFolder(managedRootPath)}
-                      aria-label={t("skills.source.openPath", { path: managedRootPath })}
-                      data-tooltip={t("skills.source.openFolder")}
-                    >
-                      <FolderIcon />
-                    </button>
-                  </dd>
-                </div>
-              ) : null}
-            </dl>
-          </section>
+            <p className="skill-card__summary-description">{description}</p>
+          </div>
+        </button>
+        <div className="skill-card__list-actions">
+          {isUnmanaged && isGridLayout ? (
+            <span className="status-badge tone-info skill-source-card__entry-kind">
+              {entryKindLabel}
+            </span>
+          ) : null}
+          {item.status === "unmanaged" ? (
+            <button
+              className="skill-card__icon-button skill-card__icon-button--update"
+              type="button"
+              disabled={isImporting}
+              onClick={() => onImport(item)}
+              aria-label={isImporting ? t("skills.source.importing") : t("skills.source.import")}
+              data-tooltip={isImporting ? t("skills.source.importing") : t("skills.source.import")}
+            >
+              <ImportIcon />
+            </button>
+          ) : null}
+          <button
+            className="skill-card__icon-button"
+            type="button"
+            onClick={() => onViewFiles(item)}
+            aria-label={t("skill.card.aria.viewFiles", { name: item.name })}
+            data-tooltip={t("skill.card.tooltip.viewFiles")}
+          >
+            <ViewFileIcon />
+          </button>
+          <button
+            className="skill-card__icon-button"
+            type="button"
+            onClick={() => onOpenFolder(item.localPath)}
+            aria-label={t("skills.source.openFolder")}
+            data-tooltip={t("skills.source.openFolder")}
+          >
+            <FolderIcon />
+          </button>
+          {isDeleteConfirming || isDeleting ? (
+            <button
+              ref={deleteActionRef}
+              className="skill-card__delete-confirm-button"
+              type="button"
+              onClick={() => void handleDeleteAction()}
+              aria-label={t("skill.card.aria.deleteConfirm", {
+                state: isDeleting ? t("skill.card.deleteLoading") : t("skill.card.deleteConfirm"),
+                name: item.name,
+              })}
+              data-tooltip={isDeleting ? t("skill.card.tooltip.deleting") : t("skill.card.tooltip.deleteConfirm")}
+              disabled={isDeleting}
+            >
+              {isDeleting ? t("skill.card.deleteLoading") : t("skill.card.deleteConfirm")}
+            </button>
+          ) : (
+            <button
+              ref={deleteActionRef}
+              className="skill-card__icon-button skill-card__icon-button--delete"
+              type="button"
+              onClick={() => void handleDeleteAction()}
+              aria-label={t("skill.card.aria.delete", { name: item.name })}
+              data-tooltip={t("skill.card.tooltip.delete")}
+            >
+              <DeleteIcon />
+            </button>
+          )}
+          <button
+            className="skill-card__chevron-button"
+            type="button"
+            onClick={() => onExpandedChange(!isExpanded)}
+            aria-expanded={isExpanded}
+            aria-controls={detailsId}
+            aria-label={t("skills.source.details.toggle", {
+              state: isExpanded ? t("skill.card.collapse") : t("skill.card.expand"),
+              name: item.name,
+            })}
+          >
+            <span className="skill-card__chevron" aria-hidden="true">
+              {isExpanded ? "⌄" : "›"}
+            </span>
+          </button>
         </div>
+        {isExpanded && !isGridLayout ? (
+          <div id={detailsId} className="skill-card__details skill-source-card__details">
+            {detailsContent}
+          </div>
+        ) : null}
+      </article>
+      {isExpanded && isGridLayout ? createPortal(
+        <div
+          className="skill-card-detail-modal__backdrop"
+          role="presentation"
+          onClick={() => onExpandedChange(false)}
+        >
+          <section
+            id={detailsId}
+            className="skill-card-detail-modal skill-card-detail-modal--source"
+            role="dialog"
+            aria-modal="true"
+            aria-label={t("skill.card.modal.aria", { name: item.name })}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <header className="skill-card-detail-modal__header">
+              <div className="skill-card-detail-modal__identity">
+                <SkillSourceMonogram name={item.name} />
+                <div className="skill-card-detail-modal__copy">
+                  <div className="skill-card-detail-modal__title">
+                    <h3>{item.name}</h3>
+                    <span className={`status-badge ${statusTone(item.status)}`}>{statusLabel}</span>
+                  </div>
+                </div>
+              </div>
+              <div className="skill-card-detail-modal__actions">
+                {isUnmanaged ? (
+                  <button
+                    className="secondary-button secondary-button--compact skill-card-detail-modal__action is-primary"
+                    type="button"
+                    disabled={isImporting}
+                    onClick={() => onImport(item)}
+                  >
+                    <ImportIcon />
+                    <span>{isImporting ? t("skills.source.importing") : t("skills.source.import")}</span>
+                  </button>
+                ) : null}
+                <button
+                  className="secondary-button secondary-button--compact skill-card-detail-modal__action"
+                  type="button"
+                  onClick={() => {
+                    onExpandedChange(false);
+                    onViewFiles(item);
+                  }}
+                  aria-label={t("skill.card.aria.viewFiles", { name: item.name })}
+                >
+                  <ViewFileIcon />
+                  <span>{t("skill.card.action.viewFiles")}</span>
+                </button>
+                <button
+                  className="secondary-button secondary-button--compact skill-card-detail-modal__action"
+                  type="button"
+                  onClick={() => onOpenFolder(item.localPath)}
+                  aria-label={t("skills.source.openFolder")}
+                >
+                  <FolderIcon />
+                  <span>{t("skill.card.action.openFolder")}</span>
+                </button>
+                <button
+                  className="skill-card-detail-modal__close"
+                  type="button"
+                  onClick={() => onExpandedChange(false)}
+                  aria-label={t("skill.card.modal.close", { name: item.name })}
+                >
+                  <span aria-hidden="true">×</span>
+                </button>
+              </div>
+            </header>
+            <div className="skill-card__details skill-card-detail-modal__body">
+              {detailsContent}
+            </div>
+          </section>
+        </div>,
+        document.body,
       ) : null}
-    </article>
+    </>
   );
 }
 
 export function SkillSourceView(props: SkillSourceViewProps) {
-  const { activeSourceId, managementFilter, onActiveSourceIdChange, onShowManagedSkill, query } = props;
+  const { activeSourceId, managementFilter, onActiveSourceIdChange, onShowManagedSkill, query, viewMode } = props;
   const { t } = useTranslate();
   const { notify } = useNotifications();
   const reportFailure = useFailureReporter();
@@ -414,6 +525,7 @@ export function SkillSourceView(props: SkillSourceViewProps) {
       .includes(normalizedQuery);
     return matchesFilter && matchesQuery;
   });
+  const sourceViewMode = viewMode === "grid" ? "grid" : "list";
 
   useEffect(() => {
     setSourceHeaderContainer(document.getElementById("skills-source-header-slot"));
@@ -505,11 +617,12 @@ export function SkillSourceView(props: SkillSourceViewProps) {
 
       {selectedTool ? (
         <>
-          <div className="card-list">
+          <div className={`card-list${sourceViewMode === "grid" ? " skill-source-card-grid" : ""}`}>
             {visibleRows.length > 0 ? visibleRows.map((item) => (
               <SkillSourceRow
                 key={item.id}
                 item={item}
+                layout={sourceViewMode}
                 toolName={selectedTool.name}
                 isExpanded={expandedItemId === item.id}
                 isImporting={importingPaths.has(item.localPath)}

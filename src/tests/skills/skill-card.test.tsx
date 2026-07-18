@@ -7,17 +7,39 @@ import { SkillCard } from "@/features/skills/components/SkillCard";
 import { installedSkillFixtures } from "@/features/skills/state/skill-fixtures";
 import { SkillWorkspaceProvider } from "@/features/skills/state/skill-workspace";
 
-function renderSkillCardWithProviders(skill: (typeof installedSkillFixtures)[number]) {
+function renderSkillCardWithProviders(
+  skill: (typeof installedSkillFixtures)[number],
+  layout: "list" | "grid" = "list",
+) {
   return render(
     <SkillWorkspaceProvider>
       <AppI18nProvider>
         <NotificationProvider>
-          <SkillCard skill={skill} />
+          <SkillCard skill={skill} layout={layout} />
         </NotificationProvider>
       </AppI18nProvider>
     </SkillWorkspaceProvider>,
   );
 }
+
+test("uses the neutral list color for disabled card status", () => {
+  const skill = installedSkillFixtures.find((item) => item.name === "drawio-diagram");
+  if (!skill) {
+    throw new Error("missing drawio-diagram fixture");
+  }
+  const disabledSkill = {
+    ...skill,
+    tools: skill.tools.map((tool) => ({ ...tool, statusLabel: "未启用" })),
+  };
+
+  renderSkillCardWithProviders(disabledSkill, "grid");
+
+  expect(screen.getByText("未启用")).toHaveClass("tone-neutral");
+  expect(screen.getByText("GitLab")).toBeInTheDocument();
+  expect(screen.queryByText("GitLab · 已托管")).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "删除 drawio-diagram" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "drawio-diagram 更多操作" })).not.toBeInTheDocument();
+});
 
 test("updates directly from list action when skill has remote update", async () => {
   const updateSkill = installedSkillFixtures.find((skill) => skill.name === "excalidraw-diagram");
@@ -209,6 +231,31 @@ test("keeps expanded enabled tools in a stable shared order", async () => {
 
   expect(container.querySelectorAll(".skill-card__tool-icon")).toHaveLength(8);
   expect(container.querySelector(".skill-card__title-row .skill-card__summary-tools")).toBeInTheDocument();
+});
+
+test("shows up to six enabled tools in the card summary", () => {
+  const skill = installedSkillFixtures.find((item) => item.name === "multi-search-engine");
+  if (!skill) {
+    throw new Error("missing multi-search-engine fixture");
+  }
+  const skillWithManyTools = {
+    ...skill,
+    tools: [
+      { name: "Devin", statusLabel: "已同步" },
+      { name: "Continue", statusLabel: "已同步" },
+      { name: "Cursor", statusLabel: "已同步" },
+      { name: "Antigravity", statusLabel: "已同步" },
+      { name: "Gemini CLI", statusLabel: "已同步" },
+      { name: "OpenCode", statusLabel: "已同步" },
+      { name: "Codex", statusLabel: "已同步" },
+      { name: "Claude Code", statusLabel: "已同步" },
+    ],
+  };
+
+  const { container } = renderSkillCardWithProviders(skillWithManyTools, "grid");
+
+  expect(container.querySelectorAll(".skill-card__grid-meta .skill-card__tool-icon")).toHaveLength(6);
+  expect(container.querySelector(".skill-card__grid-meta .skill-card__tool-tag--extra")).toHaveTextContent("+2");
 });
 
 test("uses inline confirmation before deleting a skill", async () => {

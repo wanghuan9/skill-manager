@@ -1,4 +1,4 @@
-export type SkillViewMode = "grouped" | "flat";
+export type SkillViewMode = "list" | "grid" | "grouped";
 export type SkillGroupCollapsedState = Record<string, boolean>;
 
 export const SKILL_GROUPED_DEFAULT_THRESHOLD = 12;
@@ -6,8 +6,15 @@ export const SKILL_GROUPED_DEFAULT_THRESHOLD = 12;
 const SKILL_VIEW_MODE_STORAGE_KEY = "skills:view-mode";
 const SKILL_GROUP_COLLAPSED_STATE_STORAGE_KEY = "skills:group-collapsed-state";
 
-function isSkillViewMode(value: string | null): value is SkillViewMode {
-  return value === "grouped" || value === "flat";
+function normalizeSkillViewMode(value: string | null): SkillViewMode | null {
+  if (value === "flat") {
+    return "list";
+  }
+  if (value === "list" || value === "grid" || value === "grouped") {
+    return value;
+  }
+
+  return null;
 }
 
 function isCollapsedStateRecord(value: unknown): value is SkillGroupCollapsedState {
@@ -19,11 +26,12 @@ function isCollapsedStateRecord(value: unknown): value is SkillGroupCollapsedSta
 }
 
 export function resolveSkillViewModePreference(savedMode: string | null, skillCount: number): SkillViewMode {
-  if (isSkillViewMode(savedMode)) {
-    return savedMode;
+  const normalizedMode = normalizeSkillViewMode(savedMode);
+  if (normalizedMode) {
+    return normalizedMode;
   }
 
-  return skillCount > SKILL_GROUPED_DEFAULT_THRESHOLD ? "grouped" : "flat";
+  return skillCount > SKILL_GROUPED_DEFAULT_THRESHOLD ? "grouped" : "list";
 }
 
 export function readSkillViewModePreference(): SkillViewMode | null {
@@ -35,7 +43,7 @@ export function readSkillViewModePreference(): SkillViewMode | null {
   }
 
   const savedMode = window.localStorage.getItem(SKILL_VIEW_MODE_STORAGE_KEY);
-  return isSkillViewMode(savedMode) ? savedMode : null;
+  return normalizeSkillViewMode(savedMode);
 }
 
 export function writeSkillViewModePreference(mode: SkillViewMode) {

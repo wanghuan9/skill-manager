@@ -29,6 +29,73 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+test("switches between list, grouped, and card views", () => {
+  const onViewModeChange = vi.fn();
+
+  mockedUseSkillWorkspace.mockReturnValue({
+    language: "zh-CN",
+    installedSkills: installedSkillFixtures,
+    isLoading: false,
+    refreshWorkspace: vi.fn(),
+    updateAllSkills: vi.fn(),
+  } as unknown as ReturnType<typeof useSkillWorkspace>);
+
+  renderWithI18n(
+    <NotificationProvider>
+      <SkillListToolbar
+        query=""
+        statusFilter="all"
+        onQueryChange={vi.fn()}
+        onStatusFilterChange={vi.fn()}
+        viewMode="list"
+        onViewModeChange={onViewModeChange}
+      />
+    </NotificationProvider>,
+  );
+
+  expect(screen.getByRole("group", { name: "Skill 展示方式" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "列表" })).toHaveAttribute("aria-pressed", "true");
+  fireEvent.click(screen.getByRole("button", { name: "分组" }));
+  fireEvent.click(screen.getByRole("button", { name: "卡片" }));
+
+  expect(onViewModeChange).toHaveBeenNthCalledWith(1, "grouped");
+  expect(onViewModeChange).toHaveBeenNthCalledWith(2, "grid");
+});
+
+test("offers list and card views for a tool source", () => {
+  const onViewModeChange = vi.fn();
+
+  mockedUseSkillWorkspace.mockReturnValue({
+    language: "zh-CN",
+    installedSkills: installedSkillFixtures,
+    isLoading: false,
+    refreshWorkspace: vi.fn(),
+    updateAllSkills: vi.fn(),
+  } as unknown as ReturnType<typeof useSkillWorkspace>);
+
+  renderWithI18n(
+    <NotificationProvider>
+      <SkillListToolbar
+        activeSourceId="codex"
+        query=""
+        statusFilter="all"
+        onQueryChange={vi.fn()}
+        onStatusFilterChange={vi.fn()}
+        viewMode="grouped"
+        onViewModeChange={onViewModeChange}
+      />
+    </NotificationProvider>,
+  );
+
+  expect(screen.getByRole("button", { name: "列表" })).toHaveAttribute("aria-pressed", "true");
+  expect(screen.queryByRole("button", { name: "分组" })).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "卡片" }));
+  fireEvent.click(screen.getByRole("button", { name: "列表" }));
+
+  expect(onViewModeChange).toHaveBeenNthCalledWith(1, "grid");
+  expect(onViewModeChange).toHaveBeenNthCalledWith(2, "list");
+});
+
 test("shows update-all loading state from the workspace session", () => {
   const updateAllSkills = vi.fn().mockResolvedValue(undefined);
 
@@ -48,8 +115,8 @@ test("shows update-all loading state from the workspace session", () => {
         statusFilter="all"
         onQueryChange={vi.fn()}
         onStatusFilterChange={vi.fn()}
-        showGroupView
-        onShowGroupViewChange={vi.fn()}
+        viewMode="grouped"
+        onViewModeChange={vi.fn()}
       />
     </NotificationProvider>,
   );
@@ -78,8 +145,8 @@ test("starts update-all from the toolbar", () => {
         statusFilter="all"
         onQueryChange={vi.fn()}
         onStatusFilterChange={vi.fn()}
-        showGroupView
-        onShowGroupViewChange={vi.fn()}
+        viewMode="grouped"
+        onViewModeChange={vi.fn()}
       />
     </NotificationProvider>,
   );
@@ -106,8 +173,8 @@ test("renders go-install action when handler is provided", () => {
         statusFilter="all"
         onQueryChange={vi.fn()}
         onStatusFilterChange={vi.fn()}
-        showGroupView
-        onShowGroupViewChange={vi.fn()}
+        viewMode="grouped"
+        onViewModeChange={vi.fn()}
         onGoInstall={onGoInstall}
       />
     </NotificationProvider>,
@@ -138,8 +205,8 @@ test("notifies status filter changes", () => {
         statusFilter="all"
         onQueryChange={vi.fn()}
         onStatusFilterChange={onStatusFilterChange}
-        showGroupView
-        onShowGroupViewChange={vi.fn()}
+        viewMode="grouped"
+        onViewModeChange={vi.fn()}
       />
     </NotificationProvider>,
   );

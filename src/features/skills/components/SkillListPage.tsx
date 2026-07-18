@@ -9,6 +9,7 @@ import { useSkillWorkspace } from "@/features/skills/state/skill-workspace";
 import { groupSkillsBySource } from "@/features/skills/utils/skill-groups";
 import {
   readSkillGroupCollapsedState,
+  type SkillViewMode,
   writeSkillGroupCollapsedState,
 } from "@/features/skills/utils/skill-view-preference";
 import { getMonogramLabel } from "@/features/skills/utils/monogram";
@@ -29,10 +30,19 @@ type SkillToolbarProps = {
   onQueryChange: (value: string) => void;
   onStatusFilterChange: (value: SkillStatusFilter) => void;
   onManagementFilterChange?: (value: ToolSkillManagementFilter) => void;
-  showGroupView: boolean;
-  onShowGroupViewChange: (value: boolean) => void;
+  viewMode: SkillViewMode;
+  onViewModeChange: (value: SkillViewMode) => void;
   onGoInstall?: () => void;
 };
+
+function ListIcon() {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+      <rect x="3.25" y="3.25" width="13.5" height="13.5" rx="2.25" stroke="currentColor" strokeWidth="1.5" />
+      <path d="M6 7h8M6 10h8M6 13h8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+    </svg>
+  );
+}
 
 function GridIcon() {
   return (
@@ -145,8 +155,8 @@ export function SkillListToolbar(props: SkillToolbarProps) {
     onQueryChange,
     onStatusFilterChange,
     onManagementFilterChange = () => undefined,
-    showGroupView,
-    onShowGroupViewChange,
+    viewMode,
+    onViewModeChange,
     onGoInstall,
   } = props;
   const {
@@ -233,19 +243,40 @@ export function SkillListToolbar(props: SkillToolbarProps) {
           onChange={(event) => onQueryChange(event.target.value)}
         />
       </label>
-      {isManagedSource ? (
+      <div className="skills-view-toggle" role="group" aria-label={t("skills.view.aria")}>
+        <button
+          className={`skills-view-toggle__button${viewMode === "list" || (!isManagedSource && viewMode === "grouped") ? " is-active" : ""}`}
+          type="button"
+          aria-pressed={viewMode === "list" || (!isManagedSource && viewMode === "grouped")}
+          aria-label={t("skills.view.list")}
+          data-tooltip={t("skills.view.list")}
+          onClick={() => onViewModeChange("list")}
+        >
+          <ListIcon />
+        </button>
+        {isManagedSource ? (
           <button
-            className={`secondary-button secondary-button--compact skills-toolbar-button skills-toolbar-button--toggle${showGroupView ? " is-active" : ""}`}
+            className={`skills-view-toggle__button${viewMode === "grouped" ? " is-active" : ""}`}
             type="button"
-            aria-pressed={showGroupView}
-            onClick={() => onShowGroupViewChange(!showGroupView)}
+            aria-pressed={viewMode === "grouped"}
+            aria-label={t("skills.view.grouped")}
+            data-tooltip={t("skills.view.grouped")}
+            onClick={() => onViewModeChange("grouped")}
           >
-            <span aria-hidden="true" className="skills-toolbar-button__icon">
-              {showGroupView ? <GroupIcon /> : <GridIcon />}
-            </span>
-            <span>{showGroupView ? t("skills.view.grouped") : t("skills.view.grid")}</span>
+            <GroupIcon />
           </button>
-      ) : null}
+        ) : null}
+        <button
+          className={`skills-view-toggle__button${viewMode === "grid" ? " is-active" : ""}`}
+          type="button"
+          aria-pressed={viewMode === "grid"}
+          aria-label={t("skills.view.grid")}
+          data-tooltip={t("skills.view.grid")}
+          onClick={() => onViewModeChange("grid")}
+        >
+          <GridIcon />
+        </button>
+      </div>
       <label className="skill-status-filter">
         <span className="sr-only">{t(isManagedSource ? "skills.filter.aria" : "skills.source.filter.aria")}</span>
         <span className="skill-status-filter__icon" aria-hidden="true">
@@ -317,8 +348,10 @@ type SkillListPageProps = {
   query: string;
   statusFilter: SkillStatusFilter;
   managementFilter?: ToolSkillManagementFilter;
-  showGroupView: boolean;
+  viewMode: SkillViewMode;
 };
+
+const SKILL_GRID_COLUMN_COUNT = 3;
 
 export function SkillListPage(props: SkillListPageProps) {
   const { t } = useTranslate();
@@ -329,7 +362,7 @@ export function SkillListPage(props: SkillListPageProps) {
     query,
     statusFilter,
     managementFilter = "all",
-    showGroupView,
+    viewMode,
     activeSourceId = MANAGED_SKILL_SOURCE_ID,
     onActiveSourceIdChange = () => undefined,
     focusedManagedSkillName = "",
@@ -347,6 +380,17 @@ export function SkillListPage(props: SkillListPageProps) {
     () => groupSkillsBySource(skills, { localLabel: t("skills.source.local") }),
     [skills, t],
   );
+  const orderedSkills = useMemo(
+    () => [...skills].sort((left, right) => Number(hasEnabledTool(right)) - Number(hasEnabledTool(left))),
+    [skills],
+  );
+  const skillGridRows = useMemo(() => {
+    const rows: SkillSummary[][] = [];
+    for (let index = 0; index < orderedSkills.length; index += SKILL_GRID_COLUMN_COUNT) {
+      rows.push(orderedSkills.slice(index, index + SKILL_GRID_COLUMN_COUNT));
+    }
+    return rows;
+  }, [orderedSkills]);
   const allGroupedSkills = useMemo(
     () => groupSkillsBySource(installedSkills, { localLabel: t("skills.source.local") }),
     [installedSkills, t],
@@ -358,7 +402,7 @@ export function SkillListPage(props: SkillListPageProps) {
     }
 
     setExpandedSkillName(focusedManagedSkillName);
-    if (!showGroupView) {
+    if (viewMode !== "grouped") {
       return;
     }
 
@@ -377,7 +421,7 @@ export function SkillListPage(props: SkillListPageProps) {
       writeSkillGroupCollapsedState(nextState);
       return nextState;
     });
-  }, [activeSourceId, allGroupedSkills, focusedManagedSkillName, showGroupView]);
+  }, [activeSourceId, allGroupedSkills, focusedManagedSkillName, viewMode]);
 
   function isGroupCollapsed(groupId: string) {
     return collapsedGroups[groupId] ?? true;
@@ -406,15 +450,17 @@ export function SkillListPage(props: SkillListPageProps) {
         onShowManagedSkill={onShowManagedSkill}
         managementFilter={managementFilter}
         query={deferredQuery}
+        viewMode={viewMode}
       />
-      {activeSourceId === MANAGED_SKILL_SOURCE_ID ? <div className="card-list">
+      {activeSourceId === MANAGED_SKILL_SOURCE_ID ? (
+        <div className={`card-list${viewMode === "grid" ? " skill-card-grid" : ""}`}>
         {isLoading ? (
           <div className="panel-card empty-state">
             <h3>{t("skills.loadingTitle")}</h3>
             <p>{t("skills.loadingDescription")}</p>
           </div>
         ) : groupedSkills.length > 0 ? (
-          showGroupView ? (
+          viewMode === "grouped" ? (
           groupedSkills.map((group) => {
             const updateCount = group.skills.filter((skill) => skill.collabStatus === "update-available").length;
             const pendingPushCount = group.skills.filter((skill) => skill.collabStatus === "pending-push").length;
@@ -500,15 +546,34 @@ export function SkillListPage(props: SkillListPageProps) {
             );
           })
           ) : (
-            skills.map((skill) => (
-              <SkillCard
-                key={skill.name}
-                skill={skill}
-                expanded={expandedSkillName === skill.name}
-                autoAlignWhenExpanded={focusedManagedSkillName === skill.name}
-                onExpandedChange={(expanded) => handleSkillExpandedChange(skill.name, expanded)}
-              />
-            ))
+            viewMode === "grid" ? (
+              skillGridRows.map((row) => {
+                return (
+                  <div key={row[0].name} className="skill-card-grid__row">
+                    {row.map((skill) => (
+                      <SkillCard
+                        key={skill.name}
+                        skill={skill}
+                        layout="grid"
+                        expanded={expandedSkillName === skill.name}
+                        autoAlignWhenExpanded={focusedManagedSkillName === skill.name}
+                        onExpandedChange={(expanded) => handleSkillExpandedChange(skill.name, expanded)}
+                      />
+                    ))}
+                  </div>
+                );
+              })
+            ) : (
+              orderedSkills.map((skill) => (
+                <SkillCard
+                  key={skill.name}
+                  skill={skill}
+                  expanded={expandedSkillName === skill.name}
+                  autoAlignWhenExpanded={focusedManagedSkillName === skill.name}
+                  onExpandedChange={(expanded) => handleSkillExpandedChange(skill.name, expanded)}
+                />
+              ))
+            )
           )
         ) : (
           <div className="panel-card empty-state">
@@ -536,7 +601,8 @@ export function SkillListPage(props: SkillListPageProps) {
             )}
           </div>
         )}
-      </div> : null}
+        </div>
+      ) : null}
     </div>
   );
 }

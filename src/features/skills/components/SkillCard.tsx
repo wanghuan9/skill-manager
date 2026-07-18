@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { MouseEvent as ReactMouseEvent } from "react";
+import { createPortal } from "react-dom";
 import { alignExpandedRowIntoView } from "@/app/utils/align-expanded-row";
 import { useTranslate } from "@/app/i18n";
 import { useNotifications } from "@/app/notifications";
@@ -21,12 +22,14 @@ import { getMonogramLabel } from "@/features/skills/utils/monogram";
 
 type SkillCardProps = {
   skill: SkillSummary;
+  layout?: "list" | "grid";
   expanded?: boolean;
   autoAlignWhenExpanded?: boolean;
   onExpandedChange?: (expanded: boolean, rowElement?: HTMLElement | null) => void;
 };
 
 const SUMMARY_DESCRIPTION_LIMIT = 76;
+const GRID_SUMMARY_TOOL_LIMIT = 6;
 
 function SkillMonogram({ name }: { name: string }) {
   return (
@@ -161,6 +164,7 @@ function DeleteIcon() {
 
 export function SkillCard({
   skill,
+  layout = "list",
   expanded: expandedProp,
   autoAlignWhenExpanded = false,
   onExpandedChange,
@@ -190,6 +194,8 @@ export function SkillCard({
   const enabledTools = skillTools
     .filter((tool) => isToolEnabledStatus(tool.statusLabel))
     .sort(compareToolsByDisplayOrder);
+  const gridSummaryTools = enabledTools.slice(0, GRID_SUMMARY_TOOL_LIMIT);
+  const gridSummaryToolExtraCount = enabledTools.length - gridSummaryTools.length;
   const summaryToolsLabel = enabledTools.length > 0
     ? t("skill.card.enabledTools", { tools: enabledTools.map((tool) => tool.name).join("、") })
     : t("skill.card.enabledToolsNone");
@@ -200,6 +206,7 @@ export function SkillCard({
       : sourceLabel;
   const showRemoteMetadata = skill.gitLinked && skill.sourceType !== "local";
   const expanded = expandedProp ?? expandedState;
+  const isGridLayout = layout === "grid";
 
   useEffect(() => {
     if (autoAlignWhenExpanded && expanded) {
@@ -307,7 +314,7 @@ export function SkillCard({
   }
 
   async function handleExpandedChange(nextExpanded: boolean) {
-    const shouldAlignExpandedCard = nextExpanded && !expanded;
+    const shouldAlignExpandedCard = nextExpanded && !expanded && !isGridLayout;
     if (expandedProp === undefined) {
       setExpandedState(nextExpanded);
     }
@@ -317,14 +324,129 @@ export function SkillCard({
     }
   }
 
+  useEffect(() => {
+    if (!isGridLayout || !expanded) {
+      return;
+    }
+
+    const originalOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape" && !showFileDialog) {
+        void handleExpandedChange(false);
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.body.style.overflow = originalOverflow;
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [expanded, isGridLayout, showFileDialog]);
+
   const updateTooltipLabel = isUpdating ? t("skill.card.tooltip.updating") : t("skill.card.tooltip.update");
   const deleteConfirmTooltipLabel = isDeleting ? t("skill.card.tooltip.deleting") : t("skill.card.tooltip.deleteConfirm");
+  const deleteAction = isDeleteConfirming || isDeleting ? (
+    <button
+      ref={deleteActionRef}
+      className="skill-card__delete-confirm-button"
+      type="button"
+      onClick={() => void handleDeleteAction()}
+      aria-label={t("skill.card.aria.deleteConfirm", {
+        state: isDeleting ? t("skill.card.deleteLoading") : t("skill.card.deleteConfirm"),
+        name: skill.name,
+      })}
+      data-tooltip={deleteConfirmTooltipLabel}
+      disabled={isDeleting}
+    >
+      {isDeleting ? t("skill.card.deleteLoading") : t("skill.card.deleteConfirm")}
+    </button>
+  ) : (
+    <button
+      ref={deleteActionRef}
+      className="skill-card__icon-button skill-card__icon-button--delete"
+      type="button"
+      onClick={() => void handleDeleteAction()}
+      aria-label={t("skill.card.aria.delete", { name: skill.name })}
+      data-tooltip={t("skill.card.tooltip.delete")}
+    >
+      <DeleteIcon />
+    </button>
+  );
+
+  const skillDetailSections = (
+    <>
+      <section>
+        <div className="skill-card__section-header">
+          <h4>{t("skill.card.basicInfo")}</h4>
+        </div>
+        <dl className="detail-grid detail-grid--single">
+          <div>
+            <dt>{t("skill.card.description")}</dt>
+            <dd>{skillDescription}</dd>
+          </div>
+        </dl>
+        <dl className="detail-grid detail-grid--source">
+          <div>
+            <dt>{t("skill.card.sourceType")}</dt>
+            <dd>{displaySourceLabel}</dd>
+          </div>
+          <div>
+            <dt>{t("skill.card.source")}</dt>
+            <dd className="detail-grid__source-value">
+              {isHttpUrl(skill.sourceUrl) ? (
+                <a
+                  className="detail-grid__source-link detail-grid__single-line"
+                  data-tooltip={skill.sourceUrl}
+                  href={skill.sourceUrl}
+                  onClick={(event) => {
+                    event.preventDefault();
+                    void openExternalLink(skill.sourceUrl);
+                  }}
+                >
+                  {skill.sourceUrl}
+                </a>
+              ) : (
+                <span className="detail-grid__single-line" data-tooltip={skill.sourceUrl}>
+                  {skill.sourceUrl}
+                </span>
+              )}
+              <span className={`detail-git-badge${skill.gitLinked ? " is-linked" : " is-unlinked"}`}>
+                git
+              </span>
+            </dd>
+          </div>
+        </dl>
+        <dl className="tool-list-row__detail-grid">
+          {showRemoteMetadata ? (
+            <>
+              <div>
+                <dt>{t("skill.card.remoteUpdatedAt")}</dt>
+                <dd>{remoteUpdatedAt || t("skill.card.notFetched")}</dd>
+              </div>
+              <div>
+                <dt>{t("skill.card.lastEditor")}</dt>
+                <dd>{remoteUpdater}</dd>
+              </div>
+            </>
+          ) : null}
+          <div>
+            <dt>{t("skill.card.localUpdatedAt")}</dt>
+            <dd>{localUpdatedAt || t("skill.card.notFetched")}</dd>
+          </div>
+        </dl>
+      </section>
+      <ToolSyncPanel skillName={skill.name} tools={skillTools} />
+    </>
+  );
 
   return (
     <>
       <article
         ref={cardRef}
-        className={`skill-card skill-card--list${expanded ? " is-expanded" : ""}`}
+        className={`skill-card skill-card--${layout}${expanded ? " is-expanded" : ""}`}
+        aria-label={skill.name}
       >
         <div className="skill-card__header">
           <div
@@ -333,37 +455,71 @@ export function SkillCard({
           >
             <div className="skill-card__summary-content">
               <div className="skill-card__summary-top">
+                {isGridLayout ? (
+                  <div className="skill-card__grid-status">
+                    <SkillStatusBadge status={skill.collabStatus} />
+                  </div>
+                ) : null}
                 <div className="skill-card__identity">
                   <SkillMonogram name={skill.name} />
                   <div className="skill-card__title-stack">
                     <div className="skill-card__title-row">
                       <h3>{skill.name}</h3>
-                      <button
-                        className={`status-badge tone-info skill-card__enabled-toggle${enabledTools.length > 0 ? "" : " is-empty"}`}
-                        type="button"
-                        onClick={handleEnabledToolsToggle}
-                        aria-expanded={showEnabledTools}
-                        aria-label={summaryToolsLabel}
-                        disabled={enabledTools.length === 0}
-                      >
-                        {enabledTools.length > 0 ? t("skill.card.enabledCount", { count: enabledTools.length }) : t("skill.card.disabled")}
-                      </button>
-                      {showEnabledTools && enabledTools.length > 0 ? (
-                        <div className="skill-card__summary-tools" aria-label={summaryToolsLabel}>
-                          {enabledTools.map((tool) => (
-                            <SummaryToolIcon key={tool.name} toolName={tool.name} />
-                          ))}
-                        </div>
+                      {!isGridLayout ? (
+                        <>
+                          <button
+                            className={`status-badge tone-info skill-card__enabled-toggle${enabledTools.length > 0 ? "" : " is-empty"}`}
+                            type="button"
+                            onClick={handleEnabledToolsToggle}
+                            aria-expanded={showEnabledTools}
+                            aria-label={summaryToolsLabel}
+                            disabled={enabledTools.length === 0}
+                          >
+                            {enabledTools.length > 0
+                              ? t("skill.card.enabledCount", { count: enabledTools.length })
+                              : t("skill.card.disabled")}
+                          </button>
+                          {showEnabledTools && enabledTools.length > 0 ? (
+                            <div className="skill-card__summary-tools" aria-label={summaryToolsLabel}>
+                              {enabledTools.map((tool) => (
+                                <SummaryToolIcon key={tool.name} toolName={tool.name} />
+                              ))}
+                            </div>
+                          ) : null}
+                        </>
                       ) : null}
                     </div>
                     <p className="skill-card__summary-description">{summaryDescription}</p>
+                    {isGridLayout ? (
+                      <div className="skill-card__grid-meta">
+                        <span>{displaySourceLabel}</span>
+                        <div className="skill-card__summary-tools" aria-label={summaryToolsLabel}>
+                          {gridSummaryTools.map((tool) => (
+                            <SummaryToolIcon key={tool.name} toolName={tool.name} />
+                          ))}
+                          {gridSummaryToolExtraCount > 0 ? (
+                            <span className="skill-card__tool-tag skill-card__tool-tag--extra">
+                              +{gridSummaryToolExtraCount}
+                            </span>
+                          ) : null}
+                        </div>
+                      </div>
+                    ) : null}
                   </div>
                 </div>
               </div>
             </div>
           </div>
           <div className="skill-card__list-actions">
-            <SkillStatusBadge status={skill.collabStatus} />
+            {isGridLayout ? (
+              <span className={`status-badge ${enabledTools.length > 0 ? "tone-info" : "tone-neutral"}`}>
+                {enabledTools.length > 0
+                  ? t("skill.card.enabledCount", { count: enabledTools.length })
+                  : t("skill.card.disabled")}
+              </span>
+            ) : (
+              <SkillStatusBadge status={skill.collabStatus} />
+            )}
             {showDetailAction ? (
               <button
                 className="skill-card__icon-button skill-card__icon-button--update"
@@ -394,33 +550,7 @@ export function SkillCard({
             >
               <OpenFolderIcon />
             </button>
-            {isDeleteConfirming || isDeleting ? (
-              <button
-                ref={deleteActionRef}
-                className="skill-card__delete-confirm-button"
-                type="button"
-                onClick={() => void handleDeleteAction()}
-                aria-label={t("skill.card.aria.deleteConfirm", {
-                  state: isDeleting ? t("skill.card.deleteLoading") : t("skill.card.deleteConfirm"),
-                  name: skill.name,
-                })}
-                data-tooltip={deleteConfirmTooltipLabel}
-                disabled={isDeleting}
-              >
-                {isDeleting ? t("skill.card.deleteLoading") : t("skill.card.deleteConfirm")}
-              </button>
-            ) : (
-              <button
-                ref={deleteActionRef}
-                className="skill-card__icon-button skill-card__icon-button--delete"
-                type="button"
-                onClick={() => void handleDeleteAction()}
-                aria-label={t("skill.card.aria.delete", { name: skill.name })}
-                data-tooltip={t("skill.card.tooltip.delete")}
-              >
-                <DeleteIcon />
-              </button>
-            )}
+            {deleteAction}
             <button
               className="skill-card__chevron-button"
               type="button"
@@ -432,77 +562,88 @@ export function SkillCard({
               })}
             >
               <span className="skill-card__chevron" aria-hidden="true">
-              {expanded ? "⌄" : "›"}
+                {expanded ? "⌄" : "›"}
               </span>
             </button>
           </div>
         </div>
-        {expanded ? (
+        {expanded && !isGridLayout ? (
           <div className="skill-card__details">
-            <section>
-              <div className="skill-card__section-header">
-                <h4>{t("skill.card.basicInfo")}</h4>
-              </div>
-              <dl className="detail-grid detail-grid--single">
-                <div>
-                  <dt>{t("skill.card.description")}</dt>
-                  <dd>{skillDescription}</dd>
-                </div>
-              </dl>
-              <dl className="detail-grid detail-grid--source">
-                <div>
-                  <dt>{t("skill.card.sourceType")}</dt>
-                  <dd>{displaySourceLabel}</dd>
-                </div>
-                <div>
-                  <dt>{t("skill.card.source")}</dt>
-                  <dd className="detail-grid__source-value">
-                    {isHttpUrl(skill.sourceUrl) ? (
-                      <a
-                        className="detail-grid__source-link detail-grid__single-line"
-                        data-tooltip={skill.sourceUrl}
-                        href={skill.sourceUrl}
-                        onClick={(event) => {
-                          event.preventDefault();
-                          void openExternalLink(skill.sourceUrl);
-                        }}
-                      >
-                        {skill.sourceUrl}
-                      </a>
-                    ) : (
-                      <span className="detail-grid__single-line" data-tooltip={skill.sourceUrl}>
-                        {skill.sourceUrl}
-                      </span>
-                    )}
-                    <span className={`detail-git-badge${skill.gitLinked ? " is-linked" : " is-unlinked"}`}>
-                      git
-                    </span>
-                  </dd>
-                </div>
-              </dl>
-              <dl className="tool-list-row__detail-grid">
-                {showRemoteMetadata ? (
-                  <>
-                    <div>
-                      <dt>{t("skill.card.remoteUpdatedAt")}</dt>
-                      <dd>{remoteUpdatedAt || t("skill.card.notFetched")}</dd>
-                    </div>
-                    <div>
-                      <dt>{t("skill.card.lastEditor")}</dt>
-                      <dd>{remoteUpdater}</dd>
-                    </div>
-                  </>
-                ) : null}
-                <div>
-                  <dt>{t("skill.card.localUpdatedAt")}</dt>
-                  <dd>{localUpdatedAt || t("skill.card.notFetched")}</dd>
-                </div>
-              </dl>
-            </section>
-            <ToolSyncPanel skillName={skill.name} tools={skillTools} />
+            {skillDetailSections}
           </div>
         ) : null}
       </article>
+      {expanded && isGridLayout && !showFileDialog ? createPortal(
+        <div
+          className="skill-card-detail-modal__backdrop"
+          role="presentation"
+          onClick={() => void handleExpandedChange(false)}
+        >
+          <section
+            className="skill-card-detail-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-label={t("skill.card.modal.aria", { name: skill.name })}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <header className="skill-card-detail-modal__header">
+              <div className="skill-card-detail-modal__identity">
+                <SkillMonogram name={skill.name} />
+                <div className="skill-card-detail-modal__copy">
+                  <div className="skill-card-detail-modal__title">
+                    <h3>{skill.name}</h3>
+                    <SkillStatusBadge status={skill.collabStatus} />
+                  </div>
+                </div>
+              </div>
+              <div className="skill-card-detail-modal__actions">
+                {showDetailAction ? (
+                  <button
+                    className="secondary-button secondary-button--compact skill-card-detail-modal__action is-primary"
+                    type="button"
+                    onClick={() => void handlePrimaryAction()}
+                    aria-label={t("skill.card.aria.update", { name: skill.name })}
+                    disabled={isUpdating}
+                  >
+                    <RefreshIcon isSpinning={isUpdating} />
+                    <span>{isUpdating ? t("skill.card.tooltip.updating") : t("skill.card.action.update")}</span>
+                  </button>
+                ) : null}
+                <button
+                  className="secondary-button secondary-button--compact skill-card-detail-modal__action"
+                  type="button"
+                  onClick={() => setShowFileDialog(true)}
+                  aria-label={t("skill.card.aria.viewFiles", { name: skill.name })}
+                >
+                  <ViewFileIcon />
+                  <span>{t("skill.card.action.viewFiles")}</span>
+                </button>
+                <button
+                  className="secondary-button secondary-button--compact skill-card-detail-modal__action"
+                  type="button"
+                  onClick={() => void handleOpenSkill()}
+                  aria-label={t("skill.card.aria.openFolder", { name: skill.name })}
+                >
+                  <OpenFolderIcon />
+                  <span>{t("skill.card.action.openFolder")}</span>
+                </button>
+                <button
+                  className="skill-card-detail-modal__close"
+                  type="button"
+                  onClick={() => void handleExpandedChange(false)}
+                  aria-label={t("skill.card.modal.close", { name: skill.name })}
+                >
+                  <span aria-hidden="true">×</span>
+                </button>
+              </div>
+            </header>
+            <div className="skill-card__details skill-card-detail-modal__body">
+              {skillDetailSections}
+            </div>
+          </section>
+        </div>,
+        document.body,
+      ) : null}
       {showFileDialog ? (
         <SkillFileDialog skill={skill} isOpen={showFileDialog} onClose={() => setShowFileDialog(false)} />
       ) : null}

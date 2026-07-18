@@ -31,7 +31,7 @@ test("guides empty skill library to marketplace, git install, and local import",
       onInstallFromMarketplace={onInstallFromMarketplace}
       query=""
       statusFilter="all"
-      showGroupView={false}
+      viewMode="list"
     />,
   );
 
