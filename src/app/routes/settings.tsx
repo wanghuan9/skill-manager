@@ -376,7 +376,6 @@ export function SettingsRoute() {
             onChange={(event) => void setSkillSourceViewStyle(event.target.value as SkillSourceViewStyle)}
           >
             <option value="flat">{t("settings.skillSourceView.option.flat")}</option>
-            <option value="band">{t("settings.skillSourceView.option.band")}</option>
             <option value="select">{t("settings.skillSourceView.option.select")}</option>
           </select>
         </div>

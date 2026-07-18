@@ -74,7 +74,7 @@ test("allows selecting default open tool in settings", async () => {
   expect(screen.queryByText("CodeBuddy")).not.toBeInTheDocument();
 });
 
-test("switches among the three Skill source bar styles", async () => {
+test("switches between the two Skill source bar styles", async () => {
   const user = userEvent.setup();
   window.localStorage.clear();
   render(<App />);
@@ -84,14 +84,9 @@ test("switches among the three Skill source bar styles", async () => {
   await user.click(screen.getByRole("button", { name: /设置/ }));
   const styleSelect = screen.getByLabelText("Skill 来源栏样式");
   expect(styleSelect).toHaveValue("flat");
+  expect(within(styleSelect).queryByRole("option", { name: "浅色工具栏" })).not.toBeInTheDocument();
 
-  await user.selectOptions(styleSelect, "band");
-  await user.click(screen.getByRole("button", { name: /Skills/ }));
-  expect(screen.getByRole("tablist", { name: "Skill 来源" }).closest(".skills-source-tabs-row"))
-    .toHaveClass("skills-source-tabs-row--band");
-
-  await user.click(screen.getByRole("button", { name: /设置/ }));
-  await user.selectOptions(screen.getByLabelText("Skill 来源栏样式"), "select");
+  await user.selectOptions(styleSelect, "select");
   await user.click(screen.getByRole("button", { name: /Skills/ }));
 
   expect(screen.queryByRole("tablist", { name: "Skill 来源" })).not.toBeInTheDocument();

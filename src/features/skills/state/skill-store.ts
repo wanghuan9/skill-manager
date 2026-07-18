@@ -304,7 +304,7 @@ export type GitAccountSummary = {
 };
 
 export type InstallActivationMode = "apply-all-tools" | "disable-all-tools";
-export type SkillSourceViewStyle = "flat" | "band" | "select";
+export type SkillSourceViewStyle = "flat" | "select";
 export type AppLanguage = "zh-CN" | "en";
 export type AppLanguageSource = "auto" | "user";
 
