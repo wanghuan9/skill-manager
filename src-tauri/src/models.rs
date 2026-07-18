@@ -312,6 +312,7 @@ pub struct AppSettings {
     pub skill_source_view_style: String,
     pub language: String,
     pub language_source: String,
+    pub theme: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
