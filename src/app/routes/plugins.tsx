@@ -25,10 +25,8 @@ import {
 import {
   buildInitialCollapsedDirectories,
   collectAncestorDirectoryPaths,
-  entryIndent,
-  hasCollapsedAncestor,
-  parentDirectoryPath,
   SkillFileContentSurface,
+  SkillFileTreeSidebar,
   SkillFileViewModeToggle,
   type SkillFileViewMode,
 } from "@/features/skills/components/SkillFileDialog";
@@ -2839,18 +2837,6 @@ export function PluginsRoute(props: PluginsRouteProps = {}) {
     : "";
   const previewEntries = previewState?.preview?.entries ?? [];
   const previewFileEntries = previewEntries.filter((entry) => entry.entryType === "file");
-  const visiblePreviewEntries = previewEntries.filter(
-    (entry) => entry.depth === 0 || !hasCollapsedAncestor(entry, previewCollapsedDirectories),
-  );
-  const previewDirectoryChildCounts = new Map<string, number>();
-  for (const entry of previewEntries) {
-    if (!entry.path) {
-      continue;
-    }
-
-    const parentPath = parentDirectoryPath(entry.path);
-    previewDirectoryChildCounts.set(parentPath, (previewDirectoryChildCounts.get(parentPath) ?? 0) + 1);
-  }
 
   return (
     <div className="skills-page plugins-page">
@@ -3120,48 +3106,13 @@ export function PluginsRoute(props: PluginsRouteProps = {}) {
             </div>
             <div className="skill-file-dialog__body plugins-page__preview-body">
               <aside className="skill-file-dialog__sidebar">
-                {visiblePreviewEntries.map((entry) =>
-                  entry.entryType === "directory" ? (
-                    entry.depth === 0 ? (
-                      <div
-                        key={`${entry.path}-${entry.entryType}`}
-                        className="skill-file-dialog__tree-item skill-file-dialog__tree-item--directory is-root"
-                        style={entryIndent(entry)}
-                      >
-                        <span aria-hidden="true">⌄</span>
-                        <span>{entry.name}</span>
-                      </div>
-                    ) : (
-                      <button
-                        key={`${entry.path}-${entry.entryType}`}
-                        className="skill-file-dialog__tree-item skill-file-dialog__tree-item--directory"
-                        style={entryIndent(entry)}
-                        type="button"
-                        onClick={() => handleTogglePreviewDirectory(entry.path)}
-                        aria-expanded={!previewCollapsedDirectories[entry.path]}
-                        aria-label={t(previewCollapsedDirectories[entry.path] ? "skill.files.expand" : "skill.files.collapse", { name: entry.name })}
-                      >
-                        <span aria-hidden="true">
-                          {previewDirectoryChildCounts.get(entry.path) ? (previewCollapsedDirectories[entry.path] ? "›" : "⌄") : "•"}
-                        </span>
-                        <span>{entry.name}</span>
-                      </button>
-                    )
-                  ) : (
-                    <button
-                      key={entry.path}
-                      className={`skill-file-dialog__tree-item skill-file-dialog__tree-item--file${
-                        entry.path === selectedPreviewPath ? " is-selected" : ""
-                      }`}
-                      style={entryIndent(entry)}
-                      type="button"
-                      onClick={() => void handleSelectPreviewFile(entry.path)}
-                    >
-                      <span aria-hidden="true">📄</span>
-                      <span>{entry.name}</span>
-                    </button>
-                  ),
-                )}
+                <SkillFileTreeSidebar
+                  entries={previewEntries}
+                  selectedPath={selectedPreviewPath}
+                  collapsedDirectories={previewCollapsedDirectories}
+                  onToggleDirectory={handleTogglePreviewDirectory}
+                  onSelectFile={(path) => void handleSelectPreviewFile(path)}
+                />
               </aside>
               <section className="skill-file-dialog__editor">
                 <SkillFileContentSurface

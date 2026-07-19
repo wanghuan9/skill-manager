@@ -3864,25 +3864,90 @@ fn is_supported_text_file(path: &Path) -> bool {
     let Some(file_name) = path.file_name().and_then(|value| value.to_str()) else {
         return false;
     };
-    if file_name == "SKILL.md" {
+    let normalized_file_name = file_name.to_ascii_lowercase();
+    if matches!(
+        normalized_file_name.as_str(),
+        "skill.md"
+            | "dockerfile"
+            | "makefile"
+            | "gemfile"
+            | "rakefile"
+            | ".editorconfig"
+            | ".gitignore"
+            | ".npmrc"
+    ) || normalized_file_name == ".env"
+        || normalized_file_name.starts_with(".env.")
+    {
         return true;
     }
 
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(str::to_ascii_lowercase);
     matches!(
-        path.extension().and_then(|value| value.to_str()),
+        extension.as_deref(),
         Some(
-            "md" | "txt"
+            "bash"
+                | "c"
+                | "cc"
+                | "cjs"
+                | "conf"
+                | "cpp"
+                | "cs"
+                | "css"
+                | "cts"
+                | "cxx"
+                | "diff"
+                | "go"
+                | "gql"
+                | "graphql"
+                | "h"
+                | "hpp"
+                | "htm"
+                | "html"
+                | "hxx"
+                | "ini"
+                | "java"
+                | "js"
                 | "json"
+                | "jsonc"
+                | "jsx"
+                | "kt"
+                | "kts"
+                | "less"
+                | "log"
+                | "lua"
+                | "m"
+                | "markdown"
+                | "md"
+                | "mjs"
+                | "mm"
+                | "mts"
+                | "patch"
+                | "php"
+                | "pl"
+                | "pm"
+                | "properties"
+                | "ps1"
+                | "py"
+                | "r"
+                | "rb"
+                | "rs"
+                | "scss"
+                | "sh"
+                | "sql"
+                | "svg"
+                | "swift"
                 | "yaml"
                 | "yml"
                 | "toml"
-                | "xml"
-                | "js"
                 | "ts"
                 | "tsx"
-                | "jsx"
-                | "py"
-                | "rs"
+                | "txt"
+                | "wat"
+                | "xml"
+                | "zsh"
         )
     )
 }
@@ -7390,6 +7455,33 @@ mod tests {
             super::normalize_marketplace_file_path("reference/../../secret.txt", false).is_err()
         );
         assert!(super::normalize_marketplace_file_path("reference\\secret.txt", false).is_err());
+    }
+
+    #[test]
+    fn recognizes_common_skill_source_and_config_files() {
+        for path in [
+            "scripts/main.go",
+            "scripts/setup.sh",
+            "src/Parser.java",
+            "src/view.tsx",
+            "styles/main.scss",
+            "queries/report.sql",
+            "config/settings.yaml",
+            "Dockerfile",
+            "Makefile",
+            ".env.local",
+        ] {
+            assert!(
+                super::is_supported_text_file(Path::new(path)),
+                "expected {path} to be visible"
+            );
+        }
+    }
+
+    #[test]
+    fn keeps_binary_skill_files_out_of_the_local_preview_tree() {
+        assert!(!super::is_supported_text_file(Path::new("assets/icon.png")));
+        assert!(!super::is_supported_text_file(Path::new("bin/module.wasm")));
     }
 
     #[test]

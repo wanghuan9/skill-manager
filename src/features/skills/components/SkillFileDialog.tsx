@@ -3,8 +3,14 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useTranslate } from "@/app/i18n";
 import { useFailureReporter } from "@/app/failure-feedback";
+import { HighlightedCode, SkillCodePreview } from "@/features/skills/components/SkillCodePreview";
+import { SkillFileTreeIcon, TreeChevronIcon } from "@/features/skills/components/SkillFileTreeIcons";
 import { useSkillWorkspace } from "@/features/skills/state/skill-workspace";
 import type { SkillFileEntry, SkillSummary } from "@/features/skills/state/skill-store";
+import {
+  getSkillFileLanguage,
+  normalizeCodeFenceLanguage,
+} from "@/features/skills/utils/skill-file-language";
 
 type SkillFileDialogProps = {
   skill: Pick<SkillSummary, "name">;
@@ -14,8 +20,8 @@ type SkillFileDialogProps = {
   readOnly?: boolean;
 };
 
-const MARKDOWN_FILE_PATTERN = /\.(md|markdown)$/i;
 const FRONTMATTER_PATTERN = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/;
+const MARKDOWN_CODE_LANGUAGE_PATTERN = /(?:^|\s)language-([^\s]+)/i;
 
 export type SkillFileViewMode = "edit" | "preview";
 
@@ -118,7 +124,7 @@ export function SkillFileViewModeToggle({
 
 export function entryIndent(entry: SkillFileEntry) {
   return {
-    paddingLeft: `${16 + entry.depth * 14}px`,
+    paddingLeft: `${8 + entry.depth * 12}px`,
   };
 }
 
@@ -178,6 +184,78 @@ type SkillFileTreeSidebarProps = {
   onSelectFile: (path: string) => void;
 };
 
+type SkillFileTreeItemProps = {
+  entry: SkillFileEntry;
+  selectedPath: string;
+  expanded: boolean;
+  hasChildren: boolean;
+  directoryLabel: string;
+  onToggleDirectory: (path: string) => void;
+  onSelectFile: (path: string) => void;
+};
+
+function SkillFileTreeItem({
+  entry,
+  selectedPath,
+  expanded,
+  hasChildren,
+  directoryLabel,
+  onToggleDirectory,
+  onSelectFile,
+}: SkillFileTreeItemProps) {
+  const isRoot = entry.depth === 0;
+  const isDirectory = entry.entryType === "directory";
+  const isSelected = entry.path === selectedPath;
+  const content = (
+    <>
+      <span className="skill-file-dialog__tree-leading" aria-hidden="true">
+        <TreeChevronIcon expanded={expanded} visible={isRoot || (isDirectory && hasChildren)} />
+        <SkillFileTreeIcon entry={entry} expanded={expanded} />
+      </span>
+      <span className="skill-file-dialog__tree-label">{entry.name}</span>
+    </>
+  );
+
+  if (isRoot) {
+    return (
+      <div
+        className="skill-file-dialog__tree-item skill-file-dialog__tree-item--directory is-root"
+        style={entryIndent(entry)}
+        title={entry.name}
+      >
+        {content}
+      </div>
+    );
+  }
+  if (isDirectory) {
+    return (
+      <button
+        className="skill-file-dialog__tree-item skill-file-dialog__tree-item--directory"
+        style={entryIndent(entry)}
+        type="button"
+        title={entry.path}
+        onClick={() => onToggleDirectory(entry.path)}
+        aria-expanded={expanded}
+        aria-label={directoryLabel}
+      >
+        {content}
+      </button>
+    );
+  }
+  return (
+    <button
+      className={`skill-file-dialog__tree-item skill-file-dialog__tree-item--file${isSelected ? " is-selected" : ""}`}
+      style={entryIndent(entry)}
+      type="button"
+      title={entry.path}
+      aria-current={isSelected ? "true" : undefined}
+      onClick={() => onSelectFile(entry.path)}
+    >
+      {content}
+    </button>
+  );
+}
+
 export function SkillFileTreeSidebar({
   entries,
   selectedPath,
@@ -209,53 +287,25 @@ export function SkillFileTreeSidebar({
 
   return (
     <aside className="skill-file-dialog__sidebar">
-      {visibleEntries.map((entry) =>
-        entry.entryType === "directory" ? (
-          entry.depth === 0 ? (
-            <div
-              key={`${entry.path}-${entry.entryType}`}
-              className="skill-file-dialog__tree-item skill-file-dialog__tree-item--directory is-root"
-              style={entryIndent(entry)}
-            >
-              <span aria-hidden="true">⌄</span>
-              <span>{entry.name}</span>
-            </div>
-          ) : (
-            <button
-              key={`${entry.path}-${entry.entryType}`}
-              className="skill-file-dialog__tree-item skill-file-dialog__tree-item--directory"
-              style={entryIndent(entry)}
-              type="button"
-              onClick={() => onToggleDirectory(entry.path)}
-              aria-expanded={!collapsedDirectories[entry.path]}
-              aria-label={t(
-                collapsedDirectories[entry.path] ? "skill.files.expand" : "skill.files.collapse",
-                { name: entry.name },
-              )}
-            >
-              <span aria-hidden="true">
-                {directoryChildCounts.get(entry.path)
-                  ? (collapsedDirectories[entry.path] ? "›" : "⌄")
-                  : "•"}
-              </span>
-              <span>{entry.name}</span>
-            </button>
-          )
-        ) : (
-          <button
-            key={entry.path}
-            className={`skill-file-dialog__tree-item skill-file-dialog__tree-item--file${
-              entry.path === selectedPath ? " is-selected" : ""
-            }`}
-            style={entryIndent(entry)}
-            type="button"
-            onClick={() => onSelectFile(entry.path)}
-          >
-            <span aria-hidden="true">📄</span>
-            <span>{entry.name}</span>
-          </button>
-        ),
-      )}
+      {visibleEntries.map((entry) => {
+        const expanded = entry.depth === 0 || !collapsedDirectories[entry.path];
+        const hasChildren = (directoryChildCounts.get(entry.path) ?? 0) > 0;
+        const directoryLabel = entry.entryType === "directory" && entry.depth > 0
+          ? t(expanded ? "skill.files.collapse" : "skill.files.expand", { name: entry.name })
+          : "";
+        return (
+          <SkillFileTreeItem
+            key={`${entry.path}-${entry.entryType}`}
+            entry={entry}
+            selectedPath={selectedPath}
+            expanded={expanded}
+            hasChildren={hasChildren}
+            directoryLabel={directoryLabel}
+            onToggleDirectory={onToggleDirectory}
+            onSelectFile={onSelectFile}
+          />
+        );
+      })}
     </aside>
   );
 }
@@ -336,7 +386,8 @@ export function SkillFileContentSurface({
   onSelectFile,
 }: SkillFileContentSurfaceProps) {
   const previewRef = useRef<HTMLDivElement | null>(null);
-  const isMarkdownFile = MARKDOWN_FILE_PATTERN.test(selectedPath);
+  const fileLanguage = useMemo(() => getSkillFileLanguage(selectedPath), [selectedPath]);
+  const isMarkdownFile = fileLanguage?.kind === "markdown";
   const previewDocument = useMemo(() => splitFrontmatter(content), [content]);
 
   useEffect(() => {
@@ -348,7 +399,14 @@ export function SkillFileContentSurface({
   return (
     <>
       <div className="skill-file-dialog__editor-header">
-        <strong>{selectedPath || noEditableFileLabel}</strong>
+        <div className="skill-file-dialog__file-identity">
+          <strong title={selectedPath}>{selectedPath || noEditableFileLabel}</strong>
+          {fileLanguage ? (
+            <span className="skill-file-dialog__language-badge" data-kind={fileLanguage.kind}>
+              {fileLanguage.label}
+            </span>
+          ) : null}
+        </div>
         {hasDirtyChanges ? <span className="skill-file-dialog__dirty">{unsavedLabel}</span> : null}
       </div>
       {fileEntries.length === 0 ? (
@@ -367,7 +425,11 @@ export function SkillFileContentSurface({
             <>
               {previewDocument.frontmatter ? (
                 <pre className="skill-file-dialog__frontmatter">
-                  <code>{`---\n${previewDocument.frontmatter}\n---`}</code>
+                  <HighlightedCode
+                    content={`---\n${previewDocument.frontmatter}\n---`}
+                    language="yaml"
+                    className="language-yaml"
+                  />
                 </pre>
               ) : null}
               {previewDocument.body.trim() ? (
@@ -394,6 +456,15 @@ export function SkillFileContentSurface({
                           </a>
                         );
                       },
+                      code({ className = "", children, node: _node, ...codeProps }) {
+                        const declaredLanguage = MARKDOWN_CODE_LANGUAGE_PATTERN.exec(className)?.[1] ?? "";
+                        const language = normalizeCodeFenceLanguage(declaredLanguage);
+                        if (!language) {
+                          return <code {...codeProps} className={className}>{children}</code>;
+                        }
+                        const source = String(children).replace(/\n$/, "");
+                        return <HighlightedCode content={source} language={language} className={className} />;
+                      },
                     }}
                   >
                     {previewDocument.body}
@@ -404,7 +475,11 @@ export function SkillFileContentSurface({
               )}
             </>
           ) : (
-            <pre className="skill-file-dialog__plain-preview">{content}</pre>
+            fileLanguage?.kind === "text" || !fileLanguage ? (
+              <pre className="skill-file-dialog__plain-preview">{content}</pre>
+            ) : (
+              <SkillCodePreview path={selectedPath} content={content} />
+            )
           )}
         </div>
       )}

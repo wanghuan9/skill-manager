@@ -2780,7 +2780,10 @@ test("shows nested files for plugin skill component previews", async () => {
     screen.getByRole("button", { name: /repo-scout-skill/ }),
   );
 
-  expect(await screen.findByRole("dialog")).toBeInTheDocument();
+  const dialog = await screen.findByRole("dialog");
+  expect(dialog).toBeInTheDocument();
+  expect(dialog.querySelector(".skill-file-dialog__tree-icon--markdown")).toBeInTheDocument();
+  expect(within(dialog).queryByText("📄")).not.toBeInTheDocument();
   expect(screen.getByRole("button", { name: "展开 reference" })).toBeInTheDocument();
   await userEvent.click(screen.getByRole("button", { name: "展开 reference" }));
   await userEvent.click(screen.getByRole("button", { name: "company-standards.md" }));
