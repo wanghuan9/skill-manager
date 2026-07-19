@@ -34,6 +34,7 @@ import type { SkillStatusFilter } from "@/features/skills/state/skill-store";
 import {
   readSkillViewModePreference,
   resolveSkillViewModePreference,
+  type SkillViewMode,
   writeSkillViewModePreference,
 } from "@/features/skills/utils/skill-view-preference";
 import {
@@ -281,7 +282,7 @@ function renderRoute(
   skillQuery: string,
   skillStatusFilter: SkillStatusFilter,
   skillManagementFilter: ToolSkillManagementFilter,
-  showGroupView: boolean,
+  skillViewMode: SkillViewMode,
   activeInstallCategory: InstallCategory,
   activeInstallTab: InstallTab,
   onInstallCategoryChange: (category: InstallCategory) => void,
@@ -338,7 +339,7 @@ function renderRoute(
       query={skillQuery}
       statusFilter={skillStatusFilter}
       managementFilter={skillManagementFilter}
-      showGroupView={showGroupView}
+      viewMode={skillViewMode}
     />
   );
 }
@@ -452,12 +453,8 @@ function AppContent() {
     useState<SkillStatusFilter>("all");
   const [skillManagementFilter, setSkillManagementFilter] =
     useState<ToolSkillManagementFilter>("all");
-  const [showGroupView, setShowGroupView] = useState(
-    () =>
-      resolveSkillViewModePreference(
-        initialSkillViewMode,
-        installedSkills.length,
-      ) === "grouped",
+  const [skillViewMode, setSkillViewMode] = useState<SkillViewMode>(
+    () => resolveSkillViewModePreference(initialSkillViewMode, installedSkills.length),
   );
   const [hasSavedSkillViewPreference, setHasSavedSkillViewPreference] =
     useState(initialSkillViewMode !== null);
@@ -562,7 +559,7 @@ function AppContent() {
       null,
       installedSkills.length,
     );
-    setShowGroupView(defaultSkillViewMode === "grouped");
+    setSkillViewMode(defaultSkillViewMode);
   }, [hasSavedSkillViewPreference, installedSkills.length]);
 
   useLayoutEffect(() => {
@@ -649,10 +646,10 @@ function AppContent() {
     }
   }
 
-  function handleShowGroupViewChange(nextShowGroupView: boolean) {
-    setShowGroupView(nextShowGroupView);
+  function handleSkillViewModeChange(nextViewMode: SkillViewMode) {
+    setSkillViewMode(nextViewMode);
     setHasSavedSkillViewPreference(true);
-    writeSkillViewModePreference(nextShowGroupView ? "grouped" : "flat");
+    writeSkillViewModePreference(nextViewMode);
   }
 
   function handleOpenSkillInstall(tab: InstallTab) {
@@ -839,8 +836,8 @@ function AppContent() {
                     onQueryChange={setSkillQuery}
                     onStatusFilterChange={setSkillStatusFilter}
                     onManagementFilterChange={setSkillManagementFilter}
-                    showGroupView={showGroupView}
-                    onShowGroupViewChange={handleShowGroupViewChange}
+                    viewMode={skillViewMode}
+                    onViewModeChange={handleSkillViewModeChange}
                     onGoInstall={() => handleOpenSkillInstall("market")}
                   />
                 ) : (
@@ -969,7 +966,7 @@ function AppContent() {
               skillQuery,
               skillStatusFilter,
               skillManagementFilter,
-              showGroupView,
+              skillViewMode,
               activeInstallCategory,
               activeInstallTab,
               setActiveInstallCategory,

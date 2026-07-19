@@ -4,12 +4,15 @@ import { waitForNextPaint } from "@/app/utils/wait-for-next-paint";
 import { useFailureReporter } from "@/app/failure-feedback";
 import type { SkillToolSyncStatus } from "@/features/skills/state/skill-store";
 import { useSkillWorkspace } from "@/features/skills/state/skill-workspace";
+import { setSkillAllToolsEnabled } from "@/features/skills/utils/skill-bulk-status";
 import { resolveToolLogoUrl } from "@/features/skills/utils/tool-logo";
 import { getToolStatusLabel, isToolEnabledStatus } from "@/features/skills/utils/tool-status";
 
 type ToolSyncPanelProps = {
   skillName: string;
   tools: SkillToolSyncStatus[];
+  isBulkUpdatingExternally?: boolean;
+  onBulkUpdatingChange?: (isUpdating: boolean) => void;
 };
 
 function patchToolStatuses(
@@ -31,18 +34,12 @@ function patchAllToolStatuses(tools: SkillToolSyncStatus[], nextStatusLabel: str
   }));
 }
 
-function isMissingBulkCommandError(error: unknown) {
-  if (!(error instanceof Error)) {
-    return false;
-  }
-
-  const message = error.message.toLowerCase();
-  return message.includes("set_skill_all_tool_statuses")
-    || message.includes("unknown command")
-    || message.includes("not found");
-}
-
-export function ToolSyncPanel({ skillName, tools }: ToolSyncPanelProps) {
+export function ToolSyncPanel({
+  skillName,
+  tools,
+  isBulkUpdatingExternally = false,
+  onBulkUpdatingChange,
+}: ToolSyncPanelProps) {
   const { language, t } = useTranslate();
   const { setSkillAllToolStatuses, setToolSkillStatuses, toggleSkillTool } = useSkillWorkspace();
   const reportFailure = useFailureReporter();
@@ -53,6 +50,7 @@ export function ToolSyncPanel({ skillName, tools }: ToolSyncPanelProps) {
   const latestToolsRef = useRef(tools);
   const enabledTools = displayTools.filter((tool) => isToolEnabledStatus(tool.statusLabel));
   const disabledTools = displayTools.filter((tool) => !isToolEnabledStatus(tool.statusLabel));
+  const isAnyBulkUpdatePending = isBulkUpdating || isBulkUpdatingExternally;
 
   useEffect(() => {
     latestToolsRef.current = tools;
@@ -60,7 +58,7 @@ export function ToolSyncPanel({ skillName, tools }: ToolSyncPanelProps) {
   }, [tools]);
 
   async function handleToggleTool(toolName: string) {
-    if (isBulkUpdating || pendingToolNames.includes(toolName)) {
+    if (isAnyBulkUpdatePending || pendingToolNames.includes(toolName)) {
       return;
     }
 
@@ -102,32 +100,13 @@ export function ToolSyncPanel({ skillName, tools }: ToolSyncPanelProps) {
 
   async function syncAllToolsInBackground(enabled: boolean) {
     const toolNames = latestToolsRef.current.map((tool) => tool.name);
-    const failedToolNames: string[] = [];
-
-    try {
-      await setSkillAllToolStatuses({
-        skillName,
-        enabled,
-        toolNames: toolNames,
-      });
-    } catch (error) {
-      if (isMissingBulkCommandError(error)) {
-        for (const toolName of toolNames) {
-          try {
-            await setToolSkillStatuses({
-              toolName,
-              skillNames: [skillName],
-              enabled,
-              toolNames,
-            });
-          } catch {
-            failedToolNames.push(toolName);
-          }
-        }
-      } else {
-        failedToolNames.push(...toolNames);
-      }
-    }
+    const failedToolNames = await setSkillAllToolsEnabled({
+      skillName,
+      enabled,
+      toolNames,
+      setSkillAllToolStatuses,
+      setToolSkillStatuses,
+    });
 
     if (failedToolNames.length > 0) {
       setDisplayTools(latestToolsRef.current);
@@ -146,7 +125,7 @@ export function ToolSyncPanel({ skillName, tools }: ToolSyncPanelProps) {
 
   async function handleToggleAllTools(enabled: boolean) {
     const hasTargetTools = enabled ? disabledTools.length > 0 : enabledTools.length > 0;
-    if (!hasTargetTools || isBulkUpdating || pendingToolNames.length > 0) {
+    if (!hasTargetTools || isAnyBulkUpdatePending || pendingToolNames.length > 0) {
       return;
     }
 
@@ -155,6 +134,7 @@ export function ToolSyncPanel({ skillName, tools }: ToolSyncPanelProps) {
       patchAllToolStatuses(current, getToolStatusLabel(enabled ? "enabled" : "disabled", language))
     );
     setIsBulkUpdating(true);
+    onBulkUpdatingChange?.(true);
     setBulkAction(enabled ? "enable" : "disable");
 
     try {
@@ -164,6 +144,7 @@ export function ToolSyncPanel({ skillName, tools }: ToolSyncPanelProps) {
       setDisplayTools(previousTools);
     } finally {
       setIsBulkUpdating(false);
+      onBulkUpdatingChange?.(false);
       setBulkAction(null);
     }
   }
@@ -177,7 +158,7 @@ export function ToolSyncPanel({ skillName, tools }: ToolSyncPanelProps) {
             className="secondary-button secondary-button--compact"
             type="button"
             onClick={() => void handleToggleAllTools(true)}
-            disabled={isBulkUpdating || pendingToolNames.length > 0 || disabledTools.length === 0}
+            disabled={isAnyBulkUpdatePending || pendingToolNames.length > 0 || disabledTools.length === 0}
           >
             {bulkAction === "enable" ? t("skill.tools.enableAllLoading") : t("skill.tools.enableAll")}
           </button>
@@ -185,7 +166,7 @@ export function ToolSyncPanel({ skillName, tools }: ToolSyncPanelProps) {
             className="secondary-button secondary-button--compact"
             type="button"
             onClick={() => void handleToggleAllTools(false)}
-            disabled={isBulkUpdating || pendingToolNames.length > 0 || enabledTools.length === 0}
+            disabled={isAnyBulkUpdatePending || pendingToolNames.length > 0 || enabledTools.length === 0}
           >
             {bulkAction === "disable" ? t("skill.tools.disableAllLoading") : t("skill.tools.disableAll")}
           </button>
@@ -206,7 +187,7 @@ export function ToolSyncPanel({ skillName, tools }: ToolSyncPanelProps) {
               aria-pressed={enabled}
               aria-label={enabled ? t("skill.tools.aria.disable", { name: tool.name }) : t("skill.tools.aria.enable", { name: tool.name })}
               data-tooltip={tooltipLabel}
-              disabled={isBulkUpdating || pendingToolNames.includes(tool.name)}
+              disabled={isAnyBulkUpdatePending || pendingToolNames.includes(tool.name)}
             >
               <span className="tool-pill__logo" aria-hidden="true">
                 {logoUrl ? (

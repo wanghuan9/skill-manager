@@ -36,6 +36,11 @@ import {
   ToolListRow,
   useSingleExpandedRow,
 } from "@/features/skills/components/ToolListRows";
+import {
+  ListGridViewToggle,
+  type ListGridViewMode,
+} from "@/features/skills/components/ListGridViewToggle";
+import { PowerToggleIcon } from "@/features/skills/components/PowerToggleIcon";
 import { buildOpenToolOptions } from "@/features/skills/utils/open-tools";
 import { getToolLogoUrl } from "@/features/skills/utils/tool-logo";
 import {
@@ -49,6 +54,10 @@ import {
   getCachedPlugins,
   subscribePluginsChange,
 } from "@/features/skills/utils/plugin-cache";
+import {
+  readToolViewPreference,
+  writeToolViewPreference,
+} from "@/features/skills/utils/tool-view-preference";
 import type {
   PluginAssetType,
   PluginComponentPreview,
@@ -341,30 +350,6 @@ function FilterIcon() {
   return (
     <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
       <path d="M4 5.5h12l-4.7 5.1v3.9l-2.6 1v-4.9L4 5.5Z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
-    </svg>
-  );
-}
-
-function PluginPowerIcon({ isSpinning = false }: { isSpinning?: boolean }) {
-  return (
-    <svg
-      className={isSpinning ? "plugins-page__power-icon is-spinning" : "plugins-page__power-icon"}
-      viewBox="0 0 20 20"
-      fill="none"
-      aria-hidden="true"
-    >
-      <path
-        d="M10 3.5v6"
-        stroke="currentColor"
-        strokeWidth="1.7"
-        strokeLinecap="round"
-      />
-      <path
-        d="M6.35 6.85a5.25 5.25 0 1 0 7.3 0"
-        stroke="currentColor"
-        strokeWidth="1.7"
-        strokeLinecap="round"
-      />
     </svg>
   );
 }
@@ -1444,6 +1429,9 @@ export function PluginsRoute(props: PluginsRouteProps = {}) {
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<PluginFilter>("all");
   const [activeHost, setActiveHost] = useState<PluginTabKey>("all");
+  const [viewMode, setViewMode] = useState<ListGridViewMode>(() =>
+    readToolViewPreference("plugins:view-mode"),
+  );
   const [pendingPluginToggleIds, setPendingPluginToggleIds] = useState<Set<string>>(
     () => new Set(),
   );
@@ -1485,6 +1473,12 @@ export function PluginsRoute(props: PluginsRouteProps = {}) {
     { value: "enabled", label: t("plugins.filter.enabled") },
     { value: "disabled", label: t("plugins.filter.disabled") },
   ];
+
+  function handleViewModeChange(nextViewMode: ListGridViewMode) {
+    setViewMode(nextViewMode);
+    writeToolViewPreference("plugins:view-mode", nextViewMode);
+    handleExpandedChange(expandedId, false);
+  }
 
   useEffect(() => {
     pluginsRef.current = plugins;
@@ -2077,6 +2071,7 @@ export function PluginsRoute(props: PluginsRouteProps = {}) {
           onChange={(event) => setQuery(event.target.value)}
         />
       </label>
+      <ListGridViewToggle value={viewMode} onChange={handleViewModeChange} />
       <div className="plugins-page__toolbar-actions">
         <label className="skill-status-filter plugins-page__toolbar-filter">
           <span className="sr-only">{t("plugins.toolbar.filterLabel")}</span>
@@ -2866,7 +2861,7 @@ export function PluginsRoute(props: PluginsRouteProps = {}) {
           {actionErrorMessage}
         </div>
       ) : null}
-      <div className="card-list">
+      <div className={`card-list${viewMode === "grid" ? " tool-card-grid" : ""}`}>
         {errorMessage ? (
           <div className="panel-card empty-state">
             <p>{errorMessage}</p>
@@ -2920,9 +2915,8 @@ export function PluginsRoute(props: PluginsRouteProps = {}) {
               label,
               tone: "info" as const,
             }));
-            const hostCoverageEntries = activeHost === "all"
-              ? getPluginHostCoverageEntriesForSummary(plugin, plugins)
-              : [];
+            const hostCoverageEntries = getPluginHostCoverageEntriesForSummary(plugin, plugins);
+            const enabledHostCoverageEntries = hostCoverageEntries.filter((entry) => entry.enabledState === "enabled");
             const hostCoverageBadge = renderPluginHostCoverageBadge(plugin, hostCoverageEntries, t);
 
             return (
@@ -2940,10 +2934,24 @@ export function PluginsRoute(props: PluginsRouteProps = {}) {
                       plugin.enabledState === "enabled" ? "positive" : "neutral",
                   },
                   ...componentSummaryBadges,
-                  ...(hostCoverageBadge
+                  ...(activeHost === "all" && hostCoverageBadge
                     ? [{ key: "host-coverage", label: hostCoverageBadge, tone: "neutral" as const }]
                     : []),
                 ]}
+                gridBadges={componentSummaryBadges}
+                gridMeta={(
+                  <>
+                    <span>{getPluginInstallSourceLabel(plugin, t)}</span>
+                    <div className="skill-card__summary-tools">
+                      {renderPluginHostCoverageList(enabledHostCoverageEntries, t)}
+                    </div>
+                  </>
+                )}
+                gridFooter={(
+                  <span className="skill-card__grid-source-text">
+                    {getPluginSourceTypeLabel(plugin, t)}
+                  </span>
+                )}
                 details={renderPluginDetails(plugin)}
                 expanded={expandedId === pluginKey}
                 onExpandedChange={(expanded, summaryElement) =>
@@ -2951,6 +2959,7 @@ export function PluginsRoute(props: PluginsRouteProps = {}) {
                 }
                 expandLabel={language === "en" ? "Expand" : "展开"}
                 collapseLabel={language === "en" ? "Collapse" : "收起"}
+                layout={viewMode}
                 actions={[
                   ...(collabBadge
                     ? [
@@ -2971,6 +2980,7 @@ export function PluginsRoute(props: PluginsRouteProps = {}) {
                         {
                           key: "update",
                           label: updateActionLabel,
+                          modalLabel: language === "en" ? "Update" : "更新",
                           ariaLabel: updateActionLabel,
                           className: "skill-card__icon-button skill-card__icon-button--update",
                           icon: <RefreshIcon isSpinning={isUpdatePending} variant="card" />,
@@ -2987,6 +2997,9 @@ export function PluginsRoute(props: PluginsRouteProps = {}) {
                       isTogglePending,
                       t,
                     ),
+                    modalLabel: plugin.enabledState === "enabled"
+                      ? language === "en" ? "Disable" : "关闭"
+                      : language === "en" ? "Enable" : "开启",
                     ariaLabel: getPluginToggleActionLabel(
                       plugin,
                       isTogglePending,
@@ -2994,7 +3007,7 @@ export function PluginsRoute(props: PluginsRouteProps = {}) {
                     ),
                     className: getPluginToggleButtonClassName(plugin),
                     icon: (
-                      <PluginPowerIcon
+                      <PowerToggleIcon
                         isSpinning={isTogglePending}
                       />
                     ),
@@ -3010,6 +3023,7 @@ export function PluginsRoute(props: PluginsRouteProps = {}) {
                   {
                     key: "open-folder",
                     label: openActionLabel,
+                    modalLabel: language === "en" ? "Open folder" : "打开目录",
                     ariaLabel: openActionLabel,
                     className: "skill-card__icon-button",
                     icon: <OpenFolderIcon />,
@@ -3021,6 +3035,7 @@ export function PluginsRoute(props: PluginsRouteProps = {}) {
                     ? {
                         key: "delete-confirm",
                         label: t("plugins.action.delete.confirm"),
+                        modalLabel: t("plugins.action.delete.confirm"),
                         ariaLabel: t("plugins.action.delete.confirmAria", { name: pluginDisplayName }),
                         className: "skill-card__delete-confirm-button",
                         tooltip: t("plugins.action.delete.confirmAria", { name: pluginDisplayName }),
@@ -3030,6 +3045,7 @@ export function PluginsRoute(props: PluginsRouteProps = {}) {
                     : {
                         key: "delete",
                         label: deleteActionLabel,
+                        modalLabel: language === "en" ? "Delete" : "删除",
                         ariaLabel: deleteActionLabel,
                         className: "skill-card__icon-button skill-card__icon-button--delete plugins-page__delete-icon-button",
                         icon: <DeleteIcon />,

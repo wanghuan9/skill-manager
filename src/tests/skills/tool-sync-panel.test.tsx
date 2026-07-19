@@ -209,3 +209,41 @@ test("updates a single tool immediately and only disables that tool while saving
     expect(screen.getByRole("button", { name: "取消启用 Codex" })).toBeEnabled();
   });
 });
+
+test("falls back to per-tool updates when the bulk command is unavailable", async () => {
+  const setSkillAllToolStatuses = vi.fn().mockRejectedValue(
+    new Error("unknown command set_skill_all_tool_statuses"),
+  );
+  const setToolSkillStatuses = vi.fn().mockResolvedValue(undefined);
+
+  mockedUseSkillWorkspace.mockReturnValue({
+    language: "zh-CN",
+    setSkillAllToolStatuses,
+    setToolSkillStatuses,
+    toggleSkillTool: vi.fn(),
+  } as unknown as ReturnType<typeof useSkillWorkspace>);
+
+  renderWithI18n(
+    <NotificationProvider>
+      <ToolSyncPanel
+        skillName="drawio-diagram"
+        tools={[
+          { name: "Cursor", statusLabel: "未启用" },
+          { name: "Codex", statusLabel: "未启用" },
+        ]}
+      />
+    </NotificationProvider>,
+  );
+
+  await userEvent.click(screen.getByRole("button", { name: "全部开启" }));
+
+  await waitFor(() => {
+    expect(setToolSkillStatuses).toHaveBeenCalledTimes(2);
+  });
+  expect(setToolSkillStatuses).toHaveBeenNthCalledWith(1, {
+    toolName: "Cursor",
+    skillNames: ["drawio-diagram"],
+    enabled: true,
+    toolNames: ["Cursor", "Codex"],
+  });
+});

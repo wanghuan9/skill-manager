@@ -93,6 +93,40 @@ test("hydrates plugins from runtime cache before the refresh request resolves", 
   fixtureSpy.mockRestore();
 });
 
+test("switches plugins to cards, opens details in a dialog, and restores the preference", async () => {
+  const firstRender = renderWithI18n(<PluginsRoute />);
+
+  await screen.findByText("Repo Scout");
+  await userEvent.click(screen.getByRole("button", { name: "卡片" }));
+
+  expect(document.querySelector(".plugins-page > .card-list")).toHaveClass("tool-card-grid");
+  expect(window.localStorage.getItem("plugins:view-mode")).toBe("grid");
+  const repoScoutCard = screen.getByRole("button", { name: "展开 Repo Scout" }).closest(".tool-list-row");
+  const eccCard = screen.getByRole("button", { name: "展开 ecc" }).closest(".tool-list-row");
+  expect(repoScoutCard?.querySelectorAll(".tool-list-row__grid-badges > .status-badge")).toHaveLength(6);
+  expect(eccCard?.querySelectorAll(".tool-list-row__grid-badges > .status-badge")).toHaveLength(1);
+  expect(repoScoutCard?.querySelector(".tool-list-row__grid-meta > span")).toHaveTextContent("SkillDock 安装");
+  expect(repoScoutCard?.querySelector(".tool-list-row__grid-meta .plugins-page__host-coverage-icon")).not.toBeNull();
+  expect(repoScoutCard?.querySelector(".skill-card__git-source-badge")).toBeNull();
+  expect(repoScoutCard?.querySelector(".tool-list-row__grid-footer")).toHaveTextContent("Git 仓库");
+  expect(repoScoutCard?.querySelector(".tool-list-row__actions > .tool-list-row__chevron")).not.toBeNull();
+
+  await userEvent.click(screen.getByRole("button", { name: "展开 Repo Scout" }));
+  const detailDialog = screen.getByRole("dialog", { name: "Repo Scout" });
+  expect(detailDialog).toBeInTheDocument();
+  expect(detailDialog.querySelectorAll(".tool-list-row__modal-badges > .status-badge")).toHaveLength(6);
+  expect(within(detailDialog).getByText("基本信息")).toBeInTheDocument();
+  expect(within(detailDialog).getByRole("button", { name: /打开.*Repo Scout/ })).toBeInTheDocument();
+
+  await userEvent.keyboard("{Escape}");
+  expect(screen.queryByRole("dialog", { name: "Repo Scout" })).not.toBeInTheDocument();
+
+  firstRender.unmount();
+  renderWithI18n(<PluginsRoute />);
+  await screen.findByText("Repo Scout");
+  expect(document.querySelector(".plugins-page > .card-list")).toHaveClass("tool-card-grid");
+});
+
 test("reconciles plugin config with a startup scan even when the plugin list is hydrated from cache", async () => {
   const fixtureSpy = vi.spyOn(skillClient, "shouldUseFixtureData").mockReturnValue(false);
   const cachedPlugins: PluginSummary[] = [

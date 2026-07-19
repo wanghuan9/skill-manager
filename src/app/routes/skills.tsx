@@ -1,6 +1,7 @@
 import { SkillListPage } from "@/features/skills/components/SkillListPage";
 import type { SkillStatusFilter } from "@/features/skills/state/skill-store";
 import type { SkillSourceId, ToolSkillManagementFilter } from "@/features/skills/utils/skill-source-view";
+import type { SkillViewMode } from "@/features/skills/utils/skill-view-preference";
 
 type SkillsRouteProps = {
   activeSourceId: SkillSourceId;
@@ -13,7 +14,7 @@ type SkillsRouteProps = {
   query: string;
   statusFilter: SkillStatusFilter;
   managementFilter: ToolSkillManagementFilter;
-  showGroupView: boolean;
+  viewMode: SkillViewMode;
 };
 
 export function SkillsRoute(props: SkillsRouteProps) {
@@ -29,7 +30,7 @@ export function SkillsRoute(props: SkillsRouteProps) {
       query={props.query}
       statusFilter={props.statusFilter}
       managementFilter={props.managementFilter}
-      showGroupView={props.showGroupView}
+      viewMode={props.viewMode}
     />
   );
 }

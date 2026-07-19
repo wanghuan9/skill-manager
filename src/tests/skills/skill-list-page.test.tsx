@@ -3,6 +3,10 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { App } from "@/app/App";
 import * as skillClient from "@/features/skills/api/skill-client";
+import {
+  installedSkillFixtures,
+  workspaceSnapshotFixture,
+} from "@/features/skills/state/skill-fixtures";
 
 beforeEach(() => {
   window.localStorage.clear();
@@ -53,6 +57,53 @@ test("switches from the managed library to a tool's real Skill directory", async
   expect(screen.queryByRole("button", { name: "更新 (1)" })).not.toBeInTheDocument();
 });
 
+test("shows a tool source as three-column cards with modal details", async () => {
+  const user = userEvent.setup();
+  const { container } = render(<App />);
+
+  await user.click(screen.getByRole("button", { name: "分组" }));
+  await user.click(screen.getByRole("tab", { name: "Codex 5" }));
+
+  expect(screen.getByRole("button", { name: "列表" })).toHaveAttribute("aria-pressed", "true");
+  expect(screen.queryByRole("button", { name: "分组" })).not.toBeInTheDocument();
+
+  await user.click(screen.getByRole("button", { name: "卡片" }));
+
+  const cardGrid = container.querySelector(".card-list.skill-source-card-grid");
+  const cards = Array.from(container.querySelectorAll(".skill-source-card--grid"));
+  const initialSkillNames = cards.map((card) => card.getAttribute("aria-label"));
+  expect(cardGrid).toBeInTheDocument();
+  expect(cards).toHaveLength(5);
+  expect(screen.getByRole("button", { name: "卡片" })).toHaveAttribute("aria-pressed", "true");
+
+  const technicalDesignCard = screen.getByRole("article", { name: "technical-design" });
+  expect(within(technicalDesignCard).getByText("未托管")).toHaveClass("tone-neutral");
+  const entryKindBadge = within(technicalDesignCard).getByText("符号链接");
+  expect(entryKindBadge).toHaveClass("skill-source-card__entry-kind");
+  expect(entryKindBadge.parentElement).toHaveClass("skill-card__list-actions");
+  expect(within(technicalDesignCard).getByRole("button", { name: "导入 SkillDock" })).toBeInTheDocument();
+  expect(within(technicalDesignCard).getByRole("button", { name: "查看 technical-design 文件" })).toBeInTheDocument();
+  expect(within(technicalDesignCard).getByRole("button", { name: "删除 technical-design" })).toBeInTheDocument();
+
+  await user.click(within(technicalDesignCard).getByRole("button", { name: "展开 technical-design" }));
+
+  const detailDialog = screen.getByRole("dialog", { name: "technical-design 详情" });
+  expect(detailDialog).toHaveClass("skill-card-detail-modal--source");
+  const toolDescriptions = within(detailDialog).getAllByText("根据产品文档和需求输入整理技术设计骨架。");
+  expect(toolDescriptions).toHaveLength(1);
+  expect(toolDescriptions[0].closest("dd")).toBeInTheDocument();
+  expect(within(detailDialog).getByRole("button", { name: "导入 SkillDock" })).toBeInTheDocument();
+  expect(within(detailDialog).getByRole("button", { name: "查看 technical-design 文件" })).toBeInTheDocument();
+  expect(within(detailDialog).getByRole("button", { name: "打开目录" })).toBeInTheDocument();
+  expect(within(detailDialog).getByRole("button", { name: "关闭 technical-design 详情" })).toBeInTheDocument();
+  expect(Array.from(container.querySelectorAll(".skill-source-card--grid")).map(
+    (card) => card.getAttribute("aria-label"),
+  )).toEqual(initialSkillNames);
+
+  await user.click(within(detailDialog).getByRole("button", { name: "关闭 technical-design 详情" }));
+  expect(screen.queryByRole("dialog", { name: "technical-design 详情" })).not.toBeInTheDocument();
+});
+
 test("expands one tool Skill detail at a time with actual local metadata", async () => {
   const user = userEvent.setup();
   const openFinderSpy = vi.spyOn(skillClient, "openPathInFinder").mockResolvedValue(undefined);
@@ -99,7 +150,7 @@ test("opens and focuses the corresponding managed Skill from a tool directory", 
   const user = userEvent.setup();
   render(<App />);
 
-  await user.click(screen.getByRole("button", { name: "平铺" }));
+  await user.click(screen.getByRole("button", { name: "分组" }));
   await user.selectOptions(screen.getByLabelText("按状态筛选技能"), "update-available");
   await user.click(screen.getByRole("tab", { name: "Codex 5" }));
   await user.type(screen.getByPlaceholderText("搜索技能名称、描述、路径..."), "skill-publisher");
@@ -176,14 +227,103 @@ test("imports an unmanaged tool Skill through the existing local import flow", a
   importSpy.mockRestore();
 });
 
-test("uses flat view by default when installed skill count is at or below threshold", () => {
+test("uses list view by default when installed skill count is at or below threshold", () => {
   render(<App />);
 
-  expect(screen.getByRole("button", { name: "平铺" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "列表" })).toHaveAttribute("aria-pressed", "true");
   expect(screen.getByRole("heading", { name: "skill-publisher" })).toBeInTheDocument();
   expect(screen.getByRole("heading", { name: "drawio-diagram" })).toBeInTheDocument();
   expect(screen.getByRole("heading", { name: "excalidraw-diagram" })).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: /来源分组/ })).not.toBeInTheDocument();
+});
+
+test("places disabled skills after enabled skills in list and card views", async () => {
+  const user = userEvent.setup();
+  const disabledSkill = {
+    ...installedSkillFixtures[0],
+    name: "disabled-newer-skill",
+    localUpdatedAt: "2026/7/18 12:00:00",
+    tools: [{ name: "Codex", statusLabel: "未启用" }],
+  };
+  const enabledSkill = {
+    ...installedSkillFixtures[1],
+    name: "enabled-older-skill",
+    localUpdatedAt: "2026/7/17 12:00:00",
+    tools: [{ name: "Codex", statusLabel: "已同步" }],
+  };
+  workspaceSnapshotFixture.installedSkills = [disabledSkill, enabledSkill];
+  const startupSkillsSpy = vi.spyOn(skillClient, "fetchStartupInstalledSkills").mockResolvedValue([
+    disabledSkill,
+    enabledSkill,
+  ]);
+
+  render(<App />);
+
+  expect(screen.getAllByRole("article").map((article) => article.getAttribute("aria-label"))).toEqual([
+    "enabled-older-skill",
+    "disabled-newer-skill",
+  ]);
+
+  await user.click(screen.getByRole("button", { name: "卡片" }));
+
+  expect(screen.getAllByRole("article").map((article) => article.getAttribute("aria-label"))).toEqual([
+    "enabled-older-skill",
+    "disabled-newer-skill",
+  ]);
+  startupSkillsSpy.mockRestore();
+});
+
+test("opens card details in a modal without changing the card grid order", async () => {
+  const user = userEvent.setup();
+  const { container } = render(<App />);
+
+  await user.click(screen.getByRole("button", { name: "卡片" }));
+
+  expect(screen.getByRole("button", { name: "卡片" })).toHaveAttribute("aria-pressed", "true");
+  expect(container.querySelector(".card-list.skill-card-grid")).toBeInTheDocument();
+  expect(container.querySelectorAll(".skill-card-grid__row")).toHaveLength(2);
+  expect(container.querySelectorAll(".skill-card--grid")).toHaveLength(4);
+
+  const firstRow = container.querySelector(".skill-card-grid__row");
+  const initialSkillNames = Array.from(firstRow?.children ?? []).map((element) => element.getAttribute("aria-label"));
+
+  await user.click(screen.getByRole("button", { name: "展开 excalidraw-diagram" }));
+
+  const expandedCard = screen.getByRole("article", { name: "excalidraw-diagram" });
+  expect(expandedCard).toHaveClass("skill-card--grid", "is-expanded");
+  expect(within(expandedCard).queryByText("本地更新时间")).not.toBeInTheDocument();
+
+  const detailDialog = screen.getByRole("dialog", { name: "excalidraw-diagram 详情" });
+  const managedDescriptions = within(detailDialog).getAllByText("用于生成 Excalidraw 风格的图表和草图。");
+  expect(managedDescriptions).toHaveLength(1);
+  expect(managedDescriptions[0].closest("dd")).toBeInTheDocument();
+  expect(within(detailDialog).getByText("本地更新时间")).toBeInTheDocument();
+  expect(within(detailDialog).getByRole("button", { name: "更新 excalidraw-diagram" })).toBeInTheDocument();
+  expect(within(detailDialog).getByRole("button", { name: "查看 excalidraw-diagram 文件" })).toBeInTheDocument();
+  expect(within(detailDialog).getByRole("button", { name: "打开 excalidraw-diagram 目录" })).toBeInTheDocument();
+  expect(within(detailDialog).getByRole("button", { name: "关闭 excalidraw-diagram 详情" })).toBeInTheDocument();
+
+  const currentSkillNames = Array.from(firstRow?.children ?? []).map((element) => element.getAttribute("aria-label"));
+  expect(currentSkillNames).toEqual(initialSkillNames);
+
+  await user.click(within(detailDialog).getByRole("button", { name: "查看 excalidraw-diagram 文件" }));
+  expect(screen.queryByRole("dialog", { name: "excalidraw-diagram 详情" })).not.toBeInTheDocument();
+  const fileDialog = await screen.findByRole("dialog", { name: "excalidraw-diagram" });
+  await user.click(within(fileDialog).getByRole("button", { name: "关闭" }));
+  expect(screen.getByRole("dialog", { name: "excalidraw-diagram 详情" })).toBeInTheDocument();
+
+  await user.keyboard("{Escape}");
+  expect(screen.queryByRole("dialog", { name: "excalidraw-diagram 详情" })).not.toBeInTheDocument();
+  expect(expandedCard).not.toHaveClass("is-expanded");
+});
+
+test("shows delete directly in card view", async () => {
+  render(<App />);
+
+  await userEvent.click(screen.getByRole("button", { name: "卡片" }));
+
+  expect(screen.getByRole("button", { name: "删除 drawio-diagram" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "drawio-diagram 更多操作" })).not.toBeInTheDocument();
 });
 
 test("shows the grouped skill count beside the group title", async () => {
@@ -191,7 +331,7 @@ test("shows the grouped skill count beside the group title", async () => {
 
   render(<App />);
 
-  await user.click(screen.getByRole("button", { name: "平铺" }));
+  await user.click(screen.getByRole("button", { name: "分组" }));
 
   const teamGroupHeader = screen.getByRole("button", { name: "展开来源分组 team-skills" });
   const count = within(teamGroupHeader).getByText("2 个技能");
@@ -204,7 +344,7 @@ test("filters grouped skills by selected status", async () => {
 
   render(<App />);
 
-  await user.click(screen.getByRole("button", { name: "平铺" }));
+  await user.click(screen.getByRole("button", { name: "分组" }));
   await user.selectOptions(screen.getByLabelText("按状态筛选技能"), "update-available");
 
   expect(screen.getByRole("button", { name: "展开来源分组 best-skills" })).toBeInTheDocument();
@@ -215,7 +355,7 @@ test("remembers expanded groups across app reopen", async () => {
   const user = userEvent.setup();
   const firstRender = render(<App />);
 
-  await user.click(screen.getByRole("button", { name: "平铺" }));
+  await user.click(screen.getByRole("button", { name: "分组" }));
   await user.click(screen.getByRole("button", { name: "展开来源分组 team-skills" }));
 
   expect(screen.getByRole("heading", { name: "skill-publisher" })).toBeInTheDocument();
@@ -236,7 +376,7 @@ test("remembers the user's last grouped view selection", async () => {
   const user = userEvent.setup();
   const firstRender = render(<App />);
 
-  await user.click(screen.getByRole("button", { name: "平铺" }));
+  await user.click(screen.getByRole("button", { name: "分组" }));
 
   expect(screen.getByRole("button", { name: "分组" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "展开来源分组 team-skills" })).toBeInTheDocument();
