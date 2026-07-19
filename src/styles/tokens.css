@@ -11764,3 +11764,132 @@ button.settings-form-item:disabled {
   background: rgba(255, 194, 26, 0.14);
   color: var(--accent-strong);
 }
+
+:root[data-theme="dark"] .switch-button.is-enabled {
+  border-color: rgba(82, 216, 137, 0.68);
+  background: #3cbc74;
+  box-shadow: 0 0 0 1px rgba(82, 216, 137, 0.08) inset;
+}
+
+:root[data-theme="dark"] .tool-manage-dialog .switch-button.is-enabled {
+  border-color: rgba(82, 216, 137, 0.7);
+}
+
+:root[data-theme="dark"] .tool-manage-dialog__item.is-enabled {
+  border-color: rgba(82, 216, 137, 0.22);
+  background: #213028;
+}
+
+:root[data-theme="dark"] .plugins-page__toggle-icon-button.is-disabled {
+  border-color: #494949;
+  background: #2d2d2d;
+  color: #aaaaaa;
+}
+
+:root[data-theme="dark"] .plugins-page__toggle-icon-button.is-disabled:hover:not(:disabled) {
+  border-color: rgba(82, 216, 137, 0.4);
+  background: rgba(82, 216, 137, 0.11);
+  color: #8ee3b1;
+}
+
+:root[data-theme="dark"] .plugins-page__toggle-icon-button.is-enabled {
+  border-color: rgba(82, 216, 137, 0.38);
+  background: rgba(82, 216, 137, 0.13);
+  color: #8ee3b1;
+  box-shadow: 0 1px 0 rgba(142, 227, 177, 0.05) inset;
+}
+
+:root[data-theme="dark"] .plugins-page__toggle-icon-button.is-enabled:hover:not(:disabled) {
+  border-color: rgba(112, 232, 159, 0.58);
+  background: rgba(82, 216, 137, 0.19);
+  color: #a6edc2;
+}
+
+:root[data-theme="dark"] .plugins-page__toggle-icon-button.is-partial {
+  border-color: rgba(255, 200, 92, 0.36);
+  background: rgba(255, 200, 92, 0.12);
+  color: var(--warning);
+}
+
+:root[data-theme="dark"] .plugins-page__toggle-icon-button.is-partial:hover:not(:disabled) {
+  border-color: rgba(255, 200, 92, 0.54);
+  background: rgba(255, 200, 92, 0.18);
+  color: #ffdb8f;
+}
+
+:root[data-theme="dark"] .plugins-page__toggle-icon-button.is-unknown {
+  border-color: #464646;
+  background: #292929;
+  color: #8f8f8f;
+}
+
+:root[data-theme="dark"] .skill-card__enabled-toggle:not(.is-empty),
+:root[data-theme="dark"] .skill-card__grid-enabled-badge.tone-info {
+  background: rgba(82, 216, 137, 0.13);
+  color: #8ee3b1;
+}
+
+:root[data-theme="dark"] .skill-card__enabled-toggle:hover:not(:disabled),
+:root[data-theme="dark"] .skill-card__enabled-toggle:focus-visible {
+  background: rgba(82, 216, 137, 0.19);
+  color: #a6edc2;
+}
+
+:root[data-theme="dark"] .skill-card__enabled-toggle.is-empty {
+  background: rgba(255, 255, 255, 0.07);
+  color: #9a9a9a;
+}
+
+:root[data-theme="dark"] .skill-card__icon-button.skill-card__icon-button--update,
+:root[data-theme="dark"] .tool-list-row--grid .tool-list-row__actions .skill-card__icon-button.skill-card__icon-button--update {
+  border-color: rgba(255, 194, 26, 0.24);
+  background: rgba(255, 194, 26, 0.09);
+  color: var(--accent);
+}
+
+:root[data-theme="dark"] .skill-card__icon-button.skill-card__icon-button--update:hover:not(:disabled),
+:root[data-theme="dark"] .tool-list-row--grid .tool-list-row__actions .skill-card__icon-button.skill-card__icon-button--update:hover:not(:disabled) {
+  border-color: rgba(255, 194, 26, 0.42);
+  background: rgba(255, 194, 26, 0.15);
+  color: var(--accent-strong);
+}
+
+:root[data-theme="dark"] .skill-card__delete-confirm-button {
+  border-color: #424242;
+  background: #2a2a2a;
+  color: #b5b5b5;
+}
+
+:root[data-theme="dark"] .skill-card__delete-confirm-button:hover:not(:disabled) {
+  border-color: #555555;
+  background: #333333;
+  color: #e2e2e2;
+}
+
+:root[data-theme="dark"] .semantic-action--enable,
+:root[data-theme="dark"] .skill-card-detail-modal__action.is-success {
+  border-color: rgba(82, 216, 137, 0.32);
+  background: rgba(82, 216, 137, 0.1);
+  color: #8ee3b1;
+}
+
+:root[data-theme="dark"] .semantic-action--enable:hover:not(:disabled),
+:root[data-theme="dark"] .skill-card-detail-modal__action.is-success:hover:not(:disabled) {
+  border-color: rgba(82, 216, 137, 0.5);
+  background: rgba(82, 216, 137, 0.16);
+  color: #a6edc2;
+}
+
+:root[data-theme="dark"] .semantic-action--disable,
+:root[data-theme="dark"] .skill-card-detail-modal__action.is-warning {
+  border-color: rgba(255, 177, 92, 0.3);
+  background: rgba(255, 177, 92, 0.095);
+  color: #ffc477;
+}
+
+:root[data-theme="dark"] .semantic-action--disable:hover:not(:disabled),
+:root[data-theme="dark"] .skill-card-detail-modal__action.is-warning:hover:not(:disabled) {
+  border-color: rgba(255, 177, 92, 0.5);
+  background: rgba(255, 177, 92, 0.16);
+  color: #ffd49a;
+}

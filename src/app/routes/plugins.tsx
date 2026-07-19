@@ -2983,6 +2983,7 @@ export function PluginsRoute(props: PluginsRouteProps = {}) {
                           modalLabel: language === "en" ? "Update" : "更新",
                           ariaLabel: updateActionLabel,
                           className: "skill-card__icon-button skill-card__icon-button--update",
+                          modalClassName: "is-primary",
                           icon: <RefreshIcon isSpinning={isUpdatePending} variant="card" />,
                           tooltip: updateActionLabel,
                           onClick: () => void handlePluginUpdate(plugin),
@@ -3006,6 +3007,7 @@ export function PluginsRoute(props: PluginsRouteProps = {}) {
                       t,
                     ),
                     className: getPluginToggleButtonClassName(plugin),
+                    modalClassName: plugin.enabledState === "enabled" ? "is-warning" : "is-success",
                     icon: (
                       <PowerToggleIcon
                         isSpinning={isTogglePending}

@@ -646,7 +646,7 @@ export function ToolManageDialog({ isOpen, onClose, tool }: ToolManageDialogProp
           </label>
           <div className="tool-manage-dialog__bulk-actions">
             <button
-              className="secondary-button secondary-button--compact"
+              className="secondary-button secondary-button--compact semantic-action semantic-action--enable"
               type="button"
               onClick={() => void handleToggleAllOn()}
               disabled={
@@ -660,7 +660,7 @@ export function ToolManageDialog({ isOpen, onClose, tool }: ToolManageDialogProp
               {t("tools.dialog.enableAll")}
             </button>
             <button
-              className="secondary-button secondary-button--compact"
+              className="secondary-button secondary-button--compact semantic-action semantic-action--disable"
               type="button"
               onClick={() => void handleToggleAllOff()}
               disabled={
