@@ -35,7 +35,8 @@ test("switches from the managed library to a tool's real Skill directory", async
   expect(screen.getByRole("heading", { name: "Codex", level: 1 })).toBeInTheDocument();
   expect(screen.getByText("~/.codex/skills · 已托管 3 · 未托管 1 · 冲突 1")).toBeInTheDocument();
   const managementFilter = screen.getByLabelText("按托管状态筛选 Skill");
-  expect(managementFilter).toHaveValue("all");
+  expect(managementFilter).toHaveAttribute("data-value", "all");
+  await user.click(managementFilter);
   expect(screen.getByRole("option", { name: "全部 (5)" })).toBeInTheDocument();
   expect(screen.getByRole("option", { name: "已托管 (3)" })).toBeInTheDocument();
   expect(screen.getByRole("option", { name: "未托管 (1)" })).toBeInTheDocument();
@@ -151,7 +152,8 @@ test("opens and focuses the corresponding managed Skill from a tool directory", 
   render(<App />);
 
   await user.click(screen.getByRole("button", { name: "分组" }));
-  await user.selectOptions(screen.getByLabelText("按状态筛选技能"), "update-available");
+  await user.click(screen.getByLabelText("按状态筛选技能"));
+  await user.click(screen.getByRole("option", { name: "可更新 (1)" }));
   await user.click(screen.getByRole("tab", { name: "Codex 5" }));
   await user.type(screen.getByPlaceholderText("搜索技能名称、描述、路径..."), "skill-publisher");
 
@@ -160,7 +162,7 @@ test("opens and focuses the corresponding managed Skill from a tool directory", 
   await user.click(within(sourceCard).getByRole("button", { name: "查看托管版本" }));
 
   expect(screen.getByRole("tab", { name: "已托管 4" })).toHaveAttribute("aria-selected", "true");
-  expect(screen.getByLabelText("按状态筛选技能")).toHaveValue("all");
+  expect(screen.getByLabelText("按状态筛选技能")).toHaveAttribute("data-value", "all");
   expect(screen.getByPlaceholderText("搜索技能名称、描述、来源...")).toHaveValue("");
   expect(screen.getByRole("button", { name: "收起来源分组 team-skills" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "收起 skill-publisher" })).toHaveAttribute("aria-expanded", "true");
@@ -217,7 +219,8 @@ test("imports an unmanaged tool Skill through the existing local import flow", a
   render(<App />);
 
   await user.click(screen.getByRole("tab", { name: "Codex 5" }));
-  await user.selectOptions(screen.getByLabelText("按托管状态筛选 Skill"), "unmanaged");
+  await user.click(screen.getByLabelText("按托管状态筛选 Skill"));
+  await user.click(screen.getByRole("option", { name: "未托管 (1)" }));
   await user.click(screen.getByRole("button", { name: "导入 SkillDock" }));
 
   await waitFor(() => {
@@ -345,7 +348,8 @@ test("filters grouped skills by selected status", async () => {
   render(<App />);
 
   await user.click(screen.getByRole("button", { name: "分组" }));
-  await user.selectOptions(screen.getByLabelText("按状态筛选技能"), "update-available");
+  await user.click(screen.getByLabelText("按状态筛选技能"));
+  await user.click(screen.getByRole("option", { name: "可更新 (1)" }));
 
   expect(screen.getByRole("button", { name: "展开来源分组 best-skills" })).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "展开来源分组 team-skills" })).not.toBeInTheDocument();

@@ -71,7 +71,10 @@ test("discovers repo skills with the full branch from GitLab tree urls", async (
   await userEvent.type(screen.getByRole("textbox", { name: "Git 仓库地址" }), sourceUrl);
 
   await waitFor(() => {
-    expect(screen.getByRole("combobox", { name: "Git 分支" })).toHaveValue("feature/FEATURE-123");
+    expect(screen.getByRole("combobox", { name: "Git 分支" })).toHaveAttribute(
+      "data-value",
+      "feature/FEATURE-123",
+    );
   });
   await userEvent.click(screen.getByRole("button", { name: "识别仓库技能" }));
 
@@ -168,7 +171,7 @@ test("probes plugin sources with Codex-style inputs and host selection", async (
     sourceUrl,
   );
   await waitFor(() => {
-    expect(screen.getByRole("combobox", { name: "Git 分支" })).toHaveValue("master");
+    expect(screen.getByRole("combobox", { name: "Git 分支" })).toHaveAttribute("data-value", "master");
   });
   await userEvent.click(screen.getByRole("button", { name: "识别插件" }));
 
@@ -276,7 +279,7 @@ test("marks already installed plugin hosts and still allows installing remaining
   await userEvent.click(screen.getByRole("tab", { name: "Plugin" }));
   await userEvent.type(screen.getByRole("textbox", { name: "Git 仓库地址" }), sourceUrl);
   await waitFor(() => {
-    expect(screen.getByRole("combobox", { name: "Git 分支" })).toHaveValue("master");
+    expect(screen.getByRole("combobox", { name: "Git 分支" })).toHaveAttribute("data-value", "master");
   });
   await userEvent.click(screen.getByRole("button", { name: "识别插件" }));
 
@@ -383,7 +386,7 @@ test("disables plugin install when every compatible host already has the plugin"
   await userEvent.click(screen.getByRole("tab", { name: "Plugin" }));
   await userEvent.type(screen.getByRole("textbox", { name: "Git 仓库地址" }), sourceUrl);
   await waitFor(() => {
-    expect(screen.getByRole("combobox", { name: "Git 分支" })).toHaveValue("master");
+    expect(screen.getByRole("combobox", { name: "Git 分支" })).toHaveAttribute("data-value", "master");
   });
   await userEvent.click(screen.getByRole("button", { name: "识别插件" }));
 
@@ -438,7 +441,7 @@ test("probes GitLab tree plugin sources with sparse paths", async () => {
   await userEvent.type(screen.getByRole("textbox", { name: "Git 仓库地址" }), sourceUrl);
 
   await waitFor(() => {
-    expect(screen.getByRole("combobox", { name: "Git 分支" })).toHaveValue("master");
+    expect(screen.getByRole("combobox", { name: "Git 分支" })).toHaveAttribute("data-value", "master");
   });
   await userEvent.click(screen.getByRole("button", { name: "识别插件" }));
 
@@ -530,7 +533,7 @@ test("treats manifest name as the stable identity when plugin display names diff
   await userEvent.type(screen.getByRole("textbox", { name: "Git 仓库地址" }), sourceUrl);
 
   await waitFor(() => {
-    expect(screen.getByRole("combobox", { name: "Git 分支" })).toHaveValue("main");
+    expect(screen.getByRole("combobox", { name: "Git 分支" })).toHaveAttribute("data-value", "main");
   });
   await userEvent.click(screen.getByRole("button", { name: "识别插件" }));
 
@@ -580,7 +583,7 @@ test("keeps plugin probes visible and stops blocking on workspace refresh after 
   await userEvent.click(screen.getByRole("tab", { name: "Plugin" }));
   await userEvent.type(screen.getByRole("textbox", { name: "Git 仓库地址" }), sourceUrl);
   await waitFor(() => {
-    expect(screen.getByRole("combobox", { name: "Git 分支" })).toHaveValue("main");
+    expect(screen.getByRole("combobox", { name: "Git 分支" })).toHaveAttribute("data-value", "main");
   });
   await userEvent.click(screen.getByRole("button", { name: "识别插件" }));
   await screen.findByText("Shopify");
@@ -637,7 +640,7 @@ test("renders plugin probe title from manifest name instead of cache directory n
     "https://github.com/raisely/cursor-plugin.git",
   );
   await waitFor(() => {
-    expect(screen.getByRole("combobox", { name: "Git 分支" })).toHaveValue("main");
+    expect(screen.getByRole("combobox", { name: "Git 分支" })).toHaveAttribute("data-value", "main");
   });
   await userEvent.click(screen.getByRole("button", { name: "识别插件" }));
 
@@ -718,7 +721,7 @@ test("probes repository roots and lists every plugin candidate", async () => {
   await userEvent.type(screen.getByRole("textbox", { name: "Git 仓库地址" }), sourceUrl);
 
   await waitFor(() => {
-    expect(screen.getByRole("combobox", { name: "Git 分支" })).toHaveValue("master");
+    expect(screen.getByRole("combobox", { name: "Git 分支" })).toHaveAttribute("data-value", "master");
   });
   await userEvent.click(screen.getByRole("button", { name: "识别插件" }));
 
@@ -933,7 +936,7 @@ test("keeps the plugin install result page open after installing selected hosts"
   await userEvent.type(screen.getByRole("textbox", { name: "Git 仓库地址" }), sourceUrl);
 
   await waitFor(() => {
-    expect(screen.getByRole("combobox", { name: "Git 分支" })).toHaveValue("master");
+    expect(screen.getByRole("combobox", { name: "Git 分支" })).toHaveAttribute("data-value", "master");
   });
   await userEvent.click(screen.getByRole("button", { name: "识别插件" }));
 
@@ -1035,7 +1038,7 @@ test("updates the shared plugin cache right after plugin install completes", asy
   await userEvent.click(screen.getByRole("tab", { name: "Plugin" }));
   await userEvent.type(screen.getByRole("textbox", { name: "Git 仓库地址" }), sourceUrl);
   await waitFor(() => {
-    expect(screen.getByRole("combobox", { name: "Git 分支" })).toHaveValue("master");
+    expect(screen.getByRole("combobox", { name: "Git 分支" })).toHaveAttribute("data-value", "master");
   });
   await userEvent.click(screen.getByRole("button", { name: "识别插件" }));
   await screen.findByRole("button", { name: "选择插件 example-plugin" });
@@ -1147,7 +1150,7 @@ test("shows newly installed plugin before the follow-up plugin refresh resolves"
   await userEvent.click(screen.getByRole("tab", { name: "Plugin" }));
   await userEvent.type(screen.getByRole("textbox", { name: "Git 仓库地址" }), sourceUrl);
   await waitFor(() => {
-    expect(screen.getByRole("combobox", { name: "Git 分支" })).toHaveValue("main");
+    expect(screen.getByRole("combobox", { name: "Git 分支" })).toHaveAttribute("data-value", "main");
   });
   await userEvent.click(screen.getByRole("button", { name: "识别插件" }));
   await screen.findByRole("button", { name: "选择插件 Raisely" });

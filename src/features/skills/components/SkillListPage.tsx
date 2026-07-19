@@ -14,6 +14,7 @@ import {
 } from "@/features/skills/utils/skill-view-preference";
 import { getMonogramLabel } from "@/features/skills/utils/monogram";
 import { ToolbarGoInstallButton } from "@/app/components/ToolbarGoInstallButton";
+import { AppSelect } from "@/app/components/AppSelect";
 import type { SkillStatusFilter, SkillSummary } from "@/features/skills/state/skill-store";
 import {
   MANAGED_SKILL_SOURCE_ID,
@@ -277,37 +278,39 @@ export function SkillListToolbar(props: SkillToolbarProps) {
           </button>
         ) : null}
       </div>
-      <label className="skill-status-filter">
+      <div className="skill-status-filter">
         <span className="sr-only">{t(isManagedSource ? "skills.filter.aria" : "skills.source.filter.aria")}</span>
         <span className="skill-status-filter__icon" aria-hidden="true">
           <FilterIcon />
         </span>
         {isManagedSource ? (
-          <select
+          <AppSelect
             value={statusFilter}
-            onChange={(event) => onStatusFilterChange(event.target.value as SkillStatusFilter)}
-            aria-label={t("skills.filter.aria")}
-          >
-            {skillStatusFilterOptions.map((option) => (
-              <option key={option.value} value={option.value}>
-                {`${option.label} (${statusFilterCounts[option.value]})`}
-              </option>
-            ))}
-          </select>
+            options={skillStatusFilterOptions.map((option) => ({
+              value: option.value,
+              label: `${option.label} (${statusFilterCounts[option.value]})`,
+            }))}
+            onChange={onStatusFilterChange}
+            ariaLabel={t("skills.filter.aria")}
+            className="skill-status-filter__select"
+            menuClassName="skill-status-filter__popover"
+            minMenuWidth={96}
+          />
         ) : (
-          <select
+          <AppSelect
             value={managementFilter}
-            onChange={(event) => onManagementFilterChange(event.target.value as ToolSkillManagementFilter)}
-            aria-label={t("skills.source.filter.aria")}
-          >
-            {managementFilterOptions.map((option) => (
-              <option key={option.value} value={option.value}>
-                {`${option.label} (${managementFilterCounts[option.value]})`}
-              </option>
-            ))}
-          </select>
+            options={managementFilterOptions.map((option) => ({
+              value: option.value,
+              label: `${option.label} (${managementFilterCounts[option.value]})`,
+            }))}
+            onChange={onManagementFilterChange}
+            ariaLabel={t("skills.source.filter.aria")}
+            className="skill-status-filter__select"
+            menuClassName="skill-status-filter__popover"
+            minMenuWidth={96}
+          />
         )}
-      </label>
+      </div>
       <button
         className={`secondary-button secondary-button--compact skills-toolbar-button skills-toolbar-button--refresh${isWorkspaceRefreshing ? " is-loading" : ""}`}
         type="button"
