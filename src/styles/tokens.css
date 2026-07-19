@@ -7455,9 +7455,13 @@ button.settings-form-item:disabled {
   max-width: 100%;
 }
 
+.settings-form-item__control--theme {
+  width: 320px;
+}
+
 .settings-theme-picker {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 4px;
   padding: 4px;
   border: 1px solid var(--line);
@@ -7478,6 +7482,7 @@ button.settings-form-item:disabled {
   color: var(--muted);
   font-size: 0.78rem;
   font-weight: 500;
+  white-space: nowrap;
   cursor: pointer;
   transition:
     background-color var(--motion-fast) var(--ease-standard),

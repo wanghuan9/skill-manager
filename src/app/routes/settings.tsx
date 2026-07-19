@@ -87,6 +87,15 @@ function TrashIcon() {
 }
 
 function ThemeIcon({ theme }: { theme: AppTheme }) {
+  if (theme === "system") {
+    return (
+      <svg viewBox="0 0 18 18" fill="none" aria-hidden="true">
+        <rect x="2.5" y="3" width="13" height="9" rx="1.5" stroke="currentColor" strokeWidth="1.45" />
+        <path d="M6.5 15h5M9 12v3" stroke="currentColor" strokeWidth="1.45" strokeLinecap="round" />
+      </svg>
+    );
+  }
+
   if (theme === "dark") {
     return (
       <svg viewBox="0 0 18 18" fill="none" aria-hidden="true">
@@ -395,7 +404,7 @@ export function SettingsRoute() {
       label: t("settings.theme.label"),
       description: t("settings.theme.description"),
       value: (
-        <div className="settings-form-item__control">
+        <div className="settings-form-item__control settings-form-item__control--theme">
           <div className="settings-theme-picker" role="group" aria-label={t("settings.theme.label")}>
             <button
               className={`settings-theme-option${appSettings.theme === "light" ? " is-selected" : ""}`}
@@ -414,6 +423,15 @@ export function SettingsRoute() {
             >
               <ThemeIcon theme="dark" />
               <span>{t("settings.theme.option.dark")}</span>
+            </button>
+            <button
+              className={`settings-theme-option${appSettings.theme === "system" ? " is-selected" : ""}`}
+              type="button"
+              aria-pressed={appSettings.theme === "system"}
+              onClick={() => void setTheme("system")}
+            >
+              <ThemeIcon theme="system" />
+              <span>{t("settings.theme.option.system")}</span>
             </button>
           </div>
         </div>

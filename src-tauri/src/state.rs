@@ -29,6 +29,7 @@ const APP_LANGUAGE_SOURCE_AUTO: &str = "auto";
 const APP_LANGUAGE_SOURCE_USER: &str = "user";
 const APP_THEME_LIGHT: &str = "light";
 const APP_THEME_DARK: &str = "dark";
+const APP_THEME_SYSTEM: &str = "system";
 
 #[derive(Clone, Debug, Deserialize, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -208,8 +209,9 @@ fn normalize_app_language_source(value: &str) -> &'static str {
 
 fn normalize_app_theme(value: &str) -> &'static str {
     match value.trim() {
+        APP_THEME_LIGHT => APP_THEME_LIGHT,
         APP_THEME_DARK => APP_THEME_DARK,
-        _ => APP_THEME_LIGHT,
+        _ => APP_THEME_SYSTEM,
     }
 }
 
@@ -714,11 +716,11 @@ mod tests {
     }
 
     #[test]
-    fn normalizes_app_theme_with_light_fallback() {
+    fn normalizes_app_theme_with_system_fallback() {
         assert_eq!(normalize_app_theme("light"), "light");
         assert_eq!(normalize_app_theme("dark"), "dark");
-        assert_eq!(normalize_app_theme("system"), "light");
-        assert_eq!(normalize_app_theme(""), "light");
+        assert_eq!(normalize_app_theme("system"), "system");
+        assert_eq!(normalize_app_theme(""), "system");
     }
 
     #[test]

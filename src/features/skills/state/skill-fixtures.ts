@@ -818,7 +818,7 @@ export const appSettingsFixture: AppSettings = {
   skillSourceViewStyle: "flat",
   language: "zh-CN",
   languageSource: "user",
-  theme: "light",
+  theme: "system",
 };
 
 export const pushTargetFixtures: Record<string, PushTargetSnapshot> = {
