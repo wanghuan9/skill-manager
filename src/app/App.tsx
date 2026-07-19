@@ -25,6 +25,7 @@ import { useFailureReporter } from "@/app/failure-feedback";
 import { FailureTracker } from "@/app/failure-tracker";
 import { waitForNextPaint } from "@/app/utils/wait-for-next-paint";
 import { AppUpdateAutoPrompt } from "@/features/app-update/AppUpdateAutoPrompt";
+import { AppTooltip } from "@/app/components/AppTooltip";
 import {
   SkillWorkspaceProvider,
   useSkillWorkspace,
@@ -833,7 +834,7 @@ function AppContent() {
         ) : null}
         <header className="page-header">
           {activeRoute === "skills" ? (
-            <div className="page-header--split">
+            <div key={`skills-${activeSkillsSection}`} className="page-header--split">
               <div className="page-header__row">
                 <h1>
                   {activeSkillsSection === "mcp"
@@ -870,7 +871,7 @@ function AppContent() {
               ) : null}
             </div>
           ) : activeRoute === "tools" ? (
-            <div className="page-header--split">
+            <div key="tools" className="page-header--split">
               <div className="page-header__row">
                 <h1>{tx(language, activeDefinition.labelKey)}</h1>
                 <button
@@ -928,7 +929,7 @@ function AppContent() {
               <p>{activeDescription}</p>
             </div>
           ) : activeRoute === "install" ? (
-            <div className="page-header--split">
+            <div key="install" className="page-header--split">
               <div className="page-header__row page-header__row--install">
                 <h1>{tx(language, activeDefinition.labelKey)}</h1>
                 <div
@@ -939,7 +940,7 @@ function AppContent() {
               <p>{activeDescription}</p>
             </div>
           ) : activeRoute === "plugins" ? (
-            <div className="page-header--split">
+            <div key="plugins" className="page-header--split">
               <div className="page-header__row">
                 <h1>{activePluginHostName ?? tx(language, activeDefinition.labelKey)}</h1>
                 <div
@@ -954,7 +955,7 @@ function AppContent() {
               />
             </div>
           ) : (
-            <div className="page-header--split">
+            <div key={activeRoute} className="page-header--split">
               <h1>{tx(language, activeDefinition.labelKey)}</h1>
               <p>{activeDescription}</p>
             </div>
@@ -1008,6 +1009,7 @@ export function App() {
           <FailureTracker>
             <AppUpdateAutoPrompt />
             <AppContent />
+            <AppTooltip />
           </FailureTracker>
         </NotificationProvider>
       </AppI18nProvider>

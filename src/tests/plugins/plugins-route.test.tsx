@@ -1505,9 +1505,16 @@ test("prompts before updating a hash-based plugin with local modifications", asy
   await screen.findByText("Repo Scout");
   await userEvent.click(screen.getByRole("button", { name: "更新 Repo Scout 插件" }));
 
-  expect(screen.getByRole("dialog")).toBeInTheDocument();
+  const confirmDialog = screen.getByRole("dialog");
+  expect(confirmDialog).toHaveClass("plugins-page__confirm-dialog");
   expect(screen.getByText("更新将覆盖本地修改")).toBeInTheDocument();
   expect(updateSpy).not.toHaveBeenCalled();
+
+  expect(screen.getByRole("button", { name: "取消" })).toHaveClass("secondary-button--compact");
+  expect(screen.getByRole("button", { name: "继续更新" })).toHaveClass(
+    "secondary-button--compact",
+    "danger-button",
+  );
 
   await userEvent.click(screen.getByRole("button", { name: "继续更新" }));
 

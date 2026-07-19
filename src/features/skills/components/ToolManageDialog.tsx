@@ -750,7 +750,7 @@ export function ToolManageDialog({ isOpen, onClose, tool }: ToolManageDialogProp
 
         <div className="tool-manage-dialog__actions">
           <button
-            className="primary-button primary-button--compact"
+            className="primary-button primary-button--compact tool-manage-dialog__done-button"
             type="button"
             onClick={onClose}
           >
