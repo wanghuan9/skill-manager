@@ -961,6 +961,10 @@ export function PluginInstallPanel() {
                 <input
                   className="market-search-input"
                   type="search"
+                  autoComplete="off"
+                  autoCorrect="off"
+                  autoCapitalize="none"
+                  spellCheck={false}
                   value={probeSearchQuery}
                   placeholder={t("install.plugin.searchPlaceholder")}
                   onChange={(event) => setProbeSearchQuery(event.target.value)}

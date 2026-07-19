@@ -367,6 +367,10 @@ export function RepoInstallPanel() {
                 <input
                   className="market-search-input"
                   type="search"
+                  autoComplete="off"
+                  autoCorrect="off"
+                  autoCapitalize="none"
+                  spellCheck={false}
                   value={candidateSearchQuery}
                   placeholder={t("install.repo.searchPlaceholder")}
                   onChange={(event) => setCandidateSearchQuery(event.target.value)}

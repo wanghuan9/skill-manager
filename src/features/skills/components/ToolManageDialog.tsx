@@ -622,6 +622,10 @@ export function ToolManageDialog({ isOpen, onClose, tool }: ToolManageDialogProp
           <input
             className="tool-manage-dialog__search"
             type="search"
+            autoComplete="off"
+            autoCorrect="off"
+            autoCapitalize="none"
+            spellCheck={false}
             placeholder={
               activeTab === "skills"
                 ? t("tools.dialog.searchSkills")

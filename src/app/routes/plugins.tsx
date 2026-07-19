@@ -2065,6 +2065,10 @@ export function PluginsRoute(props: PluginsRouteProps = {}) {
         <span className="sr-only">{t("plugins.toolbar.searchLabel")}</span>
         <input
           type="search"
+          autoComplete="off"
+          autoCorrect="off"
+          autoCapitalize="none"
+          spellCheck={false}
           placeholder={t("plugins.toolbar.searchPlaceholder")}
           value={query}
           onChange={(event) => setQuery(event.target.value)}

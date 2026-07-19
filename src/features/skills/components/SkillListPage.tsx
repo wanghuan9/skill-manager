@@ -237,6 +237,10 @@ export function SkillListToolbar(props: SkillToolbarProps) {
         <span className="sr-only">{t("skills.searchAria")}</span>
         <input
           type="search"
+          autoComplete="off"
+          autoCorrect="off"
+          autoCapitalize="none"
+          spellCheck={false}
           placeholder={t(activeSourceId === MANAGED_SKILL_SOURCE_ID
             ? "skills.searchPlaceholder"
             : "skills.source.searchPlaceholder")}

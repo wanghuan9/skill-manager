@@ -315,6 +315,10 @@ export function ToolListPageShell(props: ToolListPageShellProps) {
           <span className="sr-only">{searchAriaLabel || searchPlaceholder || "搜索"}</span>
           <input
             type="search"
+            autoComplete="off"
+            autoCorrect="off"
+            autoCapitalize="none"
+            spellCheck={false}
             placeholder={searchPlaceholder || ""}
             value={searchValue || ""}
             onChange={(event) => onSearchChange(event.target.value)}
