@@ -19,7 +19,9 @@ test("renders installed skill page header and search input", () => {
   expect(screen.getByText("~/.skilldock/skills · 已启用 4 · 可更新 1 · 待推送 2")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "刷新" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "更新 (1)" })).toBeInTheDocument();
-  expect(screen.getByPlaceholderText("搜索技能名称、描述、来源...")).toBeInTheDocument();
+  const searchInput = screen.getByPlaceholderText("搜索技能、描述或来源");
+  expect(searchInput).toBeInTheDocument();
+  expect(searchInput.closest("label")?.querySelector(".search-field__icon")).toBeInTheDocument();
   expect(screen.getByLabelText("按状态筛选技能")).toBeInTheDocument();
 });
 
@@ -54,7 +56,7 @@ test("switches from the managed library to a tool's real Skill directory", async
   expect(screen.getByRole("button", { name: "查看 technical-design 文件" })).toHaveClass("skill-card__icon-button");
   expect(screen.getByRole("button", { name: "删除 technical-design" })).toHaveClass("skill-card__icon-button");
   expect(screen.getByRole("button", { name: "导入 SkillDock" })).toHaveClass("skill-card__icon-button");
-  expect(screen.getByPlaceholderText("搜索技能名称、描述、路径...")).toBeInTheDocument();
+  expect(screen.getByPlaceholderText("搜索技能、描述或路径")).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "更新 (1)" })).not.toBeInTheDocument();
 });
 
@@ -155,7 +157,7 @@ test("opens and focuses the corresponding managed Skill from a tool directory", 
   await user.click(screen.getByLabelText("按状态筛选技能"));
   await user.click(screen.getByRole("option", { name: "可更新 (1)" }));
   await user.click(screen.getByRole("tab", { name: "Codex 5" }));
-  await user.type(screen.getByPlaceholderText("搜索技能名称、描述、路径..."), "skill-publisher");
+  await user.type(screen.getByPlaceholderText("搜索技能、描述或路径"), "skill-publisher");
 
   const sourceCard = screen.getByRole("article", { name: "skill-publisher" });
   await user.click(within(sourceCard).getByRole("button", { name: "skill-publisher" }));
@@ -163,7 +165,7 @@ test("opens and focuses the corresponding managed Skill from a tool directory", 
 
   expect(screen.getByRole("tab", { name: "已托管 4" })).toHaveAttribute("aria-selected", "true");
   expect(screen.getByLabelText("按状态筛选技能")).toHaveAttribute("data-value", "all");
-  expect(screen.getByPlaceholderText("搜索技能名称、描述、来源...")).toHaveValue("");
+  expect(screen.getByPlaceholderText("搜索技能、描述或来源")).toHaveValue("");
   expect(screen.getByRole("button", { name: "收起来源分组 team-skills" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "收起 skill-publisher" })).toHaveAttribute("aria-expanded", "true");
 });

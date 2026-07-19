@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { listen } from "@tauri-apps/api/event";
+import { SearchFieldIcon } from "@/app/components/SearchFieldIcon";
 import { useTranslate } from "@/app/i18n";
 import { AppSelect } from "@/app/components/AppSelect";
 import { useNotifications } from "@/app/notifications";
@@ -364,6 +365,7 @@ export function RepoInstallPanel() {
             <label className="market-search-field repo-install__search-field">
               <span className="sr-only">{t("install.repo.searchAria")}</span>
               <div className="market-search-input-wrap">
+                <SearchFieldIcon />
                 <input
                   className="market-search-input"
                   type="search"

@@ -1,4 +1,5 @@
 import { useDeferredValue, useEffect, useMemo, useState } from "react";
+import { SearchFieldIcon } from "@/app/components/SearchFieldIcon";
 import { useTranslate } from "@/app/i18n";
 import { useFailureReporter } from "@/app/failure-feedback";
 import { openExternalLink } from "@/features/skills/api/skill-client";
@@ -235,6 +236,7 @@ export function SkillListToolbar(props: SkillToolbarProps) {
     <div className="skills-header-bar__tools">
       <label className="search-field search-field--header skill-search-field">
         <span className="sr-only">{t("skills.searchAria")}</span>
+        <SearchFieldIcon />
         <input
           type="search"
           autoComplete="off"

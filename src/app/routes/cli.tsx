@@ -114,7 +114,7 @@ export function CliRoute() {
       refreshBusyLabel="刷新中..."
       toolbarAriaLabel="CLI 工具栏"
       searchValue={query}
-      searchPlaceholder="搜索 CLI 包名称、命令、skill..."
+      searchPlaceholder="搜索 CLI、命令或 Skill"
       searchAriaLabel="搜索 CLI 包"
       onRefresh={() => loadCliTools({ silent: true })}
       onSearchChange={setQuery}

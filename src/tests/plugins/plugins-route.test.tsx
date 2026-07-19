@@ -2705,7 +2705,7 @@ test("renders plugin chrome in English when workspace language is en", async () 
   expect(screen.getByRole("button", { name: "Refresh" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Scan Import" })).toBeInTheDocument();
   expect(
-    screen.getByPlaceholderText("Search plugin names, hosts, or components..."),
+    screen.getByPlaceholderText("Search plugins, hosts, or components"),
   ).toBeInTheDocument();
 
   await userEvent.click(screen.getByRole("tab", { name: /Claude Code/ }));
