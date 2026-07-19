@@ -3187,20 +3187,25 @@ code {
 .tool-pill-grid {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 6px;
+}
+
+.tool-sync-panel .skill-card__section-header h4 {
+  font-size: 0.84rem;
+  font-weight: 600;
 }
 
 .tool-sync-panel__actions {
   display: flex;
   flex-wrap: wrap;
   justify-content: flex-end;
-  gap: 8px;
+  gap: 6px;
 }
 
 .tool-sync-panel__actions .secondary-button--compact {
-  min-height: 30px;
-  padding: 0 10px;
-  font-size: 0.76rem;
+  min-height: 28px;
+  padding: 0 9px;
+  font-size: 0.72rem;
   font-weight: 500;
 }
 
@@ -3208,10 +3213,10 @@ code {
   display: inline-flex;
   align-items: center;
   justify-content: flex-start;
-  gap: 8px;
-  min-height: 34px;
-  padding: 5px 8px 5px 10px;
-  border-radius: 12px;
+  gap: 6px;
+  min-height: 30px;
+  padding: 4px 7px 4px 8px;
+  border-radius: 10px;
   background: #f8fbff;
   border: 1px solid #dbe5f2;
   appearance: none;
@@ -3253,9 +3258,9 @@ code {
   align-items: center;
   justify-content: center;
   flex: 0 0 auto;
-  width: 22px;
-  height: 22px;
-  border-radius: 7px;
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
   background: rgba(255, 255, 255, 0.72);
   color: #6a7688;
   font-size: 0.72rem;
@@ -3274,7 +3279,7 @@ code {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 0.76rem;
+  font-size: 0.72rem;
   font-weight: 500;
   color: currentColor;
 }
@@ -11195,9 +11200,9 @@ button.settings-form-item:disabled {
 }
 
 :root[data-theme="dark"] .skill-card .tool-pill-grid {
-  padding: 10px;
+  padding: 8px;
   border: 1px solid #383838;
-  border-radius: 14px;
+  border-radius: 12px;
   background: #202020;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.025);
 }

@@ -150,7 +150,7 @@ export function ToolSyncPanel({
   }
 
   return (
-    <section>
+    <section className="tool-sync-panel">
       <div className="skill-card__section-header">
         <h4>{t("skill.tools.title")}</h4>
         <div className="tool-sync-panel__actions">
