@@ -7,9 +7,9 @@ jobs:
   windows-check:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 20
           cache: npm
@@ -32,7 +32,7 @@ jobs:
       - name: Build Windows installer probe
         run: npm exec -- tauri build --target x86_64-pc-windows-msvc --config src-tauri/tauri.windows.conf.json
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: skilldock-windows-tauri-bundle

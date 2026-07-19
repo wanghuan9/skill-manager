@@ -167,8 +167,6 @@ struct PluginManifest {
 struct GitHubContentEntry {
     #[serde(default)]
     name: String,
-    #[serde(default)]
-    path: String,
     #[serde(default, rename = "type")]
     entry_type: String,
     #[serde(default)]

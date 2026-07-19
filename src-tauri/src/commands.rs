@@ -5602,6 +5602,7 @@ fn detect_preferred_app_language_from_apple_languages() -> Option<&'static str> 
     }
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn parse_apple_languages_output(output: &str) -> Option<&'static str> {
     output.lines().find_map(|line| {
         let language = line

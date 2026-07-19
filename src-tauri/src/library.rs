@@ -1784,8 +1784,9 @@ fn copy_skill_repo_dir_all(source: &Path, target: &Path) -> Result<(), String> {
             #[cfg(not(unix))]
             {
                 return Err(format!(
-                    "当前平台不支持复制 skill 符号链接: {}",
-                    source_path.display()
+                    "当前平台不支持复制 skill 符号链接: {} -> {}",
+                    source_path.display(),
+                    link_target.display()
                 ));
             }
         } else if metadata.is_dir() {

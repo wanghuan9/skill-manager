@@ -92,3 +92,6 @@ jspm_packages/
 
 # Tauri specific
 src-tauri/target/
+src-tauri/libjzmq.dylib
+src-tauri/libsodium.dylib
+src-tauri/libzmq.dylib
