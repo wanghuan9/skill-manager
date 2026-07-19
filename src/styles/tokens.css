@@ -3748,6 +3748,7 @@ code {
 .market-install-scroll {
   flex: 1;
   min-height: 0;
+  padding-top: 2px;
   overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
@@ -3980,12 +3981,38 @@ code {
 }
 
 .install-card__install-button {
-  min-width: 50px;
-  min-height: 24px;
-  padding-inline: 6px;
-  border-radius: 7px;
-  font-size: 0.64rem;
+  min-width: 56px;
+  min-height: 28px;
+  padding-inline: 11px;
+  border-radius: 9px;
+  border-color: var(--button-primary-border);
+  background: var(--button-primary-soft);
+  color: #2f6fda;
+  font-size: 0.7rem;
+  font-weight: 600;
+  box-shadow: none;
   flex-shrink: 0;
+}
+
+.install-card__install-button:hover:not(:disabled) {
+  border-color: rgba(61, 125, 239, 0.36);
+  background: var(--button-primary-soft-hover);
+  color: #245fc5;
+  box-shadow: 0 4px 10px rgba(47, 111, 223, 0.1);
+}
+
+.install-card__install-button:active:not(:disabled) {
+  border-color: rgba(61, 125, 239, 0.4);
+  background: rgba(61, 125, 239, 0.17);
+  box-shadow: none;
+}
+
+.install-card__install-button:disabled {
+  border-color: rgba(117, 128, 147, 0.18);
+  background: rgba(117, 128, 147, 0.08);
+  color: var(--muted);
+  box-shadow: none;
+  opacity: 0.72;
 }
 
 .install-card__chips {
@@ -5823,6 +5850,26 @@ code {
   border-top: 1px solid var(--line);
   flex-wrap: wrap;
   justify-content: flex-end;
+}
+
+.dialog-card__footer > .primary-button,
+.dialog-card__footer > .secondary-button {
+  min-height: 34px;
+  padding-inline: 15px;
+  border-radius: 10px;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.dialog-card__footer > .secondary-button {
+  min-width: 64px;
+}
+
+.dialog-card__footer > .primary-button {
+  min-width: 84px;
+  box-shadow:
+    0 3px 9px rgba(47, 111, 223, 0.16),
+    0 1px 0 rgba(255, 255, 255, 0.2) inset;
 }
 
 .dialog-error {
@@ -8083,7 +8130,37 @@ button.settings-form-item:disabled {
 }
 
 .tool-manage-dialog__done-button {
-  min-width: 64px;
+  min-width: 72px;
+  min-height: 34px;
+  padding-inline: 15px;
+  border-radius: 10px;
+  border-color: var(--button-primary-border);
+  background: var(--button-primary-soft);
+  color: #2f6fda;
+  font-size: 0.8rem;
+  font-weight: 600;
+  box-shadow: none;
+}
+
+.tool-manage-dialog__done-button:hover:not(:disabled) {
+  border-color: rgba(61, 125, 239, 0.36);
+  background: var(--button-primary-soft-hover);
+  color: #245fc5;
+  box-shadow: 0 4px 10px rgba(47, 111, 223, 0.1);
+}
+
+.tool-manage-dialog__done-button:active:not(:disabled) {
+  border-color: rgba(61, 125, 239, 0.4);
+  background: rgba(61, 125, 239, 0.17);
+  box-shadow: none;
+}
+
+.tool-manage-dialog__done-button:disabled {
+  border-color: rgba(117, 128, 147, 0.18);
+  background: rgba(117, 128, 147, 0.08);
+  color: var(--muted);
+  box-shadow: none;
+  opacity: 0.72;
 }
 
 .tool-manage-dialog .switch-button {
@@ -12461,4 +12538,60 @@ button.settings-form-item:disabled {
   border-color: rgba(255, 177, 92, 0.5);
   background: rgba(255, 177, 92, 0.16);
   color: #ffd49a;
+}
+
+:root[data-theme="dark"] .install-card__install-button {
+  border-color: var(--button-primary-border);
+  background: var(--button-primary-soft);
+  color: var(--accent);
+  box-shadow: none;
+}
+
+:root[data-theme="dark"] .install-card__install-button:hover:not(:disabled) {
+  border-color: rgba(255, 194, 26, 0.46);
+  background: var(--button-primary-soft-hover);
+  color: var(--accent-strong);
+  box-shadow: 0 4px 12px rgba(255, 194, 26, 0.1);
+}
+
+:root[data-theme="dark"] .install-card__install-button:active:not(:disabled) {
+  border-color: rgba(255, 194, 26, 0.5);
+  background: rgba(255, 194, 26, 0.2);
+  box-shadow: none;
+}
+
+:root[data-theme="dark"] .install-card__install-button:disabled {
+  border-color: rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.05);
+  color: #8f8f8f;
+  box-shadow: none;
+  opacity: 0.72;
+}
+
+:root[data-theme="dark"] .tool-manage-dialog__done-button {
+  border-color: var(--button-primary-border);
+  background: var(--button-primary-soft);
+  color: var(--accent);
+  box-shadow: none;
+}
+
+:root[data-theme="dark"] .tool-manage-dialog__done-button:hover:not(:disabled) {
+  border-color: rgba(255, 194, 26, 0.46);
+  background: var(--button-primary-soft-hover);
+  color: var(--accent-strong);
+  box-shadow: 0 4px 12px rgba(255, 194, 26, 0.1);
+}
+
+:root[data-theme="dark"] .tool-manage-dialog__done-button:active:not(:disabled) {
+  border-color: rgba(255, 194, 26, 0.5);
+  background: rgba(255, 194, 26, 0.2);
+  box-shadow: none;
+}
+
+:root[data-theme="dark"] .tool-manage-dialog__done-button:disabled {
+  border-color: rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.05);
+  color: #8f8f8f;
+  box-shadow: none;
+  opacity: 0.72;
 }
