@@ -13,6 +13,7 @@ type RowAction = {
   tooltip?: string;
   content?: ReactNode;
   modalLabel?: string;
+  modalClassName?: string;
 };
 
 type RowBadge = {
@@ -102,12 +103,15 @@ export function ToolListRow(props: ToolListRowProps) {
     }
 
     const isIconAction = Boolean(action.icon);
+    const modalClassName = action.modalClassName
+      ?? (action.className?.includes("--update") ? "is-primary" : "");
+    const buttonClassName = modal
+      ? `secondary-button secondary-button--compact skill-card-detail-modal__action${modalClassName ? ` ${modalClassName}` : ""}`
+      : action.className ?? (isIconAction ? "skill-card__icon-button" : "secondary-button secondary-button--compact");
     return (
       <button
         key={action.key}
-        className={modal
-          ? `secondary-button secondary-button--compact skill-card-detail-modal__action${action.className?.includes("--update") ? " is-primary" : ""}`
-          : action.className ?? (isIconAction ? "skill-card__icon-button" : "secondary-button secondary-button--compact")}
+        className={buttonClassName}
         type="button"
         onClick={action.onClick}
         disabled={action.disabled}

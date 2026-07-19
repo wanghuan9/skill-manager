@@ -1691,7 +1691,7 @@ export function McpRoute(props: McpRouteProps = {}) {
                       {visibleApps.length > 0 ? (
                         <div className="tool-sync-panel__actions">
                           <button
-                            className="secondary-button secondary-button--compact"
+                            className="secondary-button secondary-button--compact semantic-action semantic-action--enable"
                             type="button"
                             onClick={() => void handleToggleAllApps(server, visibleApps, true)}
                             disabled={Boolean(pendingAppKey) || Boolean(pendingToolKey) || disabledVisibleAppCount === 0}
@@ -1700,7 +1700,7 @@ export function McpRoute(props: McpRouteProps = {}) {
                             {appBulkAction === "enable" ? t("mcp.card.enabling") : t("mcp.card.enableAll")}
                           </button>
                           <button
-                            className="secondary-button secondary-button--compact"
+                            className="secondary-button secondary-button--compact semantic-action semantic-action--disable"
                             type="button"
                             onClick={() => void handleToggleAllApps(server, visibleApps, false)}
                             disabled={Boolean(pendingAppKey) || Boolean(pendingToolKey) || enabledVisibleAppCount === 0}
@@ -1760,7 +1760,7 @@ export function McpRoute(props: McpRouteProps = {}) {
                         {totalToolCount > 0 ? (
                           <div className="mcp-server-card__tool-actions">
                             <button
-                              className="secondary-button secondary-button--compact"
+                              className="secondary-button secondary-button--compact semantic-action semantic-action--enable"
                               type="button"
                               onClick={() => void handleToggleAllTools(server, true)}
                               disabled={Boolean(pendingToolKey) || disabledToolCount === 0}
@@ -1768,7 +1768,7 @@ export function McpRoute(props: McpRouteProps = {}) {
                               {t("mcp.card.enableAll")}
                             </button>
                             <button
-                              className="secondary-button secondary-button--compact"
+                              className="secondary-button secondary-button--compact semantic-action semantic-action--disable"
                               type="button"
                               onClick={() => void handleToggleAllTools(server, false)}
                               disabled={Boolean(pendingToolKey) || enabledToolCount === 0}

@@ -150,12 +150,12 @@ export function ToolSyncPanel({
   }
 
   return (
-    <section>
+    <section className="tool-sync-panel">
       <div className="skill-card__section-header">
         <h4>{t("skill.tools.title")}</h4>
         <div className="tool-sync-panel__actions">
           <button
-            className="secondary-button secondary-button--compact"
+            className="secondary-button secondary-button--compact semantic-action semantic-action--enable"
             type="button"
             onClick={() => void handleToggleAllTools(true)}
             disabled={isAnyBulkUpdatePending || pendingToolNames.length > 0 || disabledTools.length === 0}
@@ -163,7 +163,7 @@ export function ToolSyncPanel({
             {bulkAction === "enable" ? t("skill.tools.enableAllLoading") : t("skill.tools.enableAll")}
           </button>
           <button
-            className="secondary-button secondary-button--compact"
+            className="secondary-button secondary-button--compact semantic-action semantic-action--disable"
             type="button"
             onClick={() => void handleToggleAllTools(false)}
             disabled={isAnyBulkUpdatePending || pendingToolNames.length > 0 || enabledTools.length === 0}
