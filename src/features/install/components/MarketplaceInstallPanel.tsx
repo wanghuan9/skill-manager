@@ -1,4 +1,5 @@
 import { useEffect, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { SearchFieldIcon } from "@/app/components/SearchFieldIcon";
 import { useTranslate } from "@/app/i18n";
 import { useFailureReporter } from "@/app/failure-feedback";
 import { useNotifications } from "@/app/notifications";
@@ -76,6 +77,7 @@ export function MarketplaceInstallPanel(props: MarketplaceInstallPanelProps) {
         <label className="market-search-field">
           <span className="sr-only">{t("install.sources.searchAria")}</span>
           <div className="market-search-input-wrap">
+            <SearchFieldIcon />
             <input
               className="market-search-input"
               type="search"

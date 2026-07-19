@@ -1,4 +1,5 @@
 import { useEffect, useId, useMemo, useState } from "react";
+import { SearchFieldIcon } from "@/app/components/SearchFieldIcon";
 import { useTranslate } from "@/app/i18n";
 import { useFailureReporter } from "@/app/failure-feedback";
 import {
@@ -619,23 +620,26 @@ export function ToolManageDialog({ isOpen, onClose, tool }: ToolManageDialogProp
         </div>
 
         <div className="tool-manage-dialog__toolbar">
-          <input
-            className="tool-manage-dialog__search"
-            type="search"
-            autoComplete="off"
-            autoCorrect="off"
-            autoCapitalize="none"
-            spellCheck={false}
-            placeholder={
-              activeTab === "skills"
-                ? t("tools.dialog.searchSkills")
-                : activeTab === "mcp"
-                  ? t("tools.dialog.searchMcp")
-                  : t("tools.dialog.searchPlugins")
-            }
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-          />
+          <div className="tool-manage-dialog__search-wrap">
+            <SearchFieldIcon />
+            <input
+              className="tool-manage-dialog__search"
+              type="search"
+              autoComplete="off"
+              autoCorrect="off"
+              autoCapitalize="none"
+              spellCheck={false}
+              placeholder={
+                activeTab === "skills"
+                  ? t("tools.dialog.searchSkills")
+                  : activeTab === "mcp"
+                    ? t("tools.dialog.searchMcp")
+                    : t("tools.dialog.searchPlugins")
+              }
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+            />
+          </div>
           <label className="tool-manage-dialog__toggle">
             <button
               className={`switch-button${showEnabledOnly ? " is-enabled" : ""}`}

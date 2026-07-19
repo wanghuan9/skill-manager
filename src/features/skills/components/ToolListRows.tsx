@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { SearchFieldIcon } from "@/app/components/SearchFieldIcon";
 import { alignExpandedRowIntoView } from "@/app/utils/align-expanded-row";
 
 type RowAction = {
@@ -313,6 +314,7 @@ export function ToolListPageShell(props: ToolListPageShellProps) {
       {onSearchChange ? (
         <label className="search-field search-field--header mcp-toolbar__search">
           <span className="sr-only">{searchAriaLabel || searchPlaceholder || "搜索"}</span>
+          <SearchFieldIcon />
           <input
             type="search"
             autoComplete="off"

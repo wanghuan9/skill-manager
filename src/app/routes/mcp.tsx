@@ -1,6 +1,7 @@
 import { startTransition, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import type { MouseEvent as ReactMouseEvent, ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { SearchFieldIcon } from "@/app/components/SearchFieldIcon";
 import { alignExpandedRowIntoView } from "@/app/utils/align-expanded-row";
 import { ToolbarGoInstallButton } from "@/app/components/ToolbarGoInstallButton";
 import { useTranslate, type TranslationKey } from "@/app/i18n";
@@ -1361,6 +1362,7 @@ export function McpRoute(props: McpRouteProps = {}) {
     <section className="mcp-toolbar skills-header-bar__tools" aria-label={t("mcp.toolbar.aria")}>
       <label className="search-field search-field--header mcp-toolbar__search">
         <span className="sr-only">{t("mcp.toolbar.search")}</span>
+        <SearchFieldIcon />
         <input
           type="search"
           autoComplete="off"

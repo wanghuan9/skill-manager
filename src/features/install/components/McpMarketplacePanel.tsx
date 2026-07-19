@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { SearchFieldIcon } from "@/app/components/SearchFieldIcon";
 import { useTranslate } from "@/app/i18n";
 import { useFailureReporter } from "@/app/failure-feedback";
 import { useNotifications } from "@/app/notifications";
@@ -660,6 +661,7 @@ export function McpMarketplacePanel(props: McpMarketplacePanelProps) {
         <label className="market-search-field">
           <span className="sr-only">{t("install.mcp.searchAria")}</span>
           <div className="market-search-input-wrap">
+            <SearchFieldIcon />
             <input
               className="market-search-input"
               type="search"

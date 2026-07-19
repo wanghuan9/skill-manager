@@ -1532,7 +1532,7 @@ code {
 
 .skills-header-bar__tools {
   justify-content: flex-end;
-  gap: 10px;
+  gap: 6px;
   flex-wrap: nowrap;
   width: auto;
   flex: 0 0 auto;
@@ -1720,10 +1720,19 @@ code {
 }
 
 .search-field__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
   color: var(--muted);
-  font-size: 1rem;
-  line-height: 1;
+  pointer-events: none;
+}
+
+.search-field__icon svg {
+  width: 16px;
+  height: 16px;
 }
 
 .search-field--header {
@@ -1733,9 +1742,10 @@ code {
   height: 34px;
   min-height: 34px;
   min-width: 180px;
+  gap: 8px;
   border: 1px solid var(--line);
   border-radius: 11px;
-  padding: 0 12px;
+  padding: 0 11px;
   background: var(--surface);
   overflow: hidden;
   box-sizing: border-box;
@@ -1754,9 +1764,12 @@ code {
   border-radius: 0 !important;
   padding: 0;
   background: transparent !important;
-  font-size: 0.84rem;
+  font-size: 0.76rem;
   line-height: 1;
   min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   appearance: none;
   -webkit-appearance: none;
   box-shadow: none !important;
@@ -1765,6 +1778,17 @@ code {
 
 .search-field--header input:focus {
   outline: 0;
+}
+
+.search-field--header input::-webkit-search-decoration,
+.search-field--header input::-webkit-search-cancel-button,
+.market-search-input::-webkit-search-decoration,
+.market-search-input::-webkit-search-cancel-button,
+.tool-manage-dialog__search::-webkit-search-decoration,
+.tool-manage-dialog__search::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+  appearance: none;
+  margin: 0;
 }
 
 .skill-status-filter {
@@ -2638,7 +2662,7 @@ code {
   align-items: center;
   justify-content: center;
   gap: 6px;
-  font-size: 0.8rem;
+  font-size: 0.76rem;
   font-weight: 500;
   line-height: 1;
   letter-spacing: 0;
@@ -2850,7 +2874,7 @@ code {
   overflow: hidden;
   margin: 0;
   color: color-mix(in srgb, var(--muted) 88%, #111827 12%);
-  font-size: 0.8rem;
+  font-size: 0.76rem;
   font-weight: 400;
   line-height: 1.28;
   text-overflow: ellipsis;
@@ -3772,15 +3796,28 @@ code {
   position: relative;
 }
 
+.market-search-input-wrap > .search-field__icon {
+  position: absolute;
+  top: 50%;
+  left: 12px;
+  z-index: 1;
+  transform: translateY(-50%);
+}
+
 .market-search-input {
   width: 100%;
   min-height: 36px;
   border-radius: 10px;
   border: 1px solid #d8e2f0;
   background: #f8fbff;
-  padding: 0 36px 0 12px;
-  font-size: 0.8rem;
+  padding: 0 36px 0 34px;
+  font-size: 0.76rem;
   color: var(--text);
+  appearance: none;
+  -webkit-appearance: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .market-search-input:focus {
@@ -8177,15 +8214,35 @@ button.settings-form-item:disabled {
   cursor: pointer;
 }
 
-.tool-manage-dialog__search {
+.tool-manage-dialog__search-wrap {
+  position: relative;
   flex: 1 1 240px;
+  min-width: 0;
+}
+
+.tool-manage-dialog__search-wrap > .search-field__icon {
+  position: absolute;
+  top: 50%;
+  left: 12px;
+  z-index: 1;
+  transform: translateY(-50%);
+}
+
+.tool-manage-dialog__search {
+  width: 100%;
   min-height: 34px;
   border: 1px solid var(--line);
   border-radius: 10px;
-  padding: 0 12px;
+  padding: 0 12px 0 34px;
   background: var(--surface-strong);
   color: var(--heading);
-  font-size: 0.82rem;
+  font-size: 0.76rem;
+  appearance: none;
+  -webkit-appearance: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  box-sizing: border-box;
 }
 
 .tool-manage-dialog__toggle {
@@ -8473,13 +8530,13 @@ button.settings-form-item:disabled {
 .plugins-page__toolbar-actions {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   min-width: 0;
 }
 
 .plugins-page__toolbar-primary {
   justify-content: flex-end;
-  gap: 10px;
+  gap: 8px;
 }
 
 .plugins-page__toolbar-actions {
@@ -10257,7 +10314,7 @@ button.settings-form-item:disabled {
     width: min(800px, calc(100vw - 32px));
   }
 
-  .tool-manage-dialog__search {
+  .tool-manage-dialog__search-wrap {
     flex-basis: 100%;
   }
 

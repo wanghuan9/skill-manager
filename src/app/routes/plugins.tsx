@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { SearchFieldIcon } from "@/app/components/SearchFieldIcon";
 import { useTranslate } from "@/app/i18n";
 import { ToolbarGoInstallButton } from "@/app/components/ToolbarGoInstallButton";
 import { AppSelect } from "@/app/components/AppSelect";
@@ -2063,6 +2064,7 @@ export function PluginsRoute(props: PluginsRouteProps = {}) {
     >
       <label className="search-field search-field--header skill-search-field plugins-page__search">
         <span className="sr-only">{t("plugins.toolbar.searchLabel")}</span>
+        <SearchFieldIcon />
         <input
           type="search"
           autoComplete="off"
