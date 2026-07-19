@@ -35,6 +35,7 @@ test("allows selecting default open tool in settings", async () => {
   expect(screen.getByLabelText("新增 MCP 默认启用")).toHaveAttribute("aria-pressed", "true");
   expect(screen.getByText("工具状态")).toBeInTheDocument();
 
+  await userEvent.click(select);
   expect(screen.getByRole("option", { name: "Cursor" })).toBeInTheDocument();
   expect(screen.getByRole("option", { name: "VS Code" })).toBeInTheDocument();
   expect(screen.getByRole("option", { name: "IntelliJ IDEA" })).toBeInTheDocument();
@@ -42,13 +43,14 @@ test("allows selecting default open tool in settings", async () => {
   expect(screen.queryByRole("option", { name: "Claude Code" })).not.toBeInTheDocument();
   expect(screen.queryByRole("option", { name: "Codex" })).not.toBeInTheDocument();
 
-  await userEvent.selectOptions(select, "cursor");
+  await userEvent.click(screen.getByRole("option", { name: "Cursor" }));
 
-  expect(screen.getByDisplayValue("Cursor")).toBeInTheDocument();
+  expect(select).toHaveTextContent("Cursor");
 
-  await userEvent.selectOptions(select, "finder");
+  await userEvent.click(select);
+  await userEvent.click(screen.getByRole("option", { name: "文件夹" }));
 
-  expect(screen.getByDisplayValue("文件夹")).toBeInTheDocument();
+  expect(select).toHaveTextContent("文件夹");
 
   await userEvent.click(screen.getByLabelText("新增 Skill 默认启用"));
   expect(screen.getByLabelText("新增 Skill 默认启用")).toHaveAttribute("aria-pressed", "false");
@@ -118,10 +120,11 @@ test("switches between the two Skill source bar styles", async () => {
 
   await user.click(screen.getByRole("button", { name: /设置/ }));
   const styleSelect = screen.getByLabelText("Skill 来源栏样式");
-  expect(styleSelect).toHaveValue("flat");
+  expect(styleSelect).toHaveAttribute("data-value", "flat");
   expect(within(styleSelect).queryByRole("option", { name: "浅色工具栏" })).not.toBeInTheDocument();
 
-  await user.selectOptions(styleSelect, "select");
+  await user.click(styleSelect);
+  await user.click(screen.getByRole("option", { name: "来源选择器" }));
   await user.click(screen.getByRole("button", { name: /Skills/ }));
 
   expect(screen.queryByRole("tablist", { name: "Skill 来源" })).not.toBeInTheDocument();
@@ -237,7 +240,8 @@ test("shows release notes controls in English settings", async () => {
   render(<App />);
 
   await userEvent.click(screen.getByRole("button", { name: /设置/ }));
-  await userEvent.selectOptions(screen.getByLabelText("界面语言"), "en");
+  await userEvent.click(screen.getByLabelText("界面语言"));
+  await userEvent.click(screen.getByRole("option", { name: "English" }));
   await userEvent.click(screen.getByRole("button", { name: "Check for Updates" }));
 
   expect(await screen.findByText("New version found: 0.2.0")).toBeInTheDocument();
@@ -281,11 +285,12 @@ test("switches interface language to English from settings", async () => {
   render(<App />);
 
   await userEvent.click(screen.getByRole("button", { name: /设置/ }));
-  await userEvent.selectOptions(screen.getByLabelText("界面语言"), "en");
+  await userEvent.click(screen.getByLabelText("界面语言"));
+  await userEvent.click(screen.getByRole("option", { name: "English" }));
 
   expect(screen.getByRole("button", { name: "Settings" })).toBeInTheDocument();
   expect(screen.getByText("App Preferences")).toBeInTheDocument();
-  expect(screen.getByLabelText("Interface Language")).toHaveValue("en");
+  expect(screen.getByLabelText("Interface Language")).toHaveAttribute("data-value", "en");
 });
 
 test("switches and persists the interface theme from settings", async () => {

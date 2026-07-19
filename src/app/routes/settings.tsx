@@ -5,6 +5,7 @@ import remarkGfm from "remark-gfm";
 import { getDirectoryPath } from "@/app/path-utils";
 import { useTranslate } from "@/app/i18n";
 import { useFailureReporter } from "@/app/failure-feedback";
+import { AppSelect } from "@/app/components/AppSelect";
 import { alignExpandedRowIntoView } from "@/app/utils/align-expanded-row";
 import {
   type AppUpdateCheckResult,
@@ -378,14 +379,15 @@ export function SettingsRoute() {
       description: t("settings.language.description"),
       value: (
         <div className="settings-form-item__control">
-          <select
-            aria-label={t("settings.language.label")}
+          <AppSelect
+            ariaLabel={t("settings.language.label")}
             value={appSettings.language}
-            onChange={(event) => void setLanguage(event.target.value as "zh-CN" | "en")}
-          >
-            <option value="zh-CN">{t("settings.language.option.zh-CN")}</option>
-            <option value="en">{t("settings.language.option.en")}</option>
-          </select>
+            options={[
+              { value: "zh-CN", label: t("settings.language.option.zh-CN") },
+              { value: "en", label: t("settings.language.option.en") },
+            ]}
+            onChange={(value) => void setLanguage(value)}
+          />
         </div>
       ),
     },
@@ -435,19 +437,15 @@ export function SettingsRoute() {
       description: t("settings.defaultEditor.description"),
       value: (
         <div className="settings-form-item__control">
-          <select
-            aria-label={t("settings.defaultEditor.aria")}
+          <AppSelect
+            ariaLabel={t("settings.defaultEditor.aria")}
             value={selectedDefaultToolId}
-            onChange={(event) => setDefaultOpenToolId(event.target.value)}
+            options={openToolOptions.length === 0
+              ? [{ value: "", label: t("settings.defaultEditor.empty") }]
+              : openToolOptions.map((tool) => ({ value: tool.id, label: tool.name }))}
+            onChange={setDefaultOpenToolId}
             disabled={openToolOptions.length === 0}
-          >
-            {openToolOptions.length === 0 ? <option value="">{t("settings.defaultEditor.empty")}</option> : null}
-            {openToolOptions.map((tool) => (
-              <option key={tool.id} value={tool.id}>
-                {tool.name}
-              </option>
-            ))}
-          </select>
+          />
         </div>
       ),
     },
@@ -456,14 +454,15 @@ export function SettingsRoute() {
       description: t("settings.skillSourceView.description"),
       value: (
         <div className="settings-form-item__control">
-          <select
-            aria-label={t("settings.skillSourceView.label")}
+          <AppSelect
+            ariaLabel={t("settings.skillSourceView.label")}
             value={appSettings.skillSourceViewStyle ?? "flat"}
-            onChange={(event) => void setSkillSourceViewStyle(event.target.value as SkillSourceViewStyle)}
-          >
-            <option value="flat">{t("settings.skillSourceView.option.flat")}</option>
-            <option value="select">{t("settings.skillSourceView.option.select")}</option>
-          </select>
+            options={[
+              { value: "flat", label: t("settings.skillSourceView.option.flat") },
+              { value: "select", label: t("settings.skillSourceView.option.select") },
+            ]}
+            onChange={(value: SkillSourceViewStyle) => void setSkillSourceViewStyle(value)}
+          />
         </div>
       ),
     },

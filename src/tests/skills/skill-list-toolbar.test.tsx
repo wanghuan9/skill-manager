@@ -1,4 +1,5 @@
 import { fireEvent, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { NotificationProvider } from "@/app/notifications";
 import { SkillListToolbar } from "@/features/skills/components/SkillListPage";
@@ -187,7 +188,8 @@ test("renders go-install action when handler is provided", () => {
   expect(onGoInstall).toHaveBeenCalledOnce();
 });
 
-test("notifies status filter changes", () => {
+test("notifies status filter changes", async () => {
+  const user = userEvent.setup();
   const onStatusFilterChange = vi.fn();
 
   mockedUseSkillWorkspace.mockReturnValue({
@@ -211,14 +213,14 @@ test("notifies status filter changes", () => {
     </NotificationProvider>,
   );
 
-  fireEvent.change(screen.getByLabelText("按状态筛选技能"), {
-    target: { value: "update-available" },
-  });
+  await user.click(screen.getByLabelText("按状态筛选技能"));
 
   expect(screen.getByRole("option", { name: "全部 (5)" })).toBeInTheDocument();
   expect(screen.getByRole("option", { name: "可更新 (1)" })).toBeInTheDocument();
   expect(screen.queryByRole("option", { name: /冲突/ })).not.toBeInTheDocument();
   expect(screen.getByRole("option", { name: "未启用 (1)" })).toBeInTheDocument();
   expect(screen.queryByRole("option", { name: "已同步 (1)" })).not.toBeInTheDocument();
+
+  await user.click(screen.getByRole("option", { name: "可更新 (1)" }));
   expect(onStatusFilterChange).toHaveBeenCalledWith("update-available");
 });

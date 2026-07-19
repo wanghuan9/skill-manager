@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useTranslate } from "@/app/i18n";
 import { ToolbarGoInstallButton } from "@/app/components/ToolbarGoInstallButton";
+import { AppSelect } from "@/app/components/AppSelect";
 import { useNotifications } from "@/app/notifications";
 import { formatSkillLastEditor } from "@/features/skills/utils/skill-editor";
 import { formatSkillUpdatedAt } from "@/features/skills/utils/skill-time";
@@ -2071,23 +2072,24 @@ export function PluginsRoute(props: PluginsRouteProps = {}) {
       </label>
       <ListGridViewToggle value={viewMode} onChange={handleViewModeChange} />
       <div className="plugins-page__toolbar-actions">
-        <label className="skill-status-filter plugins-page__toolbar-filter">
+        <div className="skill-status-filter plugins-page__toolbar-filter">
           <span className="sr-only">{t("plugins.toolbar.filterLabel")}</span>
           <span className="skill-status-filter__icon" aria-hidden="true">
             <FilterIcon />
           </span>
-          <select
-            aria-label={t("plugins.toolbar.filterLabel")}
+          <AppSelect
+            ariaLabel={t("plugins.toolbar.filterLabel")}
             value={filter}
-            onChange={(event) => setFilter(event.target.value as PluginFilter)}
-          >
-            {pluginFilterOptions.map((option) => (
-              <option key={option.value} value={option.value}>
-                {`${option.label} (${filterCounts[option.value]})`}
-              </option>
-            ))}
-          </select>
-        </label>
+            options={pluginFilterOptions.map((option) => ({
+              value: option.value,
+              label: `${option.label} (${filterCounts[option.value]})`,
+            }))}
+            onChange={setFilter}
+            className="skill-status-filter__select"
+            menuClassName="skill-status-filter__popover"
+            minMenuWidth={96}
+          />
+        </div>
         <button
           className={`secondary-button secondary-button--compact skills-toolbar-button skills-toolbar-button--refresh${isReloading ? " is-loading" : ""}`}
           type="button"

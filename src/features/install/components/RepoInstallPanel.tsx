@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { listen } from "@tauri-apps/api/event";
 import { useTranslate } from "@/app/i18n";
+import { AppSelect } from "@/app/components/AppSelect";
 import { useNotifications } from "@/app/notifications";
 import { useFailureReporter } from "@/app/failure-feedback";
 import { useSkillWorkspace } from "@/features/skills/state/skill-workspace";
@@ -318,21 +319,22 @@ export function RepoInstallPanel() {
               {branches.length > 0 ? (
                 <label className="repo-form__field repo-form__field--branch">
                   <span className="repo-form__label">{t("install.repo.gitBranch")}</span>
-                  <select
+                  <AppSelect
+                    ariaLabel={t("install.repo.gitBranch")}
                     value={selectedBranch}
                     disabled={!isValid || isLoadingBranches}
-                    onChange={(event) => {
-                      setSelectedBranch(event.target.value);
+                    options={branches.map((branch) => ({
+                      value: branch.name,
+                      label: branch.isDefault
+                        ? t("install.repo.defaultBranch", { branch: branch.name })
+                        : branch.name,
+                    }))}
+                    onChange={(value) => {
+                      setSelectedBranch(value);
                       setCandidates([]);
                       setSelectedPaths([]);
                     }}
-                  >
-                    {branches.map((branch) => (
-                      <option key={branch.name} value={branch.name}>
-                        {branch.isDefault ? t("install.repo.defaultBranch", { branch: branch.name }) : branch.name}
-                      </option>
-                    ))}
-                  </select>
+                  />
                 </label>
               ) : null}
             </div>

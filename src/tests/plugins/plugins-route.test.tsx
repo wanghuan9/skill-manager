@@ -1770,12 +1770,10 @@ test("filters plugin list by enabled state", async () => {
   expect(await screen.findByText("ecc")).toBeInTheDocument();
 
   const filterSelect = screen.getByRole("combobox", { name: "筛选插件状态" });
-  expect(within(filterSelect).queryByRole("option", { name: /异常/ })).not.toBeInTheDocument();
+  await userEvent.click(filterSelect);
+  expect(screen.queryByRole("option", { name: /异常/ })).not.toBeInTheDocument();
 
-  await userEvent.selectOptions(
-    filterSelect,
-    "disabled",
-  );
+  await userEvent.click(screen.getByRole("option", { name: /未启用/ }));
 
   expect(screen.queryByText("Repo Scout")).not.toBeInTheDocument();
   expect(screen.getByText("ecc")).toBeInTheDocument();

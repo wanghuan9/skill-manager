@@ -108,6 +108,139 @@ select {
   font: inherit;
 }
 
+.app-select {
+  position: relative;
+  display: inline-flex;
+  width: 100%;
+  min-width: 0;
+}
+
+.app-select__trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  min-width: 0;
+  min-height: 40px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 0 12px;
+  background: var(--surface-strong);
+  color: var(--heading);
+  font-size: 0.84rem;
+  font-weight: 400;
+  line-height: 1.2;
+  text-align: left;
+  box-shadow: none;
+  cursor: pointer;
+  transition:
+    background-color var(--motion-fast) var(--ease-standard),
+    border-color var(--motion-fast) var(--ease-standard),
+    box-shadow var(--motion-fast) var(--ease-standard);
+}
+
+.app-select__trigger:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 34%, var(--line) 66%);
+}
+
+.app-select__trigger:focus-visible,
+.app-select__trigger[aria-expanded="true"] {
+  outline: none;
+  border-color: color-mix(in srgb, var(--accent) 54%, var(--line) 46%);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.app-select__trigger:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.app-select__value {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-select__chevron {
+  flex: 0 0 12px;
+  width: 12px;
+  height: 12px;
+  color: var(--muted);
+  transition: transform var(--motion-fast) var(--ease-standard);
+}
+
+.app-select__trigger[aria-expanded="true"] .app-select__chevron {
+  transform: rotate(180deg);
+}
+
+.app-select__popover {
+  position: fixed;
+  z-index: 1000;
+  display: grid;
+  gap: 2px;
+  padding: 5px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--heading);
+  box-shadow:
+    0 18px 42px rgba(15, 23, 42, 0.18),
+    0 1px 0 rgba(255, 255, 255, 0.7) inset;
+  transform-origin: top center;
+  animation: menu-surface-in var(--motion-base) var(--ease-emphasized);
+}
+
+.app-select__option {
+  display: grid;
+  grid-template-columns: 17px minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 34px;
+  border: 0;
+  border-radius: 8px;
+  padding: 0 8px;
+  background: transparent;
+  color: inherit;
+  font-size: 0.84rem;
+  font-weight: 400;
+  line-height: 1.25;
+  text-align: left;
+  box-shadow: none;
+  cursor: pointer;
+}
+
+.app-select__option:hover,
+.app-select__option.is-active {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+.app-select__option.is-selected {
+  background: color-mix(in srgb, var(--accent) 11%, transparent);
+  color: var(--heading);
+}
+
+.app-select__option:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 36%, transparent);
+  outline-offset: -2px;
+}
+
+.app-select__option:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.app-select__check {
+  color: inherit;
+  font-size: inherit;
+  font-weight: inherit;
+  text-align: center;
+}
+
 code {
   font-family: "SF Mono", "JetBrains Mono", monospace;
 }
@@ -1665,20 +1798,48 @@ code {
   height: 14px;
 }
 
-.skill-status-filter select {
+.skill-status-filter .app-select {
   width: 100%;
   height: 100%;
+}
+
+.skill-status-filter .app-select__trigger {
+  height: 100%;
+  min-height: 100%;
+  gap: 3px;
   border: 0;
   border-radius: 0;
-  padding: 0 9px 0 26px;
+  padding: 0 7px 0 26px;
   background: transparent;
   color: inherit;
   font-size: 0.76rem;
   line-height: 1;
-  cursor: pointer;
-  appearance: none;
-  -webkit-appearance: none;
   outline: 0;
+  box-shadow: none;
+}
+
+.skill-status-filter .app-select__chevron {
+  display: none;
+}
+
+.skill-status-filter__popover {
+  gap: 1px;
+  padding: 2px;
+  border-radius: 9px;
+}
+
+.skill-status-filter__popover .app-select__option {
+  grid-template-columns: 11px minmax(0, 1fr);
+  gap: 3px;
+  min-height: 26px;
+  padding: 0 4px;
+  border-radius: 6px;
+  font-size: 0.76rem;
+  white-space: nowrap;
+}
+
+.skill-status-filter__popover .app-select__check {
+  font-size: 0.68rem;
 }
 
 .skill-status-filter:focus-within {
@@ -1695,8 +1856,8 @@ code {
   flex-basis: 104px;
 }
 
-.plugins-page__toolbar-filter select {
-  padding-right: 12px;
+.plugins-page__toolbar-filter .app-select__trigger {
+  padding-right: 8px;
 }
 
 .toolbar {
@@ -1709,7 +1870,8 @@ code {
 .search-field input,
 .select-field select,
 .repo-form input,
-.repo-form select {
+.repo-form select,
+.repo-form .app-select__trigger {
   display: block;
   width: 100%;
   height: 44px;
@@ -1723,14 +1885,14 @@ code {
   line-height: 1.2;
 }
 
-.repo-form select {
+.repo-form select,
+.repo-form .app-select__trigger {
   padding-right: 34px;
-  appearance: none;
-  -webkit-appearance: none;
-  background:
-    linear-gradient(45deg, transparent 50%, currentColor 50%) calc(100% - 18px) 50% / 6px 6px no-repeat,
-    linear-gradient(135deg, currentColor 50%, transparent 50%) calc(100% - 13px) 50% / 6px 6px no-repeat,
-    var(--surface-strong);
+}
+
+.repo-form .app-select__chevron {
+  position: absolute;
+  right: 13px;
 }
 
 .search-field input:focus,
@@ -7507,7 +7669,7 @@ button.settings-form-item:disabled {
   max-width: 100%;
 }
 
-.settings-form-item__control select {
+.settings-form-item__control .app-select__trigger {
   width: 100%;
   min-height: 38px;
   border: 1px solid #dce4f0;
@@ -7518,7 +7680,8 @@ button.settings-form-item:disabled {
   font-size: 0.82rem;
 }
 
-.settings-form-item__control select:focus {
+.settings-form-item__control .app-select__trigger:focus-visible,
+.settings-form-item__control .app-select__trigger[aria-expanded="true"] {
   outline: none;
   border-color: #9fb9f9;
   box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.12);
@@ -11397,7 +11560,7 @@ button.settings-form-item:disabled {
   color: var(--muted);
 }
 
-:root[data-theme="dark"] .settings-form-item__control select,
+:root[data-theme="dark"] .settings-form-item__control .app-select__trigger,
 :root[data-theme="dark"] .settings-form-item__value,
 :root[data-theme="dark"] .settings-form-item--readonly .settings-form-item__value {
   border-color: var(--line);
@@ -11405,7 +11568,8 @@ button.settings-form-item:disabled {
   color: var(--heading);
 }
 
-:root[data-theme="dark"] .settings-form-item__control select:focus {
+:root[data-theme="dark"] .settings-form-item__control .app-select__trigger:focus-visible,
+:root[data-theme="dark"] .settings-form-item__control .app-select__trigger[aria-expanded="true"] {
   border-color: rgba(255, 194, 26, 0.48);
   box-shadow: 0 0 0 3px rgba(255, 194, 26, 0.1);
 }
@@ -12029,6 +12193,25 @@ button.settings-form-item:disabled {
   border-color: #414141;
   background: #242424;
   box-shadow: 0 18px 40px rgba(0, 0, 0, 0.4);
+}
+
+:root[data-theme="dark"] .app-select__popover {
+  border-color: #474747;
+  background: #292929;
+  color: #f1f1f1;
+  box-shadow:
+    0 22px 48px rgba(0, 0, 0, 0.5),
+    0 1px 0 rgba(255, 255, 255, 0.045) inset;
+}
+
+:root[data-theme="dark"] .app-select__option:hover,
+:root[data-theme="dark"] .app-select__option.is-active {
+  background: rgba(255, 255, 255, 0.065);
+}
+
+:root[data-theme="dark"] .app-select__option.is-selected {
+  background: rgba(255, 194, 26, 0.12);
+  color: #fff7dd;
 }
 
 :root[data-theme="dark"] .skills-source-menu-item {

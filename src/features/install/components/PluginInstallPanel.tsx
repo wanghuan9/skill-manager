@@ -3,6 +3,7 @@ import { flushSync } from "react-dom";
 import { listen } from "@tauri-apps/api/event";
 import { useFailureReporter } from "@/app/failure-feedback";
 import { useTranslate } from "@/app/i18n";
+import { AppSelect } from "@/app/components/AppSelect";
 import { useNotifications } from "@/app/notifications";
 import {
   fetchInstalledPlugins,
@@ -909,23 +910,24 @@ export function PluginInstallPanel() {
               {branches.length > 0 ? (
                 <label className="repo-form__field repo-form__field--branch">
                   <span className="repo-form__label">{t("install.plugin.gitRef")}</span>
-                  <select
+                  <AppSelect
+                    ariaLabel={t("install.plugin.gitRef")}
                     disabled={isLoadingBranches}
                     value={gitRef}
-                    onChange={(event) => {
-                      setGitRef(event.target.value);
+                    options={branches.map((branch) => ({
+                      value: branch.name,
+                      label: branch.isDefault
+                        ? t("install.plugin.defaultBranch", { branch: branch.name })
+                        : branch.name,
+                    }))}
+                    onChange={(value) => {
+                      setGitRef(value);
                       setProbes([]);
                       setSelectedPluginRoots([]);
                       setSelectedHostsByPluginRoot({});
                       setProbeSearchQuery("");
                     }}
-                  >
-                    {branches.map((branch) => (
-                      <option key={branch.name} value={branch.name}>
-                        {branch.isDefault ? t("install.plugin.defaultBranch", { branch: branch.name }) : branch.name}
-                      </option>
-                    ))}
-                  </select>
+                  />
                 </label>
               ) : null}
             </div>
