@@ -1,5 +1,5 @@
 import { startTransition, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
-import type { MouseEvent as ReactMouseEvent } from "react";
+import type { MouseEvent as ReactMouseEvent, ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { alignExpandedRowIntoView } from "@/app/utils/align-expanded-row";
 import { ToolbarGoInstallButton } from "@/app/components/ToolbarGoInstallButton";
@@ -40,6 +40,15 @@ import {
 import { buildInstalledToolCards } from "@/features/skills/utils/open-tools";
 import { isToolInstalledStatus } from "@/features/skills/utils/tool-status";
 import { useSkillWorkspace } from "@/features/skills/state/skill-workspace";
+import {
+  ListGridViewToggle,
+  type ListGridViewMode,
+} from "@/features/skills/components/ListGridViewToggle";
+import { PowerToggleIcon } from "@/features/skills/components/PowerToggleIcon";
+import {
+  readToolViewPreference,
+  writeToolViewPreference,
+} from "@/features/skills/utils/tool-view-preference";
 
 type McpFormState = {
   id: string;
@@ -54,6 +63,7 @@ const MCP_CONFIG_PLACEHOLDER_PATTERN = /<[^>]*(?:YOUR|TOKEN|KEY|SECRET|PASSWORD|
 const MCP_MISSING_ENV_PATTERN = /缺少环境变量\s+([A-Z0-9_]+)/i;
 const MCP_CONFIG_PARAM_FIELDS = ["env", "headers"];
 const MCP_SUMMARY_APP_ICON_LIMIT = 7;
+const MCP_GRID_SUMMARY_APP_LIMIT = 6;
 const MCP_AUTO_PROBE_COOLDOWN_MS = 5_000;
 const MCP_LOCAL_ALIGN_COOLDOWN_MS = 2_000;
 const MCP_EMPTY_AUTO_IMPORT_COOLDOWN_MS = 10_000;
@@ -415,6 +425,98 @@ function McpServerMonogram({ server }: { server: McpServerSummary }) {
   );
 }
 
+type McpServerDetailContainerProps = {
+  children: ReactNode;
+  isGridLayout: boolean;
+  server: McpServerSummary;
+  onClose: () => void;
+  onEdit: () => void;
+  t: Translate;
+};
+
+function McpServerDetailContainer({
+  children,
+  isGridLayout,
+  onClose,
+  onEdit,
+  server,
+  t,
+}: McpServerDetailContainerProps) {
+  useEffect(() => {
+    if (!isGridLayout) {
+      return;
+    }
+
+    const previousOverflow = document.body.style.overflow;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        onClose();
+      }
+    };
+
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isGridLayout, onClose]);
+
+  if (!isGridLayout) {
+    return <div className="mcp-server-card__details">{children}</div>;
+  }
+
+  return createPortal(
+    <div
+      className="skill-card-detail-modal__backdrop"
+      role="presentation"
+      onClick={onClose}
+    >
+      <section
+        className="skill-card-detail-modal mcp-server-card__detail-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label={`${t("mcp.card.basicInfo")} ${server.name}`}
+        onClick={(event) => event.stopPropagation()}
+      >
+        <header className="skill-card-detail-modal__header">
+          <div className="skill-card-detail-modal__identity">
+            <McpServerMonogram server={server} />
+            <div className="skill-card-detail-modal__copy">
+              <div className="skill-card-detail-modal__title">
+                <h3>{server.name}</h3>
+              </div>
+            </div>
+          </div>
+          <div className="skill-card-detail-modal__actions">
+            <button
+              className="secondary-button secondary-button--compact skill-card-detail-modal__action is-primary"
+              type="button"
+              onClick={onEdit}
+              aria-label={t("mcp.card.edit", { name: server.name })}
+            >
+              <EditIcon />
+              <span>{t("mcp.card.editTooltip")}</span>
+            </button>
+            <button
+              className="skill-card-detail-modal__close"
+              type="button"
+              onClick={onClose}
+              aria-label={`${t("mcp.card.collapse")} ${server.name}`}
+            >
+              <span aria-hidden="true">×</span>
+            </button>
+          </div>
+        </header>
+        <div className="mcp-server-card__details skill-card-detail-modal__body">
+          {children}
+        </div>
+      </section>
+    </div>,
+    document.body,
+  );
+}
+
 function ImportIcon({ isSpinning = false }: { isSpinning?: boolean }) {
   return (
     <svg className={isSpinning ? "skills-toolbar-button__svg is-spinning" : "skills-toolbar-button__svg"} viewBox="0 0 20 20" fill="none" aria-hidden="true">
@@ -544,6 +646,14 @@ function McpToolLogo({ appId, appName }: McpToolLogoProps) {
   );
 }
 
+function McpSummaryAppIcon({ appId, appName }: McpToolLogoProps) {
+  return (
+    <span className="skill-card__tool-icon" title={appName} aria-hidden="true">
+      <McpToolLogo appId={appId} appName={appName} />
+    </span>
+  );
+}
+
 function McpEnabledAppSummary({ apps }: { apps: McpAppStatus[] }) {
   const { t } = useTranslate();
   const [showEnabledApps, setShowEnabledApps] = useState(false);
@@ -622,6 +732,9 @@ export function McpRoute(props: McpRouteProps = {}) {
   const [errorMessage, setErrorMessage] = useState("");
   const [toolbarContainer, setToolbarContainer] = useState<HTMLElement | null>(null);
   const [expandedServerId, setExpandedServerId] = useState("");
+  const [viewMode, setViewMode] = useState<ListGridViewMode>(() =>
+    readToolViewPreference("mcp:view-mode"),
+  );
   const [collapsedToolSectionIds, setCollapsedToolSectionIds] = useState<Record<string, boolean>>({});
   const [deleteConfirmingServerId, setDeleteConfirmingServerId] = useState("");
   const [deletingServerId, setDeletingServerId] = useState("");
@@ -1186,6 +1299,12 @@ export function McpRoute(props: McpRouteProps = {}) {
     setIsCreating(true);
   }
 
+  function handleViewModeChange(nextViewMode: ListGridViewMode) {
+    setViewMode(nextViewMode);
+    writeToolViewPreference("mcp:view-mode", nextViewMode);
+    setExpandedServerId("");
+  }
+
   function handleCloseDialog() {
     setIsCreating(false);
     setEditingServer(null);
@@ -1249,6 +1368,7 @@ export function McpRoute(props: McpRouteProps = {}) {
           onChange={(event) => setQuery(event.target.value)}
         />
       </label>
+      <ListGridViewToggle value={viewMode} onChange={handleViewModeChange} />
       <button
         className={`secondary-button secondary-button--compact skills-toolbar-button skills-toolbar-button--refresh${isRefreshing ? " is-loading" : ""}`}
         type="button"
@@ -1299,7 +1419,7 @@ export function McpRoute(props: McpRouteProps = {}) {
 
       {errorMessage ? <div className="dialog-error">{errorMessage}</div> : null}
 
-      <section className="mcp-server-list card-list">
+      <section className={`mcp-server-list card-list${viewMode === "grid" ? " tool-card-grid" : ""}`}>
         {filteredServers.map((server) => {
           const isExpanded = expandedServerId === server.id;
           const isToolSectionCollapsed = collapsedToolSectionIds[server.id] ?? false;
@@ -1310,13 +1430,36 @@ export function McpRoute(props: McpRouteProps = {}) {
               && installedAppIdSet.has(app.appId)
               && isMcpAppSupported(app)
             ));
-          const enabledVisibleAppCount = visibleApps.filter((app) => app.isEnabled).length;
+          const enabledVisibleApps = visibleApps.filter((app) => app.isEnabled);
+          const enabledVisibleAppCount = enabledVisibleApps.length;
           const disabledVisibleAppCount = visibleApps.length - enabledVisibleAppCount;
+          const gridSummaryApps = enabledVisibleApps.slice(0, MCP_GRID_SUMMARY_APP_LIMIT);
+          const gridSummaryAppExtraCount = enabledVisibleAppCount - gridSummaryApps.length;
+          const enabledAppsSummaryLabel = enabledVisibleAppCount > 0
+            ? t("mcp.summary.enabledApps", { apps: enabledVisibleApps.map((app) => app.appName).join("、") })
+            : t("mcp.summary.disabled");
           const appBulkAction = pendingAppKey === `${server.id}:apps:enable`
             ? "enable"
             : pendingAppKey === `${server.id}:apps:disable`
               ? "disable"
               : null;
+          const allVisibleAppsEnabled = visibleApps.length > 0 && enabledVisibleAppCount === visibleApps.length;
+          const hasPartiallyEnabledApps = enabledVisibleAppCount > 0 && !allVisibleAppsEnabled;
+          const bulkAppToggleTooltip = appBulkAction
+            ? t("mcp.card.bulkToggle.updating", { name: server.name })
+            : allVisibleAppsEnabled
+              ? t("mcp.card.disableAllApps", { name: server.name })
+              : hasPartiallyEnabledApps
+                ? t("mcp.card.bulkToggle.partial", {
+                    enabled: enabledVisibleAppCount,
+                    total: visibleApps.length,
+                  })
+                : t("mcp.card.enableAllApps", { name: server.name });
+          const bulkAppToggleStateClassName = allVisibleAppsEnabled
+            ? "is-enabled"
+            : hasPartiallyEnabledApps
+              ? "is-partial"
+              : "is-disabled";
           const enabledToolCount = server.tools.filter((tool) => tool.isEnabled).length;
           const totalToolCount = server.tools.length;
           const disabledToolCount = totalToolCount - enabledToolCount;
@@ -1335,7 +1478,7 @@ export function McpRoute(props: McpRouteProps = {}) {
           return (
             <article
               key={server.id}
-              className={`mcp-server-card${isExpanded ? " is-expanded" : ""}`}
+              className={`mcp-server-card${viewMode === "grid" ? " mcp-server-card--grid" : ""}${isExpanded ? " is-expanded" : ""}`}
             >
               <div className="mcp-server-card__header">
                 <div
@@ -1366,10 +1509,10 @@ export function McpRoute(props: McpRouteProps = {}) {
                       <div className="mcp-server-card__title-stack">
                         <div className="mcp-server-card__title-row">
                           <strong>{server.name}</strong>
-                          <span className="status-badge tone-neutral">
+                          <span className="status-badge tone-neutral mcp-server-card__tool-summary-badge">
                             {toolSummaryLabel}
                           </span>
-                          <McpEnabledAppSummary apps={visibleApps} />
+                          {viewMode === "grid" ? null : <McpEnabledAppSummary apps={visibleApps} />}
                           {requiredConfigParamNames.length > 0 ? (
                             <span
                               className="status-badge tone-warning"
@@ -1382,11 +1525,54 @@ export function McpRoute(props: McpRouteProps = {}) {
                         <div className="mcp-server-card__subtitle">
                           {serverDescription}
                         </div>
+                        {viewMode === "grid" ? (
+                          <div className="skill-card__grid-meta mcp-server-card__grid-meta">
+                            <span className={`status-badge skill-card__grid-enabled-badge ${enabledVisibleAppCount > 0 ? "tone-info" : "tone-neutral"}`}>
+                              {enabledVisibleAppCount > 0
+                                ? t("mcp.summary.enabledCount", { count: enabledVisibleAppCount })
+                                : t("mcp.summary.disabled")}
+                            </span>
+                            <div className="skill-card__summary-tools" aria-label={enabledAppsSummaryLabel}>
+                              {gridSummaryApps.map((app) => (
+                                <McpSummaryAppIcon key={app.appId} appId={app.appId} appName={app.appName} />
+                              ))}
+                              {gridSummaryAppExtraCount > 0 ? (
+                                <span className="skill-card__tool-tag skill-card__tool-tag--extra">
+                                  +{gridSummaryAppExtraCount}
+                                </span>
+                              ) : null}
+                            </div>
+                          </div>
+                        ) : null}
                       </div>
                     </div>
                   </div>
                 </div>
                 <div className="skill-card__list-actions mcp-server-card__actions">
+                  {viewMode === "grid" ? (
+                    <span className="skill-card__grid-source-label">
+                      {server.serverType.toUpperCase()}
+                    </span>
+                  ) : null}
+                  <button
+                    className={`skill-card__icon-button plugins-page__toggle-icon-button ${bulkAppToggleStateClassName}`}
+                    type="button"
+                    onClick={() => void handleToggleAllApps(
+                      server,
+                      visibleApps,
+                      !allVisibleAppsEnabled,
+                    )}
+                    aria-label={bulkAppToggleTooltip}
+                    data-tooltip={bulkAppToggleTooltip}
+                    disabled={
+                      Boolean(pendingAppKey)
+                      || Boolean(pendingToolKey)
+                      || visibleApps.length === 0
+                      || isDeleting
+                    }
+                  >
+                    <PowerToggleIcon isSpinning={appBulkAction !== null} />
+                  </button>
                   <button
                     className="skill-card__icon-button"
                     type="button"
@@ -1430,7 +1616,16 @@ export function McpRoute(props: McpRouteProps = {}) {
                 </div>
               </div>
               {isExpanded ? (
-                <div className="mcp-server-card__details">
+                <McpServerDetailContainer
+                  isGridLayout={viewMode === "grid"}
+                  server={server}
+                  onClose={() => setExpandedServerId("")}
+                  onEdit={() => {
+                    setExpandedServerId("");
+                    handleEdit(server);
+                  }}
+                  t={t}
+                >
                   <section>
                     <div className="skill-card__section-header">
                       <h4>{t("mcp.card.basicInfo")}</h4>
@@ -1616,7 +1811,7 @@ export function McpRoute(props: McpRouteProps = {}) {
                       </p>
                     )}
                   </section>
-                </div>
+                </McpServerDetailContainer>
               ) : null}
             </article>
           );

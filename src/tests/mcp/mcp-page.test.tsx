@@ -36,6 +36,44 @@ test("renders MCP toolbar in the page header and hides the app matrix", async ()
   expect(toolbar.lastElementChild).toBe(goInstallButton);
 });
 
+test("switches MCP servers to cards, opens details in a dialog, and restores the preference", async () => {
+  const firstRender = render(<App />);
+
+  await userEvent.click(screen.getByRole("button", { name: "MCP" }));
+  await screen.findByText("context7");
+  const context7ListRow = screen.getByRole("button", { name: "展开 context7" }).closest(".mcp-server-card");
+  expect(within(context7ListRow as HTMLElement).getByRole("button", {
+    name: "已启用 2/11，点击全部启用",
+  })).toHaveClass("plugins-page__toggle-icon-button", "is-partial");
+  await userEvent.click(screen.getByRole("button", { name: "卡片" }));
+
+  expect(document.querySelector(".mcp-server-list")).toHaveClass("tool-card-grid");
+  expect(window.localStorage.getItem("mcp:view-mode")).toBe("grid");
+  const context7Card = screen.getByRole("button", { name: "展开 context7" }).closest(".mcp-server-card");
+  expect(context7Card?.querySelector(".mcp-server-card__title-row")?.children[1]).toHaveTextContent("2 tools");
+  expect(context7Card?.querySelectorAll(".mcp-server-card__grid-meta .skill-card__tool-icon")).toHaveLength(2);
+  expect(context7Card?.querySelector(".mcp-server-card__grid-meta > .status-badge")).toHaveTextContent("已启用 2");
+  expect(context7Card?.querySelector(".mcp-server-card__actions > .skill-card__grid-source-label"))
+    .toHaveTextContent("STDIO");
+  expect(within(context7Card as HTMLElement).getByRole("button", {
+    name: "已启用 2/11，点击全部启用",
+  })).toHaveClass("plugins-page__toggle-icon-button", "is-partial");
+
+  await userEvent.click(screen.getByRole("button", { name: "展开 context7" }));
+  const detailDialog = screen.getByRole("dialog", { name: "基本信息 context7" });
+  expect(detailDialog).toBeInTheDocument();
+  expect(within(detailDialog).getByRole("button", { name: "编辑 context7" })).toBeInTheDocument();
+
+  await userEvent.keyboard("{Escape}");
+  expect(screen.queryByRole("dialog", { name: "基本信息 context7" })).not.toBeInTheDocument();
+
+  firstRender.unmount();
+  render(<App />);
+  await userEvent.click(screen.getByRole("button", { name: "MCP" }));
+  await screen.findByText("context7");
+  expect(document.querySelector(".mcp-server-list")).toHaveClass("tool-card-grid");
+});
+
 test("opens MCP install page from the toolbar go-install action", async () => {
   render(<App />);
 
@@ -1384,6 +1422,23 @@ test("bulk toggles MCP target apps from server details", async () => {
   });
   expect(screen.getAllByText("未启用").length).toBeGreaterThan(0);
   expect(disableAllAppsButton).toBeDisabled();
+});
+
+test("bulk enables MCP target apps from the list power action", async () => {
+  window.localStorage.clear();
+  render(<App />);
+
+  await userEvent.click(screen.getByRole("button", { name: "MCP" }));
+  const bulkToggleButton = await screen.findByRole("button", {
+    name: "已启用 2/11，点击全部启用",
+  });
+
+  await userEvent.click(bulkToggleButton);
+
+  await waitFor(() => {
+    expect(screen.getByRole("button", { name: "全部关闭 context7 启用到工具" })).toBeEnabled();
+  });
+  expect(screen.getByText("已启用 11")).toBeInTheDocument();
 });
 
 test("shows MCP tools discovery errors when refresh fails due to missing env", async () => {

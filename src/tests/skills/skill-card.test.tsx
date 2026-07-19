@@ -1,9 +1,10 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 import { AppI18nProvider } from "@/app/i18n";
 import { NotificationProvider } from "@/app/notifications";
 import { SkillCard } from "@/features/skills/components/SkillCard";
+import * as skillClient from "@/features/skills/api/skill-client";
 import { installedSkillFixtures } from "@/features/skills/state/skill-fixtures";
 import { SkillWorkspaceProvider } from "@/features/skills/state/skill-workspace";
 
@@ -41,6 +42,32 @@ test("uses the neutral list color for disabled card status", () => {
   expect(screen.queryByRole("button", { name: "drawio-diagram 更多操作" })).not.toBeInTheDocument();
 });
 
+test.each(["list", "grid"] as const)("bulk enables a skill from the %s action", async (layout) => {
+  const skill = installedSkillFixtures.find((item) => item.name === "drawio-diagram");
+  if (!skill) {
+    throw new Error("missing drawio-diagram fixture");
+  }
+  const disabledSkill = {
+    ...skill,
+    tools: skill.tools.map((tool) => ({ ...tool, statusLabel: "未启用" })),
+  };
+  const bulkToggleSpy = vi.spyOn(skillClient, "setSkillAllToolStatuses");
+
+  renderSkillCardWithProviders(disabledSkill, layout);
+
+  const bulkToggleButton = screen.getByRole("button", { name: "启用 drawio-diagram 到全部工具" });
+  expect(bulkToggleButton).toHaveClass("plugins-page__toggle-icon-button", "is-disabled");
+  await userEvent.click(bulkToggleButton);
+
+  await waitFor(() => {
+    expect(bulkToggleSpy).toHaveBeenCalledWith(expect.objectContaining({
+      skillName: "drawio-diagram",
+      enabled: true,
+    }));
+  });
+  bulkToggleSpy.mockRestore();
+});
+
 test("updates directly from list action when skill has remote update", async () => {
   const updateSkill = installedSkillFixtures.find((skill) => skill.name === "excalidraw-diagram");
   if (!updateSkill) {
@@ -52,6 +79,7 @@ test("updates directly from list action when skill has remote update", async () 
   expect(screen.queryByRole("button", { name: "更新" })).not.toBeInTheDocument();
   const updateButton = screen.getByRole("button", { name: /更新 excalidraw-diagram/ });
   expect(updateButton).toBeInTheDocument();
+  expect(updateButton.closest(".skill-card__list-actions")?.querySelector("button")).toBe(updateButton);
   await userEvent.click(updateButton);
   expect(screen.queryByRole("dialog", { name: "更新 skill" })).not.toBeInTheDocument();
   expect(screen.queryByText("将拉取提交")).not.toBeInTheDocument();
@@ -254,8 +282,11 @@ test("shows up to six enabled tools in the card summary", () => {
 
   const { container } = renderSkillCardWithProviders(skillWithManyTools, "grid");
 
+  expect(container.querySelector(".skill-card__grid-meta .skill-card__grid-enabled-badge")).toHaveTextContent("已启用 8");
   expect(container.querySelectorAll(".skill-card__grid-meta .skill-card__tool-icon")).toHaveLength(6);
   expect(container.querySelector(".skill-card__grid-meta .skill-card__tool-tag--extra")).toHaveTextContent("+2");
+  expect(container.querySelector(".skill-card__git-source-badge")).toBeNull();
+  expect(container.querySelector(".skill-card__list-actions .skill-card__grid-source-label")).toHaveTextContent("GitHub");
 });
 
 test("uses inline confirmation before deleting a skill", async () => {

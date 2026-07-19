@@ -254,6 +254,16 @@ export function SkillListToolbar(props: SkillToolbarProps) {
         >
           <ListIcon />
         </button>
+        <button
+          className={`skills-view-toggle__button${viewMode === "grid" ? " is-active" : ""}`}
+          type="button"
+          aria-pressed={viewMode === "grid"}
+          aria-label={t("skills.view.grid")}
+          data-tooltip={t("skills.view.grid")}
+          onClick={() => onViewModeChange("grid")}
+        >
+          <GridIcon />
+        </button>
         {isManagedSource ? (
           <button
             className={`skills-view-toggle__button${viewMode === "grouped" ? " is-active" : ""}`}
@@ -266,16 +276,6 @@ export function SkillListToolbar(props: SkillToolbarProps) {
             <GroupIcon />
           </button>
         ) : null}
-        <button
-          className={`skills-view-toggle__button${viewMode === "grid" ? " is-active" : ""}`}
-          type="button"
-          aria-pressed={viewMode === "grid"}
-          aria-label={t("skills.view.grid")}
-          data-tooltip={t("skills.view.grid")}
-          onClick={() => onViewModeChange("grid")}
-        >
-          <GridIcon />
-        </button>
       </div>
       <label className="skill-status-filter">
         <span className="sr-only">{t(isManagedSource ? "skills.filter.aria" : "skills.source.filter.aria")}</span>

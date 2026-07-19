@@ -12,6 +12,7 @@ type RowAction = {
   icon?: ReactNode;
   tooltip?: string;
   content?: ReactNode;
+  modalLabel?: string;
 };
 
 type RowBadge = {
@@ -33,7 +34,22 @@ type ToolListRowProps = {
   actions?: RowAction[];
   expandLabel?: string;
   collapseLabel?: string;
+  layout?: "list" | "grid";
+  gridBadges?: RowBadge[];
+  gridMeta?: ReactNode;
+  gridFooter?: ReactNode;
 };
+
+function ToolListRowBadges({ badges }: { badges: RowBadge[] }) {
+  return badges.map((badge, badgeIndex) => (
+    <span
+      key={badge.key ?? `${badge.tone ?? "neutral"}:${typeof badge.label === "string" ? badge.label : badgeIndex}`}
+      className={`status-badge tone-${badge.tone ?? "neutral"}`}
+    >
+      {badge.label}
+    </span>
+  ));
+}
 
 export function ToolListRow(props: ToolListRowProps) {
   const {
@@ -49,11 +65,68 @@ export function ToolListRow(props: ToolListRowProps) {
     subtitle,
     expandLabel = "展开",
     collapseLabel = "收起",
+    layout = "list",
+    gridBadges = [],
+    gridMeta,
+    gridFooter,
   } = props;
+  const isGridLayout = layout === "grid";
+
+  useEffect(() => {
+    if (!expanded || layout !== "grid") {
+      return;
+    }
+
+    const previousOverflow = document.body.style.overflow;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        onExpandedChange(false);
+      }
+    };
+
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [expanded, layout, onExpandedChange]);
+
+  const actionButtons = (modal: boolean) => actions.map((action) => {
+    if (action.content) {
+      return (
+        <span key={action.key} className={action.className}>
+          {action.content}
+        </span>
+      );
+    }
+
+    const isIconAction = Boolean(action.icon);
+    return (
+      <button
+        key={action.key}
+        className={modal
+          ? `secondary-button secondary-button--compact skill-card-detail-modal__action${action.className?.includes("--update") ? " is-primary" : ""}`
+          : action.className ?? (isIconAction ? "skill-card__icon-button" : "secondary-button secondary-button--compact")}
+        type="button"
+        onClick={action.onClick}
+        disabled={action.disabled}
+        aria-label={action.ariaLabel ?? action.label}
+        data-tooltip={modal ? undefined : action.tooltip}
+      >
+        {modal ? (
+          <>
+            {action.icon}
+            <span>{action.modalLabel ?? action.label}</span>
+          </>
+        ) : action.icon ?? action.label}
+      </button>
+    );
+  });
 
   return (
     <article
-      className={`tool-list-row${expanded ? " is-expanded" : ""}`}
+      className={`tool-list-row${isGridLayout ? " tool-list-row--grid" : ""}${expanded ? " is-expanded" : ""}`}
       data-tool-list-row-id={rowId}
     >
       <div className="tool-list-row__header">
@@ -68,59 +141,89 @@ export function ToolListRow(props: ToolListRowProps) {
           <div className="tool-list-row__title-stack">
             <div className="tool-list-row__title-row">
               <strong>{name}</strong>
-              {badges.map((badge, badgeIndex) => (
-                <span
-                  key={badge.key ?? `${badge.tone ?? "neutral"}:${typeof badge.label === "string" ? badge.label : badgeIndex}`}
-                  className={`status-badge tone-${badge.tone ?? "neutral"}`}
-                >
-                  {badge.label}
-                </span>
-              ))}
+              <ToolListRowBadges badges={isGridLayout ? badges.slice(0, 1) : badges} />
             </div>
+            {isGridLayout ? (
+              <div className="tool-list-row__grid-badges">
+                <ToolListRowBadges badges={gridBadges} />
+              </div>
+            ) : null}
             <p className="tool-list-row__subtitle">{subtitle}</p>
+            {isGridLayout && gridMeta ? (
+              <div className="skill-card__grid-meta tool-list-row__grid-meta">
+                {gridMeta}
+              </div>
+            ) : null}
           </div>
         </button>
         {meta ? <div className="tool-list-row__meta">{meta}</div> : null}
-        {actions.length > 0 ? (
+        {actions.length > 0 || isGridLayout ? (
           <div className="tool-list-row__actions">
-            {actions.map((action) => {
-              if (action.content) {
-                return (
-                  <span
-                    key={action.key}
-                    className={action.className}
-                  >
-                    {action.content}
-                  </span>
-                );
-              }
-
-              const isIconAction = Boolean(action.icon);
-
-              return (
-                <button
-                  key={action.key}
-                  className={
-                    action.className ??
-                    (isIconAction ? "skill-card__icon-button" : "secondary-button secondary-button--compact")
-                  }
-                  type="button"
-                  onClick={action.onClick}
-                  disabled={action.disabled}
-                  aria-label={action.ariaLabel ?? action.label}
-                  data-tooltip={action.tooltip}
-                >
-                  {action.icon ?? action.label}
-                </button>
-              );
-            })}
+            {isGridLayout && gridFooter ? (
+              <span className="tool-list-row__grid-footer">{gridFooter}</span>
+            ) : null}
+            {actionButtons(false)}
+            {isGridLayout ? (
+              <span className="tool-list-row__chevron" aria-hidden="true">
+                {expanded ? "⌄" : "›"}
+              </span>
+            ) : null}
           </div>
         ) : null}
-        <span className="tool-list-row__chevron" aria-hidden="true">
-          {expanded ? "⌄" : "›"}
-        </span>
+        {!isGridLayout ? (
+          <span className="tool-list-row__chevron" aria-hidden="true">
+            {expanded ? "⌄" : "›"}
+          </span>
+        ) : null}
       </div>
-      {expanded ? <div className="tool-list-row__details">{details}</div> : null}
+      {expanded && !isGridLayout ? <div className="tool-list-row__details">{details}</div> : null}
+      {expanded && isGridLayout ? createPortal(
+        <div
+          className="skill-card-detail-modal__backdrop"
+          role="presentation"
+          onClick={() => onExpandedChange(false)}
+        >
+          <section
+            className="skill-card-detail-modal tool-list-row__detail-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-label={name}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <header className="skill-card-detail-modal__header">
+              <div className="skill-card-detail-modal__identity tool-list-row__detail-identity">
+                {leading ? <span className="tool-list-row__leading">{leading}</span> : null}
+                <div className="skill-card-detail-modal__copy">
+                  <div className="skill-card-detail-modal__title">
+                    <h3>{name}</h3>
+                    <ToolListRowBadges badges={badges.slice(0, 1)} />
+                  </div>
+                </div>
+                {gridBadges.length > 0 ? (
+                  <div className="tool-list-row__modal-badges">
+                    <ToolListRowBadges badges={gridBadges} />
+                  </div>
+                ) : null}
+              </div>
+              <div className="skill-card-detail-modal__actions">
+                {actionButtons(true)}
+                <button
+                  className="skill-card-detail-modal__close"
+                  type="button"
+                  onClick={() => onExpandedChange(false)}
+                  aria-label={`${collapseLabel} ${name}`}
+                >
+                  <span aria-hidden="true">×</span>
+                </button>
+              </div>
+            </header>
+            <div className="tool-list-row__details skill-card-detail-modal__body">
+              {details}
+            </div>
+          </section>
+        </div>,
+        document.body,
+      ) : null}
     </article>
   );
 }

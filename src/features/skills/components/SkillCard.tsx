@@ -5,6 +5,8 @@ import { alignExpandedRowIntoView } from "@/app/utils/align-expanded-row";
 import { useTranslate } from "@/app/i18n";
 import { useNotifications } from "@/app/notifications";
 import { useFailureReporter } from "@/app/failure-feedback";
+import { waitForNextPaint } from "@/app/utils/wait-for-next-paint";
+import { PowerToggleIcon } from "@/features/skills/components/PowerToggleIcon";
 import { SkillStatusBadge } from "@/features/skills/components/SkillStatusBadge";
 import { SkillFileDialog } from "@/features/skills/components/SkillFileDialog";
 import { ToolSyncPanel } from "@/features/skills/components/ToolSyncPanel";
@@ -14,6 +16,7 @@ import type { SkillSummary } from "@/features/skills/state/skill-store";
 import { formatSkillDescription } from "@/features/skills/utils/skill-description";
 import { formatSkillLastEditor } from "@/features/skills/utils/skill-editor";
 import { formatSkillSourceLabel } from "@/features/skills/utils/skill-source";
+import { setSkillAllToolsEnabled } from "@/features/skills/utils/skill-bulk-status";
 import { mergeSkillToolsWithInstalledTools } from "@/features/skills/utils/skill-tools";
 import { formatSkillUpdatedAt } from "@/features/skills/utils/skill-time";
 import { getToolDisplayRank, resolveToolLogoUrl } from "@/features/skills/utils/tool-logo";
@@ -169,15 +172,23 @@ export function SkillCard({
   autoAlignWhenExpanded = false,
   onExpandedChange,
 }: SkillCardProps) {
-  const { t } = useTranslate();
+  const { language, t } = useTranslate();
   const { notify } = useNotifications();
   const reportFailure = useFailureReporter();
-  const { deleteSkill, openSkillWithDefaultTool, toolConfigs, updateSkill } = useSkillWorkspace();
+  const {
+    deleteSkill,
+    openSkillWithDefaultTool,
+    setSkillAllToolStatuses,
+    setToolSkillStatuses,
+    toolConfigs,
+    updateSkill,
+  } = useSkillWorkspace();
   const [expandedState, setExpandedState] = useState(false);
   const [showFileDialog, setShowFileDialog] = useState(false);
   const [isDeleteConfirming, setIsDeleteConfirming] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
+  const [isBulkUpdating, setIsBulkUpdating] = useState(false);
   const [showEnabledTools, setShowEnabledTools] = useState(false);
   const cardRef = useRef<HTMLElement | null>(null);
   const deleteActionRef = useRef<HTMLButtonElement | null>(null);
@@ -194,11 +205,17 @@ export function SkillCard({
   const enabledTools = skillTools
     .filter((tool) => isToolEnabledStatus(tool.statusLabel))
     .sort(compareToolsByDisplayOrder);
+  const totalToolCount = skillTools.length;
+  const allToolsEnabled = totalToolCount > 0 && enabledTools.length === totalToolCount;
+  const hasPartiallyEnabledTools = enabledTools.length > 0 && !allToolsEnabled;
   const gridSummaryTools = enabledTools.slice(0, GRID_SUMMARY_TOOL_LIMIT);
   const gridSummaryToolExtraCount = enabledTools.length - gridSummaryTools.length;
   const summaryToolsLabel = enabledTools.length > 0
     ? t("skill.card.enabledTools", { tools: enabledTools.map((tool) => tool.name).join("、") })
     : t("skill.card.enabledToolsNone");
+  const enabledToolsCountLabel = enabledTools.length > 0
+    ? t("skill.card.enabledCount", { count: enabledTools.length })
+    : t("skill.card.disabled");
   const showDetailAction = skill.collabStatus === "update-available";
   const displaySourceLabel =
     sourceLabel === "本地" || sourceLabel === "Local"
@@ -304,6 +321,46 @@ export function SkillCard({
     }
   }
 
+  async function handleToggleAllSkillTools() {
+    if (isBulkUpdating || totalToolCount === 0) {
+      return;
+    }
+
+    const enabled = !allToolsEnabled;
+    const toolNames = skillTools.map((tool) => tool.name);
+    setIsBulkUpdating(true);
+    try {
+      await waitForNextPaint();
+      const failedToolNames = await setSkillAllToolsEnabled({
+        skillName: skill.name,
+        enabled,
+        toolNames,
+        setSkillAllToolStatuses,
+        setToolSkillStatuses,
+      });
+      if (failedToolNames.length > 0) {
+        reportFailure(new Error(t("skill.tools.bulkResult", {
+          action: t(enabled ? "skill.tools.action.enable" : "skill.tools.action.disable"),
+          success: toolNames.length - failedToolNames.length,
+          failed: failedToolNames.length,
+          names: failedToolNames.join("、"),
+        })), {
+          operation: "toggle_all_skill_tools_from_card",
+          fallbackMessage: t("skill.tools.error.toggle"),
+          context: { skillName: skill.name, enabled, failedToolNames },
+        });
+      }
+    } catch (error) {
+      reportFailure(error, {
+        operation: "toggle_all_skill_tools_from_card",
+        fallbackMessage: t("skill.tools.error.toggle"),
+        context: { skillName: skill.name, enabled },
+      });
+    } finally {
+      setIsBulkUpdating(false);
+    }
+  }
+
   function handleEnabledToolsToggle(event: ReactMouseEvent<HTMLButtonElement>) {
     event.stopPropagation();
     if (enabledTools.length === 0) {
@@ -346,6 +403,18 @@ export function SkillCard({
   }, [expanded, isGridLayout, showFileDialog]);
 
   const updateTooltipLabel = isUpdating ? t("skill.card.tooltip.updating") : t("skill.card.tooltip.update");
+  const bulkToggleTooltipLabel = isBulkUpdating
+    ? t("skill.card.bulkToggle.updating", { name: skill.name })
+    : allToolsEnabled
+      ? t("skill.card.bulkToggle.disable", { name: skill.name })
+      : hasPartiallyEnabledTools
+        ? t("skill.card.bulkToggle.partial", { enabled: enabledTools.length, total: totalToolCount })
+        : t("skill.card.bulkToggle.enable", { name: skill.name });
+  const bulkToggleStateClassName = allToolsEnabled
+    ? "is-enabled"
+    : hasPartiallyEnabledTools
+      ? "is-partial"
+      : "is-disabled";
   const deleteConfirmTooltipLabel = isDeleting ? t("skill.card.tooltip.deleting") : t("skill.card.tooltip.deleteConfirm");
   const deleteAction = isDeleteConfirming || isDeleting ? (
     <button
@@ -437,7 +506,12 @@ export function SkillCard({
           </div>
         </dl>
       </section>
-      <ToolSyncPanel skillName={skill.name} tools={skillTools} />
+      <ToolSyncPanel
+        skillName={skill.name}
+        tools={skillTools}
+        isBulkUpdatingExternally={isBulkUpdating}
+        onBulkUpdatingChange={setIsBulkUpdating}
+      />
     </>
   );
 
@@ -475,9 +549,7 @@ export function SkillCard({
                             aria-label={summaryToolsLabel}
                             disabled={enabledTools.length === 0}
                           >
-                            {enabledTools.length > 0
-                              ? t("skill.card.enabledCount", { count: enabledTools.length })
-                              : t("skill.card.disabled")}
+                            {enabledToolsCountLabel}
                           </button>
                           {showEnabledTools && enabledTools.length > 0 ? (
                             <div className="skill-card__summary-tools" aria-label={summaryToolsLabel}>
@@ -492,7 +564,9 @@ export function SkillCard({
                     <p className="skill-card__summary-description">{summaryDescription}</p>
                     {isGridLayout ? (
                       <div className="skill-card__grid-meta">
-                        <span>{displaySourceLabel}</span>
+                        <span className={`status-badge skill-card__grid-enabled-badge ${enabledTools.length > 0 ? "tone-info" : "tone-neutral"}`}>
+                          {enabledToolsCountLabel}
+                        </span>
                         <div className="skill-card__summary-tools" aria-label={summaryToolsLabel}>
                           {gridSummaryTools.map((tool) => (
                             <SummaryToolIcon key={tool.name} toolName={tool.name} />
@@ -512,10 +586,8 @@ export function SkillCard({
           </div>
           <div className="skill-card__list-actions">
             {isGridLayout ? (
-              <span className={`status-badge ${enabledTools.length > 0 ? "tone-info" : "tone-neutral"}`}>
-                {enabledTools.length > 0
-                  ? t("skill.card.enabledCount", { count: enabledTools.length })
-                  : t("skill.card.disabled")}
+              <span className="skill-card__grid-source-label">
+                <span className="skill-card__grid-source-text">{displaySourceLabel}</span>
               </span>
             ) : (
               <SkillStatusBadge status={skill.collabStatus} />
@@ -532,6 +604,16 @@ export function SkillCard({
                 <RefreshIcon isSpinning={isUpdating} />
               </button>
             ) : null}
+            <button
+              className={`skill-card__icon-button plugins-page__toggle-icon-button ${bulkToggleStateClassName}`}
+              type="button"
+              onClick={() => void handleToggleAllSkillTools()}
+              aria-label={bulkToggleTooltipLabel}
+              data-tooltip={bulkToggleTooltipLabel}
+              disabled={isBulkUpdating || totalToolCount === 0 || isDeleting}
+            >
+              <PowerToggleIcon isSpinning={isBulkUpdating} />
+            </button>
             <button
               className="skill-card__icon-button"
               type="button"
