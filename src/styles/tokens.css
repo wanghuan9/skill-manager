@@ -4120,6 +4120,16 @@ code {
   white-space: nowrap;
 }
 
+.skill-detail-modal__install-button {
+  appearance: none;
+  cursor: pointer;
+}
+
+.skill-detail-modal__install-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
 .skill-detail-modal__action-link:hover {
   border-color: #c6d6f5;
   background: #f8fafe;

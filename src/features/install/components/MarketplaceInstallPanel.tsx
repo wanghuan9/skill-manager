@@ -211,7 +211,13 @@ export function MarketplaceInstallPanel(props: MarketplaceInstallPanelProps) {
         )}
       </div>
       {selectedSkill ? (
-        <SkillDetailModal skill={selectedSkill} onClose={() => setSelectedSkill(null)} />
+        <SkillDetailModal
+          skill={selectedSkill}
+          isInstalled={installedMarketplaceSkillIds.has(selectedSkill.id)}
+          isInstalling={installingMarketplaceSkillIds.has(selectedSkill.id)}
+          onInstall={() => void handleInstallSkill(selectedSkill)}
+          onClose={() => setSelectedSkill(null)}
+        />
       ) : null}
     </section>
   );
@@ -219,11 +225,14 @@ export function MarketplaceInstallPanel(props: MarketplaceInstallPanelProps) {
 
 type SkillDetailModalProps = {
   skill: MarketplaceSkill;
+  isInstalled: boolean;
+  isInstalling: boolean;
+  onInstall: () => void;
   onClose: () => void;
 };
 
 function SkillDetailModal(props: SkillDetailModalProps) {
-  const { skill, onClose } = props;
+  const { skill, isInstalled, isInstalling, onInstall, onClose } = props;
   const { t } = useTranslate();
 
   useEffect(() => {
@@ -265,6 +274,15 @@ function SkillDetailModal(props: SkillDetailModalProps) {
             </p>
           </div>
           <div className="skill-detail-modal__actions">
+            <button
+              className="skill-detail-modal__action-link skill-detail-modal__action-link--primary skill-detail-modal__install-button"
+              type="button"
+              disabled={isInstalled || isInstalling}
+              onClick={onInstall}
+            >
+              <DownloadIcon />
+              {isInstalled ? t("install.market.installed") : isInstalling ? t("install.market.installing") : t("install.market.install")}
+            </button>
             {marketplaceUrl ? (
               <a
                 className="skill-detail-modal__action-link"
@@ -279,7 +297,7 @@ function SkillDetailModal(props: SkillDetailModalProps) {
               </a>
             ) : null}
             <a
-              className="skill-detail-modal__action-link skill-detail-modal__action-link--primary"
+              className="skill-detail-modal__action-link"
               href={officialRepositoryUrl}
               onClick={(event) => {
                 event.preventDefault();

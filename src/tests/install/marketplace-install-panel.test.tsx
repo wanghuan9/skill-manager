@@ -151,6 +151,44 @@ test("loads the complete skill tree and previews files on demand", async () => {
   });
 });
 
+test("installs a marketplace skill from the detail modal", async () => {
+  const installFromMarket = vi.fn().mockResolvedValue(undefined);
+  mockedUseSkillWorkspace.mockReturnValue({
+    language: "zh-CN",
+    installingMarketplaceSkillIds: new Set(),
+    installFromMarket,
+  } as unknown as ReturnType<typeof useSkillWorkspace>);
+
+  renderWithI18n(
+    <NotificationProvider>
+      <MarketplaceInstallPanel
+        activeSourceSite="skills.sh"
+        sourceTabs={["skills.sh", "skillsmp"]}
+        marketplaceSkills={[marketplaceSkillFixtures[0]]}
+        onSourceChange={vi.fn()}
+        searchQuery=""
+        onSearchQueryChange={vi.fn()}
+        isSearching={false}
+        isSearchLoading={false}
+        isInitialLoading={false}
+        isLoadingMore={false}
+        hasMore={false}
+        installedMarketplaceSkillIds={new Set()}
+        onLoadMore={vi.fn()}
+      />
+    </NotificationProvider>,
+  );
+
+  await userEvent.click(screen.getByRole("heading", { name: "workflow-critic", level: 3 }));
+  const detailDialog = screen.getByRole("dialog", { name: "workflow-critic 详情" });
+  const installButton = within(detailDialog).getByRole("button", { name: "安装" });
+
+  expect(installButton).toHaveClass("skill-detail-modal__install-button");
+  await userEvent.click(installButton);
+
+  expect(installFromMarket).toHaveBeenCalledWith(marketplaceSkillFixtures[0]);
+});
+
 test("shows a compact error state when the remote tree is unavailable", async () => {
   const skill = marketplaceSkillFixtures[1];
   mockedFetchMarketplaceSkillFileBrowser.mockRejectedValue("GitHub API 请求受限，请稍后重试");
