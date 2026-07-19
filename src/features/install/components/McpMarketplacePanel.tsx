@@ -663,6 +663,10 @@ export function McpMarketplacePanel(props: McpMarketplacePanelProps) {
             <input
               className="market-search-input"
               type="search"
+              autoComplete="off"
+              autoCorrect="off"
+              autoCapitalize="none"
+              spellCheck={false}
               value={searchQuery}
               placeholder={t("install.mcp.searchPlaceholder")}
               onChange={(event) => onSearchQueryChange(event.target.value)}

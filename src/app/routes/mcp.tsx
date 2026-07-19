@@ -1363,6 +1363,10 @@ export function McpRoute(props: McpRouteProps = {}) {
         <span className="sr-only">{t("mcp.toolbar.search")}</span>
         <input
           type="search"
+          autoComplete="off"
+          autoCorrect="off"
+          autoCapitalize="none"
+          spellCheck={false}
           placeholder={t("mcp.toolbar.searchPlaceholder")}
           value={query}
           onChange={(event) => setQuery(event.target.value)}

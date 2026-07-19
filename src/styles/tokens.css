@@ -8477,6 +8477,10 @@ button.settings-form-item:disabled {
   gap: 10px;
 }
 
+.plugins-page__toolbar-actions {
+  flex: 0 0 auto;
+}
+
 .plugins-page__search {
   flex: 0 1 230px;
   min-width: 180px;
