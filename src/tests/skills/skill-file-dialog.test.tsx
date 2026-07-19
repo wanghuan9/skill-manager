@@ -90,15 +90,41 @@ beforeEach(() => {
             { path: "", name: "drawio-diagram", entryType: "directory", depth: 0 },
             { path: "reference", name: "reference", entryType: "directory", depth: 1 },
             { path: "reference/generation.md", name: "generation.md", entryType: "file", depth: 2 },
+            { path: "scripts", name: "scripts", entryType: "directory", depth: 1 },
+            { path: "scripts/render.ts", name: "render.ts", entryType: "file", depth: 2 },
             { path: "SKILL.md", name: "SKILL.md", entryType: "file", depth: 1 },
           ],
         };
       case "get_skill_file_content":
+        if ((args as { relativePath: string }).relativePath === "scripts/render.ts") {
+          return {
+            path: "scripts/render.ts",
+            content: "export const renderSkill = (name: string) => name;",
+          };
+        }
         return {
           path: (args as { relativePath: string }).relativePath,
           content:
             (args as { relativePath: string }).relativePath === "SKILL.md"
-              ? "# drawio-diagram\n\n用于根据项目上下文生成 Draw.io 图表。\n\n## 使用时机\n\n- 需要输出架构图\n- 需要输出流程图\n\n## 规范文件\n\n[生成说明](reference/generation.md)\n"
+              ? [
+                  "# drawio-diagram",
+                  "",
+                  "用于根据项目上下文生成 Draw.io 图表。",
+                  "",
+                  "```ts",
+                  "const ready = true;",
+                  "```",
+                  "",
+                  "## 使用时机",
+                  "",
+                  "- 需要输出架构图",
+                  "- 需要输出流程图",
+                  "",
+                  "## 规范文件",
+                  "",
+                  "[生成说明](reference/generation.md)",
+                  "",
+                ].join("\n")
               : "reference doc",
         };
       case "save_skill_file_content":
@@ -141,6 +167,28 @@ test("switches between edit and markdown preview views", async () => {
   await userEvent.click(screen.getByRole("button", { name: "预览" }));
 
   expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+});
+
+test("uses modern file icons and highlights markdown and code files", async () => {
+  renderSkillFileDialog();
+
+  await screen.findByRole("dialog", { name: "drawio-diagram" });
+  const skillFileButton = screen.getByRole("button", { name: "SKILL.md" });
+  const markdownCode = document.querySelector(".skill-file-dialog__markdown code.hljs");
+
+  expect(skillFileButton).toHaveAttribute("title", "SKILL.md");
+  expect(skillFileButton.querySelector("svg")).toBeInTheDocument();
+  expect(screen.queryByText("📄")).not.toBeInTheDocument();
+  expect(markdownCode?.querySelector(".hljs-keyword")).toHaveTextContent("const");
+
+  await userEvent.click(screen.getByRole("button", { name: "展开 scripts" }));
+  await userEvent.click(screen.getByRole("button", { name: "render.ts" }));
+
+  await waitFor(() => {
+    const codePreview = document.querySelector(".skill-file-dialog__code-preview code.language-typescript");
+    expect(codePreview?.querySelector(".hljs-keyword")).toHaveTextContent("export");
+  });
+  expect(screen.getByText("TypeScript")).toHaveClass("skill-file-dialog__language-badge");
 });
 
 test("opens relative markdown links inside the skill file dialog", async () => {
