@@ -11608,3 +11608,159 @@ button.settings-form-item:disabled {
   background: rgba(255, 255, 255, 0.28);
   background-clip: padding-box;
 }
+
+:root[data-theme="dark"] .skills-view-toggle {
+  border-color: #414141;
+  background: #202020;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.03) inset;
+}
+
+:root[data-theme="dark"] .skills-view-toggle__button {
+  color: #bdbdbd;
+}
+
+:root[data-theme="dark"] .skills-view-toggle__button:hover:not(.is-active) {
+  background: rgba(255, 255, 255, 0.065);
+  color: var(--heading);
+}
+
+:root[data-theme="dark"] .skills-view-toggle__button.is-active {
+  background: rgba(255, 194, 26, 0.13);
+  color: var(--accent);
+  box-shadow:
+    0 0 0 1px rgba(255, 194, 26, 0.2) inset,
+    0 4px 10px rgba(0, 0, 0, 0.2);
+}
+
+:root[data-theme="dark"] .skills-view-toggle__button:focus-visible {
+  outline: 3px solid rgba(255, 194, 26, 0.12);
+  outline-offset: 2px;
+}
+
+:root[data-theme="dark"] .skill-card__summary-description,
+:root[data-theme="dark"] .mcp-server-card__subtitle,
+:root[data-theme="dark"] .tool-list-row__subtitle,
+:root[data-theme="dark"] .skill-card__grid-source-label,
+:root[data-theme="dark"] .tool-list-row__grid-footer {
+  color: #c4c4c4;
+}
+
+:root[data-theme="dark"] .skill-card--grid .skill-card__icon-button,
+:root[data-theme="dark"] .skill-card--grid .skill-card__chevron-button,
+:root[data-theme="dark"] .tool-list-row--grid .tool-list-row__actions .skill-card__icon-button:not(.plugins-page__toggle-icon-button),
+:root[data-theme="dark"] .tool-list-row--grid .tool-list-row__chevron,
+:root[data-theme="dark"] .mcp-server-card--grid .mcp-server-card__actions .skill-card__icon-button:not(.plugins-page__toggle-icon-button),
+:root[data-theme="dark"] .mcp-server-card--grid .mcp-server-card__chevron {
+  border-color: #424242;
+  background: #2a2a2a;
+  color: #c4c4c4;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.03) inset;
+}
+
+:root[data-theme="dark"] .skill-card--grid .skill-card__chevron-button:hover,
+:root[data-theme="dark"] .skill-card--grid .skill-card__chevron-button:focus-visible,
+:root[data-theme="dark"] .tool-list-row--grid .tool-list-row__actions .skill-card__icon-button:hover:not(:disabled),
+:root[data-theme="dark"] .mcp-server-card--grid .mcp-server-card__actions .skill-card__icon-button:hover:not(:disabled) {
+  border-color: rgba(255, 194, 26, 0.3);
+  background: rgba(255, 194, 26, 0.1);
+  color: var(--accent);
+}
+
+:root[data-theme="dark"] .skill-card--grid.is-expanded,
+:root[data-theme="dark"] .skill-source-card--grid.is-expanded,
+:root[data-theme="dark"] .mcp-server-card--grid.is-expanded,
+:root[data-theme="dark"] .tool-list-row--grid.is-expanded {
+  border-color: rgba(255, 194, 26, 0.34);
+  background: linear-gradient(180deg, #2b2922 0%, #242424 100%);
+  box-shadow:
+    0 0 0 1px rgba(255, 194, 26, 0.055),
+    0 14px 30px rgba(0, 0, 0, 0.26),
+    0 1px 0 rgba(255, 255, 255, 0.04) inset;
+}
+
+:root[data-theme="dark"] .skill-card-detail-modal__backdrop {
+  background: rgba(0, 0, 0, 0.72);
+}
+
+:root[data-theme="dark"] .skill-card-detail-modal {
+  border-color: #484848;
+  background: linear-gradient(180deg, #292929 0%, #242424 100%);
+  color: var(--text);
+  box-shadow:
+    0 32px 76px rgba(0, 0, 0, 0.56),
+    0 1px 0 rgba(255, 255, 255, 0.045) inset;
+}
+
+:root[data-theme="dark"] .skill-card-detail-modal__header {
+  border-bottom-color: rgba(255, 255, 255, 0.085);
+  background: linear-gradient(180deg, #2d2d2d 0%, #282828 100%);
+}
+
+:root[data-theme="dark"] .skill-card-detail-modal__action.is-primary {
+  border-color: rgba(255, 194, 26, 0.34);
+  background: rgba(255, 194, 26, 0.1);
+  color: var(--accent);
+}
+
+:root[data-theme="dark"] .skill-card-detail-modal__close {
+  border: 1px solid #464646;
+  background: #323232;
+  color: #cfcfcf;
+}
+
+:root[data-theme="dark"] .skill-card-detail-modal__close:hover,
+:root[data-theme="dark"] .skill-card-detail-modal__close:focus-visible {
+  border-color: rgba(255, 194, 26, 0.34);
+  background: #39362e;
+  color: var(--heading);
+}
+
+:root[data-theme="dark"] .skill-card-detail-modal__body {
+  background: #242424;
+}
+
+:root[data-theme="dark"] .detail-git-badge.is-linked,
+:root[data-theme="dark"] .tool-summary-pill {
+  border-color: rgba(255, 194, 26, 0.22);
+  background: rgba(255, 194, 26, 0.1);
+  color: var(--accent);
+}
+
+:root[data-theme="dark"] .marketplace-skill-file-dialog > .skill-file-dialog__body {
+  border-color: #3e3e3e;
+  background: #202020;
+}
+
+:root[data-theme="dark"] .marketplace-skill-file-dialog__state {
+  border-color: #464646;
+  background: rgba(31, 31, 31, 0.8);
+  color: #c4c4c4;
+}
+
+:root[data-theme="dark"] .mcp-server-card__tool-chip {
+  border-color: #444444;
+  background: #2a2a2a;
+  color: #d0d0d0;
+}
+
+:root[data-theme="dark"] .mcp-server-card__tool-chip:hover:not(:disabled) {
+  border-color: rgba(255, 194, 26, 0.3);
+  background: #312f29;
+  color: var(--heading);
+}
+
+:root[data-theme="dark"] .mcp-server-card__tool-chip:focus-visible {
+  outline-color: rgba(255, 194, 26, 0.16);
+}
+
+:root[data-theme="dark"] .mcp-server-card__tool-chip.is-enabled {
+  border-color: rgba(255, 194, 26, 0.28);
+  background: rgba(255, 194, 26, 0.095);
+  color: var(--accent);
+}
+
+:root[data-theme="dark"] .mcp-server-card__tool-chip.is-enabled:hover:not(:disabled) {
+  border-color: rgba(255, 194, 26, 0.42);
+  background: rgba(255, 194, 26, 0.14);
+  color: var(--accent-strong);
+}
