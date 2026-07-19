@@ -27,6 +27,31 @@ test("renders primary navigation entries with plugins before tools and cli hidde
   ]);
 });
 
+test("marks empty macOS page header surfaces as window drag regions", () => {
+  const originalPlatform = window.navigator.platform;
+  Object.defineProperty(window.navigator, "platform", {
+    configurable: true,
+    value: "MacIntel",
+  });
+
+  try {
+    const { container } = render(<App />);
+    const headerLayout = container.querySelector(".page-header--split");
+    const headerRow = container.querySelector(".page-header__row");
+    const searchInput = headerRow?.querySelector("input");
+
+    expect(headerLayout).toHaveAttribute("data-tauri-drag-region");
+    expect(headerRow).toHaveAttribute("data-tauri-drag-region");
+    expect(searchInput).not.toBeNull();
+    expect(searchInput).not.toHaveAttribute("data-tauri-drag-region");
+  } finally {
+    Object.defineProperty(window.navigator, "platform", {
+      configurable: true,
+      value: originalPlatform,
+    });
+  }
+});
+
 test("switches to plugins route", async () => {
   render(<App />);
 

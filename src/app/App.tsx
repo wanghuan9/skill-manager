@@ -440,6 +440,7 @@ function AppContent() {
   const reportFailure = useFailureReporter();
   const initialSkillViewMode = readSkillViewModePreference();
   const isMacOS = isMacOSWindow();
+  const macOSDragRegion = isMacOS ? "" : undefined;
   const brandIconRef = useRef<HTMLDivElement | null>(null);
   const pageContentRef = useRef<HTMLElement | null>(null);
   const [activeRoute, setActiveRoute] = useState<RouteKey>("skills");
@@ -834,8 +835,15 @@ function AppContent() {
         ) : null}
         <header className="page-header">
           {activeRoute === "skills" ? (
-            <div key={`skills-${activeSkillsSection}`} className="page-header--split">
-              <div className="page-header__row">
+            <div
+              key={`skills-${activeSkillsSection}`}
+              className="page-header--split"
+              data-tauri-drag-region={macOSDragRegion}
+            >
+              <div
+                className="page-header__row"
+                data-tauri-drag-region={macOSDragRegion}
+              >
                 <h1>
                   {activeSkillsSection === "mcp"
                     ? "MCP"
@@ -871,8 +879,15 @@ function AppContent() {
               ) : null}
             </div>
           ) : activeRoute === "tools" ? (
-            <div key="tools" className="page-header--split">
-              <div className="page-header__row">
+            <div
+              key="tools"
+              className="page-header--split"
+              data-tauri-drag-region={macOSDragRegion}
+            >
+              <div
+                className="page-header__row"
+                data-tauri-drag-region={macOSDragRegion}
+              >
                 <h1>{tx(language, activeDefinition.labelKey)}</h1>
                 <button
                   className={`ghost-button tools-refresh-button${isWorkspaceRefreshing ? " is-loading" : ""}`}
@@ -929,8 +944,15 @@ function AppContent() {
               <p>{activeDescription}</p>
             </div>
           ) : activeRoute === "install" ? (
-            <div key="install" className="page-header--split">
-              <div className="page-header__row page-header__row--install">
+            <div
+              key="install"
+              className="page-header--split"
+              data-tauri-drag-region={macOSDragRegion}
+            >
+              <div
+                className="page-header__row page-header__row--install"
+                data-tauri-drag-region={macOSDragRegion}
+              >
                 <h1>{tx(language, activeDefinition.labelKey)}</h1>
                 <div
                   className="install-header-toolbar-slot"
@@ -940,8 +962,15 @@ function AppContent() {
               <p>{activeDescription}</p>
             </div>
           ) : activeRoute === "plugins" ? (
-            <div key="plugins" className="page-header--split">
-              <div className="page-header__row">
+            <div
+              key="plugins"
+              className="page-header--split"
+              data-tauri-drag-region={macOSDragRegion}
+            >
+              <div
+                className="page-header__row"
+                data-tauri-drag-region={macOSDragRegion}
+              >
                 <h1>{activePluginHostName ?? tx(language, activeDefinition.labelKey)}</h1>
                 <div
                   className="mcp-header-toolbar-slot"
@@ -955,7 +984,11 @@ function AppContent() {
               />
             </div>
           ) : (
-            <div key={activeRoute} className="page-header--split">
+            <div
+              key={activeRoute}
+              className="page-header--split"
+              data-tauri-drag-region={macOSDragRegion}
+            >
               <h1>{tx(language, activeDefinition.labelKey)}</h1>
               <p>{activeDescription}</p>
             </div>
