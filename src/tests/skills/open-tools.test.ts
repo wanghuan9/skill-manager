@@ -22,7 +22,7 @@ function buildToolConfig(overrides: Partial<ToolConfig>): ToolConfig {
   };
 }
 
-test("adds Finder as a selectable default open tool", () => {
+test("adds Folder as a selectable default open tool", () => {
   const options = buildOpenToolOptions([
     buildToolConfig({ id: "cursor", name: "Cursor" }),
     buildToolConfig({
@@ -45,7 +45,7 @@ test("adds Finder as a selectable default open tool", () => {
   expect(options.map((tool) => tool.id)).toEqual(["cursor", "vscode", "intellij", "finder"]);
 });
 
-test("falls back to Finder when no editor can open directories directly", () => {
+test("falls back to Folder when no editor can open directories directly", () => {
   const options = buildOpenToolOptions([
     buildToolConfig({
       id: "claude-code",
@@ -64,7 +64,7 @@ test("falls back to Finder when no editor can open directories directly", () => 
   expect(options).toEqual([
     {
       id: "finder",
-      name: "访达",
+      name: "文件夹",
       primaryType: "desktop",
     },
   ]);
@@ -132,7 +132,7 @@ test("treats renamed Devin install as the windsurf tool id", () => {
   expect(editorId).toBe("windsurf");
 });
 
-test("returns Finder when no direct-open editor is available", () => {
+test("returns Folder when no direct-open editor is available", () => {
   const editorId = resolveDefaultOpenToolId([
     buildToolConfig({
       id: "claude-code",

@@ -562,6 +562,20 @@ function AppContent() {
     setSkillViewMode(defaultSkillViewMode);
   }, [hasSavedSkillViewPreference, installedSkills.length]);
 
+  useEffect(() => {
+    if (activeRoute !== "skills") {
+      return;
+    }
+
+    const savedMode = readSkillViewModePreference();
+    if (!savedMode || savedMode === skillViewMode) {
+      return;
+    }
+
+    setSkillViewMode(savedMode);
+    setHasSavedSkillViewPreference(true);
+  }, [activeRoute, skillViewMode]);
+
   useLayoutEffect(() => {
     if (!isMacOS || typeof window === "undefined") {
       setSidebarHandleTop(null);

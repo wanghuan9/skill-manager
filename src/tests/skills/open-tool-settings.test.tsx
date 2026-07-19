@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { invoke } from "@tauri-apps/api/core";
 import { vi } from "vitest";
@@ -38,7 +38,7 @@ test("allows selecting default open tool in settings", async () => {
   expect(screen.getByRole("option", { name: "Cursor" })).toBeInTheDocument();
   expect(screen.getByRole("option", { name: "VS Code" })).toBeInTheDocument();
   expect(screen.getByRole("option", { name: "IntelliJ IDEA" })).toBeInTheDocument();
-  expect(screen.getByRole("option", { name: "访达" })).toBeInTheDocument();
+  expect(screen.getByRole("option", { name: "文件夹" })).toBeInTheDocument();
   expect(screen.queryByRole("option", { name: "Claude Code" })).not.toBeInTheDocument();
   expect(screen.queryByRole("option", { name: "Codex" })).not.toBeInTheDocument();
 
@@ -48,7 +48,7 @@ test("allows selecting default open tool in settings", async () => {
 
   await userEvent.selectOptions(select, "finder");
 
-  expect(screen.getByDisplayValue("访达")).toBeInTheDocument();
+  expect(screen.getByDisplayValue("文件夹")).toBeInTheDocument();
 
   await userEvent.click(screen.getByLabelText("新增 Skill 默认启用"));
   expect(screen.getByLabelText("新增 Skill 默认启用")).toHaveAttribute("aria-pressed", "false");
@@ -72,6 +72,41 @@ test("allows selecting default open tool in settings", async () => {
 
   await userEvent.click(screen.getByRole("button", { name: "工具状态" }));
   expect(screen.queryByText("CodeBuddy")).not.toBeInTheDocument();
+});
+
+test("applies the shared card preference without locking individual page layouts", async () => {
+  const user = userEvent.setup();
+  window.localStorage.clear();
+  render(<App />);
+
+  await user.click(screen.getByRole("button", { name: /设置/ }));
+  const preferenceGroup = screen.getByRole("group", { name: "卡片样式偏好" });
+  await user.click(within(preferenceGroup).getByRole("button", { name: "卡片" }));
+
+  expect(window.localStorage.getItem("skills:view-mode")).toBe("grid");
+  expect(window.localStorage.getItem("mcp:view-mode")).toBe("grid");
+  expect(window.localStorage.getItem("plugins:view-mode")).toBe("grid");
+
+  await user.click(screen.getByRole("button", { name: /Skills/ }));
+  await waitFor(() => {
+    expect(screen.getByRole("button", { name: "卡片" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  await user.click(screen.getByRole("button", { name: "列表" }));
+  expect(window.localStorage.getItem("skills:view-mode")).toBe("list");
+  expect(window.localStorage.getItem("mcp:view-mode")).toBe("grid");
+  expect(window.localStorage.getItem("plugins:view-mode")).toBe("grid");
+
+  await user.click(screen.getByRole("button", { name: "MCP" }));
+  expect(screen.getByRole("button", { name: "卡片" })).toHaveAttribute("aria-pressed", "true");
+
+  await user.click(screen.getByRole("button", { name: /Plugins/ }));
+  expect(screen.getByRole("button", { name: "卡片" })).toHaveAttribute("aria-pressed", "true");
+
+  await user.click(screen.getByRole("button", { name: /设置/ }));
+  expect(
+    within(screen.getByRole("group", { name: "卡片样式偏好" })).getByRole("button", { name: "卡片" }),
+  ).toHaveAttribute("aria-pressed", "true");
 });
 
 test("switches between the two Skill source bar styles", async () => {
@@ -215,7 +250,7 @@ test("shows release notes controls in English settings", async () => {
   expect(screen.getByText("Improve update summary readability.")).toBeInTheDocument();
 });
 
-test("opens storage path in Finder from settings", async () => {
+test("opens the storage folder from settings", async () => {
   window.localStorage.clear();
   const invokeMock = vi.mocked(invoke);
   invokeMock.mockClear();
