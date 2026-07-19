@@ -18,6 +18,7 @@ vi.mock("@/app/utils/align-expanded-row", () => ({
 afterEach(() => {
   vi.clearAllMocks();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   delete (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
 });
 
@@ -293,16 +294,28 @@ test("switches interface language to English from settings", async () => {
   expect(screen.getByLabelText("Interface Language")).toHaveAttribute("data-value", "en");
 });
 
-test("switches and persists the interface theme from settings", async () => {
+test("defaults to the system theme and persists explicit theme choices", async () => {
   const user = userEvent.setup();
   window.localStorage.clear();
+  const mediaQuery = {
+    matches: true,
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+  };
+  vi.stubGlobal("matchMedia", vi.fn(() => mediaQuery));
   render(<App />);
 
   await user.click(screen.getByRole("button", { name: /设置/ }));
 
-  const lightThemeButton = screen.getByRole("button", { name: "浅色" });
   const darkThemeButton = screen.getByRole("button", { name: "深色" });
-  expect(lightThemeButton).toHaveAttribute("aria-pressed", "true");
+  const systemThemeButton = screen.getByRole("button", { name: "跟随系统" });
+  expect(systemThemeButton).toHaveAttribute("aria-pressed", "true");
+  expect(document.documentElement).toHaveAttribute("data-theme", "dark");
+  expect(window.localStorage.getItem("skilldock.settings.theme")).toBe("system");
+
+  mediaQuery.matches = false;
+  const handleSystemThemeChange = mediaQuery.addEventListener.mock.calls[0]?.[1] as (() => void) | undefined;
+  handleSystemThemeChange?.();
   expect(document.documentElement).toHaveAttribute("data-theme", "light");
 
   await user.click(darkThemeButton);
@@ -320,4 +333,5 @@ test("switches and persists the interface theme from settings", async () => {
 
   expect(restoredLightThemeButton).toHaveAttribute("aria-pressed", "true");
   expect(document.documentElement).toHaveAttribute("data-theme", "light");
+  expect(window.localStorage.getItem("skilldock.settings.theme")).toBe("light");
 });

@@ -308,7 +308,7 @@ export type InstallActivationMode = "apply-all-tools" | "disable-all-tools";
 export type SkillSourceViewStyle = "flat" | "select";
 export type AppLanguage = "zh-CN" | "en";
 export type AppLanguageSource = "auto" | "user";
-export type AppTheme = "light" | "dark";
+export type AppTheme = "light" | "dark" | "system";
 
 export type AppSettings = {
   storagePath: string;

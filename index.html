@@ -4,10 +4,24 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Skill Workspace</title>
+    <script>
+      (() => {
+        const storedTheme = window.localStorage.getItem("skilldock.settings.theme");
+        const theme = storedTheme === "light" || storedTheme === "dark" ? storedTheme : "system";
+        const resolvedTheme = theme === "system"
+          ? (window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light")
+          : theme;
+        document.documentElement.dataset.theme = resolvedTheme;
+      })();
+    </script>
     <style>
       html {
         min-height: 100%;
         background: #f3f6fb;
+      }
+
+      html[data-theme="dark"] {
+        background: #181818;
       }
 
       body {
@@ -18,6 +32,11 @@
           radial-gradient(circle at 92% 100%, rgba(177, 229, 236, 0.2) 0%, rgba(177, 229, 236, 0) 36%),
           linear-gradient(180deg, #f8fbff 0%, #f3f6fb 55%, #edf3fb 100%);
         color: #1f2937;
+      }
+
+      html[data-theme="dark"] body {
+        background: #181818;
+        color: #e8e8e8;
       }
 
       #root {

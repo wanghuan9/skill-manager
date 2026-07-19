@@ -192,10 +192,22 @@ const SkillWorkspaceContext = createContext<SkillWorkspaceContextValue | null>(n
 
 function readStoredAppTheme(): AppTheme {
   if (typeof window === "undefined") {
-    return "light";
+    return "system";
   }
 
-  return window.localStorage.getItem(APP_THEME_STORAGE_KEY) === "dark" ? "dark" : "light";
+  const storedTheme = window.localStorage.getItem(APP_THEME_STORAGE_KEY);
+  return storedTheme === "light" || storedTheme === "dark" ? storedTheme : "system";
+}
+
+function resolveAppTheme(theme: AppTheme): "light" | "dark" {
+  if (theme !== "system") {
+    return theme;
+  }
+
+  return typeof window !== "undefined"
+    && window.matchMedia?.("(prefers-color-scheme: dark)").matches
+    ? "dark"
+    : "light";
 }
 
 type SkillWorkspaceProviderProps = {
@@ -586,8 +598,25 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
   }
 
   useLayoutEffect(() => {
-    document.documentElement.dataset.theme = appSettings.theme;
+    const mediaQuery = window.matchMedia?.("(prefers-color-scheme: dark)");
+    const applyTheme = () => {
+      document.documentElement.dataset.theme = resolveAppTheme(appSettings.theme);
+    };
+
+    applyTheme();
     window.localStorage.setItem(APP_THEME_STORAGE_KEY, appSettings.theme);
+
+    if (appSettings.theme !== "system" || !mediaQuery) {
+      return;
+    }
+
+    if (typeof mediaQuery.addEventListener === "function") {
+      mediaQuery.addEventListener("change", applyTheme);
+      return () => mediaQuery.removeEventListener("change", applyTheme);
+    }
+
+    mediaQuery.addListener(applyTheme);
+    return () => mediaQuery.removeListener(applyTheme);
   }, [appSettings.theme]);
 
   useEffect(() => {
