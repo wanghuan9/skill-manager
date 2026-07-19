@@ -3197,7 +3197,7 @@ export function PluginsRoute(props: PluginsRouteProps = {}) {
           onClick={() => setUpdateConfirmingPlugin(null)}
         >
           <section
-            className="skill-file-dialog plugins-page__preview-dialog"
+            className="skill-file-dialog plugins-page__preview-dialog plugins-page__confirm-dialog"
             role="dialog"
             aria-modal="true"
             aria-labelledby="plugin-update-confirm-title"
@@ -3222,14 +3222,14 @@ export function PluginsRoute(props: PluginsRouteProps = {}) {
             </div>
             <div className="skill-file-dialog__footer">
               <button
-                className="secondary-button"
+                className="secondary-button secondary-button--compact"
                 type="button"
                 onClick={() => setUpdateConfirmingPlugin(null)}
               >
                 取消
               </button>
               <button
-                className="primary-button"
+                className="secondary-button secondary-button--compact danger-button"
                 type="button"
                 onClick={() => {
                   const plugin = updateConfirmingPlugin;

@@ -264,6 +264,72 @@ code {
   transform: translateY(0) rotate(45deg);
 }
 
+[data-tooltip]::before,
+[data-tooltip]::after {
+  content: none;
+}
+
+.app-tooltip {
+  --app-tooltip-arrow-left: 50%;
+  position: fixed;
+  z-index: 200;
+  max-width: min(260px, calc(100vw - 24px));
+  padding: 6px 9px;
+  border: 1px solid var(--tooltip-border);
+  border-radius: 8px;
+  background: var(--tooltip-surface);
+  color: #374151;
+  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.14);
+  backdrop-filter: blur(10px) saturate(1.08);
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  pointer-events: none;
+  visibility: hidden;
+}
+
+.app-tooltip.is-top,
+.app-tooltip.is-bottom {
+  visibility: visible;
+  animation: app-tooltip-in 100ms var(--ease-standard);
+}
+
+.app-tooltip::after {
+  position: absolute;
+  left: var(--app-tooltip-arrow-left);
+  width: 8px;
+  height: 8px;
+  border: 1px solid var(--tooltip-border);
+  background: var(--tooltip-surface);
+  content: "";
+  transform: translateX(-50%) rotate(45deg);
+}
+
+.app-tooltip.is-top::after {
+  bottom: -5px;
+  border-left: 0;
+  border-top: 0;
+}
+
+.app-tooltip.is-bottom::after {
+  top: -5px;
+  border-bottom: 0;
+  border-right: 0;
+}
+
+@keyframes app-tooltip-in {
+  from {
+    opacity: 0;
+    transform: translateY(2px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 #root {
   min-height: 100%;
   height: 100%;
@@ -2955,6 +3021,8 @@ code {
   padding: 24px;
   background: rgba(17, 24, 39, 0.4);
   backdrop-filter: blur(5px);
+  overflow: auto;
+  overscroll-behavior: contain;
   animation: dialog-backdrop-in var(--motion-base) var(--ease-standard);
 }
 
@@ -3998,6 +4066,8 @@ code {
   padding: 20px;
   background: rgba(10, 14, 22, 0.55);
   backdrop-filter: blur(6px);
+  overflow: auto;
+  overscroll-behavior: contain;
   animation: dialog-backdrop-in var(--motion-base) var(--ease-standard);
 }
 
@@ -4014,6 +4084,7 @@ code {
   color: #1f2937;
   box-shadow: 0 20px 50px rgba(17, 27, 45, 0.22);
   animation: dialog-surface-in var(--motion-slow) var(--ease-emphasized);
+  overflow: hidden;
 }
 
 .skill-detail-modal__header {
@@ -5602,6 +5673,8 @@ code {
   place-items: center;
   padding: 24px;
   background: rgba(25, 33, 48, 0.18);
+  overflow: auto;
+  overscroll-behavior: contain;
   z-index: 20;
   animation: dialog-backdrop-in var(--motion-base) var(--ease-standard);
 }
@@ -5958,6 +6031,17 @@ code {
   display: grid;
   grid-template-columns: 240px minmax(0, 1fr);
   min-height: 0;
+}
+
+.skill-file-dialog__footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 12px 14px;
+  border-top: 1px solid var(--line);
+  background: color-mix(in srgb, var(--surface-strong) 94%, var(--surface-muted) 6%);
 }
 
 
@@ -7731,7 +7815,17 @@ button.settings-form-item:disabled {
 
 .tool-manage-dialog__actions {
   display: flex;
+  align-items: center;
   justify-content: flex-end;
+  min-height: 56px;
+  margin: 0 -16px -16px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--line);
+  background: color-mix(in srgb, var(--surface-strong) 94%, var(--surface-muted) 6%);
+}
+
+.tool-manage-dialog__done-button {
+  min-width: 64px;
 }
 
 .tool-manage-dialog .switch-button {
@@ -7760,6 +7854,54 @@ button.settings-form-item:disabled {
 
 .tool-manage-dialog .switch-button.is-enabled .switch-button__thumb {
   transform: translateX(16px);
+}
+
+.skill-card-detail-modal__close,
+.skill-detail-modal__close,
+.skill-file-dialog__close,
+.tool-manage-dialog__close {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: rgba(117, 128, 147, 0.09);
+  color: var(--muted);
+  font-size: 1.25rem;
+  font-weight: 400;
+  line-height: 1;
+  opacity: 1;
+  cursor: pointer;
+  transition:
+    background-color var(--motion-fast) var(--ease-standard),
+    border-color var(--motion-fast) var(--ease-standard),
+    color var(--motion-fast) var(--ease-standard),
+    transform var(--motion-fast) var(--ease-standard);
+}
+
+.skill-card-detail-modal__close:hover,
+.skill-detail-modal__close:hover,
+.skill-file-dialog__close:hover,
+.tool-manage-dialog__close:hover {
+  border-color: rgba(117, 128, 147, 0.14);
+  background: rgba(117, 128, 147, 0.15);
+  color: var(--heading);
+  transform: none;
+}
+
+.primary-button:focus-visible,
+.secondary-button:focus-visible,
+.skill-card-detail-modal__action:focus-visible,
+.skill-detail-modal__action-link:focus-visible,
+.skill-card-detail-modal__close:focus-visible,
+.skill-detail-modal__close:focus-visible,
+.skill-file-dialog__close:focus-visible,
+.tool-manage-dialog__close:focus-visible,
+.tool-manage-dialog__tab:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 52%, transparent);
+  outline-offset: 2px;
 }
 
 .mcp-route {
@@ -8799,6 +8941,26 @@ button.settings-form-item:disabled {
 
 .plugins-page__preview-backdrop {
   z-index: 80;
+}
+
+.plugins-page__preview-dialog.plugins-page__confirm-dialog {
+  width: min(480px, calc(100vw - 40px));
+  height: auto;
+  min-height: 0;
+  grid-template-rows: auto auto auto;
+}
+
+.plugins-page__confirm-dialog .plugins-page__preview-body {
+  display: block;
+  min-height: 0;
+  padding: 18px;
+  color: var(--text);
+  font-size: 0.86rem;
+  line-height: 1.6;
+}
+
+.plugins-page__confirm-dialog .plugins-page__preview-body p {
+  margin: 0;
 }
 
 .plugins-page__preview-body {
@@ -9897,6 +10059,53 @@ button.settings-form-item:disabled {
 }
 
 @media (max-width: 680px) {
+  .app-update-notice {
+    right: 12px;
+    left: 12px;
+  }
+
+  .app-update-popover {
+    right: 0;
+    left: 0;
+    width: auto;
+  }
+
+  .dialog-backdrop,
+  .skill-detail-modal__backdrop {
+    padding: 12px;
+  }
+
+  .skill-detail-modal {
+    width: calc(100vw - 24px);
+    max-height: calc(100vh - 24px);
+  }
+
+  .skill-detail-modal__header {
+    flex-direction: column;
+  }
+
+  .skill-detail-modal__actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .skill-detail-modal__close {
+    margin-left: auto;
+  }
+
+  .tool-manage-dialog {
+    width: calc(100vw - 24px);
+    height: calc(100vh - 24px);
+    padding: 14px;
+    border-radius: 16px;
+    gap: 10px;
+  }
+
+  .tool-manage-dialog__actions {
+    margin: 0 -14px -14px;
+    padding: 10px 14px;
+  }
+
   .skill-card-grid__row {
     grid-template-columns: 1fr;
   }
@@ -10495,6 +10704,11 @@ button.settings-form-item:disabled {
 }
 
 :root[data-theme="dark"] [data-tooltip]::before {
+  color: #ededed;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.34);
+}
+
+:root[data-theme="dark"] .app-tooltip {
   color: #ededed;
   box-shadow: 0 10px 24px rgba(0, 0, 0, 0.34);
 }
