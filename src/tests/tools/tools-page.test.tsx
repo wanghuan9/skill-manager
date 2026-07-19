@@ -19,7 +19,7 @@ test("renders installed tools only with manage action", async () => {
   expect(screen.queryByText("IntelliJ IDEA")).not.toBeInTheDocument();
   expect(screen.queryByText("VS Code")).not.toBeInTheDocument();
   expect(screen.queryByText("Amp")).not.toBeInTheDocument();
-  expect(screen.queryByText("Finder")).not.toBeInTheDocument();
+  expect(screen.queryByText("Folder")).not.toBeInTheDocument();
   const manageButtons = screen.getAllByRole("button", { name: "管理" });
   expect(manageButtons.length).toBeGreaterThan(0);
   expect(manageButtons[0]).toHaveClass("tool-card__manage-button");

@@ -5,6 +5,7 @@ export type ListGridViewMode = "list" | "grid";
 type ListGridViewToggleProps = {
   value: ListGridViewMode;
   onChange: (value: ListGridViewMode) => void;
+  ariaLabel?: string;
 };
 
 function ListIcon() {
@@ -24,11 +25,11 @@ function GridIcon() {
   );
 }
 
-export function ListGridViewToggle({ value, onChange }: ListGridViewToggleProps) {
+export function ListGridViewToggle({ value, onChange, ariaLabel }: ListGridViewToggleProps) {
   const { t } = useTranslate();
 
   return (
-    <div className="skills-view-toggle" role="group" aria-label={t("skills.view.aria")}>
+    <div className="skills-view-toggle" role="group" aria-label={ariaLabel ?? t("skills.view.aria")}>
       <button
         className={`skills-view-toggle__button${value === "list" ? " is-active" : ""}`}
         type="button"

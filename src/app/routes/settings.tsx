@@ -15,6 +15,10 @@ import {
 import { resolveAppUpdateReleaseNoteEntries } from "@/features/app-update/release-notes";
 import { useSkillWorkspace } from "@/features/skills/state/skill-workspace";
 import {
+  ListGridViewToggle,
+  type ListGridViewMode,
+} from "@/features/skills/components/ListGridViewToggle";
+import {
   buildOpenToolOptions,
   buildSupportedAiToolCards,
   getToolSurfaceLabels,
@@ -23,6 +27,10 @@ import {
 import { getToolLogoUrl } from "@/features/skills/utils/tool-logo";
 import { clearRepoCache, getRepoCacheSize } from "@/features/skills/api/skill-client";
 import type { AppTheme, SkillSourceViewStyle } from "@/features/skills/state/skill-store";
+import {
+  applyGlobalListGridViewPreference,
+  readGlobalListGridViewPreference,
+} from "@/features/skills/utils/list-grid-view-preference";
 
 function FolderOpenIcon() {
   return (
@@ -155,6 +163,9 @@ export function SettingsRoute() {
     ? defaultOpenToolId
     : openToolOptions[0]?.id ?? "";
   const [isToolStatusExpanded, setIsToolStatusExpanded] = useState(false);
+  const [listGridViewPreference, setListGridViewPreference] = useState<ListGridViewMode>(
+    readGlobalListGridViewPreference,
+  );
   const [isOpeningStoragePath, setIsOpeningStoragePath] = useState(false);
   const [repoCacheSize, setRepoCacheSize] = useState<number | null>(null);
   const [isClearingCache, setIsClearingCache] = useState(false);
@@ -334,6 +345,11 @@ export function SettingsRoute() {
     }
   }
 
+  function handleListGridViewPreferenceChange(value: ListGridViewMode) {
+    setListGridViewPreference(value);
+    applyGlobalListGridViewPreference(value);
+  }
+
   const generalSettingsItems: SettingsFormItem[] = [
     {
       label: t("settings.storage.label"),
@@ -398,6 +414,19 @@ export function SettingsRoute() {
               <span>{t("settings.theme.option.dark")}</span>
             </button>
           </div>
+        </div>
+      ),
+    },
+    {
+      label: t("settings.listGridView.label"),
+      description: t("settings.listGridView.description"),
+      value: (
+        <div className="settings-form-item__control">
+          <ListGridViewToggle
+            value={listGridViewPreference}
+            onChange={handleListGridViewPreferenceChange}
+            ariaLabel={t("settings.listGridView.label")}
+          />
         </div>
       ),
     },
