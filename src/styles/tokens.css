@@ -8537,6 +8537,7 @@ button.settings-form-item:disabled {
 .plugins-page__toolbar-primary {
   justify-content: flex-end;
   gap: 8px;
+  padding-right: 12px;
 }
 
 .plugins-page__toolbar-actions {
@@ -10212,8 +10213,6 @@ button.settings-form-item:disabled {
     flex-basis: min(230px, 100%);
   }
 
-  .plugins-page__toolbar-primary,
-  .plugins-page__toolbar-actions,
   .plugins-page__toolbar-secondary {
     flex-wrap: wrap;
   }
@@ -10242,6 +10241,10 @@ button.settings-form-item:disabled {
 }
 
 @media (max-width: 760px) {
+  .plugins-page__toolbar-primary {
+    flex-wrap: wrap;
+  }
+
   .page-header__row--install {
     align-items: flex-start;
     flex-direction: column;

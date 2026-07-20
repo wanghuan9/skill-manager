@@ -2118,8 +2118,8 @@ export function PluginsRoute(props: PluginsRouteProps = {}) {
           </span>
           <span>{isRefreshing ? t("plugins.toolbar.scanning") : t("plugins.toolbar.scanImport")}</span>
         </button>
+        {props.onGoInstall ? <ToolbarGoInstallButton onClick={props.onGoInstall} /> : null}
       </div>
-      {props.onGoInstall ? <ToolbarGoInstallButton onClick={props.onGoInstall} /> : null}
     </section>
   );
   const sourceHeader = (
