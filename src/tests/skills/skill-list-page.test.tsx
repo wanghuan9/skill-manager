@@ -12,9 +12,11 @@ beforeEach(() => {
   window.localStorage.clear();
 });
 
-test("renders installed skill page header and search input", () => {
-  render(<App />);
+test("preserves the current Skill header layout and opens Skill install", async () => {
+  const { container } = render(<App />);
+  const header = container.querySelector(".page-header--split");
   expect(screen.getByRole("button", { name: /Skills/ })).toBeInTheDocument();
+  expect(header).not.toHaveClass("management-page-header--compact");
   expect(screen.getByRole("heading", { name: "Skills", level: 1 })).toBeInTheDocument();
   expect(screen.getByText("~/.skilldock/skills · 已启用 4 · 可更新 1 · 待推送 2")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "刷新" })).toBeInTheDocument();
@@ -23,6 +25,21 @@ test("renders installed skill page header and search input", () => {
   expect(searchInput).toBeInTheDocument();
   expect(searchInput.closest("label")?.querySelector(".search-field__icon")).toBeInTheDocument();
   expect(screen.getByLabelText("按状态筛选技能")).toBeInTheDocument();
+  const installButton = screen.getByRole("button", { name: "去安装" });
+  expect(installButton).toHaveClass("skills-toolbar-button--go-install");
+  expect(installButton).toHaveClass("secondary-button");
+  expect(installButton.closest(".skills-header-bar__tools")).toBeInTheDocument();
+  const titleRow = header?.querySelector(".page-header__row");
+  const description = titleRow?.nextElementSibling;
+  const sourceRow = description?.nextElementSibling;
+  expect(titleRow?.querySelector("h1")).toHaveTextContent("Skills");
+  expect(titleRow?.querySelector(".skills-header-bar__tools")).toBeInTheDocument();
+  expect(description).toHaveTextContent("~/.skilldock/skills");
+  expect(sourceRow?.querySelector("[role='tablist']")).toBeInTheDocument();
+  expect(container.querySelector(".page-header-divider")).toHaveClass("page-header-divider--skills");
+
+  await userEvent.click(installButton);
+  expect(screen.getByRole("heading", { name: "安装", level: 1 })).toBeInTheDocument();
 });
 
 test("switches from the managed library to a tool's real Skill directory", async () => {

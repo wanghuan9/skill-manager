@@ -37,11 +37,11 @@ test("marks empty macOS page header surfaces as window drag regions", () => {
   try {
     const { container } = render(<App />);
     const headerLayout = container.querySelector(".page-header--split");
-    const headerRow = container.querySelector(".page-header__row");
-    const searchInput = headerRow?.querySelector("input");
+    const headerIdentity = container.querySelector(".page-header__row");
+    const searchInput = headerLayout?.querySelector("input");
 
     expect(headerLayout).toHaveAttribute("data-tauri-drag-region");
-    expect(headerRow).toHaveAttribute("data-tauri-drag-region");
+    expect(headerIdentity).toHaveAttribute("data-tauri-drag-region");
     expect(searchInput).not.toBeNull();
     expect(searchInput).not.toHaveAttribute("data-tauri-drag-region");
   } finally {

@@ -112,28 +112,54 @@ test("applies the shared card preference without locking individual page layouts
   ).toHaveAttribute("aria-pressed", "true");
 });
 
-test("switches between the two Skill source bar styles", async () => {
+test("switches Skills, MCP, and Plugins between current and compact header layouts", async () => {
   const user = userEvent.setup();
   window.localStorage.clear();
-  render(<App />);
+  const { container } = render(<App />);
 
   expect(screen.getByRole("tablist", { name: "Skill 来源" })).toBeInTheDocument();
+  const currentHeader = container.querySelector(".page-header--split");
+  expect(currentHeader).not.toHaveClass("management-page-header--compact");
+  expect(currentHeader?.querySelector(".page-header__row .skills-header-bar__tools")).toBeInTheDocument();
 
   await user.click(screen.getByRole("button", { name: /设置/ }));
-  const styleSelect = screen.getByLabelText("Skill 来源栏样式");
+  const styleSelect = screen.getByLabelText("管理页头布局");
   expect(styleSelect).toHaveAttribute("data-value", "flat");
-  expect(within(styleSelect).queryByRole("option", { name: "浅色工具栏" })).not.toBeInTheDocument();
-
   await user.click(styleSelect);
-  await user.click(screen.getByRole("option", { name: "来源选择器" }));
+  expect(screen.getByRole("option", { name: "当前布局" })).toBeInTheDocument();
+  expect(screen.getByRole("option", { name: "B · 折叠来源" })).toBeInTheDocument();
+  expect(screen.queryByRole("option", { name: /A ·/ })).not.toBeInTheDocument();
+  expect(screen.queryByRole("option", { name: /C ·/ })).not.toBeInTheDocument();
+  await user.click(screen.getByRole("option", { name: "B · 折叠来源" }));
   await user.click(screen.getByRole("button", { name: /Skills/ }));
 
+  const compactSkillsHeader = container.querySelector(".management-page-header--compact");
+  const skillIdentity = compactSkillsHeader?.querySelector(".management-page-header__identity");
+  const skillToolbarRow = compactSkillsHeader?.querySelector(".management-page-header__toolbar-row");
+  expect(skillIdentity?.querySelector("h1")).toHaveTextContent("Skills");
+  expect(skillIdentity?.querySelector("p")).toHaveTextContent("~/.skilldock/skills");
   expect(screen.queryByRole("tablist", { name: "Skill 来源" })).not.toBeInTheDocument();
   const sourceTrigger = screen.getByRole("button", { name: /已托管 4/ });
-  expect(sourceTrigger.closest(".skills-source-select-row")).toBeInTheDocument();
+  expect(sourceTrigger.closest(".management-page-header__source")).toBeInTheDocument();
+  expect(skillToolbarRow?.querySelector(".skills-header-bar__tools")).toBeInTheDocument();
+  expect(compactSkillsHeader?.querySelector(".skills-source-divider")).toBeInTheDocument();
+  expect(container.querySelector(".page-header-divider")).toHaveClass("page-header-divider--skills");
 
   await user.click(sourceTrigger);
   expect(screen.getByRole("menuitem", { name: /Codex 5/ })).toBeInTheDocument();
+
+  await user.click(screen.getByRole("button", { name: "MCP" }));
+  const compactMcpHeader = container.querySelector(".management-page-header--compact");
+  expect(compactMcpHeader?.querySelector(".management-page-header__identity h1")).toHaveTextContent("MCP");
+  expect(compactMcpHeader?.querySelector(".management-page-header__toolbar-row .mcp-toolbar")).toBeInTheDocument();
+  expect(container.querySelector(".page-header-divider")).toHaveClass("page-header-divider--skills");
+
+  await user.click(screen.getByRole("button", { name: /Plugins/ }));
+  const compactPluginsHeader = container.querySelector(".management-page-header--compact");
+  expect(compactPluginsHeader?.querySelector(".management-page-header__identity h1")).toHaveTextContent("Plugins");
+  expect(compactPluginsHeader?.querySelector(".management-page-header__toolbar-row .plugins-page__toolbar-primary")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "插件宿主" })).toBeInTheDocument();
+  expect(container.querySelector(".page-header-divider")).toHaveClass("page-header-divider--skills");
 });
 
 test("toggles tool status from the full row", async () => {

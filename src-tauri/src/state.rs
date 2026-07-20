@@ -712,6 +712,7 @@ mod tests {
         assert_eq!(normalize_skill_source_view_style("flat"), "flat");
         assert_eq!(normalize_skill_source_view_style("band"), "flat");
         assert_eq!(normalize_skill_source_view_style("select"), "select");
+        assert_eq!(normalize_skill_source_view_style("inline"), "flat");
         assert_eq!(normalize_skill_source_view_style("legacy"), "flat");
     }
 

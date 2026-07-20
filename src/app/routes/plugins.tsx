@@ -694,6 +694,109 @@ function PluginHostLogo({ hostTool, label }: { hostTool: PluginHostTool; label: 
   );
 }
 
+type PluginSourceOption = {
+  key: PluginTabKey;
+  label: string;
+  count: number;
+};
+
+type PluginSourceSwitcherProps = {
+  activeHost: PluginTabKey;
+  ariaLabel: string;
+  options: PluginSourceOption[];
+  onChange: (host: PluginTabKey) => void;
+};
+
+function PluginSourceSwitcher(props: PluginSourceSwitcherProps) {
+  const { activeHost, ariaLabel, onChange, options } = props;
+  const [isOpen, setIsOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  const activeOption = options.find((option) => option.key === activeHost)
+    ?? options[0]
+    ?? { key: "all", label: "", count: 0 };
+
+  useEffect(() => {
+    setIsOpen(false);
+  }, [activeHost]);
+
+  useEffect(() => {
+    if (!isOpen) {
+      return;
+    }
+
+    function handlePointerDown(event: PointerEvent) {
+      if (!menuRef.current?.contains(event.target as Node)) {
+        setIsOpen(false);
+      }
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setIsOpen(false);
+      }
+    }
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isOpen]);
+
+  function renderLogo(option: PluginSourceOption) {
+    if (option.key === "all") {
+      return (
+        <span className="skills-source-tab__logo skills-source-tab__logo--all" aria-hidden="true">
+          P
+        </span>
+      );
+    }
+
+    return <PluginHostLogo hostTool={option.key} label={option.label} />;
+  }
+
+  return (
+    <div className="skills-source-select-row">
+      <div className="skills-source-menu" ref={menuRef}>
+        <button
+          className="skills-source-select-trigger"
+          type="button"
+          aria-label={ariaLabel}
+          aria-haspopup="menu"
+          aria-expanded={isOpen}
+          onClick={() => setIsOpen((current) => !current)}
+        >
+          {renderLogo(activeOption)}
+          <span>{activeOption.label}</span>
+          <span className="skills-source-tab__count">{activeOption.count}</span>
+          <span className="skills-source-select-trigger__chevron" aria-hidden="true">⌄</span>
+        </button>
+        {isOpen ? (
+          <div className="skills-source-menu__popover" role="menu">
+            {options.map((option) => (
+              <button
+                key={option.key}
+                className={`skills-source-menu-item${option.key === activeHost ? " is-selected" : ""}`}
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setIsOpen(false);
+                  onChange(option.key);
+                }}
+              >
+                {renderLogo(option)}
+                <span>{option.label}</span>
+                <span className="skills-source-tab__count">{option.count}</span>
+              </button>
+            ))}
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 function PluginHostCoverageIcon({
   hostTool,
   label,
@@ -1413,7 +1516,7 @@ type PluginsRouteProps = {
 
 export function PluginsRoute(props: PluginsRouteProps = {}) {
   const { t } = useTranslate();
-  const { defaultOpenToolId, language, toolConfigs } = useSkillWorkspace();
+  const { appSettings, defaultOpenToolId, language, toolConfigs } = useSkillWorkspace();
   const { notify } = useNotifications();
   const [plugins, setPlugins] = useState<PluginSummary[]>(() => getRuntimeCachedPlugins() ?? []);
   const [isLoading, setIsLoading] = useState(() => getRuntimeCachedPlugins() === null);
@@ -1461,6 +1564,7 @@ export function PluginsRoute(props: PluginsRouteProps = {}) {
     null,
   );
   const [sourceHeaderContainer, setSourceHeaderContainer] = useState<HTMLElement | null>(null);
+  const isCompactHeader = appSettings?.skillSourceViewStyle === "select";
   const { expandedId, handleExpandedChange } = useSingleExpandedRow();
   const localizedPluginTabs: { key: PluginTabKey; label: string }[] = [
     { key: "all", label: t("plugins.tabs.all") },
@@ -1468,6 +1572,12 @@ export function PluginsRoute(props: PluginsRouteProps = {}) {
     { key: "codex", label: "Codex" },
     { key: "cursor", label: "Cursor" },
   ];
+  const pluginSourceOptions: PluginSourceOption[] = localizedPluginTabs.map((tab) => ({
+    ...tab,
+    count: tab.key === "all"
+      ? buildAllTabPlugins(plugins).length
+      : plugins.filter((plugin) => plugin.hostTool === tab.key).length,
+  }));
   const pluginFilterOptions: PluginFilterOption[] = [
     { value: "all", label: t("plugins.filter.all") },
     { value: "enabled", label: t("plugins.filter.enabled") },
@@ -1928,7 +2038,7 @@ export function PluginsRoute(props: PluginsRouteProps = {}) {
   useEffect(() => {
     setToolbarContainer(document.getElementById("plugins-header-toolbar-slot"));
     setSourceHeaderContainer(document.getElementById("plugins-source-header-slot"));
-  }, []);
+  }, [isCompactHeader]);
 
   useEffect(() => {
     props.onActiveHostChange?.(activeHost === "all" ? null : getHostLabel(activeHost));
@@ -2122,31 +2232,35 @@ export function PluginsRoute(props: PluginsRouteProps = {}) {
       </div>
     </section>
   );
-  const sourceHeader = (
+  const sourceHeader = isCompactHeader ? (
+    <PluginSourceSwitcher
+      activeHost={activeHost}
+      ariaLabel={t("plugins.tabs.aria")}
+      options={pluginSourceOptions}
+      onChange={setActiveHost}
+    />
+  ) : (
     <div className="skills-source-header">
       <div className="skills-source-tabs-row">
         <div className="skills-source-tabs" role="tablist" aria-label={t("plugins.tabs.aria")}>
-          {localizedPluginTabs.map((tab) => {
-            const selected = tab.key === activeHost;
-            const count = tab.key === "all"
-              ? buildAllTabPlugins(plugins).length
-              : plugins.filter((plugin) => plugin.hostTool === tab.key).length;
+          {pluginSourceOptions.map((option) => {
+            const selected = option.key === activeHost;
 
             return (
               <button
-                key={tab.key}
+                key={option.key}
                 className={`skills-source-tab${selected ? " is-selected" : ""}`}
                 type="button"
                 role="tab"
                 aria-selected={selected}
-                aria-label={`${tab.label} ${count}`}
-                title={tab.label}
-                onClick={() => setActiveHost(tab.key)}
+                aria-label={`${option.label} ${option.count}`}
+                title={option.label}
+                onClick={() => setActiveHost(option.key)}
               >
-                {tab.key === "all" ? <span>{t("plugins.tabs.all")}</span> : (
-                  <PluginHostLogo hostTool={tab.key} label={tab.label} />
+                {option.key === "all" ? <span>{t("plugins.tabs.all")}</span> : (
+                  <PluginHostLogo hostTool={option.key} label={option.label} />
                 )}
-                <span className="skills-source-tab__count">{count}</span>
+                <span className="skills-source-tab__count">{option.count}</span>
               </button>
             );
           })}

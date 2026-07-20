@@ -529,7 +529,7 @@ export function SkillSourceView(props: SkillSourceViewProps) {
 
   useEffect(() => {
     setSourceHeaderContainer(document.getElementById("skills-source-header-slot"));
-  }, []);
+  }, [sourceStyle]);
 
   useEffect(() => {
     if (activeSourceId !== MANAGED_SKILL_SOURCE_ID && !selectedTool) {
