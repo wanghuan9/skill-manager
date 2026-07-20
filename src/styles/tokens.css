@@ -1446,6 +1446,7 @@ code {
 .page-content::-webkit-scrollbar,
 .sidebar::-webkit-scrollbar,
 .local-install-workspace::-webkit-scrollbar,
+.skill-file-dialog__preview::-webkit-scrollbar,
 .mcp-edit-dialog__body::-webkit-scrollbar,
 .mcp-market-config-preview::-webkit-scrollbar {
   width: 10px;
@@ -1455,6 +1456,7 @@ code {
 .page-content::-webkit-scrollbar-track,
 .sidebar::-webkit-scrollbar-track,
 .local-install-workspace::-webkit-scrollbar-track,
+.skill-file-dialog__preview::-webkit-scrollbar-track,
 .mcp-edit-dialog__body::-webkit-scrollbar-track,
 .mcp-market-config-preview::-webkit-scrollbar-track {
   background: transparent;
@@ -1463,6 +1465,7 @@ code {
 .page-content::-webkit-scrollbar-thumb,
 .sidebar::-webkit-scrollbar-thumb,
 .local-install-workspace::-webkit-scrollbar-thumb,
+.skill-file-dialog__preview::-webkit-scrollbar-thumb,
 .mcp-edit-dialog__body::-webkit-scrollbar-thumb,
 .mcp-market-config-preview::-webkit-scrollbar-thumb {
   border: 2px solid transparent;
@@ -1474,6 +1477,7 @@ code {
 .page-content::-webkit-scrollbar-thumb:hover,
 .sidebar::-webkit-scrollbar-thumb:hover,
 .local-install-workspace::-webkit-scrollbar-thumb:hover,
+.skill-file-dialog__preview::-webkit-scrollbar-thumb:hover,
 .mcp-edit-dialog__body::-webkit-scrollbar-thumb:hover,
 .mcp-market-config-preview::-webkit-scrollbar-thumb:hover {
   background: rgba(100, 116, 139, 0.66);
@@ -12670,6 +12674,7 @@ button.settings-form-item:disabled {
 :root[data-theme="dark"] .page-content::-webkit-scrollbar-thumb,
 :root[data-theme="dark"] .sidebar::-webkit-scrollbar-thumb,
 :root[data-theme="dark"] .local-install-workspace::-webkit-scrollbar-thumb,
+:root[data-theme="dark"] .skill-file-dialog__preview::-webkit-scrollbar-thumb,
 :root[data-theme="dark"] .mcp-edit-dialog__body::-webkit-scrollbar-thumb,
 :root[data-theme="dark"] .mcp-market-config-preview::-webkit-scrollbar-thumb,
 :root[data-theme="dark"] .market-install-scroll::-webkit-scrollbar-thumb {
@@ -12680,6 +12685,7 @@ button.settings-form-item:disabled {
 :root[data-theme="dark"] .page-content::-webkit-scrollbar-thumb:hover,
 :root[data-theme="dark"] .sidebar::-webkit-scrollbar-thumb:hover,
 :root[data-theme="dark"] .local-install-workspace::-webkit-scrollbar-thumb:hover,
+:root[data-theme="dark"] .skill-file-dialog__preview::-webkit-scrollbar-thumb:hover,
 :root[data-theme="dark"] .mcp-edit-dialog__body::-webkit-scrollbar-thumb:hover,
 :root[data-theme="dark"] .mcp-market-config-preview::-webkit-scrollbar-thumb:hover,
 :root[data-theme="dark"] .market-install-scroll::-webkit-scrollbar-thumb:hover {
