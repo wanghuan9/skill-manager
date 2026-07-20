@@ -21,8 +21,8 @@ const SKILL_INSTALL_ACTIVATION_APPLY_ALL: &str = "apply-all-tools";
 const SKILL_INSTALL_ACTIVATION_DISABLE_ALL: &str = "disable-all-tools";
 const MCP_INSTALL_ACTIVATION_APPLY_ALL: &str = "apply-all-tools";
 const MCP_INSTALL_ACTIVATION_DISABLE_ALL: &str = "disable-all-tools";
-const SKILL_SOURCE_VIEW_STYLE_FLAT: &str = "flat";
 const SKILL_SOURCE_VIEW_STYLE_SELECT: &str = "select";
+const SKILL_SOURCE_VIEW_STYLE_FLAT: &str = "flat";
 const APP_LANGUAGE_ZH_CN: &str = "zh-CN";
 const APP_LANGUAGE_EN: &str = "en";
 const APP_LANGUAGE_SOURCE_AUTO: &str = "auto";
@@ -439,7 +439,8 @@ pub fn normalize_mcp_install_activation(value: &str) -> &'static str {
 pub fn normalize_skill_source_view_style(value: &str) -> &'static str {
     match value.trim() {
         SKILL_SOURCE_VIEW_STYLE_SELECT => SKILL_SOURCE_VIEW_STYLE_SELECT,
-        _ => SKILL_SOURCE_VIEW_STYLE_FLAT,
+        SKILL_SOURCE_VIEW_STYLE_FLAT => SKILL_SOURCE_VIEW_STYLE_FLAT,
+        _ => SKILL_SOURCE_VIEW_STYLE_SELECT,
     }
 }
 
@@ -708,12 +709,13 @@ mod tests {
     }
 
     #[test]
-    fn normalizes_skill_source_view_style_with_flat_fallback() {
+    fn normalizes_skill_source_view_style_with_compact_fallback() {
         assert_eq!(normalize_skill_source_view_style("flat"), "flat");
-        assert_eq!(normalize_skill_source_view_style("band"), "flat");
         assert_eq!(normalize_skill_source_view_style("select"), "select");
-        assert_eq!(normalize_skill_source_view_style("inline"), "flat");
-        assert_eq!(normalize_skill_source_view_style("legacy"), "flat");
+        assert_eq!(normalize_skill_source_view_style("band"), "select");
+        assert_eq!(normalize_skill_source_view_style("inline"), "select");
+        assert_eq!(normalize_skill_source_view_style("legacy"), "select");
+        assert_eq!(normalize_skill_source_view_style(""), "select");
     }
 
     #[test]

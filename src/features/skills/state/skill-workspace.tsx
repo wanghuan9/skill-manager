@@ -468,7 +468,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
           defaultOpenToolId: "",
           skillInstallActivation: "apply-all-tools",
           mcpInstallActivation: "apply-all-tools",
-          skillSourceViewStyle: "flat",
+          skillSourceViewStyle: "select",
           language: "zh-CN",
           languageSource: "auto",
           theme: readStoredAppTheme(),

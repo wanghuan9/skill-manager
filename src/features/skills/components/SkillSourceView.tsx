@@ -514,7 +514,7 @@ export function SkillSourceView(props: SkillSourceViewProps) {
     () => new Map(sourceTools.map((tool) => [tool.id, rowsByTool.get(tool.id)?.length ?? 0])),
     [rowsByTool, sourceTools],
   );
-  const sourceStyle = appSettings?.skillSourceViewStyle ?? "flat";
+  const sourceStyle = appSettings?.skillSourceViewStyle ?? "select";
   const selectedRows = selectedTool ? rowsByTool.get(selectedTool.id) ?? [] : [];
   const normalizedQuery = query.trim().toLowerCase();
   const visibleRows = selectedRows.filter((item) => {
