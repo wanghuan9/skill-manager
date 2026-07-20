@@ -1977,6 +1977,10 @@ code {
   line-height: 1.2;
 }
 
+.search-field input {
+  font-size: 0.8rem;
+}
+
 .repo-form select,
 .repo-form .app-select__trigger {
   padding-right: 34px;
