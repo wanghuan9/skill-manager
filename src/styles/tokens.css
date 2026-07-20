@@ -7568,6 +7568,11 @@ button.settings-form-item:disabled {
   width: 280px;
 }
 
+.settings-form-item__control--view {
+  display: flex;
+  justify-content: flex-end;
+}
+
 .settings-theme-picker {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));

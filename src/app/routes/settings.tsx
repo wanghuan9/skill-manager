@@ -501,7 +501,7 @@ export function SettingsRoute() {
       label: t("settings.listGridView.label"),
       description: t("settings.listGridView.description"),
       value: (
-        <div className="settings-form-item__control">
+        <div className="settings-form-item__control settings-form-item__control--view">
           <ListGridViewToggle
             value={listGridViewPreference}
             onChange={handleListGridViewPreferenceChange}
