@@ -470,19 +470,6 @@ export function SettingsRoute() {
       ),
     },
     {
-      label: t("settings.listGridView.label"),
-      description: t("settings.listGridView.description"),
-      value: (
-        <div className="settings-form-item__control">
-          <ListGridViewToggle
-            value={listGridViewPreference}
-            onChange={handleListGridViewPreferenceChange}
-            ariaLabel={t("settings.listGridView.label")}
-          />
-        </div>
-      ),
-    },
-    {
       label: t("settings.skillSourceView.label"),
       description: t("settings.skillSourceView.description"),
       value: (
@@ -507,6 +494,19 @@ export function SettingsRoute() {
               <span>{t("settings.skillSourceView.option.select")}</span>
             </button>
           </div>
+        </div>
+      ),
+    },
+    {
+      label: t("settings.listGridView.label"),
+      description: t("settings.listGridView.description"),
+      value: (
+        <div className="settings-form-item__control">
+          <ListGridViewToggle
+            value={listGridViewPreference}
+            onChange={handleListGridViewPreferenceChange}
+            ariaLabel={t("settings.listGridView.label")}
+          />
         </div>
       ),
     },
