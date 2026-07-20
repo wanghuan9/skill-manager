@@ -6613,6 +6613,12 @@ code {
   line-height: 1.6;
 }
 
+.skill-file-dialog__textarea:focus {
+  border-color: color-mix(in srgb, var(--accent) 68%, var(--line));
+  outline: none;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
 .skill-file-dialog__preview {
   min-height: 0;
   overflow: auto;
