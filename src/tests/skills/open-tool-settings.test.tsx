@@ -126,8 +126,8 @@ test("switches Skills, MCP, and Plugins between current and compact header layou
 
   await user.click(screen.getByRole("button", { name: /设置/ }));
   const layoutGroup = screen.getByRole("group", { name: "管理页头布局" });
-  const currentLayoutButton = within(layoutGroup).getByRole("button", { name: "当前布局" });
-  const compactLayoutButton = within(layoutGroup).getByRole("button", { name: "B · 折叠来源" });
+  const currentLayoutButton = within(layoutGroup).getByRole("button", { name: "横向来源导航" });
+  const compactLayoutButton = within(layoutGroup).getByRole("button", { name: "紧凑来源选择" });
   expect(currentLayoutButton).toHaveAttribute("aria-pressed", "true");
   expect(compactLayoutButton).toHaveAttribute("aria-pressed", "false");
   await user.click(compactLayoutButton);
