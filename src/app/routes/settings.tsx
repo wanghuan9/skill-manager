@@ -27,7 +27,7 @@ import {
 } from "@/features/skills/utils/open-tools";
 import { getToolLogoUrl } from "@/features/skills/utils/tool-logo";
 import { clearRepoCache, getRepoCacheSize } from "@/features/skills/api/skill-client";
-import type { AppTheme, SkillSourceViewStyle } from "@/features/skills/state/skill-store";
+import type { AppTheme } from "@/features/skills/state/skill-store";
 import {
   applyGlobalListGridViewPreference,
   readGlobalListGridViewPreference,
@@ -119,6 +119,21 @@ function ThemeIcon({ theme }: { theme: AppTheme }) {
         strokeWidth="1.45"
         strokeLinecap="round"
       />
+    </svg>
+  );
+}
+
+function LayoutIcon({ compact }: { compact: boolean }) {
+  return compact ? (
+    <svg viewBox="0 0 18 18" fill="none" aria-hidden="true">
+      <rect x="2.5" y="3" width="13" height="12" rx="2" stroke="currentColor" strokeWidth="1.35" />
+      <path d="M5 6.5h8M5 9h5M5 11.5h3" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round" />
+      <path d="m12.5 9.75 1.25 1.25 1.25-1.25" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  ) : (
+    <svg viewBox="0 0 18 18" fill="none" aria-hidden="true">
+      <rect x="2.5" y="3" width="13" height="12" rx="2" stroke="currentColor" strokeWidth="1.35" />
+      <path d="M5 6.5h8M5 9h8M5 11.5h8" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round" />
     </svg>
   );
 }
@@ -401,6 +416,23 @@ export function SettingsRoute() {
       ),
     },
     {
+      label: t("settings.defaultEditor.label"),
+      description: t("settings.defaultEditor.description"),
+      value: (
+        <div className="settings-form-item__control">
+          <AppSelect
+            ariaLabel={t("settings.defaultEditor.aria")}
+            value={selectedDefaultToolId}
+            options={openToolOptions.length === 0
+              ? [{ value: "", label: t("settings.defaultEditor.empty") }]
+              : openToolOptions.map((tool) => ({ value: tool.id, label: tool.name }))}
+            onChange={setDefaultOpenToolId}
+            disabled={openToolOptions.length === 0}
+          />
+        </div>
+      ),
+    },
+    {
       label: t("settings.theme.label"),
       description: t("settings.theme.description"),
       value: (
@@ -438,48 +470,42 @@ export function SettingsRoute() {
       ),
     },
     {
+      label: t("settings.skillSourceView.label"),
+      description: t("settings.skillSourceView.description"),
+      value: (
+        <div className="settings-form-item__control settings-form-item__control--layout">
+          <div className="settings-layout-picker" role="group" aria-label={t("settings.skillSourceView.label")}>
+            <button
+              className={`settings-layout-option${(appSettings.skillSourceViewStyle ?? "flat") === "flat" ? " is-selected" : ""}`}
+              type="button"
+              aria-pressed={(appSettings.skillSourceViewStyle ?? "flat") === "flat"}
+              onClick={() => void setSkillSourceViewStyle("flat")}
+            >
+              <LayoutIcon compact={false} />
+              <span>{t("settings.skillSourceView.option.flat")}</span>
+            </button>
+            <button
+              className={`settings-layout-option${appSettings.skillSourceViewStyle === "select" ? " is-selected" : ""}`}
+              type="button"
+              aria-pressed={appSettings.skillSourceViewStyle === "select"}
+              onClick={() => void setSkillSourceViewStyle("select")}
+            >
+              <LayoutIcon compact />
+              <span>{t("settings.skillSourceView.option.select")}</span>
+            </button>
+          </div>
+        </div>
+      ),
+    },
+    {
       label: t("settings.listGridView.label"),
       description: t("settings.listGridView.description"),
       value: (
-        <div className="settings-form-item__control">
+        <div className="settings-form-item__control settings-form-item__control--view">
           <ListGridViewToggle
             value={listGridViewPreference}
             onChange={handleListGridViewPreferenceChange}
             ariaLabel={t("settings.listGridView.label")}
-          />
-        </div>
-      ),
-    },
-    {
-      label: t("settings.defaultEditor.label"),
-      description: t("settings.defaultEditor.description"),
-      value: (
-        <div className="settings-form-item__control">
-          <AppSelect
-            ariaLabel={t("settings.defaultEditor.aria")}
-            value={selectedDefaultToolId}
-            options={openToolOptions.length === 0
-              ? [{ value: "", label: t("settings.defaultEditor.empty") }]
-              : openToolOptions.map((tool) => ({ value: tool.id, label: tool.name }))}
-            onChange={setDefaultOpenToolId}
-            disabled={openToolOptions.length === 0}
-          />
-        </div>
-      ),
-    },
-    {
-      label: t("settings.skillSourceView.label"),
-      description: t("settings.skillSourceView.description"),
-      value: (
-        <div className="settings-form-item__control">
-          <AppSelect
-            ariaLabel={t("settings.skillSourceView.label")}
-            value={appSettings.skillSourceViewStyle ?? "flat"}
-            options={[
-              { value: "flat", label: t("settings.skillSourceView.option.flat") },
-              { value: "select", label: t("settings.skillSourceView.option.select") },
-            ]}
-            onChange={(value: SkillSourceViewStyle) => void setSkillSourceViewStyle(value)}
           />
         </div>
       ),

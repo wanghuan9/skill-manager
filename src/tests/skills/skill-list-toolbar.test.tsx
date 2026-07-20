@@ -156,7 +156,7 @@ test("starts update-all from the toolbar", () => {
   expect(updateAllSkills).toHaveBeenCalledOnce();
 });
 
-test("renders go-install action when handler is provided", () => {
+test("renders go-install as the last toolbar action", () => {
   const onGoInstall = vi.fn();
 
   mockedUseSkillWorkspace.mockReturnValue({
@@ -181,10 +181,9 @@ test("renders go-install action when handler is provided", () => {
     </NotificationProvider>,
   );
 
-  const goInstallButton = screen.getByRole("button", { name: "去安装" });
-  expect(goInstallButton).toHaveClass("skills-toolbar-button--go-install");
-  expect(goInstallButton.parentElement?.lastElementChild).toBe(goInstallButton);
-  fireEvent.click(goInstallButton);
+  const installButton = screen.getByRole("button", { name: "去安装" });
+  expect(installButton.parentElement?.lastElementChild).toBe(installButton);
+  fireEvent.click(installButton);
   expect(onGoInstall).toHaveBeenCalledOnce();
 });
 

@@ -121,7 +121,7 @@ pub fn ensure_workspace_initialized() -> Result<PathBuf, String> {
     )?;
     ensure_workspace_file_with_default_content(
         &workspace_root.join("settings.json"),
-        "{\n  \"defaultOpenToolId\": \"\",\n  \"skillInstallActivation\": \"apply-all-tools\",\n  \"mcpInstallActivation\": \"apply-all-tools\",\n  \"skillSourceViewStyle\": \"flat\"\n}\n",
+        "{\n  \"defaultOpenToolId\": \"\",\n  \"skillInstallActivation\": \"apply-all-tools\",\n  \"mcpInstallActivation\": \"apply-all-tools\",\n  \"skillSourceViewStyle\": \"select\"\n}\n",
     )?;
     ensure_workspace_file_with_default_content(
         &workspace_root.join("mcp-servers.json"),
@@ -630,7 +630,7 @@ mod tests {
             assert!(settings_content.contains("\"defaultOpenToolId\": \"\""));
             assert!(settings_content.contains("\"skillInstallActivation\": \"apply-all-tools\""));
             assert!(settings_content.contains("\"mcpInstallActivation\": \"apply-all-tools\""));
-            assert!(settings_content.contains("\"skillSourceViewStyle\": \"flat\""));
+            assert!(settings_content.contains("\"skillSourceViewStyle\": \"select\""));
         });
     }
 

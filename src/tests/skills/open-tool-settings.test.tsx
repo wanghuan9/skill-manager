@@ -30,6 +30,8 @@ test("allows selecting default open tool in settings", async () => {
 
   expect(screen.getByText("/Users/demo/.skilldock")).toBeInTheDocument();
   expect(screen.getByLabelText("界面语言")).toHaveTextContent("简体中文");
+  expect(screen.getByLabelText("默认编辑器").closest(".settings-form-item")?.previousElementSibling)
+    .toHaveTextContent("界面语言");
   const select = screen.getByLabelText("默认编辑器");
   expect(select).toBeInTheDocument();
   expect(screen.getByLabelText("新增 Skill 默认启用")).toHaveAttribute("aria-pressed", "true");
@@ -112,28 +114,60 @@ test("applies the shared card preference without locking individual page layouts
   ).toHaveAttribute("aria-pressed", "true");
 });
 
-test("switches between the two Skill source bar styles", async () => {
+test("switches Skills, MCP, and Plugins between current and compact header layouts", async () => {
   const user = userEvent.setup();
   window.localStorage.clear();
-  render(<App />);
+  const { container } = render(<App />);
 
   expect(screen.getByRole("tablist", { name: "Skill 来源" })).toBeInTheDocument();
+  const currentHeader = container.querySelector(".page-header--split");
+  expect(currentHeader).not.toHaveClass("management-page-header--compact");
+  expect(currentHeader?.querySelector(".page-header__row .skills-header-bar__tools")).toBeInTheDocument();
 
   await user.click(screen.getByRole("button", { name: /设置/ }));
-  const styleSelect = screen.getByLabelText("Skill 来源栏样式");
-  expect(styleSelect).toHaveAttribute("data-value", "flat");
-  expect(within(styleSelect).queryByRole("option", { name: "浅色工具栏" })).not.toBeInTheDocument();
-
-  await user.click(styleSelect);
-  await user.click(screen.getByRole("option", { name: "来源选择器" }));
+  const layoutGroup = screen.getByRole("group", { name: "管理页头布局" });
+  const currentLayoutButton = within(layoutGroup).getByRole("button", { name: "横向来源导航" });
+  const compactLayoutButton = within(layoutGroup).getByRole("button", { name: "紧凑来源选择" });
+  expect(currentLayoutButton).toHaveAttribute("aria-pressed", "true");
+  expect(compactLayoutButton).toHaveAttribute("aria-pressed", "false");
+  await user.click(compactLayoutButton);
   await user.click(screen.getByRole("button", { name: /Skills/ }));
 
+  const compactSkillsHeader = container.querySelector(".management-page-header--compact");
+  const skillIdentity = compactSkillsHeader?.querySelector(".management-page-header__identity");
+  const skillToolbarRow = compactSkillsHeader?.querySelector(".management-page-header__toolbar-row");
+  expect(skillIdentity?.querySelector("h1")).toHaveTextContent("Skills");
+  expect(skillIdentity?.querySelector("p")).toHaveTextContent("~/.skilldock/skills");
   expect(screen.queryByRole("tablist", { name: "Skill 来源" })).not.toBeInTheDocument();
   const sourceTrigger = screen.getByRole("button", { name: /已托管 4/ });
-  expect(sourceTrigger.closest(".skills-source-select-row")).toBeInTheDocument();
+  expect(sourceTrigger.closest(".management-page-header__source")).toBeInTheDocument();
+  expect(skillToolbarRow?.querySelector(".skills-header-bar__tools")).toBeInTheDocument();
+  expect(compactSkillsHeader?.querySelector(".skills-source-divider")).toBeInTheDocument();
+  expect(container.querySelector(".page-header-divider")).toHaveClass("page-header-divider--skills");
 
   await user.click(sourceTrigger);
   expect(screen.getByRole("menuitem", { name: /Codex 5/ })).toBeInTheDocument();
+
+  await user.click(screen.getByRole("button", { name: "MCP" }));
+  const compactMcpHeader = container.querySelector(".management-page-header--compact");
+  expect(compactMcpHeader?.querySelector(".management-page-header__identity h1")).toHaveTextContent("MCP");
+  expect(compactMcpHeader?.querySelector(".management-page-header__toolbar-row .mcp-toolbar")).toBeInTheDocument();
+  expect(container.querySelector(".page-header-divider")).toHaveClass("page-header-divider--skills");
+
+  await user.click(screen.getByRole("button", { name: /Plugins/ }));
+  const compactPluginsHeader = container.querySelector(".management-page-header--compact");
+  expect(compactPluginsHeader?.querySelector(".management-page-header__identity h1")).toHaveTextContent("Plugins");
+  expect(compactPluginsHeader?.querySelector(".management-page-header__toolbar-row .plugins-page__toolbar-primary")).toBeInTheDocument();
+  const pluginSourceTrigger = screen.getByRole("button", { name: "插件宿主" });
+  expect(pluginSourceTrigger).toBeInTheDocument();
+  expect(pluginSourceTrigger.querySelector("svg")).toBeInTheDocument();
+  expect(pluginSourceTrigger).not.toHaveTextContent(/^P/);
+  const pluginRightActions = compactPluginsHeader?.querySelector(".plugins-page__toolbar-actions--right");
+  expect(pluginRightActions).toBeInTheDocument();
+  expect(pluginRightActions).toContainElement(screen.getByRole("button", { name: "刷新" }));
+  expect(pluginRightActions).toContainElement(screen.getByRole("button", { name: "扫描导入" }));
+  expect(pluginRightActions).toContainElement(screen.getByRole("button", { name: "去安装" }));
+  expect(container.querySelector(".page-header-divider")).toHaveClass("page-header-divider--skills");
 });
 
 test("toggles tool status from the full row", async () => {

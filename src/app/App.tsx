@@ -429,6 +429,7 @@ function SidebarToggleButton(props: {
 function AppContent() {
   const {
     alignLocalWorkspaceState,
+    appSettings,
     installedSkills,
     isWorkspaceRefreshing,
     language,
@@ -492,6 +493,7 @@ function AppContent() {
     : null;
   const activeSkillPageTitle = activeSkillSourceTool?.name
     ?? tx(language, "app.nav.skills.label");
+  const isCompactManagementHeader = appSettings.skillSourceViewStyle === "select";
   const installedToolCount = toolConfigs.filter((tool) =>
     isToolInstalledStatus(tool.statusLabel),
   ).length;
@@ -686,6 +688,22 @@ function AppContent() {
     setActiveInstallTab("market");
   }
 
+  const skillToolbar = (
+    <SkillListToolbar
+      activeSourceId={activeSkillSourceId}
+      query={skillQuery}
+      statusFilter={skillStatusFilter}
+      managementFilter={skillManagementFilter}
+      managementFilterCounts={activeToolSkillCounts ?? undefined}
+      onQueryChange={setSkillQuery}
+      onStatusFilterChange={setSkillStatusFilter}
+      onManagementFilterChange={setSkillManagementFilter}
+      viewMode={skillViewMode}
+      onViewModeChange={handleSkillViewModeChange}
+      onGoInstall={() => handleOpenSkillInstall("market")}
+    />
+  );
+
   return (
     <div
       className={`app-shell${isSidebarCollapsed ? " is-sidebar-collapsed" : ""}${isMacOS ? " is-macos-window" : ""}`}
@@ -837,46 +855,66 @@ function AppContent() {
           {activeRoute === "skills" ? (
             <div
               key={`skills-${activeSkillsSection}`}
-              className="page-header--split"
+              className={`page-header--split${isCompactManagementHeader ? " management-page-header--compact" : ""}`}
               data-tauri-drag-region={macOSDragRegion}
             >
-              <div
-                className="page-header__row"
-                data-tauri-drag-region={macOSDragRegion}
-              >
-                <h1>
-                  {activeSkillsSection === "mcp"
-                    ? "MCP"
-                    : activeSkillPageTitle}
-                </h1>
-                {activeSkillsSection === "skills" ? (
-                  <SkillListToolbar
-                    activeSourceId={activeSkillSourceId}
-                    query={skillQuery}
-                    statusFilter={skillStatusFilter}
-                    managementFilter={skillManagementFilter}
-                    managementFilterCounts={activeToolSkillCounts ?? undefined}
-                    onQueryChange={setSkillQuery}
-                    onStatusFilterChange={setSkillStatusFilter}
-                    onManagementFilterChange={setSkillManagementFilter}
-                    viewMode={skillViewMode}
-                    onViewModeChange={handleSkillViewModeChange}
-                    onGoInstall={() => handleOpenSkillInstall("market")}
-                  />
-                ) : (
+              {isCompactManagementHeader ? (
+                <>
                   <div
-                    className="mcp-header-toolbar-slot"
-                    id="mcp-header-toolbar-slot"
-                  />
-                )}
-              </div>
-              <p>{activeDescription}</p>
-              {activeSkillsSection === "skills" ? (
-                <div
-                  className="skills-source-header-slot"
-                  id="skills-source-header-slot"
-                />
-              ) : null}
+                    className="management-page-header__identity"
+                    data-tauri-drag-region={macOSDragRegion}
+                  >
+                    <h1>{activeSkillsSection === "mcp" ? "MCP" : activeSkillPageTitle}</h1>
+                    <p>{activeDescription}</p>
+                  </div>
+                  <div className="management-page-header__toolbar-row">
+                    {activeSkillsSection === "skills" ? (
+                      <div
+                        className="skills-source-header-slot management-page-header__source"
+                        id="skills-source-header-slot"
+                      />
+                    ) : null}
+                    {activeSkillsSection === "skills" ? (
+                      <div className="management-page-header__toolbar">
+                        {skillToolbar}
+                      </div>
+                    ) : (
+                      <div
+                        className="mcp-header-toolbar-slot management-page-header__toolbar"
+                        id="mcp-header-toolbar-slot"
+                      />
+                    )}
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div
+                    className="page-header__row"
+                    data-tauri-drag-region={macOSDragRegion}
+                  >
+                    <h1>
+                      {activeSkillsSection === "mcp"
+                        ? "MCP"
+                        : activeSkillPageTitle}
+                    </h1>
+                    {activeSkillsSection === "skills" ? (
+                      skillToolbar
+                    ) : (
+                      <div
+                        className="mcp-header-toolbar-slot"
+                        id="mcp-header-toolbar-slot"
+                      />
+                    )}
+                  </div>
+                  <p>{activeDescription}</p>
+                  {activeSkillsSection === "skills" ? (
+                    <div
+                      className="skills-source-header-slot"
+                      id="skills-source-header-slot"
+                    />
+                  ) : null}
+                </>
+              )}
             </div>
           ) : activeRoute === "tools" ? (
             <div
@@ -964,24 +1002,48 @@ function AppContent() {
           ) : activeRoute === "plugins" ? (
             <div
               key="plugins"
-              className="page-header--split"
+              className={`page-header--split${isCompactManagementHeader ? " management-page-header--compact" : ""}`}
               data-tauri-drag-region={macOSDragRegion}
             >
-              <div
-                className="page-header__row"
-                data-tauri-drag-region={macOSDragRegion}
-              >
-                <h1>{activePluginHostName ?? tx(language, activeDefinition.labelKey)}</h1>
-                <div
-                  className="mcp-header-toolbar-slot"
-                  id="plugins-header-toolbar-slot"
-                />
-              </div>
-              <p>{activeDescription}</p>
-              <div
-                className="skills-source-header-slot"
-                id="plugins-source-header-slot"
-              />
+              {isCompactManagementHeader ? (
+                <>
+                  <div
+                    className="management-page-header__identity"
+                    data-tauri-drag-region={macOSDragRegion}
+                  >
+                    <h1>{activePluginHostName ?? tx(language, activeDefinition.labelKey)}</h1>
+                    <p>{activeDescription}</p>
+                  </div>
+                  <div className="management-page-header__toolbar-row">
+                    <div
+                      className="skills-source-header-slot management-page-header__source"
+                      id="plugins-source-header-slot"
+                    />
+                    <div
+                      className="mcp-header-toolbar-slot management-page-header__toolbar"
+                      id="plugins-header-toolbar-slot"
+                    />
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div
+                    className="page-header__row"
+                    data-tauri-drag-region={macOSDragRegion}
+                  >
+                    <h1>{activePluginHostName ?? tx(language, activeDefinition.labelKey)}</h1>
+                    <div
+                      className="mcp-header-toolbar-slot"
+                      id="plugins-header-toolbar-slot"
+                    />
+                  </div>
+                  <p>{activeDescription}</p>
+                  <div
+                    className="skills-source-header-slot"
+                    id="plugins-source-header-slot"
+                  />
+                </>
+              )}
             </div>
           ) : (
             <div
@@ -996,7 +1058,9 @@ function AppContent() {
         </header>
         <div
           className={`page-header-divider${
-            (activeRoute === "skills" && activeSkillsSection === "skills")
+            (isCompactManagementHeader
+              && (activeRoute === "skills" || activeRoute === "plugins"))
+              || (activeRoute === "skills" && activeSkillsSection === "skills")
               || activeRoute === "plugins"
               ? " page-header-divider--skills"
               : ""
