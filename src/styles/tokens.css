@@ -7565,7 +7565,7 @@ button.settings-form-item:disabled {
 }
 
 .settings-form-item__control--layout {
-  width: 320px;
+  width: 280px;
 }
 
 .settings-theme-picker {
@@ -7630,8 +7630,8 @@ button.settings-form-item:disabled {
 .settings-layout-picker {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 4px;
-  padding: 4px;
+  gap: 3px;
+  padding: 3px;
   border: 1px solid var(--line);
   border-radius: 12px;
   background: var(--surface-muted);
@@ -7641,8 +7641,9 @@ button.settings-form-item:disabled {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 34px;
-  padding: 0 10px;
+  gap: 6px;
+  min-height: 32px;
+  padding: 0 8px;
   border: 1px solid transparent;
   border-radius: 8px;
   background: transparent;
@@ -7657,6 +7658,12 @@ button.settings-form-item:disabled {
     box-shadow var(--motion-fast) var(--ease-standard),
     color var(--motion-fast) var(--ease-standard),
     transform var(--motion-fast) var(--ease-standard);
+}
+
+.settings-layout-option svg {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 15px;
 }
 
 .settings-layout-option:hover {

@@ -123,6 +123,21 @@ function ThemeIcon({ theme }: { theme: AppTheme }) {
   );
 }
 
+function LayoutIcon({ compact }: { compact: boolean }) {
+  return compact ? (
+    <svg viewBox="0 0 18 18" fill="none" aria-hidden="true">
+      <rect x="2.5" y="3" width="13" height="12" rx="2" stroke="currentColor" strokeWidth="1.35" />
+      <path d="M5 6.5h8M5 9h5M5 11.5h3" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round" />
+      <path d="m12.5 9.75 1.25 1.25 1.25-1.25" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  ) : (
+    <svg viewBox="0 0 18 18" fill="none" aria-hidden="true">
+      <rect x="2.5" y="3" width="13" height="12" rx="2" stroke="currentColor" strokeWidth="1.35" />
+      <path d="M5 6.5h8M5 9h8M5 11.5h8" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 function formatBytes(bytes: number) {
   if (bytes <= 0) {
     return "0 B";
@@ -479,6 +494,7 @@ export function SettingsRoute() {
               aria-pressed={(appSettings.skillSourceViewStyle ?? "flat") === "flat"}
               onClick={() => void setSkillSourceViewStyle("flat")}
             >
+              <LayoutIcon compact={false} />
               <span>{t("settings.skillSourceView.option.flat")}</span>
             </button>
             <button
@@ -487,6 +503,7 @@ export function SettingsRoute() {
               aria-pressed={appSettings.skillSourceViewStyle === "select"}
               onClick={() => void setSkillSourceViewStyle("select")}
             >
+              <LayoutIcon compact />
               <span>{t("settings.skillSourceView.option.select")}</span>
             </button>
           </div>
