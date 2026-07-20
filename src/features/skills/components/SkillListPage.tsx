@@ -1,4 +1,4 @@
-import { useDeferredValue, useEffect, useMemo, useState } from "react";
+import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { SearchFieldIcon } from "@/app/components/SearchFieldIcon";
 import { useTranslate } from "@/app/i18n";
 import { useFailureReporter } from "@/app/failure-feedback";
@@ -15,6 +15,7 @@ import {
 } from "@/features/skills/utils/skill-view-preference";
 import { getMonogramLabel } from "@/features/skills/utils/monogram";
 import { ToolbarGoInstallButton } from "@/app/components/ToolbarGoInstallButton";
+import { useStableListOrder } from "@/app/hooks/useStableListOrder";
 import { AppSelect } from "@/app/components/AppSelect";
 import type { SkillStatusFilter, SkillSummary } from "@/features/skills/state/skill-store";
 import {
@@ -362,6 +363,10 @@ type SkillListPageProps = {
 
 const SKILL_GRID_COLUMN_COUNT = 3;
 
+function getSkillOrderKey(skill: SkillSummary) {
+  return skill.name;
+}
+
 export function SkillListPage(props: SkillListPageProps) {
   const { t } = useTranslate();
   const {
@@ -377,33 +382,51 @@ export function SkillListPage(props: SkillListPageProps) {
     focusedManagedSkillName = "",
     onShowManagedSkill = () => undefined,
   } = props;
-  const { installedSkills, isLoading } = useSkillWorkspace();
+  const { installedSkills, isLoading, isWorkspaceRefreshing } = useSkillWorkspace();
   const deferredQuery = useDeferredValue(query);
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>(readSkillGroupCollapsedState);
   const [expandedSkillName, setExpandedSkillName] = useState("");
-  const skills = useMemo(
-    () => filterSkills(installedSkills, { query: deferredQuery, status: statusFilter }),
-    [deferredQuery, installedSkills, statusFilter],
+  const [skillOrderRevision, setSkillOrderRevision] = useState(0);
+  const wasWorkspaceRefreshingRef = useRef(isWorkspaceRefreshing);
+  const statusSortedSkills = useMemo(
+    () => [...filterSkills(installedSkills, { query: "", status: "all" })]
+      .sort((left, right) => Number(hasEnabledTool(right)) - Number(hasEnabledTool(left))),
+    [installedSkills],
   );
+  const orderedInstalledSkills = useStableListOrder(
+    statusSortedSkills,
+    getSkillOrderKey,
+    skillOrderRevision,
+  );
+  const skills = useMemo(() => {
+    const visibleSkillNames = new Set(
+      filterSkills(installedSkills, { query: deferredQuery, status: statusFilter })
+        .map((skill) => skill.name),
+    );
+    return orderedInstalledSkills.filter((skill) => visibleSkillNames.has(skill.name));
+  }, [deferredQuery, installedSkills, orderedInstalledSkills, statusFilter]);
   const groupedSkills = useMemo(
     () => groupSkillsBySource(skills, { localLabel: t("skills.source.local") }),
     [skills, t],
   );
-  const orderedSkills = useMemo(
-    () => [...skills].sort((left, right) => Number(hasEnabledTool(right)) - Number(hasEnabledTool(left))),
-    [skills],
-  );
   const skillGridRows = useMemo(() => {
     const rows: SkillSummary[][] = [];
-    for (let index = 0; index < orderedSkills.length; index += SKILL_GRID_COLUMN_COUNT) {
-      rows.push(orderedSkills.slice(index, index + SKILL_GRID_COLUMN_COUNT));
+    for (let index = 0; index < skills.length; index += SKILL_GRID_COLUMN_COUNT) {
+      rows.push(skills.slice(index, index + SKILL_GRID_COLUMN_COUNT));
     }
     return rows;
-  }, [orderedSkills]);
+  }, [skills]);
   const allGroupedSkills = useMemo(
-    () => groupSkillsBySource(installedSkills, { localLabel: t("skills.source.local") }),
-    [installedSkills, t],
+    () => groupSkillsBySource(orderedInstalledSkills, { localLabel: t("skills.source.local") }),
+    [orderedInstalledSkills, t],
   );
+
+  useEffect(() => {
+    if (wasWorkspaceRefreshingRef.current && !isWorkspaceRefreshing) {
+      setSkillOrderRevision((current) => current + 1);
+    }
+    wasWorkspaceRefreshingRef.current = isWorkspaceRefreshing;
+  }, [isWorkspaceRefreshing]);
 
   useEffect(() => {
     if (activeSourceId !== MANAGED_SKILL_SOURCE_ID || !focusedManagedSkillName) {
@@ -573,7 +596,7 @@ export function SkillListPage(props: SkillListPageProps) {
                 );
               })
             ) : (
-              orderedSkills.map((skill) => (
+              skills.map((skill) => (
                 <SkillCard
                   key={skill.name}
                   skill={skill}

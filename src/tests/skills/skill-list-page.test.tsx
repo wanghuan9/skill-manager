@@ -295,6 +295,43 @@ test("places disabled skills after enabled skills in list and card views", async
   startupSkillsSpy.mockRestore();
 });
 
+test("keeps the current skill order after toggling its enabled state", async () => {
+  const enabledSkill = {
+    ...installedSkillFixtures[0],
+    name: "enabled-older-skill",
+    localUpdatedAt: "2026/7/17 12:00:00",
+    tools: [{ name: "Codex", statusLabel: "已同步" }],
+  };
+  const disabledSkill = {
+    ...installedSkillFixtures[1],
+    name: "disabled-newer-skill",
+    localUpdatedAt: "2026/7/18 12:00:00",
+    tools: [{ name: "Codex", statusLabel: "未启用" }],
+  };
+  const toggledSkill = {
+    ...disabledSkill,
+    tools: [{ name: "Codex", statusLabel: "已同步" }],
+  };
+  workspaceSnapshotFixture.installedSkills = [disabledSkill, enabledSkill];
+  const startupSkillsSpy = vi.spyOn(skillClient, "fetchStartupInstalledSkills")
+    .mockResolvedValue([disabledSkill, enabledSkill]);
+  const toggleSkillSpy = vi.spyOn(skillClient, "setSkillAllToolStatuses").mockResolvedValue(toggledSkill);
+
+  render(<App />);
+
+  const getSkillOrder = () => screen.getAllByRole("article")
+    .map((article) => article.getAttribute("aria-label"));
+  expect(getSkillOrder()).toEqual(["enabled-older-skill", "disabled-newer-skill"]);
+
+  await userEvent.click(screen.getByRole("button", { name: "启用 disabled-newer-skill 到全部工具" }));
+
+  await waitFor(() => {
+    expect(getSkillOrder()).toEqual(["enabled-older-skill", "disabled-newer-skill"]);
+  });
+  startupSkillsSpy.mockRestore();
+  toggleSkillSpy.mockRestore();
+});
+
 test("opens card details in a modal without changing the card grid order", async () => {
   const user = userEvent.setup();
   const { container } = render(<App />);

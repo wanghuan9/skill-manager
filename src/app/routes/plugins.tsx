@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { SearchFieldIcon } from "@/app/components/SearchFieldIcon";
+import { useStableListOrder } from "@/app/hooks/useStableListOrder";
 import { useTranslate } from "@/app/i18n";
 import { ToolbarGoInstallButton } from "@/app/components/ToolbarGoInstallButton";
 import { AppSelect } from "@/app/components/AppSelect";
@@ -501,6 +502,20 @@ function buildPluginAggregateKey(plugin: PluginSummary) {
   }
 
   return `fallback:${normalizePluginAggregateIdentity(plugin.name)}:${plugin.hostTool}`;
+}
+
+function getPluginListOrderKey(
+  plugin: PluginSummary,
+  activeHost: PluginTabKey,
+  duplicatePluginIds: Set<string>,
+) {
+  if (activeHost === "all") {
+    return buildPluginAggregateKey(plugin);
+  }
+  if (duplicatePluginIds.has(plugin.id)) {
+    return getPluginInstanceKey(plugin);
+  }
+  return `${plugin.hostTool}:${plugin.id}`;
 }
 
 function buildPluginPackageMap(plugins: PluginSummary[]) {
@@ -1533,6 +1548,7 @@ export function PluginsRoute(props: PluginsRouteProps = {}) {
   const [isLoading, setIsLoading] = useState(() => getRuntimeCachedPlugins() === null);
   const [isRefreshing, setIsRefreshing] = useState(() => getPluginScanSessionSnapshot().isScanning);
   const [isReloading, setIsReloading] = useState(false);
+  const [pluginOrderRevision, setPluginOrderRevision] = useState(0);
   const [errorMessage, setErrorMessage] = useState("");
   const [actionErrorMessage, setActionErrorMessage] = useState("");
   const [previewState, setPreviewState] = useState<PreviewState | null>(null);
@@ -1570,6 +1586,7 @@ export function PluginsRoute(props: PluginsRouteProps = {}) {
   const startupPluginSyncInFlightRef = useRef<Promise<void> | null>(null);
   const lastStartupPluginSyncAtRef = useRef(0);
   const lastPluginLocalAlignAtRef = useRef(0);
+  const wasPluginRefreshingRef = useRef(isRefreshing || isReloading);
   const pluginsRef = useRef(plugins);
   const [toolbarContainer, setToolbarContainer] = useState<HTMLElement | null>(
     null,
@@ -1604,6 +1621,14 @@ export function PluginsRoute(props: PluginsRouteProps = {}) {
   useEffect(() => {
     pluginsRef.current = plugins;
   }, [plugins]);
+
+  useEffect(() => {
+    const isPluginRefreshing = isRefreshing || isReloading;
+    if (wasPluginRefreshingRef.current && !isPluginRefreshing) {
+      setPluginOrderRevision((current) => current + 1);
+    }
+    wasPluginRefreshingRef.current = isPluginRefreshing;
+  }, [isRefreshing, isReloading]);
 
   function commitPlugins(nextPlugins: PluginSummary[]) {
     if (!shouldUseFixtureData()) {
@@ -2129,10 +2154,24 @@ export function PluginsRoute(props: PluginsRouteProps = {}) {
   }, [activeHost, plugins]);
 
   const normalizedQuery = query.trim().toLowerCase();
-  const scopedPlugins = (activeHost === "all"
+  const statusSortedScopedPlugins = (activeHost === "all"
     ? buildAllTabPlugins(plugins)
     : plugins.filter((plugin) => plugin.hostTool === activeHost))
     .sort(comparePlugins);
+  const pluginIdCounts = new Map<string, number>();
+  for (const plugin of statusSortedScopedPlugins) {
+    pluginIdCounts.set(plugin.id, (pluginIdCounts.get(plugin.id) ?? 0) + 1);
+  }
+  const duplicatePluginIds = new Set(
+    [...pluginIdCounts.entries()]
+      .filter(([, count]) => count > 1)
+      .map(([pluginId]) => pluginId),
+  );
+  const scopedPlugins = useStableListOrder(
+    statusSortedScopedPlugins,
+    (plugin) => getPluginListOrderKey(plugin, activeHost, duplicatePluginIds),
+    `${activeHost}:${pluginOrderRevision}`,
+  );
   const filterCounts: Record<PluginFilter, number> = {
     all: scopedPlugins.length,
     enabled: scopedPlugins.filter((plugin) => plugin.enabledState === "enabled").length,

@@ -1882,6 +1882,22 @@ test("toggles plugin enabled state from the plugin list", async () => {
   expect(screen.getAllByText("已启用").length).toBeGreaterThan(0);
 });
 
+test("keeps the current plugin order after toggling its enabled state", async () => {
+  renderWithI18n(<PluginsRoute />);
+
+  await screen.findByRole("tab", { name: /全部/ });
+  expect(await screen.findByText("ecc")).toBeInTheDocument();
+
+  const getPluginOrder = () => screen.getAllByRole("button", { name: /^展开 / })
+    .map((button) => button.getAttribute("aria-label"));
+  expect(getPluginOrder()).toEqual(["展开 Repo Scout", "展开 ecc"]);
+
+  await userEvent.click(screen.getByRole("button", { name: "开启 ecc 插件" }));
+
+  expect(await screen.findByRole("button", { name: "关闭 ecc 插件" })).toBeInTheDocument();
+  expect(getPluginOrder()).toEqual(["展开 Repo Scout", "展开 ecc"]);
+});
+
 test("toggles Cursor plugin enabled state from the plugin list", async () => {
   const cursorPlugin = buildCursorPlugin(
     "Example Plugin",
