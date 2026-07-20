@@ -27,7 +27,7 @@ import {
 } from "@/features/skills/utils/open-tools";
 import { getToolLogoUrl } from "@/features/skills/utils/tool-logo";
 import { clearRepoCache, getRepoCacheSize } from "@/features/skills/api/skill-client";
-import type { AppTheme, SkillSourceViewStyle } from "@/features/skills/state/skill-store";
+import type { AppTheme } from "@/features/skills/state/skill-store";
 import {
   applyGlobalListGridViewPreference,
   readGlobalListGridViewPreference,
@@ -401,6 +401,23 @@ export function SettingsRoute() {
       ),
     },
     {
+      label: t("settings.defaultEditor.label"),
+      description: t("settings.defaultEditor.description"),
+      value: (
+        <div className="settings-form-item__control">
+          <AppSelect
+            ariaLabel={t("settings.defaultEditor.aria")}
+            value={selectedDefaultToolId}
+            options={openToolOptions.length === 0
+              ? [{ value: "", label: t("settings.defaultEditor.empty") }]
+              : openToolOptions.map((tool) => ({ value: tool.id, label: tool.name }))}
+            onChange={setDefaultOpenToolId}
+            disabled={openToolOptions.length === 0}
+          />
+        </div>
+      ),
+    },
+    {
       label: t("settings.theme.label"),
       description: t("settings.theme.description"),
       value: (
@@ -451,36 +468,28 @@ export function SettingsRoute() {
       ),
     },
     {
-      label: t("settings.defaultEditor.label"),
-      description: t("settings.defaultEditor.description"),
-      value: (
-        <div className="settings-form-item__control">
-          <AppSelect
-            ariaLabel={t("settings.defaultEditor.aria")}
-            value={selectedDefaultToolId}
-            options={openToolOptions.length === 0
-              ? [{ value: "", label: t("settings.defaultEditor.empty") }]
-              : openToolOptions.map((tool) => ({ value: tool.id, label: tool.name }))}
-            onChange={setDefaultOpenToolId}
-            disabled={openToolOptions.length === 0}
-          />
-        </div>
-      ),
-    },
-    {
       label: t("settings.skillSourceView.label"),
       description: t("settings.skillSourceView.description"),
       value: (
-        <div className="settings-form-item__control">
-          <AppSelect
-            ariaLabel={t("settings.skillSourceView.label")}
-            value={appSettings.skillSourceViewStyle ?? "flat"}
-            options={[
-              { value: "flat", label: t("settings.skillSourceView.option.flat") },
-              { value: "select", label: t("settings.skillSourceView.option.select") },
-            ]}
-            onChange={(value: SkillSourceViewStyle) => void setSkillSourceViewStyle(value)}
-          />
+        <div className="settings-form-item__control settings-form-item__control--layout">
+          <div className="settings-layout-picker" role="group" aria-label={t("settings.skillSourceView.label")}>
+            <button
+              className={`settings-layout-option${(appSettings.skillSourceViewStyle ?? "flat") === "flat" ? " is-selected" : ""}`}
+              type="button"
+              aria-pressed={(appSettings.skillSourceViewStyle ?? "flat") === "flat"}
+              onClick={() => void setSkillSourceViewStyle("flat")}
+            >
+              <span>{t("settings.skillSourceView.option.flat")}</span>
+            </button>
+            <button
+              className={`settings-layout-option${appSettings.skillSourceViewStyle === "select" ? " is-selected" : ""}`}
+              type="button"
+              aria-pressed={appSettings.skillSourceViewStyle === "select"}
+              onClick={() => void setSkillSourceViewStyle("select")}
+            >
+              <span>{t("settings.skillSourceView.option.select")}</span>
+            </button>
+          </div>
         </div>
       ),
     },

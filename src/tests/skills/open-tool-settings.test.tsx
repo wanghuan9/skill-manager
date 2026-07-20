@@ -30,6 +30,8 @@ test("allows selecting default open tool in settings", async () => {
 
   expect(screen.getByText("/Users/demo/.skilldock")).toBeInTheDocument();
   expect(screen.getByLabelText("界面语言")).toHaveTextContent("简体中文");
+  expect(screen.getByLabelText("默认编辑器").closest(".settings-form-item")?.previousElementSibling)
+    .toHaveTextContent("界面语言");
   const select = screen.getByLabelText("默认编辑器");
   expect(select).toBeInTheDocument();
   expect(screen.getByLabelText("新增 Skill 默认启用")).toHaveAttribute("aria-pressed", "true");
@@ -123,14 +125,12 @@ test("switches Skills, MCP, and Plugins between current and compact header layou
   expect(currentHeader?.querySelector(".page-header__row .skills-header-bar__tools")).toBeInTheDocument();
 
   await user.click(screen.getByRole("button", { name: /设置/ }));
-  const styleSelect = screen.getByLabelText("管理页头布局");
-  expect(styleSelect).toHaveAttribute("data-value", "flat");
-  await user.click(styleSelect);
-  expect(screen.getByRole("option", { name: "当前布局" })).toBeInTheDocument();
-  expect(screen.getByRole("option", { name: "B · 折叠来源" })).toBeInTheDocument();
-  expect(screen.queryByRole("option", { name: /A ·/ })).not.toBeInTheDocument();
-  expect(screen.queryByRole("option", { name: /C ·/ })).not.toBeInTheDocument();
-  await user.click(screen.getByRole("option", { name: "B · 折叠来源" }));
+  const layoutGroup = screen.getByRole("group", { name: "管理页头布局" });
+  const currentLayoutButton = within(layoutGroup).getByRole("button", { name: "当前布局" });
+  const compactLayoutButton = within(layoutGroup).getByRole("button", { name: "B · 折叠来源" });
+  expect(currentLayoutButton).toHaveAttribute("aria-pressed", "true");
+  expect(compactLayoutButton).toHaveAttribute("aria-pressed", "false");
+  await user.click(compactLayoutButton);
   await user.click(screen.getByRole("button", { name: /Skills/ }));
 
   const compactSkillsHeader = container.querySelector(".management-page-header--compact");
@@ -158,7 +158,15 @@ test("switches Skills, MCP, and Plugins between current and compact header layou
   const compactPluginsHeader = container.querySelector(".management-page-header--compact");
   expect(compactPluginsHeader?.querySelector(".management-page-header__identity h1")).toHaveTextContent("Plugins");
   expect(compactPluginsHeader?.querySelector(".management-page-header__toolbar-row .plugins-page__toolbar-primary")).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "插件宿主" })).toBeInTheDocument();
+  const pluginSourceTrigger = screen.getByRole("button", { name: "插件宿主" });
+  expect(pluginSourceTrigger).toBeInTheDocument();
+  expect(pluginSourceTrigger.querySelector("svg")).toBeInTheDocument();
+  expect(pluginSourceTrigger).not.toHaveTextContent(/^P/);
+  const pluginRightActions = compactPluginsHeader?.querySelector(".plugins-page__toolbar-actions--right");
+  expect(pluginRightActions).toBeInTheDocument();
+  expect(pluginRightActions).toContainElement(screen.getByRole("button", { name: "刷新" }));
+  expect(pluginRightActions).toContainElement(screen.getByRole("button", { name: "扫描导入" }));
+  expect(pluginRightActions).toContainElement(screen.getByRole("button", { name: "去安装" }));
   expect(container.querySelector(".page-header-divider")).toHaveClass("page-header-divider--skills");
 });
 

@@ -694,6 +694,21 @@ function PluginHostLogo({ hostTool, label }: { hostTool: PluginHostTool; label: 
   );
 }
 
+function PluginSourceAllIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path
+        d="M9 3v5m6-5v5M6.5 8.5h11v4.3a5.5 5.5 0 0 1-11 0V8.5ZM12 18.3V21"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 type PluginSourceOption = {
   key: PluginTabKey;
   label: string;
@@ -746,11 +761,7 @@ function PluginSourceSwitcher(props: PluginSourceSwitcherProps) {
 
   function renderLogo(option: PluginSourceOption) {
     if (option.key === "all") {
-      return (
-        <span className="skills-source-tab__logo skills-source-tab__logo--all" aria-hidden="true">
-          P
-        </span>
-      );
+      return <span className="skills-source-tab__logo skills-source-tab__logo--all"><PluginSourceAllIcon /></span>;
     }
 
     return <PluginHostLogo hostTool={option.key} label={option.label} />;
@@ -2206,6 +2217,8 @@ export function PluginsRoute(props: PluginsRouteProps = {}) {
             minMenuWidth={96}
           />
         </div>
+      </div>
+      <div className="plugins-page__toolbar-actions plugins-page__toolbar-actions--right">
         <button
           className={`secondary-button secondary-button--compact skills-toolbar-button skills-toolbar-button--refresh${isReloading ? " is-loading" : ""}`}
           type="button"

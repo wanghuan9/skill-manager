@@ -1616,6 +1616,10 @@ code {
   margin-left: 0;
 }
 
+.management-page-header--compact .plugins-page__toolbar-actions--right {
+  margin-left: auto;
+}
+
 .management-page-header--compact .skills-toolbar-button--refresh {
   margin-left: auto;
 }
@@ -7560,6 +7564,10 @@ button.settings-form-item:disabled {
   width: 320px;
 }
 
+.settings-form-item__control--layout {
+  width: 320px;
+}
+
 .settings-theme-picker {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -7617,6 +7625,58 @@ button.settings-form-item:disabled {
   width: 16px;
   height: 16px;
   flex: 0 0 16px;
+}
+
+.settings-layout-picker {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-muted);
+}
+
+.settings-layout-option {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 34px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background-color var(--motion-fast) var(--ease-standard),
+    border-color var(--motion-fast) var(--ease-standard),
+    box-shadow var(--motion-fast) var(--ease-standard),
+    color var(--motion-fast) var(--ease-standard),
+    transform var(--motion-fast) var(--ease-standard);
+}
+
+.settings-layout-option:hover {
+  color: var(--heading);
+}
+
+.settings-layout-option:active {
+  transform: scale(0.98);
+}
+
+.settings-layout-option:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 52%, transparent);
+  outline-offset: 1px;
+}
+
+.settings-layout-option.is-selected {
+  border-color: color-mix(in srgb, var(--accent) 28%, var(--line) 72%);
+  background: var(--surface-strong);
+  color: var(--accent);
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--accent) 10%, transparent);
 }
 
 .settings-update-actions {
@@ -8716,6 +8776,11 @@ button.settings-form-item:disabled {
   background: rgba(148, 163, 184, 0.12);
   color: var(--muted);
   font-size: 0.68rem;
+}
+
+.skills-source-tab__logo--all svg {
+  width: 13px;
+  height: 13px;
 }
 
 .skills-source-tab__count {
