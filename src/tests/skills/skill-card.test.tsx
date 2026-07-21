@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 import { AppI18nProvider } from "@/app/i18n";
@@ -105,23 +105,22 @@ test("shows description in the list summary and keeps update metadata in details
   expect(screen.getByText(/更新人/)).toBeInTheDocument();
 });
 
-test("opens the shared file dialog in local changes mode from skill details", async () => {
-  const skill = installedSkillFixtures.find((item) => item.name === "drawio-diagram");
+test("opens the shared file dialog in local changes mode from a pending-push file entry", async () => {
+  const skill = installedSkillFixtures.find((item) => item.name === "skill-publisher");
   if (!skill) {
-    throw new Error("missing drawio-diagram fixture");
+    throw new Error("missing skill-publisher fixture");
   }
 
   renderSkillCardWithProviders(skill);
-  await userEvent.click(screen.getByRole("button", { name: /展开 drawio-diagram/ }));
-  const changesButton = screen.getByRole("button", { name: "查看 drawio-diagram 的本地变更" });
-  expect(changesButton.querySelector("svg")).toBeInTheDocument();
-  await userEvent.click(changesButton);
+  const filesButton = screen.getByRole("button", { name: "查看 skill-publisher 文件与本地变更" });
+  expect(filesButton.querySelector(".skill-card__change-count")).toHaveTextContent("4");
+  await userEvent.click(filesButton);
 
-  expect(await screen.findByRole("dialog", { name: "drawio-diagram" })).toBeInTheDocument();
+  expect(await screen.findByRole("dialog", { name: "skill-publisher" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "本地变更 0" })).toHaveAttribute("aria-pressed", "true");
 });
 
-test("moves the local changes action into the grid detail header", async () => {
+test("uses the compact file entry in the grid detail header", async () => {
   const skill = installedSkillFixtures.find((item) => item.name === "drawio-diagram");
   if (!skill) {
     throw new Error("missing drawio-diagram fixture");
@@ -130,10 +129,11 @@ test("moves the local changes action into the grid detail header", async () => {
   renderSkillCardWithProviders(skill, "grid");
   await userEvent.click(screen.getByRole("button", { name: /展开 drawio-diagram/ }));
 
-  const changesButton = screen.getByRole("button", { name: "查看 drawio-diagram 的本地变更" });
-  expect(changesButton).toHaveTextContent("本地变更");
-  expect(changesButton.closest(".skill-card-detail-modal__header")).toBeInTheDocument();
-  expect(screen.getByText("基本信息").closest("section")).not.toContainElement(changesButton);
+  const detailDialog = screen.getByRole("dialog", { name: "drawio-diagram 详情" });
+  const filesButton = within(detailDialog).getByRole("button", { name: "查看 drawio-diagram 文件" });
+  expect(filesButton).toHaveClass("skill-card__icon-button", "skill-card-detail-modal__icon-action");
+  expect(filesButton).not.toHaveTextContent("查看文件");
+  expect(filesButton.closest(".skill-card-detail-modal__header")).toBeInTheDocument();
 });
 
 test("hides remote update metadata for non-git skill details", async () => {

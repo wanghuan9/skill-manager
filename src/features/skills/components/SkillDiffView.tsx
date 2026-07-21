@@ -266,7 +266,8 @@ function SkillDiffEditor({
     });
   }, [content]);
 
-  return <div className="skill-diff__editor" ref={editorHostRef} />;
+  const changeStatus = normalizeSkillChangeStatus(change.status).toLowerCase();
+  return <div className={`skill-diff__editor is-${changeStatus}`} ref={editorHostRef} />;
 }
 
 export function SkillDiffView({

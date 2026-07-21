@@ -38,6 +38,7 @@ export const installedSkillFixtures: SkillSummary[] = [
     lastEditor: "Wanghuan",
     commitLabel: "9fd72ac",
     gitLinked: true,
+    localChangeCount: 4,
     tools: [
       { name: "Codex", statusLabel: "已同步" },
       { name: "Claude Code", statusLabel: "已同步" },

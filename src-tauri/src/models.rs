@@ -190,6 +190,8 @@ pub struct SkillSummary {
     #[serde(default)]
     pub git_linked: bool,
     #[serde(default)]
+    pub local_change_count: usize,
+    #[serde(default)]
     pub lifecycle_source: String,
     #[serde(default)]
     pub owner_plugin_id: String,

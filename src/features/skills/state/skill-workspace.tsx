@@ -356,6 +356,7 @@ function normalizeCachedSkillSummary(skill: CachedSkillSummary): SkillSummary {
     lastEditor: skill.lastEditor ?? "",
     commitLabel: skill.commitLabel ?? "",
     gitLinked: skill.gitLinked ?? false,
+    localChangeCount: skill.localChangeCount ?? 0,
     tools: skill.tools ?? [],
   };
 }
@@ -446,6 +447,7 @@ export function mergeStartupSkillStatusCache(
       lastEditor: cachedSkill.lastEditor,
       commitLabel: cachedSkill.commitLabel,
       gitLinked: cachedSkill.gitLinked,
+      localChangeCount: cachedSkill.localChangeCount ?? 0,
     };
   });
 }
