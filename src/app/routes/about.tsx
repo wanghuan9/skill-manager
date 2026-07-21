@@ -134,7 +134,6 @@ export function AboutRoute() {
         </div>
         <div className="about-hero__meta" aria-label={t("about.meta")}>
           <span>v{currentAppVersion || t("about.versionLoading")}</span>
-          <span>{t("about.preview")}</span>
         </div>
       </section>
 
