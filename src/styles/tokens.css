@@ -2314,10 +2314,16 @@ code {
   border: 1px solid rgba(59, 130, 246, 0.15);
 }
 
+.skill-group-section__state--commit {
+  color: #5d7fae;
+  background: rgba(47, 120, 255, 0.065);
+  border: 1px solid rgba(47, 120, 255, 0.11);
+}
+
 .skill-group-section__state--pending {
-  color: #7b61d1;
-  background: rgba(123, 97, 209, 0.1);
-  border: 1px solid rgba(123, 97, 209, 0.15);
+  color: #3f7fdc;
+  background: rgba(47, 120, 255, 0.09);
+  border: 1px solid rgba(47, 120, 255, 0.15);
 }
 
 .skill-group-section__chevron {
@@ -2932,6 +2938,16 @@ code {
 .tone-info {
   background: rgba(47, 120, 255, 0.1);
   color: var(--accent);
+}
+
+.tone-pending-commit {
+  background: rgba(47, 120, 255, 0.065);
+  color: #5d7fae;
+}
+
+.tone-pending-push {
+  background: rgba(47, 120, 255, 0.1);
+  color: #3f7fdc;
 }
 
 .tone-warning {
@@ -13148,6 +13164,28 @@ button.settings-form-item:disabled {
 :root[data-theme="dark"] .tone-info {
   background: rgba(255, 194, 26, 0.095);
   color: var(--accent);
+}
+
+:root[data-theme="dark"] .tone-pending-commit {
+  background: rgba(88, 153, 255, 0.1);
+  color: #9ab7df;
+}
+
+:root[data-theme="dark"] .tone-pending-push {
+  background: rgba(88, 153, 255, 0.14);
+  color: #8fbcff;
+}
+
+:root[data-theme="dark"] .skill-group-section__state--commit {
+  border-color: rgba(88, 153, 255, 0.16);
+  background: rgba(88, 153, 255, 0.09);
+  color: #9ab7df;
+}
+
+:root[data-theme="dark"] .skill-group-section__state--pending {
+  border-color: rgba(88, 153, 255, 0.22);
+  background: rgba(88, 153, 255, 0.13);
+  color: #8fbcff;
 }
 
 :root[data-theme="dark"] .mcp-server-card__summary-button:focus-visible .mcp-server-card__main,

@@ -233,7 +233,11 @@ export function SkillCard({
       : sourceLabel;
   const showRemoteMetadata = skill.gitLinked && skill.sourceType !== "local";
   const showLocalChangesAction = skill.gitLinked
-    && (skill.collabStatus === "pending-push" || skill.collabStatus === "diverged");
+    && (
+      skill.collabStatus === "pending-commit"
+      || skill.collabStatus === "pending-push"
+      || skill.collabStatus === "diverged"
+    );
   const expanded = expandedProp ?? expandedState;
   const isGridLayout = layout === "grid";
 

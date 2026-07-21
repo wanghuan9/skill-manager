@@ -18,7 +18,7 @@ test("preserves the current Skill header layout and opens Skill install", async 
   expect(screen.getByRole("button", { name: /Skills/ })).toBeInTheDocument();
   expect(header).not.toHaveClass("management-page-header--compact");
   expect(screen.getByRole("heading", { name: "Skills", level: 1 })).toBeInTheDocument();
-  expect(screen.getByText("~/.skilldock/skills · 已启用 4 · 可更新 1 · 待推送 2")).toBeInTheDocument();
+  expect(screen.getByText("~/.skilldock/skills · 已启用 4 · 可更新 1 · 待处理 2")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "刷新" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "更新 (1)" })).toBeInTheDocument();
   const searchInput = screen.getByPlaceholderText("搜索技能、描述或来源");

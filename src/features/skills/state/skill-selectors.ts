@@ -8,10 +8,11 @@ type FilterOptions = {
 };
 
 const statusPriority: Record<SkillSummary["collabStatus"], number> = {
-  "pending-push": 0,
-  "update-available": 1,
-  diverged: 2,
-  clean: 3,
+  "pending-commit": 0,
+  "pending-push": 1,
+  "update-available": 2,
+  diverged: 3,
+  clean: 4,
 };
 
 export function hasEnabledTool(skill: SkillSummary) {

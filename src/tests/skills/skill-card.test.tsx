@@ -121,6 +121,19 @@ test("opens the shared file dialog in local changes mode from skill details", as
   expect(screen.getByRole("button", { name: "本地变更 0" })).toHaveAttribute("aria-pressed", "true");
 });
 
+test("shows pending commit as a soft status and keeps the local changes action", async () => {
+  const skill = installedSkillFixtures.find((item) => item.name === "drawio-diagram");
+  if (!skill) {
+    throw new Error("missing drawio-diagram fixture");
+  }
+
+  renderSkillCardWithProviders({ ...skill, collabStatus: "pending-commit" });
+
+  expect(screen.getByText("待提交")).toHaveClass("tone-pending-commit");
+  await userEvent.click(screen.getByRole("button", { name: /展开 drawio-diagram/ }));
+  expect(screen.getByRole("button", { name: "查看 drawio-diagram 的本地变更" })).toBeInTheDocument();
+});
+
 test("moves the local changes action into the grid detail header", async () => {
   const skill = installedSkillFixtures.find((item) => item.name === "drawio-diagram");
   if (!skill) {
