@@ -114,6 +114,7 @@ test("opens the shared file dialog in local changes mode from a pending-push fil
   renderSkillCardWithProviders(skill);
   const filesButton = screen.getByRole("button", { name: "查看 skill-publisher 文件与本地变更" });
   expect(filesButton.querySelector(".skill-card__change-count")).toHaveTextContent("4");
+  expect(filesButton.querySelector('path[d="M4.5 5.5h5M7 3v5"]')).not.toBeInTheDocument();
   await userEvent.click(filesButton);
 
   expect(await screen.findByRole("dialog", { name: "skill-publisher" })).toBeInTheDocument();
@@ -136,6 +137,7 @@ test("keeps the file entry expanded in the grid detail header", async () => {
   expect(filesButton).toHaveClass("secondary-button", "skill-card-detail-modal__action");
   expect(filesButton).toHaveTextContent("本地变更");
   expect(filesButton.querySelector(".skill-card__change-count")).toHaveTextContent("4");
+  expect(filesButton.querySelector('path[d="M4.5 5.5h5M7 3v5"]')).toBeInTheDocument();
   expect(filesButton.closest(".skill-card-detail-modal__header")).toBeInTheDocument();
 });
 

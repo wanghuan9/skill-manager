@@ -116,6 +116,15 @@ function ViewFileIcon() {
   );
 }
 
+function LocalChangesIcon() {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+      <path d="M4.5 5.5h5M7 3v5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+      <path d="M11.5 5.5h4M4.5 14.5h4M11.5 14.5h4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 function OpenFolderIcon() {
   return (
     <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
@@ -158,7 +167,7 @@ function SkillFilePreviewButton(props: {
         hasLocalChanges ? "skill.card.tooltip.viewFilesWithChanges" : "skill.card.tooltip.viewFiles",
       )}
     >
-      <ViewFileIcon />
+      {hasLocalChanges && props.showLabel ? <LocalChangesIcon /> : <ViewFileIcon />}
       {props.showLabel ? (
         <span>{t(hasLocalChanges ? "skill.card.action.viewChanges" : "skill.card.action.viewFiles")}</span>
       ) : null}
