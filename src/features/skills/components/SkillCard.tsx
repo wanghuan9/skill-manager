@@ -133,15 +133,16 @@ function OpenFolderIcon() {
 function SkillFilePreviewButton(props: {
   skill: SkillSummary;
   onClick: () => void;
-  className?: string;
+  showLabel?: boolean;
 }) {
   const { t } = useTranslate();
   const localChangeCount = props.skill.localChangeCount ?? 0;
   const hasLocalChanges = localChangeCount > 0;
   const className = [
-    "skill-card__icon-button",
+    props.showLabel
+      ? "secondary-button secondary-button--compact skill-card-detail-modal__action"
+      : "skill-card__icon-button",
     "skill-card__file-preview-button",
-    props.className,
   ].filter(Boolean).join(" ");
 
   return (
@@ -158,6 +159,9 @@ function SkillFilePreviewButton(props: {
       )}
     >
       <ViewFileIcon />
+      {props.showLabel ? (
+        <span>{t(hasLocalChanges ? "skill.card.action.viewChanges" : "skill.card.action.viewFiles")}</span>
+      ) : null}
       {hasLocalChanges ? (
         <span className="skill-card__change-count" aria-hidden="true">{localChangeCount}</span>
       ) : null}
@@ -731,7 +735,7 @@ export function SkillCard({
                 <SkillFilePreviewButton
                   skill={skill}
                   onClick={handleOpenFiles}
-                  className="skill-card-detail-modal__icon-action"
+                  showLabel
                 />
                 <button
                   className="secondary-button secondary-button--compact skill-card-detail-modal__action"

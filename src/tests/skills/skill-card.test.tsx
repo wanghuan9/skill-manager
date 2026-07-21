@@ -120,19 +120,22 @@ test("opens the shared file dialog in local changes mode from a pending-push fil
   expect(screen.getByRole("button", { name: "本地变更 0" })).toHaveAttribute("aria-pressed", "true");
 });
 
-test("uses the compact file entry in the grid detail header", async () => {
-  const skill = installedSkillFixtures.find((item) => item.name === "drawio-diagram");
+test("keeps the file entry expanded in the grid detail header", async () => {
+  const skill = installedSkillFixtures.find((item) => item.name === "skill-publisher");
   if (!skill) {
-    throw new Error("missing drawio-diagram fixture");
+    throw new Error("missing skill-publisher fixture");
   }
 
   renderSkillCardWithProviders(skill, "grid");
-  await userEvent.click(screen.getByRole("button", { name: /展开 drawio-diagram/ }));
+  await userEvent.click(screen.getByRole("button", { name: /展开 skill-publisher/ }));
 
-  const detailDialog = screen.getByRole("dialog", { name: "drawio-diagram 详情" });
-  const filesButton = within(detailDialog).getByRole("button", { name: "查看 drawio-diagram 文件" });
-  expect(filesButton).toHaveClass("skill-card__icon-button", "skill-card-detail-modal__icon-action");
-  expect(filesButton).not.toHaveTextContent("查看文件");
+  const detailDialog = screen.getByRole("dialog", { name: "skill-publisher 详情" });
+  const filesButton = within(detailDialog).getByRole("button", {
+    name: "查看 skill-publisher 文件与本地变更",
+  });
+  expect(filesButton).toHaveClass("secondary-button", "skill-card-detail-modal__action");
+  expect(filesButton).toHaveTextContent("本地变更");
+  expect(filesButton.querySelector(".skill-card__change-count")).toHaveTextContent("4");
   expect(filesButton.closest(".skill-card-detail-modal__header")).toBeInTheDocument();
 });
 

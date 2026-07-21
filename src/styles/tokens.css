@@ -3404,14 +3404,6 @@ code {
   color: var(--accent);
 }
 
-.skill-card-detail-modal__icon-action {
-  position: relative;
-  overflow: visible;
-  width: 32px;
-  height: 32px;
-  border-radius: 9px;
-}
-
 .skill-card-detail-modal__close {
   display: grid;
   place-items: center;
