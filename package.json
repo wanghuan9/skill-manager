@@ -8,6 +8,7 @@
     "build": "tsc --noEmit && vite build",
     "test": "vitest run",
     "test:watch": "vitest",
+    "tauri": "tauri",
     "desktop:dev": "cargo tauri dev",
     "desktop:build": "cargo tauri build",
     "tauri:check": "cd src-tauri && cargo check",
