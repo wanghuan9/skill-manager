@@ -31,7 +31,6 @@ type SkillCardProps = {
   onExpandedChange?: (expanded: boolean, rowElement?: HTMLElement | null) => void;
 };
 
-const SUMMARY_DESCRIPTION_LIMIT = 76;
 const GRID_SUMMARY_TOOL_LIMIT = 6;
 
 function SkillMonogram({ name }: { name: string }) {
@@ -82,14 +81,7 @@ function compareToolsByDisplayOrder(left: { name: string }, right: { name: strin
 
 function formatSummaryDescription(description: string, emptyDescriptionLabel: string) {
   const normalizedDescription = formatSkillDescription(description).replace(/\s+/g, " ");
-  if (!normalizedDescription) {
-    return emptyDescriptionLabel;
-  }
-  if (normalizedDescription.length <= SUMMARY_DESCRIPTION_LIMIT) {
-    return normalizedDescription;
-  }
-
-  return `${normalizedDescription.slice(0, SUMMARY_DESCRIPTION_LIMIT).trimEnd()}...`;
+  return normalizedDescription || emptyDescriptionLabel;
 }
 
 function isHttpUrl(value: string) {

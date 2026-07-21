@@ -174,18 +174,15 @@ test("hides remote update metadata for non-git skill details", async () => {
   expect(screen.getByText("2026/5/12 09:20:00")).toBeInTheDocument();
 });
 
-test("truncates long descriptions in the list summary", () => {
+test("keeps long descriptions intact for CSS truncation", () => {
   const skill = installedSkillFixtures.find((item) => item.name === "drawio-diagram");
   if (!skill) {
     throw new Error("missing drawio-diagram fixture");
   }
   const longDescription = "You MUST use this before any Java/Kotlin/XML/JS/TS code edit. Read company-standards.md and personal-standards.md first. Trigger: 优化, 重构, 修改, 改进, 实现, 调整, 类, 方法, 接口, optimize, refactor, modify, improve, method, class, function";
-  const expectedSummary = `${longDescription.slice(0, 76).trimEnd()}...`;
-
   renderSkillCardWithProviders({ ...skill, description: longDescription });
 
-  expect(screen.getByText(expectedSummary)).toBeInTheDocument();
-  expect(screen.queryByText(longDescription)).not.toBeInTheDocument();
+  expect(screen.getByText(longDescription)).toHaveClass("skill-card__summary-description");
 });
 
 test("hides remote updated time for local skill details", async () => {
