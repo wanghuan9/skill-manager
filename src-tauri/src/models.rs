@@ -341,6 +341,10 @@ pub struct GitChangeFile {
     pub path: String,
     pub status: String,
     pub diff: String,
+    pub staged_diff: String,
+    pub unstaged_diff: String,
+    pub original_content: Option<String>,
+    pub current_content: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

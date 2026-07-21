@@ -26,6 +26,7 @@ import {
   fetchToolSkillFileContent,
   fetchPushPreviewSnapshot,
   fetchPushTargetSnapshot,
+  fetchSkillLocalChanges,
   fetchToolConfigs,
   fetchToolSkillEntries,
   fetchStartupInstalledSkills,
@@ -39,6 +40,7 @@ import {
   openPathInFinder,
   openSkillRepository,
   refreshLocalGitState,
+  revertSkillChange as revertSkillChangeRequest,
   saveSkillFileContent,
   setSkillAllToolStatuses,
   setToolSkillStatuses,
@@ -60,6 +62,7 @@ import type {
   AppSettings,
   AppTheme,
   GitAccountSummary,
+  GitChangeFile,
   InstallActivationMode,
   LocalSkillCandidate,
   LocalInstallSkillCandidate,
@@ -172,6 +175,14 @@ type SkillWorkspaceContextValue = {
     targetBranch: string;
     createBranchName?: string;
   }) => Promise<PushPreviewSnapshot>;
+  loadSkillLocalChanges: (skillName: string) => Promise<GitChangeFile[]>;
+  revertSkillChange: (input: {
+    skillName: string;
+    relativePath: string;
+    hunkIndex?: number;
+    expectedPatch?: string;
+    staged?: boolean;
+  }) => Promise<SkillSummary>;
   loadPushTargets: (skillName: string) => Promise<PushTargetSnapshot>;
   openSkillRepository: (skillName: string) => Promise<void>;
   openSkillInEditor: (input: { skillName: string; editorId: string }) => Promise<void>;
@@ -1202,6 +1213,18 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
     setInstalledSkills((current) => mergeUpdatedSkillsPreservingOrder(current, [updatedSkill]));
   }
 
+  async function handleRevertSkillChange(input: {
+    skillName: string;
+    relativePath: string;
+    hunkIndex?: number;
+    expectedPatch?: string;
+    staged?: boolean;
+  }) {
+    const updatedSkill = await revertSkillChangeRequest(input);
+    setInstalledSkills((current) => mergeUpdatedSkillsPreservingOrder(current, [updatedSkill]));
+    return updatedSkill;
+  }
+
   async function handleUpdateAllSkills() {
     if (updateAllSkillsInFlightRef.current) {
       return updateAllSkillsInFlightRef.current;
@@ -1449,6 +1472,8 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       setToolSkillStatuses: handleSetToolSkillStatuses,
       setSkillAllToolStatuses: handleSetSkillAllToolStatuses,
       loadPushPreview: fetchPushPreviewSnapshot,
+      loadSkillLocalChanges: fetchSkillLocalChanges,
+      revertSkillChange: handleRevertSkillChange,
       loadPushTargets: fetchPushTargetSnapshot,
       openSkillRepository,
       openSkillInEditor,

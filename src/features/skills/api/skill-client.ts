@@ -31,6 +31,7 @@ import type {
   FeedbackIssueDraft,
   GitAccountSummary,
   GitBranchOption,
+  GitChangeFile,
   LocalSkillCandidate,
   LocalInstallSkillCandidate,
   MarketplaceSkill,
@@ -1461,6 +1462,28 @@ export async function fetchPushPreviewSnapshot(input: PushPreviewInput): Promise
   };
 
   return invokeOrFallback("get_push_preview_snapshot", input, fallback);
+}
+
+export async function fetchSkillLocalChanges(skillName: string): Promise<GitChangeFile[]> {
+  return invokeOrFallback("get_skill_local_changes", { skillName }, []);
+}
+
+export async function revertSkillChange(input: {
+  skillName: string;
+  relativePath: string;
+  hunkIndex?: number;
+  expectedPatch?: string;
+  staged?: boolean;
+}): Promise<SkillSummary> {
+  const fallback = installedSkillFixtures.find((skill) => skill.name === input.skillName)
+    ?? installedSkillFixtures[0];
+  return invokeOrFallback("revert_skill_change", {
+    skillName: input.skillName,
+    relativePath: input.relativePath,
+    hunkIndex: input.hunkIndex ?? null,
+    expectedPatch: input.expectedPatch ?? null,
+    staged: input.staged ?? false,
+  }, fallback);
 }
 
 export async function openSkillRepository(skillName: string): Promise<void> {
