@@ -64,11 +64,23 @@ describe("filterSkills", () => {
           collabStatus: "update-available",
           localUpdatedAt: "2026/5/9 10:00:00",
         }),
+        createSkill({
+          name: "pending-push-skill",
+          collabStatus: "pending-push",
+          localUpdatedAt: "2026/5/9 10:00:00",
+        }),
+        createSkill({
+          name: "pending-commit-skill",
+          collabStatus: "pending-commit",
+          localUpdatedAt: "2026/5/9 10:00:00",
+        }),
       ],
       { query: "", status: "all" },
     );
 
     expect(skills.map((skill) => skill.name)).toEqual([
+      "pending-commit-skill",
+      "pending-push-skill",
       "update-skill",
       "disabled-clean-skill",
       "enabled-clean-skill",

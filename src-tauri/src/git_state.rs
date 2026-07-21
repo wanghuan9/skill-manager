@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 
 const STATUS_CLEAN: &str = "clean";
 const STATUS_UPDATE_AVAILABLE: &str = "update-available";
+const STATUS_PENDING_COMMIT: &str = "pending-commit";
 const STATUS_PENDING_PUSH: &str = "pending-push";
 const ORIGIN_REMOTE: &str = "origin";
 const REMOTE_BRANCH_PREFIX: &str = "origin/";
@@ -359,6 +360,19 @@ pub fn enrich_skill_with_cached_update_state(skill: &SkillSummary) -> SkillSumma
             latest_commit_metadata(skill_path).updated_at,
         ),
     );
+
+    if working_tree_dirty {
+        let mut enriched = skill.clone();
+        enriched.branch = branch;
+        enriched.commit_label = commit_label;
+        enriched.collab_status = STATUS_PENDING_COMMIT.into();
+        enriched.status_text = "本地存在未提交修改，请先提交后再推送。".into();
+        enriched.local_updated_at = local_updated_at.clone();
+        enriched.last_synced_at = local_updated_at;
+        enriched.last_checked_at = "已缓存".into();
+        enriched.git_linked = true;
+        return enriched;
+    }
 
     if cached_pending_push_entry(skill, &branch, &head, &working_tree_signature).is_some() {
         let mut enriched = skill.clone();
@@ -812,18 +826,18 @@ fn derive_collab_status(
     working_tree_dirty: bool,
     remote_counts: Option<(usize, usize)>,
 ) -> (&'static str, String) {
-    let Some((behind, ahead)) = remote_counts else {
-        if working_tree_dirty {
-            return (
-                STATUS_PENDING_PUSH,
-                "本地工作区存在改动，建议整理后推送到团队仓库。".into(),
-            );
-        }
+    if working_tree_dirty {
+        return (
+            STATUS_PENDING_COMMIT,
+            "本地存在未提交修改，请先提交后再推送。".into(),
+        );
+    }
 
+    let Some((behind, ahead)) = remote_counts else {
         return (STATUS_CLEAN, "本地与仓库状态一致，可直接使用。".into());
     };
 
-    if behind > 0 && (ahead > 0 || working_tree_dirty) {
+    if behind > 0 && ahead > 0 {
         return (
             STATUS_PENDING_PUSH,
             "本地与远端均有变化，建议先处理本地改动，再更新远端内容。".into(),
@@ -835,10 +849,10 @@ fn derive_collab_status(
             "远端存在更新，建议先拉取后再同步到工具。".into(),
         );
     }
-    if ahead > 0 || working_tree_dirty {
+    if ahead > 0 {
         return (
             STATUS_PENDING_PUSH,
-            "本地存在领先或未提交改动，可继续推送到团队仓库。".into(),
+            "本地存在待推送提交，可继续推送到团队仓库。".into(),
         );
     }
 
@@ -1070,6 +1084,20 @@ mod tests {
             owner_plugin_name: String::new(),
             tools: vec![],
         }
+    }
+
+    #[test]
+    fn pending_commit_takes_priority_over_pending_push() {
+        let (status, _) = derive_collab_status(true, Some((0, 2)));
+
+        assert_eq!(status, STATUS_PENDING_COMMIT);
+    }
+
+    #[test]
+    fn clean_working_tree_with_ahead_commits_is_pending_push() {
+        let (status, _) = derive_collab_status(false, Some((0, 2)));
+
+        assert_eq!(status, STATUS_PENDING_PUSH);
     }
 
     fn run_git_test<I, S>(args: I)

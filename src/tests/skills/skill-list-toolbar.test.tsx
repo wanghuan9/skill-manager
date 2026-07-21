@@ -20,6 +20,12 @@ const disabledSkillFixture: SkillSummary = {
   tools: [{ name: "Codex", statusLabel: "未启用" }],
 };
 
+const pendingCommitSkillFixture: SkillSummary = {
+  ...installedSkillFixtures[0],
+  name: "pending-commit-skill",
+  collabStatus: "pending-commit",
+};
+
 beforeEach(() => {
   mockedUseSkillWorkspace.mockReturnValue({
     language: "zh-CN",
@@ -193,7 +199,7 @@ test("notifies status filter changes", async () => {
 
   mockedUseSkillWorkspace.mockReturnValue({
     language: "zh-CN",
-    installedSkills: [...installedSkillFixtures, disabledSkillFixture],
+    installedSkills: [...installedSkillFixtures, disabledSkillFixture, pendingCommitSkillFixture],
     isLoading: false,
     refreshWorkspace: vi.fn(),
     updateAllSkills: vi.fn(),
@@ -214,12 +220,13 @@ test("notifies status filter changes", async () => {
 
   await user.click(screen.getByLabelText("按状态筛选技能"));
 
-  expect(screen.getByRole("option", { name: "全部 (5)" })).toBeInTheDocument();
+  expect(screen.getByRole("option", { name: "全部 (6)" })).toBeInTheDocument();
   expect(screen.getByRole("option", { name: "可更新 (1)" })).toBeInTheDocument();
+  expect(screen.getByRole("option", { name: "待提交 (1)" })).toBeInTheDocument();
   expect(screen.queryByRole("option", { name: /冲突/ })).not.toBeInTheDocument();
   expect(screen.getByRole("option", { name: "未启用 (1)" })).toBeInTheDocument();
   expect(screen.queryByRole("option", { name: "已同步 (1)" })).not.toBeInTheDocument();
 
-  await user.click(screen.getByRole("option", { name: "可更新 (1)" }));
-  expect(onStatusFilterChange).toHaveBeenCalledWith("update-available");
+  await user.click(screen.getByRole("option", { name: "待提交 (1)" }));
+  expect(onStatusFilterChange).toHaveBeenCalledWith("pending-commit");
 });

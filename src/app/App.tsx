@@ -478,8 +478,8 @@ function AppContent() {
   const updatableSkillCount = installedSkills.filter(
     (skill) => skill.collabStatus === "update-available",
   ).length;
-  const pendingPushSkillCount = installedSkills.filter(
-    (skill) => skill.collabStatus === "pending-push",
+  const pendingSkillCount = installedSkills.filter(
+    (skill) => skill.collabStatus === "pending-commit" || skill.collabStatus === "pending-push",
   ).length;
   const enabledManagedSkillCount = installedSkills.filter(hasEnabledTool).length;
   const activeSkillSourceTool = listSkillSourceTools(toolConfigs)
@@ -516,7 +516,7 @@ function AppContent() {
             path: MANAGED_SKILL_DIRECTORY,
             installed: enabledManagedSkillCount,
             updatable: updatableSkillCount,
-            pending: pendingPushSkillCount,
+            pending: pendingSkillCount,
           })
       : activeRoute === "skills"
         ? tx(language, "app.header.mcp.summary", {

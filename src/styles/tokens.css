@@ -1137,7 +1137,7 @@ code {
   border-radius: 12px;
   padding: 10px;
   background: transparent;
-  color: #566170;
+  color: #4f5b6b;
   text-align: left;
   cursor: pointer;
   transition:
@@ -1202,6 +1202,12 @@ code {
 .nav-label {
   font-size: 0.875rem;
   font-weight: 500;
+  line-height: 1.35;
+  letter-spacing: 0;
+}
+
+.nav-item.is-selected .nav-label {
+  font-weight: 550;
 }
 
 .app-shell.is-sidebar-collapsed .brand-title {
@@ -1341,6 +1347,24 @@ code {
   font-size: 0.82rem;
   color: var(--muted);
   line-height: 1.35;
+}
+
+.main-panel[data-active-route="skills"] .page-header h1,
+.main-panel[data-active-route="plugins"] .page-header h1,
+.main-panel[data-active-route="install"] .page-header h1,
+.main-panel[data-active-route="tools"] .page-header h1 {
+  font-size: 1.1875rem;
+  font-weight: 600;
+  line-height: 1.3;
+  letter-spacing: -0.008em;
+}
+
+.main-panel[data-active-route="skills"] .page-header p,
+.main-panel[data-active-route="plugins"] .page-header p,
+.main-panel[data-active-route="install"] .page-header p,
+.main-panel[data-active-route="tools"] .page-header p {
+  font-size: 0.8rem;
+  line-height: 1.45;
 }
 
 .skeleton-text {
@@ -2157,7 +2181,7 @@ code {
   background: color-mix(in srgb, var(--group-accent) 12%, #ffffff 88%);
   color: color-mix(in srgb, var(--group-accent) 72%, #475569 28%);
   font-size: 0.78rem;
-  font-weight: 750;
+  font-weight: 600;
   line-height: 1;
   box-shadow:
     0 1px 0 rgba(255, 255, 255, 0.7) inset,
@@ -2191,7 +2215,7 @@ code {
   background: color-mix(in srgb, var(--group-accent) 2%, #ffffff 98%);
   color: color-mix(in srgb, var(--group-accent) 38%, #64748b 62%);
   font-size: 0.66rem;
-  font-weight: 500;
+  font-weight: 450;
   line-height: 1;
 }
 
@@ -2235,9 +2259,10 @@ code {
 .skill-group-section__title h3 {
   flex: 0 1 auto;
   min-width: 0;
-  font-size: 0.9375rem;
-  font-weight: 600;
-  color: var(--heading);
+  font-size: 0.9rem;
+  font-weight: 500;
+  line-height: 1.35;
+  color: color-mix(in srgb, var(--heading) 92%, var(--muted) 8%);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2280,7 +2305,7 @@ code {
   height: 22px;
   padding: 0 9px;
   border-radius: 999px;
-  font-weight: 600;
+  font-weight: 450;
 }
 
 .skill-group-section__state--update {
@@ -2289,10 +2314,16 @@ code {
   border: 1px solid rgba(59, 130, 246, 0.15);
 }
 
+.skill-group-section__state--commit {
+  color: #5d7fae;
+  background: rgba(47, 120, 255, 0.065);
+  border: 1px solid rgba(47, 120, 255, 0.11);
+}
+
 .skill-group-section__state--pending {
-  color: #7b61d1;
-  background: rgba(123, 97, 209, 0.1);
-  border: 1px solid rgba(123, 97, 209, 0.15);
+  color: #3f7fdc;
+  background: rgba(47, 120, 255, 0.09);
+  border: 1px solid rgba(47, 120, 255, 0.15);
 }
 
 .skill-group-section__chevron {
@@ -2470,7 +2501,7 @@ code {
 
 .link-badge__label {
   font-size: 0.76rem;
-  font-weight: 700;
+  font-weight: 600;
   line-height: 1;
 }
 
@@ -2574,9 +2605,10 @@ code {
   margin: 0;
   min-width: 0;
   font-size: 0.875rem;
-  font-weight: 600;
+  font-weight: 500;
+  color: color-mix(in srgb, var(--heading) 92%, var(--muted) 8%);
   overflow: hidden;
-  line-height: 1.15;
+  line-height: 1.3;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -2916,7 +2948,7 @@ code {
   border-radius: 999px;
   padding: 3px 8px;
   font-size: 0.7rem;
-  font-weight: 500;
+  font-weight: 450;
 }
 
 .tone-neutral {
@@ -2932,6 +2964,16 @@ code {
 .tone-info {
   background: rgba(47, 120, 255, 0.1);
   color: var(--accent);
+}
+
+.tone-pending-commit {
+  background: rgba(47, 120, 255, 0.065);
+  color: #5d7fae;
+}
+
+.tone-pending-push {
+  background: rgba(47, 120, 255, 0.1);
+  color: #3f7fdc;
 }
 
 .tone-warning {
@@ -2970,15 +3012,15 @@ code {
 
 .skill-card__summary-description,
 .mcp-server-card__subtitle {
-  width: min(100%, 620px);
+  width: min(700px, 68vw);
   min-width: 0;
-  max-width: 62vw;
+  max-width: none;
   overflow: hidden;
   margin: 0;
-  color: color-mix(in srgb, var(--muted) 88%, #111827 12%);
+  color: color-mix(in srgb, var(--muted) 94%, #111827 6%);
   font-size: 0.76rem;
   font-weight: 400;
-  line-height: 1.28;
+  line-height: 1.38;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -3050,6 +3092,15 @@ code {
   justify-content: flex-end;
 }
 
+.skill-card--list .skill-card__list-actions {
+  align-self: start;
+}
+
+.skill-card__list-actions .skill-card__icon-button {
+  color: #64748b;
+  opacity: 0.96;
+}
+
 .skill-card__chevron {
   color: var(--muted);
   font-size: 0.82rem;
@@ -3117,6 +3168,14 @@ code {
   align-items: center;
   justify-content: space-between;
   gap: 10px;
+}
+
+.skill-card__section-header h4 {
+  margin: 0;
+  color: var(--heading);
+  font-size: 0.88rem;
+  font-weight: 500;
+  line-height: 1.35;
 }
 
 .skill-card__section-header .secondary-button--compact svg {
@@ -3379,6 +3438,8 @@ code {
   margin: 0;
   color: var(--heading);
   font-size: 1.08rem;
+  font-weight: 550;
+  line-height: 1.3;
 }
 
 .skill-card-detail-modal__actions {
@@ -3482,7 +3543,10 @@ code {
 
 .detail-grid dd {
   margin: 0;
-  font-size: 0.84rem;
+  color: color-mix(in srgb, var(--heading) 88%, var(--muted) 12%);
+  font-size: 0.82rem;
+  font-weight: 400;
+  line-height: 1.48;
 }
 
 .detail-grid__single-line {
@@ -3552,8 +3616,8 @@ code {
 }
 
 .tool-sync-panel .skill-card__section-header h4 {
-  font-size: 0.84rem;
-  font-weight: 600;
+  font-size: 0.88rem;
+  font-weight: 500;
 }
 
 .tool-sync-panel__actions {
@@ -3641,7 +3705,7 @@ code {
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 0.72rem;
-  font-weight: 500;
+  font-weight: 450;
   color: currentColor;
 }
 
@@ -3844,7 +3908,7 @@ code {
 .install-category-tab.is-selected {
   background: rgba(29, 78, 216, 0.08);
   color: #1d4ed8;
-  font-weight: 600;
+  font-weight: 500;
   box-shadow: none;
 }
 
@@ -4234,10 +4298,10 @@ code {
 .install-card__title-row h3 {
   min-width: 0;
   margin: 0;
-  color: var(--heading);
+  color: color-mix(in srgb, var(--heading) 88%, var(--muted) 12%);
   font-size: 0.88rem;
-  font-weight: 600;
-  line-height: 1.25;
+  font-weight: 500;
+  line-height: 1.35;
   display: -webkit-box;
   -webkit-line-clamp: 1;
   -webkit-box-orient: vertical;
@@ -4246,7 +4310,7 @@ code {
 
 .install-card__title-group p {
   margin: 0;
-  color: var(--muted);
+  color: #5f6978;
   line-height: 1.4;
   font-size: 0.78rem;
   display: -webkit-box;
@@ -4338,7 +4402,7 @@ code {
   border-radius: 10px;
   border: 1px solid #dbe5f2;
   background: #f8fbff;
-  color: var(--muted);
+  color: #5d6978;
   display: inline-flex;
   align-items: center;
   gap: 8px;
@@ -4501,9 +4565,9 @@ code {
 }
 
 .skill-detail-modal__title-group h3 {
-  font-size: 1.25rem;
-  font-weight: 600;
-  line-height: 1.2;
+  font-size: 1.08rem;
+  font-weight: 550;
+  line-height: 1.3;
 }
 
 .skill-detail-modal__title-group p {
@@ -4596,13 +4660,14 @@ code {
 
 .skill-detail-modal__config h4,
 .skill-detail-modal__content h4 {
-  font-size: 0.92rem;
-  font-weight: 600;
+  font-size: 0.88rem;
+  font-weight: 500;
 }
 
 .skill-detail-modal__content p {
   color: #374151;
-  font-size: 0.92rem;
+  font-size: 0.86rem;
+  font-weight: 400;
   line-height: 1.55;
 }
 
@@ -4914,6 +4979,13 @@ code {
   margin: 0;
 }
 
+.repo-install__option-main h3 {
+  color: color-mix(in srgb, var(--heading) 88%, var(--muted) 12%);
+  font-size: 0.875rem;
+  font-weight: 500;
+  line-height: 1.35;
+}
+
 .repo-install__option-main p {
   color: var(--muted);
   font-size: 0.82rem;
@@ -5051,9 +5123,10 @@ code {
 }
 
 .plugin-install-preview__summary h3 {
-  color: var(--heading);
-  font-size: 0.97rem;
-  line-height: 1.25;
+  color: color-mix(in srgb, var(--heading) 88%, var(--muted) 12%);
+  font-size: 0.92rem;
+  font-weight: 500;
+  line-height: 1.35;
 }
 
 .plugin-install-preview__summary span {
@@ -6075,6 +6148,13 @@ code {
   font-size: 0.8rem;
 }
 
+.dialog-card__header h3 {
+  color: var(--heading);
+  font-size: 1rem;
+  font-weight: 550;
+  line-height: 1.3;
+}
+
 .dialog-card__body {
   display: grid;
   gap: 10px;
@@ -6130,6 +6210,8 @@ code {
 .dialog-section h4 {
   color: var(--heading);
   font-size: 0.9rem;
+  font-weight: 500;
+  line-height: 1.35;
 }
 
 .dialog-command-preview {
@@ -6378,7 +6460,7 @@ code {
   background: transparent;
   color: var(--muted);
   font-size: 0.72rem;
-  font-weight: 600;
+  font-weight: 500;
   cursor: pointer;
 }
 
@@ -6472,6 +6554,13 @@ code {
   margin: 0;
 }
 
+.skill-file-dialog__title h3 {
+  color: var(--heading);
+  font-size: 0.96rem;
+  font-weight: 550;
+  line-height: 1.3;
+}
+
 .skill-file-dialog__title p {
   min-width: 0;
   overflow: hidden;
@@ -6533,14 +6622,14 @@ code {
 
 .skill-file-dialog__tree-item--directory {
   color: var(--muted);
-  font-weight: 560;
+  font-weight: 500;
 }
 
 .skill-file-dialog__tree-item.is-root {
   min-height: 31px;
   color: var(--heading);
   font-size: 0.82rem;
-  font-weight: 650;
+  font-weight: 550;
 }
 
 .skill-file-dialog__tree-item--directory:not(.is-root),
@@ -7302,9 +7391,9 @@ code {
 
 .tool-card__header strong {
   font-size: 0.875rem;
-  color: var(--heading);
-  line-height: 1.2;
-  font-weight: 600;
+  color: color-mix(in srgb, var(--heading) 90%, var(--muted) 10%);
+  line-height: 1.35;
+  font-weight: 500;
   min-width: 0;
 }
 
@@ -7353,7 +7442,7 @@ code {
 }
 
 .tool-card__path-label {
-  color: #657086;
+  color: #59677b;
   font-size: 0.74rem;
   line-height: 1.35;
   white-space: nowrap;
@@ -7368,9 +7457,9 @@ code {
   border-radius: 6px;
   background: rgba(246, 249, 253, 0.96);
   box-shadow: inset 0 0 0 1px rgba(225, 233, 245, 0.42);
-  color: #263244;
+  color: #243044;
   font-family: "SF Mono", "JetBrains Mono", monospace;
-  font-size: 0.64rem;
+  font-size: 0.66rem;
   line-height: 1.35;
 }
 
@@ -7391,7 +7480,7 @@ code {
   border: 1px solid transparent;
   border-radius: 5px;
   background: transparent;
-  color: #77869c;
+  color: #66758a;
   cursor: pointer;
   transition:
     background-color 120ms ease,
@@ -7434,7 +7523,7 @@ code {
   );
   border: 1px solid var(--line);
   font-size: 0.72rem;
-  font-weight: 700;
+  font-weight: 600;
   overflow: hidden;
   flex: 0 0 auto;
 }
@@ -8235,15 +8324,37 @@ button.settings-form-item:disabled {
   display: inline-flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 10px;
+  gap: 8px;
   width: fit-content;
-  min-width: 126px;
+  min-width: 112px;
 }
 
 .settings-toggle-control__state {
   color: #6b7280;
-  font-size: 0.78rem;
+  font-size: 0.75rem;
   font-weight: 400;
+}
+
+.settings-toggle-control .switch-button {
+  width: 44px;
+  height: 26px;
+  border-color: rgba(47, 120, 255, 0.14);
+  background: rgba(117, 128, 147, 0.17);
+}
+
+.settings-toggle-control .switch-button.is-enabled {
+  background: rgba(47, 120, 255, 0.8);
+}
+
+.settings-toggle-control .switch-button__thumb {
+  top: 2px;
+  left: 2px;
+  width: 20px;
+  height: 20px;
+}
+
+.settings-toggle-control .switch-button.is-enabled .switch-button__thumb {
+  transform: translateX(18px);
 }
 
 .settings-form-item__path-group {
@@ -8702,6 +8813,13 @@ button.settings-form-item:disabled {
   margin: 0;
 }
 
+.tool-manage-dialog__title h3 {
+  color: var(--heading);
+  font-size: 0.98rem;
+  font-weight: 550;
+  line-height: 1.3;
+}
+
 .tool-manage-dialog__title p {
   font-size: 0.8rem;
   color: var(--muted);
@@ -8727,7 +8845,7 @@ button.settings-form-item:disabled {
   background: transparent;
   color: var(--muted);
   font-size: 0.82rem;
-  font-weight: 500;
+  font-weight: 450;
   cursor: pointer;
   transition:
     background-color 120ms ease,
@@ -8875,7 +8993,7 @@ button.settings-form-item:disabled {
   white-space: nowrap;
   font-size: 0.8rem;
   color: var(--heading);
-  font-weight: 600;
+  font-weight: 450;
 }
 
 .tool-manage-dialog__empty {
@@ -9134,7 +9252,7 @@ button.settings-form-item:disabled {
   background: transparent;
   color: var(--muted);
   font-size: 0.78rem;
-  font-weight: 500;
+  font-weight: 450;
   box-shadow: none;
   transition:
     background-color var(--motion-base) var(--ease-standard),
@@ -9836,7 +9954,7 @@ button.settings-form-item:disabled {
   margin: 0;
   color: var(--heading);
   font-size: 0.875rem;
-  font-weight: 600;
+  font-weight: 500;
   line-height: 1.2;
 }
 
@@ -9903,7 +10021,7 @@ button.settings-form-item:disabled {
   margin: 0;
   color: var(--heading);
   font-size: 0.875rem;
-  font-weight: 600;
+  font-weight: 500;
   line-height: 1.2;
 }
 
@@ -10015,7 +10133,7 @@ button.settings-form-item:disabled {
 .plugins-page__component-copy strong {
   color: var(--heading);
   font-size: 0.85rem;
-  font-weight: 600;
+  font-weight: 500;
   line-height: 1.2;
 }
 
@@ -10234,9 +10352,9 @@ button.settings-form-item:disabled {
 
 .mcp-server-card__details h4 {
   margin: 0;
-  font-size: 0.9rem;
-  font-weight: 600;
-  line-height: 1.2;
+  font-size: 0.88rem;
+  font-weight: 500;
+  line-height: 1.35;
 }
 
 .mcp-server-card__main {
@@ -10277,10 +10395,10 @@ button.settings-form-item:disabled {
 
 .mcp-server-card__title-row strong {
   max-width: 220px;
-  color: var(--heading);
+  color: color-mix(in srgb, var(--heading) 92%, var(--muted) 8%);
   font-size: 0.875rem;
-  font-weight: 600;
-  line-height: 1.15;
+  font-weight: 500;
+  line-height: 1.35;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -10288,13 +10406,13 @@ button.settings-form-item:disabled {
 
 .mcp-server-card__subtitle {
   min-width: 0;
-  width: min(100%, 620px);
-  max-width: 62vw;
+  width: min(700px, 68vw);
+  max-width: none;
   overflow: hidden;
-  color: color-mix(in srgb, var(--muted) 88%, #111827 12%);
+  color: color-mix(in srgb, var(--muted) 94%, #111827 6%);
   font-size: 0.74rem;
   font-weight: 400;
-  line-height: 1.28;
+  line-height: 1.38;
   text-overflow: ellipsis;
   white-space: nowrap;
   position: relative;
@@ -10443,7 +10561,7 @@ button.settings-form-item:disabled {
 }
 
 .mcp-server-card__actions {
-  align-self: center;
+  align-self: start;
 }
 
 .mcp-server-card__chevron {
@@ -10517,17 +10635,17 @@ button.settings-form-item:disabled {
 }
 
 .tool-list-row__title-row strong {
-  color: var(--heading);
+  color: color-mix(in srgb, var(--heading) 92%, var(--muted) 8%);
   font-size: 0.875rem;
-  font-weight: 600;
-  line-height: 1.15;
+  font-weight: 500;
+  line-height: 1.35;
 }
 
 .tool-list-row__subtitle {
   margin: 0;
-  color: color-mix(in srgb, var(--muted) 88%, #111827 12%);
+  color: color-mix(in srgb, var(--muted) 94%, #111827 6%);
   font-size: 0.8rem;
-  line-height: 1.28;
+  line-height: 1.38;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -10593,9 +10711,10 @@ button.settings-form-item:disabled {
 
 .tool-list-row__detail-grid dd {
   margin: 0;
-  color: var(--heading);
-  font-size: 0.84rem;
-  line-height: 1.42;
+  color: color-mix(in srgb, var(--heading) 88%, var(--muted) 12%);
+  font-size: 0.82rem;
+  font-weight: 400;
+  line-height: 1.48;
   overflow-wrap: anywhere;
 }
 
@@ -10635,6 +10754,8 @@ button.settings-form-item:disabled {
   margin: 0;
   color: var(--heading);
   font-size: 1rem;
+  font-weight: 550;
+  line-height: 1.3;
 }
 
 .mcp-edit-dialog__body {
@@ -10655,7 +10776,7 @@ button.settings-form-item:disabled {
   gap: 6px;
   color: var(--heading);
   font-size: 0.86rem;
-  font-weight: 500;
+  font-weight: 450;
 }
 
 .mcp-form-field input,
@@ -10990,7 +11111,8 @@ button.settings-form-item:disabled {
     left: 84px;
   }
 
-  .skill-card__summary-description {
+  .skill-card__summary-description,
+  .mcp-server-card__subtitle {
     width: 100%;
     max-width: 100%;
   }
@@ -12164,7 +12286,11 @@ button.settings-form-item:disabled {
 :root[data-theme="dark"] .install-card__chip {
   border-color: var(--line);
   background: #232323;
-  color: #d3d3d3;
+  color: #c7cbd1;
+}
+
+:root[data-theme="dark"] .install-card__title-group p {
+  color: #c9c9c9;
 }
 
 :root[data-theme="dark"] .market-search-input:focus {
@@ -12210,7 +12336,7 @@ button.settings-form-item:disabled {
 
 :root[data-theme="dark"] .settings-form-item__copy p,
 :root[data-theme="dark"] .settings-toggle-control__state {
-  color: var(--muted);
+  color: #cccccc;
 }
 
 :root[data-theme="dark"] .settings-form-item__control .app-select__trigger,
@@ -12249,6 +12375,11 @@ button.settings-form-item:disabled {
   box-shadow: 0 2px 5px rgba(0, 0, 0, 0.28);
 }
 
+:root[data-theme="dark"] .settings-toggle-control .switch-button.is-enabled {
+  border-color: rgba(255, 194, 26, 0.5);
+  background: rgba(255, 194, 26, 0.74);
+}
+
 :root[data-theme="dark"] .settings-theme-picker {
   background: #1d1d1d;
 }
@@ -12279,10 +12410,22 @@ button.settings-form-item:disabled {
   color: var(--heading);
 }
 
+:root[data-theme="dark"] .tool-card__meta {
+  color: #c7c9cd;
+}
+
+:root[data-theme="dark"] .tool-card__path-label {
+  color: #b9c1cc;
+}
+
 :root[data-theme="dark"] .tool-card__path-value {
   background: #232323;
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
-  color: #d7d7d7;
+  color: #dedede;
+}
+
+:root[data-theme="dark"] .tool-card__path-button {
+  color: #aeb8c6;
 }
 
 :root[data-theme="dark"] .tool-manage-dialog__tabs {
@@ -12321,15 +12464,15 @@ button.settings-form-item:disabled {
 }
 
 :root[data-theme="dark"] .primary-button--compact.tool-card__manage-button {
-  border-color: var(--button-primary-border);
-  background: var(--button-primary-soft);
-  color: var(--accent);
+  border-color: rgba(255, 194, 26, 0.2);
+  background: rgba(255, 194, 26, 0.06);
+  color: #e3c66f;
 }
 
 :root[data-theme="dark"] .primary-button--compact.tool-card__manage-button:hover:not(:disabled) {
-  border-color: rgba(255, 194, 26, 0.38);
-  background: var(--button-primary-soft-hover);
-  color: var(--accent-strong);
+  border-color: rgba(255, 194, 26, 0.34);
+  background: rgba(255, 194, 26, 0.1);
+  color: #f0d48a;
 }
 
 :root[data-theme="dark"] .skill-group-section {
@@ -13151,6 +13294,28 @@ button.settings-form-item:disabled {
   color: var(--accent);
 }
 
+:root[data-theme="dark"] .tone-pending-commit {
+  background: rgba(88, 153, 255, 0.1);
+  color: #9ab7df;
+}
+
+:root[data-theme="dark"] .tone-pending-push {
+  background: rgba(88, 153, 255, 0.14);
+  color: #8fbcff;
+}
+
+:root[data-theme="dark"] .skill-group-section__state--commit {
+  border-color: rgba(88, 153, 255, 0.16);
+  background: rgba(88, 153, 255, 0.09);
+  color: #9ab7df;
+}
+
+:root[data-theme="dark"] .skill-group-section__state--pending {
+  border-color: rgba(88, 153, 255, 0.22);
+  background: rgba(88, 153, 255, 0.13);
+  color: #8fbcff;
+}
+
 :root[data-theme="dark"] .mcp-server-card__summary-button:focus-visible .mcp-server-card__main,
 :root[data-theme="dark"] .install-card__surface:focus-visible {
   outline: none;
@@ -13225,7 +13390,16 @@ button.settings-form-item:disabled {
 :root[data-theme="dark"] .tool-list-row__subtitle,
 :root[data-theme="dark"] .skill-card__grid-source-label,
 :root[data-theme="dark"] .tool-list-row__grid-footer {
-  color: #c4c4c4;
+  color: #c9c9c9;
+}
+
+:root[data-theme="dark"] .page-header p {
+  color: #c8c8c8;
+}
+
+:root[data-theme="dark"] .tool-list-row--grid .tool-list-row__grid-badges .tone-info {
+  background: rgba(255, 194, 26, 0.06);
+  color: #dcc274;
 }
 
 :root[data-theme="dark"] .skill-card--grid .skill-card__icon-button,
@@ -13478,17 +13652,17 @@ button.settings-form-item:disabled {
 }
 
 :root[data-theme="dark"] .install-card__install-button {
-  border-color: var(--button-primary-border);
-  background: var(--button-primary-soft);
-  color: var(--accent);
+  border-color: rgba(255, 194, 26, 0.18);
+  background: rgba(255, 194, 26, 0.055);
+  color: #dfc173;
   box-shadow: none;
 }
 
 :root[data-theme="dark"] .install-card__install-button:hover:not(:disabled) {
-  border-color: rgba(255, 194, 26, 0.46);
-  background: var(--button-primary-soft-hover);
-  color: var(--accent-strong);
-  box-shadow: 0 4px 12px rgba(255, 194, 26, 0.1);
+  border-color: rgba(255, 194, 26, 0.34);
+  background: rgba(255, 194, 26, 0.11);
+  color: #f0d48a;
+  box-shadow: 0 4px 12px rgba(255, 194, 26, 0.06);
 }
 
 :root[data-theme="dark"] .install-card__install-button:active:not(:disabled) {

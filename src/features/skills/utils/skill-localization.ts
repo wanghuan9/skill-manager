@@ -15,6 +15,8 @@ const SKILL_STATUS_TEXT_MAPPINGS: Array<[string, string]> = [
   ["本地已修改 4 个文件，建议打开 canonical repo 后提交 MR。", "4 local files changed. Open the canonical repo and submit an MR."],
   ["远端有新版本，建议更新后重新同步到工具。", "A newer remote version is available. Update and resync to tools."],
   ["本地存在待处理改动，可在 canonical repo 中提交 MR。", "There are pending local changes. You can submit an MR from the canonical repo."],
+  ["本地存在未提交修改，请先提交后再推送。", "There are uncommitted local changes. Commit them before pushing."],
+  ["本地存在待推送提交，可继续推送到团队仓库。", "Local commits are ready to push to the shared repository."],
   ["本地与远端一致，可直接使用。", "Local and remote are in sync. Ready to use."],
 ];
 

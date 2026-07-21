@@ -176,6 +176,7 @@ export function SkillListToolbar(props: SkillToolbarProps) {
       all: installedSkills.length,
       clean: installedSkills.filter((skill) => skill.collabStatus === "clean").length,
       "update-available": installedSkills.filter((skill) => skill.collabStatus === "update-available").length,
+      "pending-commit": installedSkills.filter((skill) => skill.collabStatus === "pending-commit").length,
       "pending-push": installedSkills.filter((skill) => skill.collabStatus === "pending-push").length,
       diverged: installedSkills.filter((skill) => skill.collabStatus === "diverged").length,
       disabled: installedSkills.filter((skill) => !hasEnabledTool(skill)).length,
@@ -189,6 +190,7 @@ export function SkillListToolbar(props: SkillToolbarProps) {
   const skillStatusFilterOptions: Array<{ value: SkillStatusFilter; label: string }> = [
     { value: "all", label: t("skills.filter.all") },
     { value: "update-available", label: t("skills.filter.updateAvailable") },
+    { value: "pending-commit", label: t("skills.filter.pendingCommit") },
     { value: "pending-push", label: t("skills.filter.pendingPush") },
     { value: "disabled", label: t("skills.filter.disabled") },
   ];
@@ -495,6 +497,7 @@ export function SkillListPage(props: SkillListPageProps) {
           viewMode === "grouped" ? (
           groupedSkills.map((group) => {
             const updateCount = group.skills.filter((skill) => skill.collabStatus === "update-available").length;
+            const pendingCommitCount = group.skills.filter((skill) => skill.collabStatus === "pending-commit").length;
             const pendingPushCount = group.skills.filter((skill) => skill.collabStatus === "pending-push").length;
             const isCollapsed = isGroupCollapsed(group.id);
             const groupTone = resolveSkillGroupTone(group.skills[0]?.sourceType);
@@ -550,7 +553,15 @@ export function SkillListPage(props: SkillListPageProps) {
                   </div>
                   <div className="skill-group-section__meta">
                     {updateCount > 0 ? <span className="skill-group-section__state skill-group-section__state--update">{t("skills.group.updateCount", { count: updateCount })}</span> : null}
-                    {pendingPushCount > 0 ? <span className="skill-group-section__state skill-group-section__state--pending">{t("skills.group.pendingCount", { count: pendingPushCount })}</span> : null}
+                    {pendingCommitCount > 0 ? (
+                      <span className="skill-group-section__state skill-group-section__state--commit">
+                        {t("skills.group.pendingCommitCount", { count: pendingCommitCount })}
+                      </span>
+                    ) : pendingPushCount > 0 ? (
+                      <span className="skill-group-section__state skill-group-section__state--pending">
+                        {t("skills.group.pendingCount", { count: pendingPushCount })}
+                      </span>
+                    ) : null}
                     <span
                       className="skill-group-section__toggle"
                       aria-hidden="true"

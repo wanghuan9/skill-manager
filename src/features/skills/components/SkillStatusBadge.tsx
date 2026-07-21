@@ -9,7 +9,8 @@ export function SkillStatusBadge({ status }: SkillStatusBadgeProps) {
   const { t } = useTranslate();
   const statusMap = {
     "update-available": { label: t("skill.status.updateAvailable"), toneClass: "tone-positive" },
-    "pending-push": { label: t("skill.status.pendingPush"), toneClass: "tone-info" },
+    "pending-commit": { label: t("skill.status.pendingCommit"), toneClass: "tone-pending-commit" },
+    "pending-push": { label: t("skill.status.pendingPush"), toneClass: "tone-pending-push" },
   } as const;
 
   if (!(status in statusMap)) {
