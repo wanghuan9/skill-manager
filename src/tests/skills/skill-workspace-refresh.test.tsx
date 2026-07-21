@@ -132,6 +132,12 @@ function LanguageProbe() {
   );
 }
 
+function SkillSourceViewStyleProbe() {
+  const { appSettings } = useSkillWorkspace();
+
+  return <span data-testid="skill-source-view-style">{appSettings.skillSourceViewStyle}</span>;
+}
+
 function MarketplaceProbe() {
   const { loadInitialMarketplaceSkills, marketplaceSkills } = useSkillWorkspace();
   const [loadState, setLoadState] = useState("idle");
@@ -193,6 +199,42 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+});
+
+test("uses the stored source layout before native settings finish loading", async () => {
+  const settingsDeferred = createDeferred<AppSettings>();
+  window.localStorage.setItem("skilldock.settings.skillSourceViewStyle", "flat");
+
+  mockedInvoke.mockImplementation(async (command) => {
+    switch (command) {
+      case "list_startup_installed_skills":
+        return installedSkillFixtures;
+      case "list_local_skill_candidates":
+        return localSkillFixtures;
+      case "list_tool_configs":
+        return toolConfigFixtures;
+      case "list_tool_skill_entries":
+        return [];
+      case "get_git_account_summary":
+        return gitAccountFixture;
+      case "get_app_settings":
+        return settingsDeferred.promise;
+      default:
+        throw new Error(`Unexpected command: ${command}`);
+    }
+  });
+
+  render(
+    <SkillWorkspaceProvider>
+      <SkillSourceViewStyleProbe />
+    </SkillWorkspaceProvider>,
+  );
+
+  expect(screen.getByTestId("skill-source-view-style")).toHaveTextContent("flat");
+
+  await act(async () => {
+    settingsDeferred.resolve({ ...appSettingsFixture, skillSourceViewStyle: "flat" });
+  });
 });
 
 test("refresh resolves after git state refresh during local alignment cooldown", async () => {

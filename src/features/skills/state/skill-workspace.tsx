@@ -86,6 +86,7 @@ import { getToolStatusLabel, isToolEnabledStatus } from "@/features/skills/utils
 const STARTUP_WORKSPACE_CACHE_KEY = "skilldock.startupWorkspaceCache";
 const APP_LANGUAGE_STORAGE_KEY = "skilldock.settings.language";
 const APP_THEME_STORAGE_KEY = "skilldock.settings.theme";
+const APP_SKILL_SOURCE_VIEW_STYLE_STORAGE_KEY = "skilldock.settings.skillSourceViewStyle";
 const FALLBACK_OPEN_TOOL_ID = "finder";
 const MARKETPLACE_PAGE_SIZE = 18;
 const MARKETPLACE_SOURCE_SITES: MarketplaceSourceSite[] = ["skills.sh", "skillsmp"];
@@ -197,6 +198,16 @@ function readStoredAppTheme(): AppTheme {
 
   const storedTheme = window.localStorage.getItem(APP_THEME_STORAGE_KEY);
   return storedTheme === "light" || storedTheme === "dark" ? storedTheme : "system";
+}
+
+function readStoredSkillSourceViewStyle(): SkillSourceViewStyle {
+  if (typeof window === "undefined") {
+    return "select";
+  }
+
+  return window.localStorage.getItem(APP_SKILL_SOURCE_VIEW_STYLE_STORAGE_KEY) === "flat"
+    ? "flat"
+    : "select";
 }
 
 function resolveAppTheme(theme: AppTheme): "light" | "dark" {
@@ -468,7 +479,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
           defaultOpenToolId: "",
           skillInstallActivation: "apply-all-tools",
           mcpInstallActivation: "apply-all-tools",
-          skillSourceViewStyle: "select",
+          skillSourceViewStyle: readStoredSkillSourceViewStyle(),
           language: "zh-CN",
           languageSource: "auto",
           theme: readStoredAppTheme(),
@@ -518,6 +529,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
   const startupWatchedSkillNamesRef = useRef(new Set<string>());
   const defaultOpenToolId = appSettings.defaultOpenToolId;
   const language = appSettings.language;
+  const skillSourceViewStyle = appSettings.skillSourceViewStyle ?? "select";
 
   useEffect(() => {
     installedSkillsRef.current = installedSkills;
@@ -627,6 +639,10 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
     setToolConfigs((current) => localizeToolConfigs(current, language));
     setGitAccount((current) => localizeGitAccountSummary(current, language));
   }, [language]);
+
+  useEffect(() => {
+    window.localStorage.setItem(APP_SKILL_SOURCE_VIEW_STYLE_STORAGE_KEY, skillSourceViewStyle);
+  }, [skillSourceViewStyle]);
 
   useEffect(() => {
     if (usesFixtureData || appSettings.languageSource !== "auto" || appSettings.storagePath.trim().length === 0) {
