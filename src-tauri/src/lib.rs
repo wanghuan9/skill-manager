@@ -74,6 +74,8 @@ pub fn run() {
             commands::import_local_skill,
             commands::get_push_target_snapshot,
             commands::get_push_preview_snapshot,
+            commands::get_skill_local_changes,
+            commands::revert_skill_change,
             commands::push_skill_to_current_branch,
             commands::get_update_preview_snapshot,
             commands::open_skill_repository,

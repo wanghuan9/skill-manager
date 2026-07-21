@@ -3093,6 +3093,11 @@ code {
   gap: 10px;
 }
 
+.skill-card__section-header .secondary-button--compact svg {
+  width: 15px;
+  height: 15px;
+}
+
 .skills-page .skill-card--grid {
   position: relative;
   align-content: stretch;
@@ -6239,6 +6244,7 @@ code {
   --skill-dialog-sidebar-width: 212px;
   --skill-dialog-content-radius: 12px;
   --skill-dialog-editor-bottom-padding: 10px;
+  position: relative;
   width: min(1280px, calc(100vw - 40px));
   height: min(820px, calc(100vh - 40px));
   border-radius: 20px;
@@ -6248,6 +6254,42 @@ code {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
   overflow: hidden;
+}
+
+.skill-revert-confirmation__backdrop {
+  position: absolute;
+  z-index: 4;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(15, 23, 42, 0.24);
+  backdrop-filter: blur(2px);
+}
+
+.skill-revert-confirmation {
+  width: min(460px, 100%);
+  display: grid;
+  gap: 18px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface-strong);
+  box-shadow: 0 18px 48px rgba(15, 23, 42, 0.2);
+}
+
+.skill-revert-confirmation p {
+  margin: 0;
+  color: var(--heading);
+  font-size: 0.84rem;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.skill-revert-confirmation__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .skill-file-dialog__header,
@@ -6290,6 +6332,37 @@ code {
   border-radius: 10px;
   background: var(--surface-strong);
   box-shadow: 0 1px 2px rgba(15, 23, 42, 0.025);
+}
+
+.skill-file-dialog__panel-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-strong);
+}
+
+.skill-file-dialog__panel-toggle button {
+  min-height: 26px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.skill-file-dialog__panel-toggle button:hover {
+  color: var(--heading);
+}
+
+.skill-file-dialog__panel-toggle button.is-selected {
+  background: rgba(47, 120, 255, 0.09);
+  color: var(--accent);
 }
 
 .skill-file-dialog__view-toggle-button {
@@ -6532,6 +6605,67 @@ code {
   white-space: nowrap;
 }
 
+.skill-change-status {
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 auto;
+  min-width: 20px;
+  height: 19px;
+  margin-left: auto;
+  border-radius: 6px;
+  background: rgba(47, 120, 255, 0.1);
+  color: var(--accent);
+  font-family: "SF Mono", "JetBrains Mono", monospace;
+  font-size: 0.64rem;
+  font-weight: 700;
+}
+
+.skill-change-status.is-a {
+  background: rgba(39, 179, 106, 0.12);
+  color: #159454;
+}
+
+.skill-change-status.is-d {
+  background: rgba(225, 61, 75, 0.11);
+  color: var(--danger);
+}
+
+.skill-change-status.is-r {
+  background: rgba(184, 116, 26, 0.11);
+  color: #a86415;
+}
+
+.skill-change-tree__header {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 34px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--line);
+  color: var(--heading);
+  font-size: 0.76rem;
+}
+
+.skill-change-tree__name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.skill-change-tree__parent {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.67rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.skill-change-tree__file .skill-change-status {
+  margin-left: auto;
+}
+
 .skill-file-dialog__editor {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
@@ -6630,6 +6764,231 @@ code {
     rgba(246, 249, 252, 0.98)
   );
   padding: 16px 18px;
+}
+
+.skill-diff {
+  min-height: 0;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--skill-dialog-content-radius);
+  background: #fbfcfe;
+  font-family: "SF Mono", "JetBrains Mono", monospace;
+}
+
+.skill-diff__actions {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 6px;
+}
+
+.skill-diff__display-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--surface-strong);
+}
+
+.skill-diff__display-toggle button {
+  min-height: 26px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.skill-diff__display-toggle button:hover {
+  color: var(--heading);
+}
+
+.skill-diff__display-toggle button.is-selected {
+  background: rgba(47, 120, 255, 0.09);
+  color: var(--accent);
+}
+
+.skill-diff__editor {
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--skill-dialog-content-radius);
+  background: #fbfcfe;
+}
+
+.skill-diff__editor .cm-editor {
+  height: 100%;
+  background: transparent;
+  color: #344054;
+  font-family: "SF Mono", "JetBrains Mono", monospace;
+  font-size: 0.76rem;
+}
+
+.skill-diff__editor .cm-editor.cm-focused {
+  outline: none;
+}
+
+.skill-diff__editor .cm-scroller {
+  overflow: auto;
+  font-family: inherit;
+  line-height: 1.65;
+}
+
+.skill-diff__editor .cm-gutters {
+  border-right: 1px solid rgba(112, 127, 148, 0.14);
+  background: #f5f7fa;
+  color: #8994a5;
+}
+
+.skill-diff__editor .cm-changeGutter {
+  width: 14px;
+  padding: 0;
+}
+
+.skill-diff__editor .cm-gutterElement.cm-changedLineGutter,
+.skill-diff__editor .cm-gutterElement.cm-deletedLineGutter {
+  position: relative;
+  width: 14px;
+  padding: 0;
+  background: transparent;
+  color: transparent;
+  font-family: system-ui, sans-serif;
+  font-size: 0.7rem;
+  font-weight: 400;
+  text-align: center;
+}
+
+.skill-diff__editor .cm-gutterElement.cm-changedLineGutter::before,
+.skill-diff__editor .cm-gutterElement.cm-deletedLineGutter::before {
+  color: #27a866;
+  content: "+";
+}
+
+.skill-diff__editor .cm-gutterElement.cm-deletedLineGutter::before {
+  color: #d23d4c;
+  content: "−";
+}
+
+.skill-diff__editor .skill-diff__revert-gutter-column {
+  width: 30px;
+  padding: 0;
+  border-right: 1px solid rgba(112, 127, 148, 0.12);
+  background: rgba(48, 88, 64, 0.04);
+}
+
+.skill-diff__editor .skill-diff__revert-gutter-column .cm-gutterElement {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  padding: 0;
+}
+
+.skill-diff__editor .cm-lineNumbers .cm-gutterElement {
+  min-width: 34px;
+  padding: 0 5px;
+}
+
+.skill-diff__editor .cm-content {
+  padding: 9px 0;
+  caret-color: var(--accent);
+}
+
+.skill-diff__editor .cm-line {
+  padding: 0 14px;
+}
+
+.skill-diff__editor .cm-changedLine,
+.skill-diff__editor .cm-inlineChangedLine {
+  background: rgba(39, 179, 106, 0.11);
+}
+
+.skill-diff__editor .cm-editor.cm-merge-b .cm-changedText {
+  border-radius: 2px;
+  background: rgba(39, 179, 106, 0.1);
+}
+
+.skill-diff__editor .cm-editor .cm-deletedChunk .cm-deletedText {
+  border-radius: 2px;
+  background: rgba(225, 61, 75, 0.08);
+}
+
+.skill-diff__editor .cm-deletedChunk {
+  position: relative;
+  padding-left: 14px;
+  background: rgba(225, 61, 75, 0.095);
+  color: #8f2934;
+}
+
+.skill-diff__editor .cm-deletedChunk .cm-chunkButtons {
+  right: auto;
+  left: -48px;
+  z-index: 3;
+}
+
+.skill-diff__editor .cm-editor .cm-collapsedLines {
+  display: flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-family: system-ui, sans-serif;
+  font-size: 0.65rem;
+  line-height: 1;
+  text-align: center;
+}
+
+.skill-diff__editor .cm-editor .cm-collapsedLines::before,
+.skill-diff__editor .cm-editor .cm-collapsedLines::after {
+  height: 1px;
+  flex: 1;
+  margin: 0 10px;
+  background: rgba(112, 127, 148, 0.16);
+  content: "";
+}
+
+.skill-diff__editor .cm-editor .cm-collapsedLines:hover {
+  color: var(--heading);
+}
+
+.skill-diff__editor .skill-diff__revert-gutter {
+  width: 30px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 2px;
+  background: rgba(54, 100, 71, 0.12);
+  color: #587062;
+  cursor: pointer;
+  font-family: system-ui, sans-serif;
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.skill-diff__editor .skill-diff__revert-gutter-column .skill-diff__revert-gutter {
+  width: 30px;
+  height: 22px;
+}
+
+.skill-diff__editor .skill-diff__revert-gutter:hover:not(:disabled) {
+  background: rgba(54, 100, 71, 0.2);
+  color: #3e5b49;
+}
+
+.skill-diff__editor .skill-diff__revert-gutter:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 48%, transparent);
+  outline-offset: -2px;
+}
+
+.skill-diff__revert-file {
+  border-color: rgba(225, 61, 75, 0.24);
+  color: var(--danger);
 }
 
 .skill-file-dialog__frontmatter,
@@ -12075,6 +12434,24 @@ button.settings-form-item:disabled {
   background: #202020;
 }
 
+:root[data-theme="dark"] .skill-file-dialog__panel-toggle {
+  border-color: var(--line);
+  background: #202020;
+}
+
+:root[data-theme="dark"] .skill-file-dialog__panel-toggle button {
+  color: var(--muted);
+}
+
+:root[data-theme="dark"] .skill-file-dialog__panel-toggle button:hover {
+  color: var(--heading);
+}
+
+:root[data-theme="dark"] .skill-file-dialog__panel-toggle button.is-selected {
+  background: rgba(255, 194, 26, 0.12);
+  color: var(--accent);
+}
+
 :root[data-theme="dark"] .skill-file-dialog__view-toggle-button {
   color: var(--muted);
 }
@@ -12160,6 +12537,16 @@ button.settings-form-item:disabled {
   background: #272727;
 }
 
+:root[data-theme="dark"] .skill-revert-confirmation__backdrop {
+  background: rgba(0, 0, 0, 0.48);
+}
+
+:root[data-theme="dark"] .skill-revert-confirmation {
+  border-color: #464646;
+  background: #292929;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.45);
+}
+
 :root[data-theme="dark"] .skill-file-dialog__textarea,
 :root[data-theme="dark"] .skill-file-dialog__preview {
   border-color: #464646;
@@ -12194,6 +12581,77 @@ button.settings-form-item:disabled {
 
 :root[data-theme="dark"] .skill-file-dialog__code-preview {
   color: #d6deeb;
+}
+
+:root[data-theme="dark"] .skill-diff {
+  border-color: #464646;
+  background: #1f1f1f;
+}
+
+:root[data-theme="dark"] .skill-diff__display-toggle button.is-selected {
+  background: rgba(255, 194, 26, 0.12);
+  color: var(--accent);
+}
+
+:root[data-theme="dark"] .skill-diff__editor {
+  border-color: #464646;
+  background: #1f1f1f;
+}
+
+:root[data-theme="dark"] .skill-diff__editor .cm-editor {
+  color: #d3d8e0;
+}
+
+:root[data-theme="dark"] .skill-diff__editor .cm-gutters {
+  border-color: rgba(255, 255, 255, 0.08);
+  background: #242424;
+  color: #7f8998;
+}
+
+:root[data-theme="dark"] .skill-diff__editor .cm-gutterElement.cm-changedLineGutter::before {
+  color: #63d598;
+}
+
+:root[data-theme="dark"] .skill-diff__editor .cm-gutterElement.cm-deletedLineGutter::before {
+  color: #f07883;
+}
+
+:root[data-theme="dark"] .skill-diff__editor .cm-changedLine,
+:root[data-theme="dark"] .skill-diff__editor .cm-inlineChangedLine {
+  background: rgba(52, 168, 103, 0.17);
+}
+
+:root[data-theme="dark"] .skill-diff__editor .cm-editor.cm-merge-b .cm-changedText {
+  background: rgba(52, 168, 103, 0.16);
+}
+
+:root[data-theme="dark"] .skill-diff__editor .cm-editor .cm-deletedChunk .cm-deletedText {
+  background: rgba(214, 70, 82, 0.14);
+}
+
+:root[data-theme="dark"] .skill-diff__editor .cm-deletedChunk {
+  background: rgba(214, 70, 82, 0.16);
+  color: #f0bec3;
+}
+
+:root[data-theme="dark"] .skill-diff__editor .skill-diff__revert-gutter {
+  background: #314237;
+  color: #b8c9bd;
+}
+
+:root[data-theme="dark"] .skill-diff__editor .skill-diff__revert-gutter:hover:not(:disabled) {
+  background: #3a5142;
+  color: #d0ddd3;
+}
+
+:root[data-theme="dark"] .skill-diff__editor .cm-editor .cm-collapsedLines {
+  background: transparent;
+  color: #aeb6c4;
+}
+
+:root[data-theme="dark"] .skill-diff__editor .cm-editor .cm-collapsedLines::before,
+:root[data-theme="dark"] .skill-diff__editor .cm-editor .cm-collapsedLines::after {
+  background: rgba(255, 255, 255, 0.1);
 }
 
 :root[data-theme="dark"] .skill-file-dialog .hljs-comment,

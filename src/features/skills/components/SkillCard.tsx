@@ -8,7 +8,7 @@ import { useFailureReporter } from "@/app/failure-feedback";
 import { waitForNextPaint } from "@/app/utils/wait-for-next-paint";
 import { PowerToggleIcon } from "@/features/skills/components/PowerToggleIcon";
 import { SkillStatusBadge } from "@/features/skills/components/SkillStatusBadge";
-import { SkillFileDialog } from "@/features/skills/components/SkillFileDialog";
+import { SkillFileDialog, type SkillFilePanelMode } from "@/features/skills/components/SkillFileDialog";
 import { ToolSyncPanel } from "@/features/skills/components/ToolSyncPanel";
 import { openExternalLink } from "@/features/skills/api/skill-client";
 import { useSkillWorkspace } from "@/features/skills/state/skill-workspace";
@@ -116,6 +116,15 @@ function ViewFileIcon() {
   );
 }
 
+function LocalChangesIcon() {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+      <path d="M4.5 5.5h5M7 3v5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+      <path d="M11.5 5.5h4M4.5 14.5h4M11.5 14.5h4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 function OpenFolderIcon() {
   return (
     <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
@@ -185,6 +194,7 @@ export function SkillCard({
   } = useSkillWorkspace();
   const [expandedState, setExpandedState] = useState(false);
   const [showFileDialog, setShowFileDialog] = useState(false);
+  const [fileDialogInitialMode, setFileDialogInitialMode] = useState<SkillFilePanelMode>("files");
   const [isDeleteConfirming, setIsDeleteConfirming] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
@@ -222,6 +232,8 @@ export function SkillCard({
       ? t("skills.source.local")
       : sourceLabel;
   const showRemoteMetadata = skill.gitLinked && skill.sourceType !== "local";
+  const showLocalChangesAction = skill.gitLinked
+    && (skill.collabStatus === "pending-push" || skill.collabStatus === "diverged");
   const expanded = expandedProp ?? expandedState;
   const isGridLayout = layout === "grid";
 
@@ -319,6 +331,11 @@ export function SkillCard({
         context: { skillName: skill.name },
       });
     }
+  }
+
+  function handleOpenFileDialog(mode: SkillFilePanelMode) {
+    setFileDialogInitialMode(mode);
+    setShowFileDialog(true);
   }
 
   async function handleToggleAllSkillTools() {
@@ -449,6 +466,17 @@ export function SkillCard({
       <section>
         <div className="skill-card__section-header">
           <h4>{t("skill.card.basicInfo")}</h4>
+          {showLocalChangesAction && !isGridLayout ? (
+            <button
+              className="secondary-button secondary-button--compact"
+              type="button"
+              onClick={() => handleOpenFileDialog("changes")}
+              aria-label={t("skill.card.aria.viewChanges", { name: skill.name })}
+            >
+              <LocalChangesIcon />
+              <span>{t("skill.card.action.viewChanges")}</span>
+            </button>
+          ) : null}
         </div>
         <dl className="detail-grid detail-grid--single">
           <div>
@@ -617,7 +645,7 @@ export function SkillCard({
             <button
               className="skill-card__icon-button"
               type="button"
-              onClick={() => setShowFileDialog(true)}
+              onClick={() => handleOpenFileDialog("files")}
               aria-label={t("skill.card.aria.viewFiles", { name: skill.name })}
               data-tooltip={t("skill.card.tooltip.viewFiles")}
             >
@@ -691,10 +719,21 @@ export function SkillCard({
                     <span>{isUpdating ? t("skill.card.tooltip.updating") : t("skill.card.action.update")}</span>
                   </button>
                 ) : null}
+                {showLocalChangesAction ? (
+                  <button
+                    className="secondary-button secondary-button--compact skill-card-detail-modal__action"
+                    type="button"
+                    onClick={() => handleOpenFileDialog("changes")}
+                    aria-label={t("skill.card.aria.viewChanges", { name: skill.name })}
+                  >
+                    <LocalChangesIcon />
+                    <span>{t("skill.card.action.viewChanges")}</span>
+                  </button>
+                ) : null}
                 <button
                   className="secondary-button secondary-button--compact skill-card-detail-modal__action"
                   type="button"
-                  onClick={() => setShowFileDialog(true)}
+                  onClick={() => handleOpenFileDialog("files")}
                   aria-label={t("skill.card.aria.viewFiles", { name: skill.name })}
                 >
                   <ViewFileIcon />
@@ -727,7 +766,12 @@ export function SkillCard({
         document.body,
       ) : null}
       {showFileDialog ? (
-        <SkillFileDialog skill={skill} isOpen={showFileDialog} onClose={() => setShowFileDialog(false)} />
+        <SkillFileDialog
+          skill={skill}
+          isOpen={showFileDialog}
+          initialMode={fileDialogInitialMode}
+          onClose={() => setShowFileDialog(false)}
+        />
       ) : null}
     </>
   );

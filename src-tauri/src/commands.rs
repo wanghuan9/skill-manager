@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::env;
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
@@ -3503,6 +3504,40 @@ fn run_git_command(skill_path: &str, args: &[&str]) -> Result<String, String> {
     run_git_command_with_allowed_codes(skill_path, args, &[0])
 }
 
+fn run_git_command_with_input(skill_path: &str, args: &[&str], input: &str) -> Result<(), String> {
+    let mut command = git_command();
+    configure_git_network_command(&mut command);
+    let mut child = command
+        .args(["-C", skill_path])
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| format!("执行 git 命令失败: {error}"))?;
+
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| "无法写入 git 命令输入".to_string())?;
+    stdin
+        .write_all(input.as_bytes())
+        .map_err(|error| format!("写入 git 命令输入失败: {error}"))?;
+    drop(stdin);
+
+    let output = child
+        .wait_with_output()
+        .map_err(|error| format!("读取 git 命令输出失败: {error}"))?;
+    if output.status.success() {
+        return Ok(());
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let message = if stderr.is_empty() { stdout } else { stderr };
+    Err(format!("git {} 失败: {}", args.join(" "), message))
+}
+
 fn run_git_remote_command(args: &[&str]) -> Result<String, String> {
     run_git_remote_command_with_timeout(args, Duration::from_secs(GIT_COMMAND_TIMEOUT_SECS))
 }
@@ -3643,6 +3678,34 @@ fn parse_name_status_line(line: &str) -> Option<(String, String)> {
     Some((status, path))
 }
 
+fn normalize_porcelain_v2_status(status: &str) -> String {
+    status
+        .chars()
+        .map(|character| if character == '.' { ' ' } else { character })
+        .collect()
+}
+
+fn parse_porcelain_v2_status_record(record: &str) -> Option<(String, String)> {
+    if let Some(path) = record.strip_prefix("? ") {
+        return Some(("??".into(), path.into()));
+    }
+    if record.starts_with("1 ") {
+        let fields = record.splitn(9, ' ').collect::<Vec<_>>();
+        return Some((
+            normalize_porcelain_v2_status(fields.get(1)?),
+            fields.get(8)?.to_string(),
+        ));
+    }
+    if record.starts_with("u ") {
+        let fields = record.splitn(11, ' ').collect::<Vec<_>>();
+        return Some((
+            normalize_porcelain_v2_status(fields.get(1)?),
+            fields.get(10)?.to_string(),
+        ));
+    }
+    None
+}
+
 fn git_diff_for_path(skill_path: &str, args: &[&str], path: &str) -> String {
     let mut diff_args = args.to_vec();
     diff_args.extend(["--", path]);
@@ -3658,28 +3721,53 @@ fn git_diff_for_untracked_path(skill_path: &str, path: &str) -> String {
     .unwrap_or_default()
 }
 
-fn combine_working_tree_diff(skill_path: &str, status: &str, path: &str) -> String {
+fn working_tree_diffs(skill_path: &str, status: &str, path: &str) -> (String, String) {
     if status.contains('?') {
-        return git_diff_for_untracked_path(skill_path, path);
+        return (String::new(), git_diff_for_untracked_path(skill_path, path));
     }
 
-    let mut diff_parts = Vec::new();
     let index_status = status.chars().next().unwrap_or(' ');
     let worktree_status = status.chars().nth(1).unwrap_or(' ');
-    if index_status != ' ' {
-        let staged_diff = git_diff_for_path(skill_path, &["diff", "--cached"], path);
-        if !staged_diff.trim().is_empty() {
-            diff_parts.push(staged_diff);
-        }
-    }
-    if worktree_status != ' ' {
-        let unstaged_diff = git_diff_for_path(skill_path, &["diff"], path);
-        if !unstaged_diff.trim().is_empty() {
-            diff_parts.push(unstaged_diff);
-        }
+    let staged_diff = if index_status == ' ' {
+        String::new()
+    } else {
+        git_diff_for_path(skill_path, &["diff", "--cached"], path)
+    };
+    let unstaged_diff = if worktree_status == ' ' {
+        String::new()
+    } else {
+        git_diff_for_path(skill_path, &["diff"], path)
+    };
+
+    (staged_diff, unstaged_diff)
+}
+
+fn git_head_file_content(repository_path: &str, repository_relative_path: &str) -> Option<String> {
+    if !is_supported_text_file(Path::new(repository_relative_path)) {
+        return None;
     }
 
-    diff_parts.join("\n")
+    let object_spec = format!("HEAD:{repository_relative_path}");
+    let output = git_command()
+        .args(["-C", repository_path, "show", &object_spec])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return Some(String::new());
+    }
+    String::from_utf8(output.stdout).ok()
+}
+
+fn working_tree_file_content(skill_path: &str, relative_path: &str) -> Option<String> {
+    if !is_supported_text_file(Path::new(relative_path)) {
+        return None;
+    }
+
+    match fs::read(Path::new(skill_path).join(relative_path)) {
+        Ok(bytes) => String::from_utf8(bytes).ok(),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Some(String::new()),
+        Err(_) => None,
+    }
 }
 
 fn collect_name_status_changes(
@@ -3693,28 +3781,197 @@ fn collect_name_status_changes(
         .filter_map(parse_name_status_line)
         .map(|(status, path)| {
             let diff = git_diff_for_path(skill_path, diff_args, &path);
-            GitChangeFile { path, status, diff }
+            GitChangeFile {
+                path,
+                status,
+                diff,
+                staged_diff: String::new(),
+                unstaged_diff: String::new(),
+                original_content: None,
+                current_content: None,
+            }
         })
         .collect();
     Ok(changes)
 }
 
 fn collect_working_tree_changes(skill_path: &str) -> Result<Vec<GitChangeFile>, String> {
-    let porcelain = run_git_command(skill_path, &["status", "--porcelain", "--", "."])?;
+    let repository_path = repository_root_path(skill_path)?;
+    let canonical_skill_path =
+        fs::canonicalize(skill_path).map_err(|error| format!("解析 Skill 目录失败: {error}"))?;
+    let canonical_repository_path =
+        fs::canonicalize(&repository_path).map_err(|error| format!("解析仓库目录失败: {error}"))?;
+    let skill_relative_path = canonical_skill_path
+        .strip_prefix(&canonical_repository_path)
+        .map_err(|error| format!("解析 Skill 相对路径失败: {error}"))?
+        .to_string_lossy()
+        .replace('\\', "/")
+        .trim_matches('/')
+        .to_string();
+    let pathspec = if skill_relative_path.is_empty() {
+        "."
+    } else {
+        skill_relative_path.as_str()
+    };
+    let porcelain = run_git_command(
+        &repository_path,
+        &[
+            "status",
+            "--porcelain=v2",
+            "-z",
+            "--no-renames",
+            "--untracked-files=all",
+            "--",
+            pathspec,
+        ],
+    )?;
     let changes = porcelain
-        .lines()
-        .filter_map(|line| {
-            if line.len() < 4 {
-                return None;
-            }
-            let raw_status = line.get(..2)?.to_string();
+        .split('\0')
+        .filter_map(|record| {
+            let (raw_status, repository_relative_path) = parse_porcelain_v2_status_record(record)?;
             let status = raw_status.trim().to_string();
-            let path = line.get(3..)?.trim().to_string();
-            let diff = combine_working_tree_diff(skill_path, &raw_status, &path);
-            Some(GitChangeFile { path, status, diff })
+            let original_content =
+                git_head_file_content(&repository_path, &repository_relative_path);
+            let path = if skill_relative_path.is_empty() {
+                repository_relative_path.clone()
+            } else {
+                repository_relative_path
+                    .strip_prefix(&format!("{skill_relative_path}/"))?
+                    .to_string()
+            };
+            let current_content = working_tree_file_content(skill_path, &path);
+            let (staged_diff, unstaged_diff) = working_tree_diffs(skill_path, &raw_status, &path);
+            let diff = [staged_diff.as_str(), unstaged_diff.as_str()]
+                .into_iter()
+                .filter(|part| !part.trim().is_empty())
+                .collect::<Vec<_>>()
+                .join("\n");
+            Some(GitChangeFile {
+                path,
+                status,
+                diff,
+                staged_diff,
+                unstaged_diff,
+                original_content,
+                current_content,
+            })
         })
         .collect();
     Ok(changes)
+}
+
+fn validate_git_change_path(path: &str) -> Result<(), String> {
+    let relative_path = Path::new(path);
+    let has_only_normal_components = relative_path
+        .components()
+        .all(|component| matches!(component, std::path::Component::Normal(_)));
+    if path.trim().is_empty() || relative_path.is_absolute() || !has_only_normal_components {
+        return Err("变更文件路径无效".into());
+    }
+    Ok(())
+}
+
+fn extract_diff_hunk_patch(diff: &str, target_hunk_index: usize) -> Option<String> {
+    let lines = diff.lines().collect::<Vec<_>>();
+    let mut section_start = 0;
+    let mut hunk_index = 0;
+    let mut line_index = 0;
+
+    while line_index < lines.len() {
+        if lines[line_index].starts_with("diff --git ") {
+            section_start = line_index;
+        }
+        if !lines[line_index].starts_with("@@ ") {
+            line_index += 1;
+            continue;
+        }
+
+        let hunk_start = line_index;
+        let mut hunk_end = hunk_start + 1;
+        while hunk_end < lines.len()
+            && !lines[hunk_end].starts_with("@@ ")
+            && !lines[hunk_end].starts_with("diff --git ")
+        {
+            hunk_end += 1;
+        }
+        if hunk_index == target_hunk_index {
+            let header_end = (section_start..hunk_start)
+                .find(|index| lines[*index].starts_with("@@ "))
+                .unwrap_or(hunk_start);
+            let mut patch_lines = lines[section_start..header_end].to_vec();
+            patch_lines.extend_from_slice(&lines[hunk_start..hunk_end]);
+            return Some(format!("{}\n", patch_lines.join("\n")));
+        }
+
+        hunk_index += 1;
+        line_index = hunk_end;
+    }
+
+    None
+}
+
+fn revert_untracked_file(skill_path: &str, relative_path: &str) -> Result<(), String> {
+    let full_path = Path::new(skill_path).join(relative_path);
+    if full_path.is_dir() {
+        return Err("仅支持回退单个新增文件".into());
+    }
+    if full_path.exists() {
+        fs::remove_file(&full_path).map_err(|error| format!("删除新增文件失败: {error}"))?;
+    }
+    Ok(())
+}
+
+fn revert_diff_hunk(skill_path: &str, patch: &str, staged: bool) -> Result<(), String> {
+    let worktree_check_args = [
+        "apply",
+        "--check",
+        "--reverse",
+        "--recount",
+        "--whitespace=nowarn",
+    ];
+    let worktree_apply_args = ["apply", "--reverse", "--recount", "--whitespace=nowarn"];
+    run_git_command_with_input(skill_path, &worktree_check_args, patch)?;
+    if !staged {
+        return run_git_command_with_input(skill_path, &worktree_apply_args, patch);
+    }
+
+    let index_check_args = [
+        "apply",
+        "--cached",
+        "--check",
+        "--reverse",
+        "--recount",
+        "--whitespace=nowarn",
+    ];
+    let index_apply_args = [
+        "apply",
+        "--cached",
+        "--reverse",
+        "--recount",
+        "--whitespace=nowarn",
+    ];
+    run_git_command_with_input(skill_path, &index_check_args, patch)?;
+    run_git_command_with_input(skill_path, &worktree_apply_args, patch)?;
+    run_git_command_with_input(skill_path, &index_apply_args, patch)
+}
+
+fn revert_change_file(skill_path: &str, relative_path: &str, status: &str) -> Result<(), String> {
+    if status.contains('?') {
+        return revert_untracked_file(skill_path, relative_path);
+    }
+
+    run_git_command(
+        skill_path,
+        &[
+            "restore",
+            "--source=HEAD",
+            "--staged",
+            "--worktree",
+            "--",
+            relative_path,
+        ],
+    )?;
+    Ok(())
 }
 
 fn refresh_and_persist_skill(skill_name: &str) -> Result<SkillSummary, String> {
@@ -6837,6 +7094,50 @@ pub fn get_push_preview_snapshot(
 }
 
 #[tauri::command]
+pub fn get_skill_local_changes(skill_name: &str) -> Result<Vec<GitChangeFile>, String> {
+    let (installed_skills, skill_index) = find_skill_by_name(skill_name)?;
+    let skill = &installed_skills[skill_index];
+    collect_working_tree_changes(&skill.local_path)
+}
+
+#[tauri::command]
+pub fn revert_skill_change(
+    skill_name: &str,
+    relative_path: &str,
+    hunk_index: Option<usize>,
+    expected_patch: Option<String>,
+    staged: bool,
+) -> Result<SkillSummary, String> {
+    validate_git_change_path(relative_path)?;
+    let (installed_skills, skill_index) = find_skill_by_name(skill_name)?;
+    let skill = &installed_skills[skill_index];
+    let changes = collect_working_tree_changes(&skill.local_path)?;
+    let change = changes
+        .iter()
+        .find(|change| change.path == relative_path)
+        .ok_or_else(|| "该文件已没有可回退的本地变更".to_string())?;
+
+    if let Some(target_hunk_index) = hunk_index {
+        let source_diff = if staged {
+            &change.staged_diff
+        } else {
+            &change.unstaged_diff
+        };
+        let patch = extract_diff_hunk_patch(source_diff, target_hunk_index)
+            .ok_or_else(|| "该变更块已不存在，请刷新后重试".to_string())?;
+        if expected_patch.as_deref() != Some(patch.as_str()) {
+            return Err("文件内容已变化，请刷新后重试".into());
+        }
+
+        revert_diff_hunk(&skill.local_path, &patch, staged)?;
+    } else {
+        revert_change_file(&skill.local_path, relative_path, &change.status)?;
+    }
+
+    refresh_and_persist_local_git_skill(skill_name)
+}
+
+#[tauri::command]
 pub fn push_skill_to_current_branch(skill_name: &str) -> Result<SkillSummary, String> {
     let (installed_skills, skill_index) = find_skill_by_name(skill_name)?;
     let skill = &installed_skills[skill_index];
@@ -7641,6 +7942,209 @@ mod tests {
             "git command failed: {}",
             String::from_utf8_lossy(&output.stderr)
         );
+    }
+
+    fn initialize_git_test_repo(temp_dir: &PathBuf) {
+        run_git_test(temp_dir, &["init"]);
+        run_git_test(temp_dir, &["config", "user.name", "SkillDock Test"]);
+        run_git_test(temp_dir, &["config", "user.email", "skilldock@example.com"]);
+    }
+
+    #[test]
+    fn reverse_applies_one_diff_hunk_without_touching_other_hunks() {
+        let temp_dir = temp_test_dir("revert-one-hunk");
+        initialize_git_test_repo(&temp_dir);
+        let file_path = temp_dir.join("sample.txt");
+        let original_lines = (1..=24)
+            .map(|line| format!("line {line}"))
+            .collect::<Vec<_>>();
+        fs::write(&file_path, format!("{}\n", original_lines.join("\n")))
+            .expect("write original file");
+        run_git_test(&temp_dir, &["add", "sample.txt"]);
+        run_git_test(&temp_dir, &["commit", "-m", "initial"]);
+
+        let mut changed_lines = original_lines.clone();
+        changed_lines[1] = "line 2 changed".into();
+        changed_lines[21] = "line 22 changed".into();
+        fs::write(&file_path, format!("{}\n", changed_lines.join("\n")))
+            .expect("write changed file");
+        let changes = super::collect_working_tree_changes(temp_dir.to_string_lossy().as_ref())
+            .expect("collect changes");
+        let patch = super::extract_diff_hunk_patch(&changes[0].unstaged_diff, 0)
+            .expect("extract first hunk");
+
+        super::revert_diff_hunk(temp_dir.to_string_lossy().as_ref(), &patch, false)
+            .expect("reverse first hunk");
+
+        let content = fs::read_to_string(&file_path).expect("read reverted file");
+        assert!(content.contains("line 2\n"));
+        assert!(!content.contains("line 2 changed"));
+        assert!(content.contains("line 22 changed"));
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn reverse_applies_one_staged_hunk_to_index_and_worktree() {
+        let temp_dir = temp_test_dir("revert-one-staged-hunk");
+        initialize_git_test_repo(&temp_dir);
+        let file_path = temp_dir.join("sample.txt");
+        let original_lines = (1..=24)
+            .map(|line| format!("line {line}"))
+            .collect::<Vec<_>>();
+        fs::write(&file_path, format!("{}\n", original_lines.join("\n")))
+            .expect("write original file");
+        run_git_test(&temp_dir, &["add", "sample.txt"]);
+        run_git_test(&temp_dir, &["commit", "-m", "initial"]);
+
+        let mut changed_lines = original_lines;
+        changed_lines[1] = "line 2 changed".into();
+        changed_lines[21] = "line 22 changed".into();
+        fs::write(&file_path, format!("{}\n", changed_lines.join("\n")))
+            .expect("write changed file");
+        run_git_test(&temp_dir, &["add", "sample.txt"]);
+        let changes = super::collect_working_tree_changes(temp_dir.to_string_lossy().as_ref())
+            .expect("collect staged changes");
+        let patch = super::extract_diff_hunk_patch(&changes[0].staged_diff, 0)
+            .expect("extract first staged hunk");
+
+        super::revert_diff_hunk(temp_dir.to_string_lossy().as_ref(), &patch, true)
+            .expect("reverse staged hunk");
+
+        let content = fs::read_to_string(&file_path).expect("read reverted file");
+        assert!(content.contains("line 2\n"));
+        assert!(!content.contains("line 2 changed"));
+        assert!(content.contains("line 22 changed"));
+        let cached_diff =
+            super::run_git_command(temp_dir.to_string_lossy().as_ref(), &["diff", "--cached"])
+                .expect("read cached diff");
+        assert!(!cached_diff.contains("line 2 changed"));
+        assert!(cached_diff.contains("line 22 changed"));
+        assert_eq!(
+            super::run_git_command(temp_dir.to_string_lossy().as_ref(), &["diff"])
+                .expect("read worktree diff"),
+            ""
+        );
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn views_and_reverts_added_deleted_and_modified_files() {
+        let temp_dir = temp_test_dir("change-kinds");
+        initialize_git_test_repo(&temp_dir);
+        let skill_dir = temp_dir.join("skills/demo-skill");
+        fs::create_dir_all(&skill_dir).expect("create skill directory");
+        fs::write(skill_dir.join("modified.md"), "before\n").expect("write modified fixture");
+        fs::write(skill_dir.join("deleted.md"), "deleted content\n")
+            .expect("write deleted fixture");
+        run_git_test(&temp_dir, &["add", "."]);
+        run_git_test(&temp_dir, &["commit", "-m", "initial"]);
+
+        fs::write(skill_dir.join("modified.md"), "after\n").expect("modify fixture");
+        fs::remove_file(skill_dir.join("deleted.md")).expect("delete fixture");
+        fs::write(skill_dir.join("added.md"), "added content\n").expect("add fixture");
+        let changes = super::collect_working_tree_changes(skill_dir.to_string_lossy().as_ref())
+            .expect("collect all change kinds");
+
+        assert_eq!(changes.len(), 3);
+        let added = changes
+            .iter()
+            .find(|change| change.path == "added.md")
+            .expect("added change");
+        let deleted = changes
+            .iter()
+            .find(|change| change.path == "deleted.md")
+            .expect("deleted change");
+        let modified = changes
+            .iter()
+            .find(|change| change.path == "modified.md")
+            .expect("modified change");
+        assert_eq!(added.status, "??");
+        assert_eq!(deleted.status, "D");
+        assert_eq!(modified.status, "M");
+        assert!(added.diff.contains("+added content"));
+        assert!(deleted.diff.contains("-deleted content"));
+        assert!(modified.diff.contains("-before"));
+        assert!(modified.diff.contains("+after"));
+        assert_eq!(added.original_content.as_deref(), Some(""));
+        assert_eq!(added.current_content.as_deref(), Some("added content\n"));
+        assert_eq!(
+            deleted.original_content.as_deref(),
+            Some("deleted content\n")
+        );
+        assert_eq!(deleted.current_content.as_deref(), Some(""));
+        assert_eq!(modified.original_content.as_deref(), Some("before\n"));
+        assert_eq!(modified.current_content.as_deref(), Some("after\n"));
+
+        for change in &changes {
+            super::revert_change_file(
+                skill_dir.to_string_lossy().as_ref(),
+                &change.path,
+                &change.status,
+            )
+            .expect("revert changed file");
+        }
+        assert!(!skill_dir.join("added.md").exists());
+        assert_eq!(
+            fs::read_to_string(skill_dir.join("deleted.md")).expect("read restored deleted file"),
+            "deleted content\n"
+        );
+        assert_eq!(
+            fs::read_to_string(skill_dir.join("modified.md")).expect("read restored modified file"),
+            "before\n"
+        );
+        assert!(
+            super::collect_working_tree_changes(skill_dir.to_string_lossy().as_ref())
+                .expect("collect clean state")
+                .is_empty()
+        );
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn lists_untracked_directory_contents_as_individual_change_files() {
+        let temp_dir = temp_test_dir("untracked-files");
+        run_git_test(&temp_dir, &["init"]);
+        fs::create_dir_all(temp_dir.join("nested")).expect("create nested directory");
+        fs::write(temp_dir.join("nested/one.txt"), "one\n").expect("write first file");
+        fs::write(temp_dir.join("nested/two.txt"), "two\n").expect("write second file");
+
+        let changes = super::collect_working_tree_changes(temp_dir.to_string_lossy().as_ref())
+            .expect("collect untracked files");
+
+        assert_eq!(
+            changes
+                .iter()
+                .map(|change| change.path.as_str())
+                .collect::<Vec<_>>(),
+            vec!["nested/one.txt", "nested/two.txt"]
+        );
+        assert!(changes.iter().all(|change| change.status == "??"));
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn collects_nested_skill_changes_relative_to_the_skill_directory() {
+        let temp_dir = temp_test_dir("nested-skill-diff");
+        run_git_test(&temp_dir, &["init"]);
+        run_git_test(&temp_dir, &["config", "user.name", "SkillDock Test"]);
+        run_git_test(
+            &temp_dir,
+            &["config", "user.email", "skilldock@example.com"],
+        );
+        let skill_dir = temp_dir.join("skills/demo-skill");
+        fs::create_dir_all(&skill_dir).expect("create nested skill directory");
+        fs::write(skill_dir.join("SKILL.md"), "# original\n").expect("write original skill");
+        run_git_test(&temp_dir, &["add", "."]);
+        run_git_test(&temp_dir, &["commit", "-m", "initial"]);
+        fs::write(skill_dir.join("SKILL.md"), "# changed\n").expect("write changed skill");
+
+        let changes = super::collect_working_tree_changes(skill_dir.to_string_lossy().as_ref())
+            .expect("collect nested skill changes");
+
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].path, "SKILL.md");
+        assert!(changes[0].diff.contains("+# changed"));
+        let _ = fs::remove_dir_all(temp_dir);
     }
 
     fn prepend_fake_executable_to_path(

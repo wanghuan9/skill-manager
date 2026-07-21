@@ -180,6 +180,10 @@ export type GitChangeFile = {
   path: string;
   status: string;
   diff: string;
+  stagedDiff?: string;
+  unstagedDiff?: string;
+  originalContent?: string | null;
+  currentContent?: string | null;
 };
 
 export type PushPreviewSnapshot = {
