@@ -141,6 +141,26 @@ test("keeps the file entry expanded in the grid detail header", async () => {
   expect(filesButton.closest(".skill-card-detail-modal__header")).toBeInTheDocument();
 });
 
+test("shows the local changes action in expanded list details", async () => {
+  const skill = installedSkillFixtures.find((item) => item.name === "skill-publisher");
+  if (!skill) {
+    throw new Error("missing skill-publisher fixture");
+  }
+
+  const { container } = renderSkillCardWithProviders(skill);
+  await userEvent.click(screen.getByRole("button", { name: /展开 skill-publisher/ }));
+
+  const details = container.querySelector<HTMLElement>(".skill-card__details");
+  if (!details) {
+    throw new Error("missing expanded list details");
+  }
+  const filesButton = within(details).getByRole("button", {
+    name: "查看 skill-publisher 文件与本地变更",
+  });
+  expect(filesButton).toHaveTextContent("本地变更");
+  expect(filesButton.querySelector('path[d="M4.5 5.5h5M7 3v5"]')).toBeInTheDocument();
+});
+
 test("hides remote update metadata for non-git skill details", async () => {
   const skill = installedSkillFixtures.find((item) => item.name === "drawio-diagram");
   if (!skill) {

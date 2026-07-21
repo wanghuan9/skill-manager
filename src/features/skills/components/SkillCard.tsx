@@ -507,6 +507,9 @@ export function SkillCard({
       <section>
         <div className="skill-card__section-header">
           <h4>{t("skill.card.basicInfo")}</h4>
+          {!isGridLayout && (skill.localChangeCount ?? 0) > 0 ? (
+            <SkillFilePreviewButton skill={skill} onClick={handleOpenFiles} showLabel />
+          ) : null}
         </div>
         <dl className="detail-grid detail-grid--single">
           <div>
