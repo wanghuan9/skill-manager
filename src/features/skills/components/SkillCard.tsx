@@ -473,7 +473,8 @@ export function SkillCard({
               onClick={() => handleOpenFileDialog("changes")}
               aria-label={t("skill.card.aria.viewChanges", { name: skill.name })}
             >
-              {t("skill.card.action.viewChanges")}
+              <LocalChangesIcon />
+              <span>{t("skill.card.action.viewChanges")}</span>
             </button>
           ) : null}
         </div>

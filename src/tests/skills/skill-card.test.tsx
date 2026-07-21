@@ -113,7 +113,9 @@ test("opens the shared file dialog in local changes mode from skill details", as
 
   renderSkillCardWithProviders(skill);
   await userEvent.click(screen.getByRole("button", { name: /展开 drawio-diagram/ }));
-  await userEvent.click(screen.getByRole("button", { name: "查看 drawio-diagram 的本地变更" }));
+  const changesButton = screen.getByRole("button", { name: "查看 drawio-diagram 的本地变更" });
+  expect(changesButton.querySelector("svg")).toBeInTheDocument();
+  await userEvent.click(changesButton);
 
   expect(await screen.findByRole("dialog", { name: "drawio-diagram" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "本地变更 0" })).toHaveAttribute("aria-pressed", "true");

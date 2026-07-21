@@ -3093,6 +3093,11 @@ code {
   gap: 10px;
 }
 
+.skill-card__section-header .secondary-button--compact svg {
+  width: 15px;
+  height: 15px;
+}
+
 .skills-page .skill-card--grid {
   position: relative;
   align-content: stretch;
