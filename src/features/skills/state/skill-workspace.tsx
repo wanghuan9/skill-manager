@@ -529,6 +529,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
     skillsmp: true,
   });
   const gitStateRefreshInFlightRef = useRef<Promise<void> | null>(null);
+  const workspaceMutationVersionRef = useRef(0);
   const lastGitStateRefreshAtRef = useRef(0);
   const lastLocalWorkspaceAlignAtRef = useRef(0);
   const [isWorkspaceRefreshing, setIsWorkspaceRefreshing] = useState(false);
@@ -849,11 +850,12 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
     }
 
     lastGitStateRefreshAtRef.current = now;
+    const refreshMutationVersion = workspaceMutationVersionRef.current;
     let nextRefreshPromise: Promise<void> | null = null;
     nextRefreshPromise = (async () => {
       try {
         const skillsWithGitState = await fetchGitStates();
-        if (!shouldApply()) {
+        if (!shouldApply() || refreshMutationVersion !== workspaceMutationVersionRef.current) {
           return;
         }
         setInstalledSkills(skillsWithGitState);
@@ -1220,9 +1222,14 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
   }
 
   async function handleUpdateSkill(skillName: string) {
-    const updatedSkill = await updateSkill({ skillName });
-    markSkillAsActive(skillName);
-    setInstalledSkills((current) => [updatedSkill, ...current.filter((item) => item.name !== updatedSkill.name)]);
+    workspaceMutationVersionRef.current += 1;
+    try {
+      const updatedSkill = await updateSkill({ skillName });
+      markSkillAsActive(skillName);
+      setInstalledSkills((current) => [updatedSkill, ...current.filter((item) => item.name !== updatedSkill.name)]);
+    } finally {
+      workspaceMutationVersionRef.current += 1;
+    }
   }
 
   async function handleRefreshSkillLocalGitState(skillName: string) {
@@ -1250,6 +1257,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
 
     const updatableSkills = installedSkills.filter((skill) => skill.collabStatus === "update-available");
     let updatePromise: Promise<void> | null = null;
+    workspaceMutationVersionRef.current += 1;
     updatePromise = (async () => {
       setIsUpdatingAllSkills(true);
       try {
@@ -1283,6 +1291,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
           }));
         }
       } finally {
+        workspaceMutationVersionRef.current += 1;
         if (updateAllSkillsInFlightRef.current === updatePromise) {
           updateAllSkillsInFlightRef.current = null;
           setIsUpdatingAllSkills(false);

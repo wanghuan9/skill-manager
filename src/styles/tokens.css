@@ -977,6 +977,62 @@ code {
   margin: 0 -22px 4px;
 }
 
+.window-topbar--windows {
+  display: flex;
+  align-items: stretch;
+  margin-bottom: 6px;
+  position: relative;
+  z-index: 10;
+}
+
+.window-controls {
+  --window-control-width: 32px;
+  --window-control-height: 26px;
+  display: flex;
+  flex: 0 0 auto;
+  height: var(--window-control-height);
+  align-self: flex-start;
+  position: relative;
+  z-index: 1;
+}
+
+.window-control-button {
+  width: var(--window-control-width);
+  height: 100%;
+  display: grid;
+  place-items: center;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: #111827;
+  cursor: default;
+}
+
+.window-control-button:hover {
+  background: rgba(15, 23, 42, 0.08);
+  color: var(--heading);
+}
+
+.window-control-button--close:hover {
+  background: #c42b1c;
+  color: #ffffff;
+}
+
+.window-control-button svg {
+  width: 11px;
+  height: 11px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: square;
+  stroke-linejoin: round;
+  shape-rendering: geometricPrecision;
+}
+
+.window-control-button svg * {
+  vector-effect: non-scaling-stroke;
+}
+
 .brand-block {
   display: flex;
   align-items: center;
@@ -1048,7 +1104,7 @@ code {
   padding-left: 1px;
 }
 
-.sidebar-toggle--macos {
+.sidebar-toggle--edge {
   position: fixed;
   top: var(--sidebar-handle-top);
   left: 0;
@@ -1072,11 +1128,11 @@ code {
     box-shadow 0.2s ease;
 }
 
-.sidebar-toggle--macos:focus {
+.sidebar-toggle--edge:focus {
   outline: none;
 }
 
-.sidebar-toggle--macos:focus-visible {
+.sidebar-toggle--edge:focus-visible {
   border-color: #c1d3ef;
   color: var(--heading);
   background: #f2f6fc;
@@ -1096,14 +1152,14 @@ code {
   box-shadow: 0 12px 24px rgba(15, 23, 42, 0.2);
 }
 
-.sidebar-toggle--macos:hover {
+.sidebar-toggle--edge:hover {
   border-color: #c1d3ef;
   color: var(--heading);
   background: #f2f6fc;
   box-shadow: 0 12px 24px rgba(15, 23, 42, 0.2);
 }
 
-.sidebar-toggle--macos svg {
+.sidebar-toggle--edge svg {
   width: 16px;
   height: 16px;
 }
@@ -1240,7 +1296,7 @@ code {
   padding-top: 50px;
 }
 
-.app-shell.is-macos-window.is-sidebar-collapsed .sidebar-toggle--macos {
+.app-shell.is-sidebar-collapsed .sidebar-toggle--edge {
   transform: translate(var(--sidebar-width-collapsed), -50%);
 }
 
@@ -1272,16 +1328,24 @@ code {
   position: relative;
 }
 
-.app-shell.is-macos-window .sidebar {
+.app-shell.is-macos-window .sidebar,
+.app-shell.is-windows-window .sidebar {
   padding-top: 0;
 }
 
-.app-shell.is-macos-window .main-panel {
+.app-shell.is-windows-window .window-topbar {
+  height: 32px;
+  flex-basis: 32px;
+}
+
+.app-shell.is-macos-window .main-panel,
+.app-shell.is-windows-window .main-panel {
   padding-top: 0;
   grid-template-rows: auto auto auto minmax(0, 1fr);
 }
 
-.app-shell.is-macos-window .brand-block {
+.app-shell.is-macos-window .brand-block,
+.app-shell.is-windows-window .brand-block {
   padding-top: 6px;
 }
 
@@ -3408,17 +3472,17 @@ code {
 
 .skill-card-detail-modal__identity {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 12px;
   min-width: 0;
   flex: 1;
 }
 
 .skill-card-detail-modal__identity .link-badge {
-  width: 40px;
-  height: 40px;
-  flex: 0 0 40px;
-  border-radius: 11px;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  border-radius: 7px;
 }
 
 .skill-card-detail-modal__copy {
@@ -6099,6 +6163,10 @@ code {
   animation: dialog-surface-in var(--motion-slow) var(--ease-emphasized);
 }
 
+.skill-file-dialog-backdrop {
+  overflow: hidden;
+}
+
 .dialog-card {
   width: min(460px, 100%);
   border-radius: 18px;
@@ -6353,8 +6421,9 @@ code {
   --skill-dialog-content-radius: 12px;
   --skill-dialog-editor-bottom-padding: 10px;
   position: relative;
-  width: min(1280px, calc(100vw - 40px));
-  height: min(820px, calc(100vh - 40px));
+  width: min(1280px, calc(100vw - 48px));
+  height: min(820px, calc(100vh - 48px));
+  box-sizing: border-box;
   border-radius: 20px;
   border: 1px solid var(--line);
   background: rgba(255, 255, 255, 0.98);
@@ -11348,6 +11417,11 @@ button.settings-form-item:disabled {
     padding: 12px;
   }
 
+  .skill-file-dialog-backdrop .skill-file-dialog {
+    width: calc(100vw - 24px);
+    height: calc(100vh - 24px);
+  }
+
   .skill-detail-modal {
     width: calc(100vw - 24px);
     max-height: calc(100vh - 24px);
@@ -11655,7 +11729,7 @@ button.settings-form-item:disabled {
 .tool-list-row__detail-identity {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
-  align-items: start;
+  align-items: center;
   column-gap: 12px;
   row-gap: 6px;
 }
@@ -12072,15 +12146,15 @@ button.settings-form-item:disabled {
 }
 
 :root[data-theme="dark"] .sidebar-toggle,
-:root[data-theme="dark"] .sidebar-toggle--macos {
+:root[data-theme="dark"] .sidebar-toggle--edge {
   border-color: var(--line);
   color: var(--muted);
   box-shadow: 0 10px 22px rgba(0, 0, 0, 0.34);
 }
 
 :root[data-theme="dark"] .sidebar-toggle:hover,
-:root[data-theme="dark"] .sidebar-toggle--macos:hover,
-:root[data-theme="dark"] .sidebar-toggle--macos:focus-visible {
+:root[data-theme="dark"] .sidebar-toggle--edge:hover,
+:root[data-theme="dark"] .sidebar-toggle--edge:focus-visible {
   border-color: var(--line-strong);
   background: #242424;
   color: var(--heading);

@@ -4,6 +4,7 @@ import { type DownloadEvent, check } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 
 const FALLBACK_APP_VERSION = "0.1.0";
+const APP_UPDATE_CHECK_TIMEOUT_MS = 15_000;
 const RELEASE_NOTES_HISTORY_KEY = "releaseNotesHistory";
 
 export type AppUpdateReleaseNoteEntry = {
@@ -50,7 +51,7 @@ export async function checkForAppUpdate(): Promise<AppUpdateCheckResult> {
     };
   }
 
-  const update = await check();
+  const update = await check({ timeout: APP_UPDATE_CHECK_TIMEOUT_MS });
   if (!update) {
     return {
       available: false,

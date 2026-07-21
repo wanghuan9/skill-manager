@@ -2,14 +2,15 @@
   "app": {
     "windows": [
       {
-        "title": "SkillDock",
+        "title": "",
         "width": 1088,
         "height": 680,
         "center": true,
         "resizable": true,
-        "decorations": true,
-        "hiddenTitle": false,
-        "titleBarStyle": "Visible",
+        "decorations": false,
+        "hiddenTitle": true,
+        "titleBarStyle": "Overlay",
+        "shadow": true,
         "fullscreen": false,
         "maximized": false,
         "minWidth": 960,

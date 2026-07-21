@@ -8,6 +8,7 @@ import {
   type ReactNode,
   type CSSProperties,
 } from "react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { SkillsRoute } from "@/app/routes/skills";
 import { ToolsRoute } from "@/app/routes/tools";
 import { McpRoute } from "@/app/routes/mcp";
@@ -160,14 +161,22 @@ const routes: RouteDefinition[] = [
   },
 ];
 
-function isMacOSWindow() {
+function getWindowPlatformSignature() {
   if (typeof window === "undefined") {
-    return false;
+    return "";
   }
 
   const platform = window.navigator.platform || "";
   const userAgent = window.navigator.userAgent || "";
-  return /mac|iphone|ipad|ipod/i.test(`${platform} ${userAgent}`);
+  return `${platform} ${userAgent}`;
+}
+
+function isMacOSWindow() {
+  return /mac|iphone|ipad|ipod/i.test(getWindowPlatformSignature());
+}
+
+function isWindowsWindow() {
+  return /windows|win32|win64/i.test(getWindowPlatformSignature());
 }
 
 function formatSkillDirectoryPath(path: string) {
@@ -426,6 +435,117 @@ function SidebarToggleButton(props: {
   );
 }
 
+function useWindowsMaximizedState() {
+  const [isMaximized, setIsMaximized] = useState(false);
+
+  useEffect(() => {
+    const appWindow = getCurrentWindow();
+    let isDisposed = false;
+    let unlistenResize: (() => void) | undefined;
+
+    async function syncMaximizedState() {
+      const maximized = await appWindow.isMaximized();
+      if (!isDisposed) {
+        setIsMaximized(maximized);
+      }
+    }
+
+    async function subscribeToResize() {
+      const unlisten = await appWindow.onResized(() => {
+        void syncMaximizedState().catch(() => undefined);
+      });
+      if (isDisposed) {
+        unlisten();
+        return;
+      }
+      unlistenResize = unlisten;
+    }
+
+    void syncMaximizedState().catch(() => undefined);
+    void subscribeToResize().catch(() => undefined);
+
+    return () => {
+      isDisposed = true;
+      unlistenResize?.();
+    };
+  }, []);
+
+  async function toggleMaximize() {
+    const appWindow = getCurrentWindow();
+    await appWindow.toggleMaximize();
+    setIsMaximized(await appWindow.isMaximized());
+  }
+
+  return { isMaximized, toggleMaximize };
+}
+
+function WindowsMaximizeIcon(props: { isMaximized: boolean }) {
+  if (props.isMaximized) {
+    return (
+      <svg viewBox="0 0 14 14" aria-hidden="true">
+        <path d="M4.5 4.5V3H11v6.5H9.5" />
+        <rect x="3" y="4.5" width="6.5" height="6.5" rx="0.5" />
+      </svg>
+    );
+  }
+
+  return (
+    <svg viewBox="0 0 14 14" aria-hidden="true">
+      <rect x="3" y="3" width="8" height="8" rx="0.5" />
+    </svg>
+  );
+}
+
+function WindowsMaximizeButton() {
+  const { t } = useTranslate();
+  const { isMaximized, toggleMaximize } = useWindowsMaximizedState();
+  const label = isMaximized ? t("app.window.restore") : t("app.window.maximize");
+
+  return (
+    <button
+      className="window-control-button"
+      type="button"
+      aria-label={label}
+      title={label}
+      onClick={() => void toggleMaximize()}
+    >
+      <WindowsMaximizeIcon isMaximized={isMaximized} />
+    </button>
+  );
+}
+
+function WindowsWindowControls() {
+  const { t } = useTranslate();
+
+  return (
+    <div className="window-controls" aria-label={t("app.window.controls")}>
+      <button
+        className="window-control-button"
+        type="button"
+        aria-label={t("app.window.minimize")}
+        title={t("app.window.minimize")}
+        onClick={() => void getCurrentWindow().minimize()}
+      >
+        <svg viewBox="0 0 14 14" aria-hidden="true">
+          <path d="M3 7h8" />
+        </svg>
+      </button>
+      <WindowsMaximizeButton />
+      <button
+        className="window-control-button window-control-button--close"
+        type="button"
+        aria-label={t("app.window.close")}
+        title={t("app.window.close")}
+        onClick={() => void getCurrentWindow().close()}
+      >
+        <svg viewBox="0 0 14 14" aria-hidden="true">
+          <path d="m3 3 8 8m0-8-8 8" />
+        </svg>
+      </button>
+    </div>
+  );
+}
+
 function AppContent() {
   const {
     alignLocalWorkspaceState,
@@ -441,6 +561,8 @@ function AppContent() {
   const reportFailure = useFailureReporter();
   const initialSkillViewMode = readSkillViewModePreference();
   const isMacOS = isMacOSWindow();
+  const isWindows = isWindowsWindow();
+  const usesExternalSidebarToggle = isMacOS || isWindows;
   const macOSDragRegion = isMacOS ? "" : undefined;
   const brandIconRef = useRef<HTMLDivElement | null>(null);
   const pageContentRef = useRef<HTMLElement | null>(null);
@@ -581,7 +703,7 @@ function AppContent() {
   }, [activeRoute, skillViewMode]);
 
   useLayoutEffect(() => {
-    if (!isMacOS || typeof window === "undefined") {
+    if (!usesExternalSidebarToggle || typeof window === "undefined") {
       setSidebarHandleTop(null);
       return;
     }
@@ -612,7 +734,7 @@ function AppContent() {
       window.removeEventListener("resize", updateSidebarHandleTop);
       resizeObserver?.disconnect();
     };
-  }, [isMacOS, isSidebarCollapsed]);
+  }, [isSidebarCollapsed, usesExternalSidebarToggle]);
 
   useEffect(() => {
     const routeAlignKey =
@@ -706,11 +828,11 @@ function AppContent() {
 
   return (
     <div
-      className={`app-shell${isSidebarCollapsed ? " is-sidebar-collapsed" : ""}${isMacOS ? " is-macos-window" : ""}`}
+      className={`app-shell${isSidebarCollapsed ? " is-sidebar-collapsed" : ""}${isMacOS ? " is-macos-window" : ""}${isWindows ? " is-windows-window" : ""}`}
     >
-      {isMacOS ? (
+      {usesExternalSidebarToggle ? (
         <SidebarToggleButton
-          className="sidebar-toggle--macos"
+          className="sidebar-toggle--edge"
           isSidebarCollapsed={isSidebarCollapsed}
           onToggle={() => setIsSidebarCollapsed((current) => !current)}
           style={
@@ -721,7 +843,7 @@ function AppContent() {
         />
       ) : null}
       <aside className="sidebar">
-        {isMacOS ? (
+        {isMacOS || isWindows ? (
           <div className="window-topbar window-topbar--sidebar">
             <div
               className="window-topbar__drag-region"
@@ -786,7 +908,7 @@ function AppContent() {
             </svg>
           </div>
           <p className="brand-title">SkillDock</p>
-          {!isMacOS ? (
+          {!usesExternalSidebarToggle ? (
             <SidebarToggleButton
               isSidebarCollapsed={isSidebarCollapsed}
               onToggle={() => setIsSidebarCollapsed((current) => !current)}
@@ -850,6 +972,16 @@ function AppContent() {
             data-tauri-drag-region
             aria-hidden="true"
           />
+        ) : isWindows ? (
+          <div className="window-topbar window-topbar--main window-topbar--windows">
+            <div
+              className="window-topbar__drag-region"
+              data-tauri-drag-region
+              aria-hidden="true"
+              onDoubleClick={() => void getCurrentWindow().toggleMaximize()}
+            />
+            <WindowsWindowControls />
+          </div>
         ) : null}
         <header className="page-header">
           {activeRoute === "skills" ? (

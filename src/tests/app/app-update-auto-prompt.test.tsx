@@ -7,6 +7,8 @@ import {
 } from "@/features/app-update/AppUpdateAutoPrompt";
 import { checkForAppUpdate } from "@/features/app-update/app-update-client";
 
+const reportFailureMock = vi.hoisted(() => vi.fn());
+
 vi.mock("@/features/app-update/app-update-client", () => ({
   checkForAppUpdate: vi.fn(),
 }));
@@ -30,7 +32,7 @@ vi.mock("@/app/i18n", async () => {
 });
 
 vi.mock("@/app/failure-feedback", () => ({
-  useFailureReporter: () => vi.fn(),
+  useFailureReporter: () => reportFailureMock,
 }));
 
 afterEach(() => {
@@ -133,7 +135,7 @@ test("falls back to the latest release body when structured history is unavailab
   view.unmount();
 });
 
-test("fails silently when automatic update check cannot reach the updater endpoint", async () => {
+test("reports when automatic update check cannot reach the updater endpoint", async () => {
   vi.useFakeTimers();
   vi.mocked(checkForAppUpdate).mockRejectedValue(new Error("error sending request for url (https://github.com/...)"));
   const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
@@ -153,6 +155,13 @@ test("fails silently when automatic update check cannot reach the updater endpoi
   expect(warnSpy).toHaveBeenCalledWith(
     "Automatic app update check failed",
     expect.any(Error),
+  );
+  expect(reportFailureMock).toHaveBeenCalledWith(
+    expect.any(Error),
+    {
+      operation: "auto_check_for_app_update",
+      fallbackMessage: "updates.autoCheckFailed",
+    },
   );
 
   view.unmount();

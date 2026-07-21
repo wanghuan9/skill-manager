@@ -5277,10 +5277,7 @@ mod tests {
         });
 
         let server = codex_table_to_json(&table);
-        assert_eq!(
-            server.get("type").and_then(Value::as_str),
-            Some("http")
-        );
+        assert_eq!(server.get("type").and_then(Value::as_str), Some("http"));
         assert_eq!(
             server
                 .get("headers")
@@ -5299,10 +5296,7 @@ mod tests {
         table["url"] = toml_edit::value("https://mcp.figma.com/mcp");
 
         let server = codex_table_to_json(&table);
-        assert_eq!(
-            server.get("type").and_then(Value::as_str),
-            Some("http")
-        );
+        assert_eq!(server.get("type").and_then(Value::as_str), Some("http"));
         validate_mcp_server("figma", &server).expect("figma codex server should validate");
     }
 

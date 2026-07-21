@@ -1020,7 +1020,7 @@ export function SkillFileDialog({
   }
 
   return (
-    <div className="dialog-backdrop" role="presentation" onClick={handleClose}>
+    <div className="dialog-backdrop skill-file-dialog-backdrop" role="presentation" onClick={handleClose}>
       <div
         className="skill-file-dialog"
         role="dialog"

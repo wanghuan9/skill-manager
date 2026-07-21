@@ -1,6 +1,41 @@
-import { render, screen, within } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { beforeEach, vi } from "vitest";
 import { App } from "@/app/App";
+
+let isWindowMaximized = false;
+let windowResizeListener: (() => void) | null = null;
+const minimizeWindowMock = vi.fn().mockResolvedValue(undefined);
+const isMaximizedWindowMock = vi.fn(async () => isWindowMaximized);
+const toggleMaximizeWindowMock = vi.fn(async () => {
+  isWindowMaximized = !isWindowMaximized;
+  windowResizeListener?.();
+});
+const onResizedWindowMock = vi.fn(async (listener: () => void) => {
+  windowResizeListener = listener;
+  return () => {
+    if (windowResizeListener === listener) {
+      windowResizeListener = null;
+    }
+  };
+});
+const closeWindowMock = vi.fn().mockResolvedValue(undefined);
+
+vi.mock("@tauri-apps/api/window", () => ({
+  getCurrentWindow: () => ({
+    minimize: minimizeWindowMock,
+    isMaximized: isMaximizedWindowMock,
+    toggleMaximize: toggleMaximizeWindowMock,
+    onResized: onResizedWindowMock,
+    close: closeWindowMock,
+  }),
+}));
+
+beforeEach(() => {
+  isWindowMaximized = false;
+  windowResizeListener = null;
+  vi.clearAllMocks();
+});
 
 test("renders primary navigation entries with plugins before tools and cli hidden", () => {
   render(<App />);
@@ -97,4 +132,47 @@ test("renders about page project links", async () => {
     "href",
     "https://github.com/wanghuan9/skill-manager/issues/new/choose",
   );
+});
+
+test("renders frameless Windows controls and keeps the sidebar toggle outside the brand block", async () => {
+  const platformDescriptor = Object.getOwnPropertyDescriptor(window.navigator, "platform");
+  Object.defineProperty(window.navigator, "platform", {
+    configurable: true,
+    value: "Win32",
+  });
+
+  try {
+    render(<App />);
+
+    const shell = document.querySelector(".app-shell");
+    const edgeToggle = document.querySelector(".sidebar-toggle--edge");
+    expect(shell).toHaveClass("is-windows-window");
+    expect(edgeToggle).not.toBeNull();
+    expect(document.querySelector(".brand-block .sidebar-toggle")).toBeNull();
+
+    await userEvent.click(screen.getByRole("button", { name: "最小化" }));
+    const maximizeButton = screen.getByRole("button", { name: "最大化" });
+    expect(maximizeButton.querySelector("path")).not.toBeInTheDocument();
+
+    act(() => {
+      isWindowMaximized = true;
+      windowResizeListener?.();
+    });
+    const restoreButton = await screen.findByRole("button", { name: "还原" });
+    expect(restoreButton.querySelector("path")).toBeInTheDocument();
+
+    await userEvent.click(restoreButton);
+    expect(screen.getByRole("button", { name: "最大化" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "关闭" }));
+
+    expect(minimizeWindowMock).toHaveBeenCalledTimes(1);
+    expect(toggleMaximizeWindowMock).toHaveBeenCalledTimes(1);
+    expect(closeWindowMock).toHaveBeenCalledTimes(1);
+  } finally {
+    if (platformDescriptor) {
+      Object.defineProperty(window.navigator, "platform", platformDescriptor);
+    } else {
+      Reflect.deleteProperty(window.navigator, "platform");
+    }
+  }
 });

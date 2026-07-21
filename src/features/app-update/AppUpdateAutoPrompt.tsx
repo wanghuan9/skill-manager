@@ -53,6 +53,10 @@ export function AppUpdateAutoPrompt() {
         })
         .catch((error) => {
           console.warn("Automatic app update check failed", error);
+          reportFailure(error, {
+            operation: "auto_check_for_app_update",
+            fallbackMessage: t("updates.autoCheckFailed"),
+          });
         })
         .finally(() => {
           autoUpdatePromptState = "done";

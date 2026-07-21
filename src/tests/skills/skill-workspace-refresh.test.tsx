@@ -100,6 +100,28 @@ function UpdateAllProbe() {
   );
 }
 
+function SingleUpdateProbe() {
+  const {
+    installedSkills,
+    isWorkspaceRefreshing,
+    refreshWorkspace,
+    updateSkill,
+  } = useSkillWorkspace();
+
+  return (
+    <div>
+      <button type="button" onClick={() => void refreshWorkspace({ showRefreshing: true })}>
+        刷新工作区
+      </button>
+      <button type="button" onClick={() => void updateSkill(installedSkills[0]?.name ?? "")}>
+        更新 Skill
+      </button>
+      <span data-testid="workspace-refreshing">{isWorkspaceRefreshing ? "refreshing" : "idle"}</span>
+      <span data-testid="skill-status">{installedSkills[0]?.collabStatus ?? "none"}</span>
+    </div>
+  );
+}
+
 function RouteSwitchUpdateAllProbe() {
   const [showsSkillsPage, setShowsSkillsPage] = useState(true);
 
@@ -978,4 +1000,77 @@ test("ignores library change events for skills that appear only after startup", 
   } finally {
     vi.useRealTimers();
   }
+});
+
+test("does not let an older refresh overwrite a completed skill update", async () => {
+  const updateAvailableSkill: SkillSummary = {
+    ...installedSkillFixtures[0],
+    collabStatus: "update-available",
+  };
+  const updatedSkill: SkillSummary = {
+    ...updateAvailableSkill,
+    collabStatus: "clean",
+    statusText: "已更新完成",
+  };
+  const pendingRefresh = createDeferred<SkillSummary[]>();
+  const pendingUpdate = createDeferred<SkillSummary>();
+  let refreshCallCount = 0;
+
+  mockedInvoke.mockImplementation(async (command, args) => {
+    switch (command) {
+      case "list_startup_installed_skills":
+        return [updateAvailableSkill];
+      case "refresh_git_states":
+        refreshCallCount += 1;
+        return refreshCallCount === 1 ? [updateAvailableSkill] : pendingRefresh.promise;
+      case "list_local_skill_candidates":
+        return localSkillFixtures;
+      case "list_tool_configs":
+        return toolConfigFixtures;
+      case "get_git_account_summary":
+        return gitAccountFixture;
+      case "get_app_settings":
+        return appSettingsFixture;
+      case "update_app_settings":
+        return (args as { settings: AppSettings }).settings;
+      case "update_skill":
+        return pendingUpdate.promise;
+      default:
+        throw new Error(`Unexpected command: ${command}`);
+    }
+  });
+
+  render(
+    <SkillWorkspaceProvider>
+      <SingleUpdateProbe />
+    </SkillWorkspaceProvider>,
+  );
+
+  await waitFor(() => {
+    expect(screen.getByTestId("skill-status").textContent).toBe("update-available");
+  });
+
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "刷新工作区" }));
+  });
+  await waitFor(() => {
+    expect(screen.getByTestId("workspace-refreshing").textContent).toBe("refreshing");
+  });
+
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "更新 Skill" }));
+    pendingUpdate.resolve(updatedSkill);
+    await Promise.resolve();
+  });
+
+  await waitFor(() => {
+    expect(screen.getByTestId("skill-status").textContent).toBe("clean");
+  });
+
+  await act(async () => {
+    pendingRefresh.resolve([updateAvailableSkill]);
+    await Promise.resolve();
+  });
+
+  expect(screen.getByTestId("skill-status").textContent).toBe("clean");
 });

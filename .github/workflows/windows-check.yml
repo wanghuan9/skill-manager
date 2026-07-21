@@ -3,6 +3,10 @@ name: Windows Check
 on:
   workflow_dispatch:
 
+concurrency:
+  group: windows-check-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   windows-check:
     runs-on: windows-latest

@@ -1853,7 +1853,7 @@ fn build_local_candidates(installed_skills: &[SkillSummary]) -> Vec<LocalSkillCa
                 .to_string();
             let source_hint = local_candidate_source_hint(&local_path).to_string();
             LocalSkillCandidate {
-                description: format!("从 {detected_from} 发现的本地技能。"),
+                description: read_skill_description(&Path::new(&local_path).join("SKILL.md")),
                 source_hint,
                 name,
                 local_path,
@@ -4040,6 +4040,43 @@ fn refresh_installed_skill_git_states(skills: &[SkillSummary]) -> Vec<SkillSumma
     )
 }
 
+fn merge_refreshed_skill_states_with_latest_state(
+    refreshed_skills: Vec<SkillSummary>,
+    refresh_started_skills: &[SkillSummary],
+    latest_skills: Vec<SkillSummary>,
+) -> Vec<SkillSummary> {
+    let refresh_started_by_name = refresh_started_skills
+        .iter()
+        .map(|skill| (skill.name.as_str(), skill))
+        .collect::<HashMap<_, _>>();
+    let mut refreshed_by_name = refreshed_skills
+        .into_iter()
+        .map(|skill| (skill.name.clone(), skill))
+        .collect::<HashMap<_, _>>();
+    latest_skills
+        .into_iter()
+        .map(|current_skill| {
+            let Some(refreshed_skill) = refreshed_by_name.remove(&current_skill.name) else {
+                return current_skill;
+            };
+            let Some(refresh_started_skill) =
+                refresh_started_by_name.get(current_skill.name.as_str())
+            else {
+                return current_skill;
+            };
+
+            if current_skill.local_path == refresh_started_skill.local_path
+                && current_skill.commit_label == refresh_started_skill.commit_label
+                && current_skill.local_updated_at == refresh_started_skill.local_updated_at
+            {
+                refreshed_skill
+            } else {
+                current_skill
+            }
+        })
+        .collect()
+}
+
 fn skill_base_path(skill_name: &str) -> Result<PathBuf, String> {
     let (installed_skills, skill_index) = find_skill_by_name(skill_name)?;
     Ok(PathBuf::from(&installed_skills[skill_index].local_path))
@@ -4395,17 +4432,19 @@ fn default_open_command_for_platform(target: &str) -> OpenCommandSpec {
 
 fn default_url_open_command_for_platform(target: &str) -> OpenCommandSpec {
     if cfg!(windows) {
-        return OpenCommandSpec {
-            program: "cmd".to_string(),
-            args: vec![
-                "/C".to_string(),
-                "start".to_string(),
-                String::new(),
-                target.to_string(),
-            ],
-        };
+        return windows_url_open_command(target);
     }
     default_open_command_for_platform(target)
+}
+
+fn windows_url_open_command(target: &str) -> OpenCommandSpec {
+    OpenCommandSpec {
+        program: "rundll32.exe".to_string(),
+        args: vec![
+            "url.dll,FileProtocolHandler".to_string(),
+            target.to_string(),
+        ],
+    }
 }
 
 fn run_open_command(spec: OpenCommandSpec, error_prefix: &str) -> Result<(), String> {
@@ -5939,7 +5978,7 @@ fn parse_apple_languages_output(output: &str) -> Option<&'static str> {
 
 #[tauri::command]
 pub async fn refresh_git_states() -> Vec<SkillSummary> {
-    tauri::async_runtime::spawn_blocking(|| {
+    let (refresh_started_skills, refreshed_skills) = tauri::async_runtime::spawn_blocking(|| {
         let skills = load_installed_skills(&default_installed_skills());
         let refreshed_skills = refresh_installed_skill_git_states(&skills);
         if sync_trace_enabled() {
@@ -5955,11 +5994,18 @@ pub async fn refresh_git_states() -> Vec<SkillSummary> {
                 );
             }
         }
-        let _ = save_installed_skills(&refreshed_skills);
-        refreshed_skills
+        (skills, refreshed_skills)
     })
     .await
-    .unwrap_or_default()
+    .unwrap_or_default();
+    let latest_skills = load_installed_skills(&default_installed_skills());
+    let refreshed_skills = merge_refreshed_skill_states_with_latest_state(
+        refreshed_skills,
+        &refresh_started_skills,
+        latest_skills,
+    );
+    let _ = save_installed_skills(&refreshed_skills);
+    refreshed_skills
 }
 
 #[tauri::command]
@@ -7690,14 +7736,15 @@ mod tests {
         import_local_skill, insert_trusted_project_path, inspect_skill_tool_status,
         install_selected_local_skill_dirs, intellij_trusted_locations_for_project,
         load_marketplace_cache_page, map_in_parallel_preserving_order,
-        map_skillsmp_items_to_marketplace, normalize_installed_skill_source_url,
-        normalize_skill_tools, open_target_path_for_skill, parse_apple_languages_output,
-        parse_repo_install_spec, parse_skills_sh_homepage_items, recover_missing_managed_skills,
-        refresh_installed_skill_git_state, remove_trusted_project_paths, repo_clone_candidates,
-        resolve_skill_install_name, resolve_startup_installed_skills, run_git_command,
-        save_marketplace_cache, scan_local_install_skill_candidates, scan_repo_skill_candidates,
-        selected_repo_path_hint, should_use_skills_sh_homepage_page, tool_name_to_id,
-        update_skill_repo, REFRESH_GIT_STATES_CONCURRENCY,
+        map_skillsmp_items_to_marketplace, merge_refreshed_skill_states_with_latest_state,
+        normalize_installed_skill_source_url, normalize_skill_tools, open_target_path_for_skill,
+        parse_apple_languages_output, parse_repo_install_spec, parse_skills_sh_homepage_items,
+        recover_missing_managed_skills, refresh_installed_skill_git_state,
+        remove_trusted_project_paths, repo_clone_candidates, resolve_skill_install_name,
+        resolve_startup_installed_skills, run_git_command, save_marketplace_cache,
+        scan_local_install_skill_candidates, scan_repo_skill_candidates, selected_repo_path_hint,
+        should_use_skills_sh_homepage_page, tool_name_to_id, update_skill_repo,
+        REFRESH_GIT_STATES_CONCURRENCY,
     };
     use crate::models::{
         MarketplaceSkill, SkillFileEntry, SkillSummary, ToolConfig, WorkspacePersistence,
@@ -8538,6 +8585,44 @@ mod tests {
     }
 
     #[test]
+    fn keeps_refresh_version_repairs_when_latest_state_is_unchanged() {
+        let started = installed_skill_fixture("demo", "", "/skills/demo");
+        let mut refreshed = started.clone();
+        refreshed.commit_label = "v1.3.0".into();
+        refreshed.collab_status = "clean".into();
+        let result = merge_refreshed_skill_states_with_latest_state(
+            vec![refreshed.clone()],
+            std::slice::from_ref(&started),
+            vec![started.clone()],
+        );
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].commit_label, "v1.3.0");
+        assert_eq!(result[0].collab_status, "clean");
+    }
+
+    #[test]
+    fn keeps_latest_state_when_refresh_started_before_a_skill_update() {
+        let started = installed_skill_fixture("demo", "", "/skills/demo");
+        let mut refreshed = started.clone();
+        refreshed.collab_status = "update-available".into();
+        let mut latest = started.clone();
+        latest.commit_label = "v1.3.0".into();
+        latest.local_updated_at = "2026-07-19 15:32:00".into();
+        latest.collab_status = "clean".into();
+        let result = merge_refreshed_skill_states_with_latest_state(
+            vec![refreshed],
+            std::slice::from_ref(&started),
+            vec![latest.clone()],
+        );
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].commit_label, latest.commit_label);
+        assert_eq!(result[0].local_updated_at, latest.local_updated_at);
+        assert_eq!(result[0].collab_status, "clean");
+    }
+
+    #[test]
     fn local_candidates_mark_real_directory_as_local_file() {
         let _guard = TEST_ENV_LOCK
             .lock()
@@ -8546,7 +8631,11 @@ mod tests {
         let home_dir = temp_dir.join("home");
         let skill_dir = home_dir.join(".cursor/skills/real-skill");
         fs::create_dir_all(&skill_dir).expect("create real skill dir");
-        fs::write(skill_dir.join("SKILL.md"), "# real-skill").expect("write skill file");
+        fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: real-skill\ndescription: 真实的 Skill 简介。\n---\n",
+        )
+        .expect("write skill file");
 
         let original_home = env::var_os("HOME");
         // SAFETY: this test holds ENV_LOCK and restores HOME before returning.
@@ -8560,6 +8649,7 @@ mod tests {
 
         assert_eq!(candidates.len(), 1);
         assert_eq!(candidates[0].name, "real-skill");
+        assert_eq!(candidates[0].description, "真实的 Skill 简介。");
         assert_eq!(candidates[0].source_hint, "本地文件");
         assert_eq!(
             candidates[0].local_path,
@@ -10051,24 +10141,15 @@ mod tests {
     }
 
     #[test]
-    fn default_url_open_command_uses_shell_on_windows() {
-        let url = "https://github.com/wanghuan9/skill-manager";
-        let command = super::default_url_open_command_for_platform(url);
-        if cfg!(windows) {
-            assert_eq!(command.program, "cmd");
-            assert_eq!(
-                command.args,
-                vec![
-                    "/C".to_string(),
-                    "start".to_string(),
-                    String::new(),
-                    url.to_string(),
-                ]
-            );
-        } else if cfg!(target_os = "macos") {
-            assert_eq!(command.program, "open");
-            assert_eq!(command.args, vec![url.to_string()]);
-        }
+    fn default_url_open_command_preserves_query_parameters_on_windows() {
+        let url = "https://example.com/authorize?redirect_uri=http%3A%2F%2F127.0.0.1%3A49152%2Fcallback&state=auth-state&device_id=device-1";
+        let command = super::windows_url_open_command(url);
+
+        assert_eq!(command.program, "rundll32.exe");
+        assert_eq!(
+            command.args,
+            vec!["url.dll,FileProtocolHandler".to_string(), url.to_string()]
+        );
     }
 
     #[test]
