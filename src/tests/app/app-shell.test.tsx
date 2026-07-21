@@ -126,11 +126,11 @@ test("renders about page project links", async () => {
   ).toBeInTheDocument();
   expect(screen.getByRole("link", { name: /GitHub 仓库/ })).toHaveAttribute(
     "href",
-    "https://github.com/wanghuan9/skill-manager",
+    "https://github.com/wanghuan9/skilldock",
   );
   expect(screen.getByRole("link", { name: /意见反馈/ })).toHaveAttribute(
     "href",
-    "https://github.com/wanghuan9/skill-manager/issues/new/choose",
+    "https://github.com/wanghuan9/skilldock/issues/new/choose",
   );
 });
 

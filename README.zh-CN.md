@@ -2,10 +2,10 @@
   <img src="src-tauri/icons/icon.png" width="150" alt="SkillDock" />
 </p>
 
-<h1 align="center">SkillDock - AI Skills, MCP & Plugins Manager</h1>
+<h1 align="center">SkillDock - Claude Code、Cursor、Codex 的 AI Skill 管理软件</h1>
 
 <p align="center">
-  SkillDock 是一个面向 AI Coding 工具的 skills、MCP 和插件管理工具，支持安装、查看、编辑、整理、同步和更新 skills、MCP servers 与插件包，并提供 Git-aware 更新能力，用于跟踪上游变更和本地修改。
+  SkillDock 是面向 Claude Code、Cursor、Codex 等 AI Coding 工具的桌面 Skill 管理软件和 AI Skill Manager，支持安装、查看、编辑、整理、同步和更新 Skills、MCP servers 与插件包，并提供 Git-aware 更新能力，用于跟踪上游变更和本地修改。
 </p>
 
 <p align="center">
@@ -13,14 +13,14 @@
 </p>
 
 <p align="center">
-  <img alt="Version" src="https://img.shields.io/badge/version-0.1.0-blue" />
-  <img alt="Platform" src="https://img.shields.io/badge/platform-macOS%20now%20%7C%20Windows%20planned-lightgrey" />
+  <img alt="Version" src="https://img.shields.io/badge/version-1.0.0-blue" />
+  <img alt="Platform" src="https://img.shields.io/badge/platform-macOS%20Apple%20Silicon%20%7C%20Windows%20x64-blue" />
   <img alt="Preview" src="https://img.shields.io/badge/source-closed%20preview-lightgrey" />
 </p>
 
 ## 它能做什么
 
-SkillDock 是面向 AI Coding 工具的桌面管理台。它把本地 Skills、MCP 配置和插件包集中展示、编辑，并同步到 Claude Code、Codex、Cursor、Windsurf、Gemini CLI、GitHub Copilot 等常用工具，让你不再手动在多个工具目录之间复制文件。对于 Git 来源的 skills 和插件，它会检测远端更新、本地修改和待推送状态，并支持带预览的一键更新。
+SkillDock 是一款 AI Skill 管理工具和桌面管理台，面向 Claude Code、Cursor、Codex、Windsurf、Gemini CLI、GitHub Copilot 等 AI Coding Agent。它集中展示、编辑和同步本地 Skills、MCP 配置和插件包，并直接扫描各工具真实 Skill 目录，识别已托管、未托管和冲突状态。对于 Git 来源的 Skills 和插件，它会检测远端更新、本地修改和待推送状态，并支持带 Diff 预览的一键更新。
 
 核心是面向团队协作的直连工作流，不需要中转目录。发布者本地修改 skills 或插件后可以一键推送回仓库；使用者可以一键更新，并看到更新人和更新内容。
 
@@ -28,6 +28,9 @@ SkillDock 是面向 AI Coding 工具的桌面管理台。它把本地 Skills、M
 - **MCP 管理** — 浏览、导入、编辑、启用、停用、同步和查看 MCP server 配置。
 - **插件管理** — 安装、启用、停用、查看、一键更新和删除插件包，并为 Git 来源插件检测本地修改和待推送状态。
 - **Skill 来源分组** — 按仓库或本地来源对已安装 skills 分组，团队维护的 skill 集合更容易浏览。
+- **真实工具目录** — 查看 Claude Code、Cursor、Codex、Windsurf、Gemini CLI 等工具真实目录中的 Skill，并识别托管、未托管、冲突、真实文件夹和符号链接。
+- **Skill Diff 与协作** — 编辑本地修改，查看已暂存/未暂存差异，按文件或变更块回退，并在推送前预览变更。
+- **卡片布局与深色主题** — Skills、MCP 和 Plugins 支持列表/卡片切换，并支持浅色、深色和跟随系统。
 - **MCP tools 探测** — 探测 MCP server 暴露的 tools，追踪配置是否可用，并支持 tools 级别的启用和停用控制。
 - **Skill 安装** — 支持从 `skills.sh`、`skillsmp` 市场一键安装，也支持 Git 仓库安装、本地导入及安装。
 - **MCP 安装** — 支持从 `MCP.Directory` 市场一键安装 MCP servers，并纳入共享 MCP 配置生命周期。
@@ -37,7 +40,7 @@ SkillDock 是面向 AI Coding 工具的桌面管理台。它把本地 Skills、M
 
 ## Skills
 
-查看所有已安装 skill，按来源分组、按状态筛选，检查来源信息，并一眼看到 Git 协作状态。
+查看所有已安装 Skill，按托管库或工具真实目录分组，按状态筛选，检查来源信息，并一眼看到 Git 协作状态。
 
 **Skills 列表**
 
@@ -55,7 +58,7 @@ SkillDock 会保留每个 skill 的来源和工具启用状态。团队维护的
 
 ## MCP
 
-MCP server 和 skills 放在同一个工作台中管理。SkillDock 会扫描受支持应用的配置文件，展示 server 命令、来源和 tools，并允许按工具启用或停用同步。
+MCP server 和 Skills 放在同一个工作台中管理。SkillDock 会扫描受支持应用的配置文件，展示 server 命令、来源和 tools，并允许按工具启用或停用同步；同时支持列表和卡片布局。
 
 **MCP 列表**
 
@@ -113,7 +116,7 @@ SkillDock 会检测受支持的 Coding 工具，展示每个工具的 Skills 路
 
 ## 设置
 
-配置应用存储目录、默认编辑器、更新检查、默认安装行为和工具支持状态。
+配置应用存储目录、默认编辑器、更新检查、默认安装行为、主题、卡片布局偏好和工具支持状态。
 
 ![SkillDock 设置](docs/images/settings.png)
 
@@ -132,27 +135,27 @@ MCP servers 使用的是另一套机制：SkillDock 会把它们作为统一配�
 
 ## 下载
 
-安装包会发布在 [Releases](../../releases) 页面。
+前往 [SkillDock 最新版本](https://github.com/wanghuan9/skilldock/releases/latest) 下载安装包。
 
 | 平台 | 状态 |
 | --- | --- |
-| macOS | 已发布 |
-| Windows | 计划支持 |
+| macOS Apple Silicon | 已发布 |
+| Windows x64 | 已发布 |
 
 ## 快速开始
 
 1. 下载并打开 SkillDock。
-2. 从市场、Git 仓库或本地目录安装 plugins、skills 或 MCP servers。
-3. 为你的 Coding Agent 启用 plugins、skills 和 MCP servers。
-4. 使用 Git-aware 状态查看更新、本地修改和推送预览。
+2. 从市场、Git 仓库或本地目录安装 Plugins、Skills 或 MCP servers。
+3. 查看 Claude Code、Cursor、Codex 等工具实际使用的 Skill 目录。
+4. 为你的 Coding Agent 启用 Plugins、Skills 和 MCP servers。
+5. 使用 Git-aware 状态查看更新、本地修改、Diff 预览和推送预览。
 
 ## 路线图
 
-- [ ] 公开安装包。
+- [ ] 预览版稳定后开放源码。
 - [ ] 更清晰的 skill 状态：可更新、本地已修改、待推送、冲突。
 - [ ] 更完整的插件和 MCP 生命周期：安装、参数配置、tools 探测、跨工具同步。
 - [ ] 更好的 Git 流程：分支选择、团队仓库回推、PR/MR 交接。
-- [ ] macOS 工作流稳定后支持 Windows。
 
 ## 源码说明
 

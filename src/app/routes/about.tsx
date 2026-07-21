@@ -3,7 +3,7 @@ import { useTranslate } from "@/app/i18n";
 import { fetchCurrentAppVersion } from "@/features/app-update/app-update-client";
 import { openExternalLink } from "@/features/skills/api/skill-client";
 
-const APP_REPOSITORY_URL = "https://github.com/wanghuan9/skill-manager";
+const APP_REPOSITORY_URL = "https://github.com/wanghuan9/skilldock";
 const APP_ISSUES_URL = `${APP_REPOSITORY_URL}/issues/new/choose`;
 const APP_RELEASES_URL = `${APP_REPOSITORY_URL}/releases`;
 
@@ -84,7 +84,7 @@ export function AboutRoute() {
     {
       title: t("about.repo.title"),
       description: t("about.repo.description"),
-      linkText: "wanghuan9/skill-manager",
+      linkText: "wanghuan9/skilldock",
       url: APP_REPOSITORY_URL,
       icon: "github",
     },

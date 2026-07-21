@@ -1555,14 +1555,14 @@ export async function recordFailureFeedback(input: FailureFeedbackInput): Promis
 function buildSafeIssueUrl(title: string, body: string) {
   let nextBody = body;
   while (nextBody.length > 400) {
-    const issueUrl = `https://github.com/wanghuan9/skill-manager/issues/new?title=${encodeURIComponent(title)}&body=${encodeURIComponent(nextBody)}`;
+    const issueUrl = `https://github.com/wanghuan9/skilldock/issues/new?title=${encodeURIComponent(title)}&body=${encodeURIComponent(nextBody)}`;
     if (issueUrl.length <= 6000) {
       return issueUrl;
     }
     nextBody = `${nextBody.slice(0, Math.max(400, nextBody.length - 200))}\n\n${inCurrentLanguage("...自动诊断摘要过长，已截断。", "...Auto-diagnosis summary too long, truncated.")}`;
   }
 
-  return `https://github.com/wanghuan9/skill-manager/issues/new?title=${encodeURIComponent(title)}&body=${encodeURIComponent(nextBody)}`;
+  return `https://github.com/wanghuan9/skilldock/issues/new?title=${encodeURIComponent(title)}&body=${encodeURIComponent(nextBody)}`;
 }
 
 export async function resolveMcpMarketplaceSourceUrl(server: McpMarketplaceServer): Promise<string> {

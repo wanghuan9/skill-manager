@@ -9,7 +9,7 @@ use serde_json::{Map, Value};
 use crate::workspace;
 
 const ERROR_LOG_FILE_NAME: &str = "errors.jsonl";
-const ISSUE_REPOSITORY_URL: &str = "https://github.com/wanghuan9/skill-manager";
+const ISSUE_REPOSITORY_URL: &str = "https://github.com/wanghuan9/skilldock";
 const RECENT_ERROR_LIMIT: usize = 12;
 const MAX_LOG_ENTRY_BYTES: usize = 24 * 1024;
 const MAX_ISSUE_BODY_CHARS: usize = 8_000;

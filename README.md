@@ -2,10 +2,10 @@
   <img src="src-tauri/icons/icon.png" width="150" alt="SkillDock" />
 </p>
 
-<h1 align="center">SkillDock - AI Skills, MCP & Plugins Manager</h1>
+<h1 align="center">SkillDock - AI Skill Manager for Claude Code, Cursor, Codex & MCP</h1>
 
 <p align="center">
-  SkillDock is a skills, MCP, and plugin manager for AI coding tools. It helps users install, view, edit, organize, sync, and update skills, MCP servers, and plugin bundles, with Git-aware updates for tracking upstream changes and local modifications.
+  SkillDock is desktop skill management software for AI coding tools: an AI skill manager for Claude Code, Cursor, Codex, Windsurf, and more. It also manages MCP servers and plugins, with Git-aware updates for tracking upstream changes and local modifications.
 </p>
 
 <p align="center">
@@ -13,14 +13,14 @@
 </p>
 
 <p align="center">
-  <img alt="Version" src="https://img.shields.io/badge/version-0.1.0-blue" />
-  <img alt="Platform" src="https://img.shields.io/badge/platform-macOS%20now%20%7C%20Windows%20planned-lightgrey" />
+  <img alt="Version" src="https://img.shields.io/badge/version-1.0.0-blue" />
+  <img alt="Platform" src="https://img.shields.io/badge/platform-macOS%20Apple%20Silicon%20%7C%20Windows%20x64-blue" />
   <img alt="Preview" src="https://img.shields.io/badge/source-closed%20preview-lightgrey" />
 </p>
 
 ## What It Does
 
-SkillDock is a desktop control center for AI coding tools. It keeps your local Skills, MCP configurations, and plugin bundles visible, editable, and synced across Claude Code, Codex, Cursor, Windsurf, Gemini CLI, GitHub Copilot, and the tools you use every day. For Git-backed skills and plugins, it detects upstream updates, local changes, and pending pushes, then supports one-click updates with previewable changes.
+SkillDock is an AI coding skills manager and desktop control center for Claude Code, Cursor, Codex, Windsurf, Gemini CLI, GitHub Copilot, and other AI coding agents. It keeps local Skills, MCP configurations, and plugin bundles visible, editable, and synced. It scans each tool's real Skill directory, shows managed and unmanaged Skills, and lets users preview local changes before updating or pushing.
 
 The core workflow is team collaboration without intermediate handoff directories. Publishers can modify skills or plugins locally and push changes back with one click; users can update with one click while seeing who updated the package and what changed.
 
@@ -28,6 +28,9 @@ The core workflow is team collaboration without intermediate handoff directories
 - **MCP management** — Browse, import, edit, enable, disable, sync, and inspect MCP server configs.
 - **Plugin management** — Install, enable, disable, inspect, one-click update, and remove plugin packages, with local change and pending-push detection for Git-backed plugins.
 - **Skill source grouping** — Group installed skills by repository or local source so team-maintained skill sets stay easy to scan.
+- **Real tool directory view** — Inspect Skills in the actual Claude Code, Cursor, Codex, Windsurf, Gemini CLI, and other supported tool directories, including managed, unmanaged, conflicting, folder, and symlink states.
+- **Skill diff and collaboration** — Edit local changes, review staged and unstaged diffs, revert a file or hunk, and preview pending pushes before sharing updates.
+- **Cards and dark mode** — Switch Skills, MCP, and Plugins between list and card layouts, with light, dark, and system themes.
 - **MCP tools discovery** — Detect exposed MCP tools, track whether each server config is usable, and control tool-level enablement.
 - **Skill install** — Install skills with one click from `skills.sh` and `skillsmp`, or add them from Git repositories and local folders.
 - **MCP install** — Install MCP servers with one click from `MCP.Directory`, then manage their shared configuration lifecycle.
@@ -37,7 +40,7 @@ The core workflow is team collaboration without intermediate handoff directories
 
 ## Skills
 
-View every installed skill by source group, filter by status, inspect source metadata, and see Git collaboration state at a glance.
+View every installed skill by source group or by the tool's real directory, filter by management status, inspect source metadata, and see Git collaboration state at a glance.
 
 **Skills list**
 
@@ -55,7 +58,7 @@ SkillDock preserves source information and tool enablement per skill, so a team-
 
 ## MCP
 
-Manage MCP servers in the same workspace as skills. SkillDock scans supported app config files, shows the server command and source, and lets you enable or disable server sync per tool.
+Manage MCP servers in the same workspace as skills. SkillDock scans supported app config files, shows the server command and source, and lets you enable or disable server sync per tool. Use list or card views and inspect MCP tools in context.
 
 **MCP list**
 
@@ -113,7 +116,7 @@ Install complete plugin packages with one click from Git repositories, select su
 
 ## Settings
 
-Configure the app storage directory, default editor, update checks, default install behavior, and tool support status.
+Configure the app storage directory, default editor, update checks, default install behavior, themes, card layout preferences, and tool support status.
 
 ![SkillDock settings](docs/images/settings.png)
 
@@ -131,27 +134,27 @@ MCP servers use a different model: SkillDock manages them as shared configuratio
 
 ## Download
 
-Installers will be published on the [Releases](../../releases) page.
+Download the latest [SkillDock release](https://github.com/wanghuan9/skilldock/releases/latest).
 
 | Platform | Status |
 | --- | --- |
-| macOS | Released |
-| Windows | Planned |
+| macOS Apple Silicon | Released |
+| Windows x64 | Released |
 
 ## Getting Started
 
 1. Download and open SkillDock.
 2. Install plugins, skills, or MCP servers from a marketplace, Git repository, or local folder.
-3. Enable plugins, skills, and MCP servers for your coding tools.
-4. Use Git-aware status to review updates, local edits, and push previews.
+3. Inspect the real Skill directories used by Claude Code, Cursor, Codex, and other tools.
+4. Enable plugins, skills, and MCP servers for your coding tools.
+5. Use Git-aware status to review updates, local edits, Diff previews, and push previews.
 
 ## Roadmap
 
-- [ ] Public installers.
+- [ ] Public source release after the preview stabilizes.
 - [ ] Clearer skill states: updateable, locally modified, pending push, conflicted.
 - [ ] Fuller plugin and MCP lifecycle: install, configure, discover tools, and sync across tools.
 - [ ] Better Git flows: branch selection, team repository pushback, PR/MR handoff.
-- [ ] Windows support after the macOS workflow is stable.
 
 ## Source Availability
 
