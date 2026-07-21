@@ -436,7 +436,10 @@ export function SkillListPage(props: SkillListPageProps) {
     }
 
     setExpandedSkillName(focusedManagedSkillName);
-    if (viewMode !== "grouped") {
+  }, [activeSourceId, focusedManagedSkillName]);
+
+  useEffect(() => {
+    if (activeSourceId !== MANAGED_SKILL_SOURCE_ID || !focusedManagedSkillName || viewMode !== "grouped") {
       return;
     }
 

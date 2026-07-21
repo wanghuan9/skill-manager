@@ -187,6 +187,26 @@ test("opens and focuses the corresponding managed Skill from a tool directory", 
   expect(screen.getByRole("button", { name: "收起 skill-publisher" })).toHaveAttribute("aria-expanded", "true");
 });
 
+test("closes the managed Skill detail opened from a tool card", async () => {
+  const user = userEvent.setup();
+  render(<App />);
+
+  await user.click(screen.getByRole("button", { name: "分组" }));
+  await user.click(screen.getByRole("tab", { name: "Codex 5" }));
+  await user.click(screen.getByRole("button", { name: "卡片" }));
+
+  const sourceCard = screen.getByRole("article", { name: "skill-publisher" });
+  await user.click(within(sourceCard).getByRole("button", { name: "展开 skill-publisher" }));
+
+  const sourceDialog = screen.getByRole("dialog", { name: "skill-publisher 详情" });
+  await user.click(within(sourceDialog).getByRole("button", { name: "查看托管版本" }));
+
+  const managedDialog = screen.getByRole("dialog", { name: "skill-publisher 详情" });
+  await user.click(within(managedDialog).getByRole("button", { name: "关闭 skill-publisher 详情" }));
+
+  expect(screen.queryByRole("dialog", { name: "skill-publisher 详情" })).not.toBeInTheDocument();
+});
+
 test("keeps a source selected from More visible in the flat source bar", async () => {
   const user = userEvent.setup();
   render(<App />);
