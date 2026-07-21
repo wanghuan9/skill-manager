@@ -295,6 +295,7 @@ test("edits local changes and switches between changed and full file views", asy
   expect(initialEditor).toHaveTextContent("new description");
   const revertHunkButton = await waitFor(() => screen.getByRole("button", { name: "回退此变更块" }));
   expect(revertHunkButton).toHaveClass("skill-diff__revert-gutter");
+  expect(revertHunkButton.querySelector(".skill-diff__revert-icon")).toHaveAttribute("viewBox", "0 0 14 14");
   expect(revertHunkButton.closest(".skill-diff__revert-gutter-column")).toBeInTheDocument();
   expect(document.querySelector(".cm-changedLineGutter")).toBeInTheDocument();
   expect(document.querySelector(".cm-deletedLineGutter")).toBeInTheDocument();

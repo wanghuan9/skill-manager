@@ -155,7 +155,34 @@ class RevertChunkGutterMarker extends GutterMarker {
     button.className = "skill-diff__revert-gutter";
     button.setAttribute("aria-label", this.label);
     button.title = this.label;
-    button.textContent = "↶";
+    const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    icon.setAttribute("class", "skill-diff__revert-icon");
+    icon.setAttribute("viewBox", "0 0 14 14");
+    icon.setAttribute("fill", "none");
+    icon.setAttribute("aria-hidden", "true");
+    const curve = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    curve.setAttribute(
+      "d",
+      "M4.6666 12.5h4.7917c2.1861 0 3.9583-1.7722 3.9583-3.9583s-1.7722-3.9584-3.9583-3.9584H.5",
+    );
+    curve.setAttribute("stroke", "currentColor");
+    curve.setAttribute("stroke-width", "1");
+    curve.setAttribute("stroke-linecap", "round");
+    curve.setAttribute("stroke-linejoin", "round");
+    const arrowTop = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    arrowTop.setAttribute("d", "M.5 4.5833 4.5.5");
+    arrowTop.setAttribute("stroke", "currentColor");
+    arrowTop.setAttribute("stroke-width", "1");
+    arrowTop.setAttribute("stroke-linecap", "round");
+    arrowTop.setAttribute("stroke-linejoin", "round");
+    const arrowBottom = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    arrowBottom.setAttribute("d", "m.5 4.5833 4 3.9167");
+    arrowBottom.setAttribute("stroke", "currentColor");
+    arrowBottom.setAttribute("stroke-width", "1");
+    arrowBottom.setAttribute("stroke-linecap", "round");
+    arrowBottom.setAttribute("stroke-linejoin", "round");
+    icon.append(curve, arrowTop, arrowBottom);
+    button.append(icon);
     button.onmousedown = (event) => {
       event.preventDefault();
       rejectChunk(view, this.position);
@@ -266,7 +293,8 @@ function SkillDiffEditor({
     });
   }, [content]);
 
-  return <div className="skill-diff__editor" ref={editorHostRef} />;
+  const changeStatus = normalizeSkillChangeStatus(change.status).toLowerCase();
+  return <div className={`skill-diff__editor is-${changeStatus}`} ref={editorHostRef} />;
 }
 
 export function SkillDiffView({

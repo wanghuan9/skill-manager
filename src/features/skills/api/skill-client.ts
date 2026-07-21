@@ -518,6 +518,7 @@ function normalizeSkillSummary(skill: LegacySkillSummary): SkillSummary {
     lastEditor: skill.lastEditor ?? "",
     commitLabel: skill.commitLabel ?? "",
     gitLinked: skill.gitLinked ?? false,
+    localChangeCount: skill.localChangeCount ?? 0,
     lifecycleSource,
     ownerPluginId,
     ownerPluginName,

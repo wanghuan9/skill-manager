@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 import { AppI18nProvider } from "@/app/i18n";
@@ -105,35 +105,60 @@ test("shows description in the list summary and keeps update metadata in details
   expect(screen.getByText(/更新人/)).toBeInTheDocument();
 });
 
-test("opens the shared file dialog in local changes mode from skill details", async () => {
-  const skill = installedSkillFixtures.find((item) => item.name === "drawio-diagram");
+test("opens the shared file dialog in local changes mode from a pending-push file entry", async () => {
+  const skill = installedSkillFixtures.find((item) => item.name === "skill-publisher");
   if (!skill) {
-    throw new Error("missing drawio-diagram fixture");
+    throw new Error("missing skill-publisher fixture");
   }
 
   renderSkillCardWithProviders(skill);
-  await userEvent.click(screen.getByRole("button", { name: /展开 drawio-diagram/ }));
-  const changesButton = screen.getByRole("button", { name: "查看 drawio-diagram 的本地变更" });
-  expect(changesButton.querySelector("svg")).toBeInTheDocument();
-  await userEvent.click(changesButton);
+  const filesButton = screen.getByRole("button", { name: "查看 skill-publisher 文件与本地变更" });
+  expect(filesButton.querySelector(".skill-card__change-count")).toHaveTextContent("4");
+  expect(filesButton.querySelector('path[d="M4.5 5.5h5M7 3v5"]')).not.toBeInTheDocument();
+  await userEvent.click(filesButton);
 
-  expect(await screen.findByRole("dialog", { name: "drawio-diagram" })).toBeInTheDocument();
+  expect(await screen.findByRole("dialog", { name: "skill-publisher" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "本地变更 0" })).toHaveAttribute("aria-pressed", "true");
 });
 
-test("moves the local changes action into the grid detail header", async () => {
-  const skill = installedSkillFixtures.find((item) => item.name === "drawio-diagram");
+test("keeps the file entry expanded in the grid detail header", async () => {
+  const skill = installedSkillFixtures.find((item) => item.name === "skill-publisher");
   if (!skill) {
-    throw new Error("missing drawio-diagram fixture");
+    throw new Error("missing skill-publisher fixture");
   }
 
   renderSkillCardWithProviders(skill, "grid");
-  await userEvent.click(screen.getByRole("button", { name: /展开 drawio-diagram/ }));
+  await userEvent.click(screen.getByRole("button", { name: /展开 skill-publisher/ }));
 
-  const changesButton = screen.getByRole("button", { name: "查看 drawio-diagram 的本地变更" });
-  expect(changesButton).toHaveTextContent("本地变更");
-  expect(changesButton.closest(".skill-card-detail-modal__header")).toBeInTheDocument();
-  expect(screen.getByText("基本信息").closest("section")).not.toContainElement(changesButton);
+  const detailDialog = screen.getByRole("dialog", { name: "skill-publisher 详情" });
+  const filesButton = within(detailDialog).getByRole("button", {
+    name: "查看 skill-publisher 文件与本地变更",
+  });
+  expect(filesButton).toHaveClass("secondary-button", "skill-card-detail-modal__action");
+  expect(filesButton).toHaveTextContent("本地变更");
+  expect(filesButton.querySelector(".skill-card__change-count")).toHaveTextContent("4");
+  expect(filesButton.querySelector('path[d="M4.5 5.5h5M7 3v5"]')).toBeInTheDocument();
+  expect(filesButton.closest(".skill-card-detail-modal__header")).toBeInTheDocument();
+});
+
+test("shows the local changes action in expanded list details", async () => {
+  const skill = installedSkillFixtures.find((item) => item.name === "skill-publisher");
+  if (!skill) {
+    throw new Error("missing skill-publisher fixture");
+  }
+
+  const { container } = renderSkillCardWithProviders(skill);
+  await userEvent.click(screen.getByRole("button", { name: /展开 skill-publisher/ }));
+
+  const details = container.querySelector<HTMLElement>(".skill-card__details");
+  if (!details) {
+    throw new Error("missing expanded list details");
+  }
+  const filesButton = within(details).getByRole("button", {
+    name: "查看 skill-publisher 文件与本地变更",
+  });
+  expect(filesButton).toHaveTextContent("本地变更");
+  expect(filesButton.querySelector('path[d="M4.5 5.5h5M7 3v5"]')).toBeInTheDocument();
 });
 
 test("hides remote update metadata for non-git skill details", async () => {

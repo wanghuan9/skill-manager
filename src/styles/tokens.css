@@ -2679,6 +2679,32 @@ code {
   color: var(--accent);
 }
 
+.skill-card__file-preview-button {
+  position: relative;
+  overflow: visible;
+}
+
+.skill-card__change-count {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 12px;
+  height: 12px;
+  padding: 0 2px;
+  border: 1px solid var(--surface);
+  border-radius: 999px;
+  background: var(--accent);
+  color: #ffffff;
+  font-size: 0.54rem;
+  font-weight: 500;
+  line-height: 12px;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+
 .skill-card__icon-button--delete svg {
   width: 16px;
   height: 16px;
@@ -6924,6 +6950,10 @@ code {
   color: #8f2934;
 }
 
+.skill-diff__editor.is-a .cm-deletedChunk {
+  display: none;
+}
+
 .skill-diff__editor .cm-deletedChunk .cm-chunkButtons {
   right: auto;
   left: -48px;
@@ -6966,9 +6996,14 @@ code {
   background: rgba(54, 100, 71, 0.12);
   color: #587062;
   cursor: pointer;
-  font-family: system-ui, sans-serif;
-  font-size: 1rem;
-  line-height: 1;
+  line-height: 0;
+}
+
+.skill-diff__editor .skill-diff__revert-icon {
+  display: block;
+  width: 14px;
+  height: 14px;
+  margin: 0 auto;
 }
 
 .skill-diff__editor .skill-diff__revert-gutter-column .skill-diff__revert-gutter {

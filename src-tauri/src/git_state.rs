@@ -88,6 +88,7 @@ pub fn enrich_skill_with_git_state(skill: &SkillSummary) -> SkillSummary {
             unlinked.last_synced_at = local_updated_at;
         }
         unlinked.git_linked = false;
+        unlinked.local_change_count = 0;
         return unlinked;
     }
 
@@ -99,6 +100,7 @@ pub fn enrich_skill_with_git_state(skill: &SkillSummary) -> SkillSummary {
     let working_tree_signature =
         run_git(skill_path, &["status", "--porcelain", "--", "."]).unwrap_or_default();
     let working_tree_dirty = !working_tree_signature.trim().is_empty();
+    let local_change_count = count_working_tree_changes(&working_tree_signature);
 
     let remote_counts = cached_update_counts(skill, &branch, &head)
         .or_else(|| branch_divergence(skill_path, &branch));
@@ -154,6 +156,7 @@ pub fn enrich_skill_with_git_state(skill: &SkillSummary) -> SkillSummary {
     enriched.last_checked_at = "刚刚检查".into();
     enriched.last_editor = remote_updated_by;
     enriched.git_linked = true;
+    enriched.local_change_count = local_change_count;
     enriched
 }
 
@@ -228,6 +231,7 @@ pub fn enrich_freshly_installed_skill(
     enriched.last_checked_at = "刚刚检查".into();
     enriched.last_editor = committer.unwrap_or_else(|| skill.last_editor.clone());
     enriched.git_linked = true;
+    enriched.local_change_count = 0;
     enriched
 }
 
@@ -249,6 +253,7 @@ pub fn enrich_newly_installed_skill_with_git_state(skill: &SkillSummary) -> Skil
             unlinked.last_synced_at = local_updated_at;
         }
         unlinked.git_linked = false;
+        unlinked.local_change_count = 0;
         return unlinked;
     }
 
@@ -256,9 +261,10 @@ pub fn enrich_newly_installed_skill_with_git_state(skill: &SkillSummary) -> Skil
         .unwrap_or_else(|| skill.branch.clone());
     let commit_label = run_git(skill_path, &["rev-parse", "--short", "HEAD"])
         .unwrap_or_else(|| skill.commit_label.clone());
-    let working_tree_dirty = run_git(skill_path, &["status", "--porcelain", "--", "."])
-        .map(|output| !output.trim().is_empty())
-        .unwrap_or(false);
+    let working_tree_signature =
+        run_git(skill_path, &["status", "--porcelain", "--", "."]).unwrap_or_default();
+    let working_tree_dirty = !working_tree_signature.trim().is_empty();
+    let local_change_count = count_working_tree_changes(&working_tree_signature);
     let (collab_status, status_text) = derive_collab_status(working_tree_dirty, Some((0, 0)));
     let fallback_local_updated_at = if skill.local_updated_at.trim().is_empty() {
         skill.last_synced_at.clone()
@@ -301,6 +307,7 @@ pub fn enrich_newly_installed_skill_with_git_state(skill: &SkillSummary) -> Skil
     enriched.last_checked_at = "刚刚检查".into();
     enriched.last_editor = remote_updated_by;
     enriched.git_linked = true;
+    enriched.local_change_count = local_change_count;
     enriched
 }
 
@@ -326,6 +333,7 @@ pub fn enrich_skill_with_cached_update_state(skill: &SkillSummary) -> SkillSumma
             enriched.last_synced_at = local_updated_at;
         }
         enriched.git_linked = false;
+        enriched.local_change_count = 0;
         return enriched;
     }
 
@@ -337,6 +345,7 @@ pub fn enrich_skill_with_cached_update_state(skill: &SkillSummary) -> SkillSumma
     let working_tree_signature =
         run_git(skill_path, &["status", "--porcelain", "--", "."]).unwrap_or_default();
     let working_tree_dirty = !working_tree_signature.trim().is_empty();
+    let local_change_count = count_working_tree_changes(&working_tree_signature);
     let fallback_local_updated_at = if skill.local_updated_at.trim().is_empty() {
         skill.last_synced_at.clone()
     } else {
@@ -361,6 +370,7 @@ pub fn enrich_skill_with_cached_update_state(skill: &SkillSummary) -> SkillSumma
         enriched.last_synced_at = local_updated_at;
         enriched.last_checked_at = "已缓存".into();
         enriched.git_linked = true;
+        enriched.local_change_count = local_change_count;
         return enriched;
     }
 
@@ -371,6 +381,7 @@ pub fn enrich_skill_with_cached_update_state(skill: &SkillSummary) -> SkillSumma
         enriched.local_updated_at = local_updated_at.clone();
         enriched.last_synced_at = local_updated_at;
         enriched.git_linked = true;
+        enriched.local_change_count = local_change_count;
         return enriched;
     }
 
@@ -383,6 +394,7 @@ pub fn enrich_skill_with_cached_update_state(skill: &SkillSummary) -> SkillSumma
     enriched.last_synced_at = local_updated_at;
     enriched.last_checked_at = "已缓存".into();
     enriched.git_linked = true;
+    enriched.local_change_count = local_change_count;
     enriched
 }
 
@@ -404,6 +416,7 @@ pub fn enrich_skill_with_local_git_state(skill: &SkillSummary) -> SkillSummary {
             unlinked.last_synced_at = local_updated_at;
         }
         unlinked.git_linked = false;
+        unlinked.local_change_count = 0;
         return unlinked;
     }
 
@@ -415,6 +428,7 @@ pub fn enrich_skill_with_local_git_state(skill: &SkillSummary) -> SkillSummary {
     let working_tree_signature =
         run_git(skill_path, &["status", "--porcelain", "--", "."]).unwrap_or_default();
     let working_tree_dirty = !working_tree_signature.trim().is_empty();
+    let local_change_count = count_working_tree_changes(&working_tree_signature);
     let remote_counts = cached_update_counts(skill, &branch, &head)
         .or_else(|| local_branch_divergence(skill_path, &branch));
     let (collab_status, status_text) = derive_collab_status(working_tree_dirty, remote_counts);
@@ -451,7 +465,15 @@ pub fn enrich_skill_with_local_git_state(skill: &SkillSummary) -> SkillSummary {
     enriched.last_checked_at = "刚刚检查".into();
     enriched.last_editor = skill.last_editor.clone();
     enriched.git_linked = true;
+    enriched.local_change_count = local_change_count;
     enriched
+}
+
+fn count_working_tree_changes(status: &str) -> usize {
+    status
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .count()
 }
 
 pub fn clear_skill_update_cache(skill: &SkillSummary) {
@@ -1017,6 +1039,12 @@ mod tests {
 
     const GIT_BINARY: &str = "git";
 
+    #[test]
+    fn counts_changed_files_from_git_status_output() {
+        assert_eq!(count_working_tree_changes(" M SKILL.md\n?? notes.txt\n"), 2);
+        assert_eq!(count_working_tree_changes(""), 0);
+    }
+
     fn skill_summary(name: &str, local_path: &Path) -> SkillSummary {
         SkillSummary {
             name: name.into(),
@@ -1036,6 +1064,7 @@ mod tests {
             last_editor: "".into(),
             commit_label: "initial".into(),
             git_linked: true,
+            local_change_count: 0,
             lifecycle_source: "direct".into(),
             owner_plugin_id: String::new(),
             owner_plugin_name: String::new(),

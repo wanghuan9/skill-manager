@@ -160,6 +160,7 @@ export type SkillSummary = {
   lastEditor: string;
   commitLabel: string;
   gitLinked: boolean;
+  localChangeCount?: number;
   lifecycleSource?: PluginLifecycleSource;
   ownerPluginId?: string;
   ownerPluginName?: string;

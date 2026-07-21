@@ -3772,6 +3772,7 @@ url.git@git.example.com:example-org/.insteadof https://git.example.com/example-o
                 last_editor: "".into(),
                 commit_label: "abc123".into(),
                 git_linked: false,
+                local_change_count: 0,
                 lifecycle_source: "direct".into(),
                 owner_plugin_id: String::new(),
                 owner_plugin_name: String::new(),
