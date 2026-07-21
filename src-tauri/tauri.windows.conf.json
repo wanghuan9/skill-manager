@@ -3,15 +3,17 @@
     "windows": [
       {
         "title": "SkillDock",
-        "width": 1280,
-        "height": 840,
+        "width": 1088,
+        "height": 680,
+        "center": true,
         "resizable": true,
         "decorations": true,
         "hiddenTitle": false,
         "titleBarStyle": "Visible",
         "fullscreen": false,
-        "minWidth": 1024,
-        "minHeight": 700
+        "maximized": false,
+        "minWidth": 960,
+        "minHeight": 560
       }
     ]
   },
