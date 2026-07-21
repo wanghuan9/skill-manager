@@ -155,7 +155,24 @@ class RevertChunkGutterMarker extends GutterMarker {
     button.className = "skill-diff__revert-gutter";
     button.setAttribute("aria-label", this.label);
     button.title = this.label;
-    button.textContent = "↶";
+    const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    icon.setAttribute("class", "skill-diff__revert-icon");
+    icon.setAttribute("viewBox", "0 0 20 20");
+    icon.setAttribute("fill", "none");
+    icon.setAttribute("aria-hidden", "true");
+    const arrow = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    arrow.setAttribute("d", "M8.5 14 4 9.5l4.5-4.5");
+    arrow.setAttribute("stroke", "currentColor");
+    arrow.setAttribute("stroke-width", "1.35");
+    arrow.setAttribute("stroke-linecap", "round");
+    arrow.setAttribute("stroke-linejoin", "round");
+    const curve = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    curve.setAttribute("d", "M4.5 9.5h8a4 4 0 0 1 4 4v1");
+    curve.setAttribute("stroke", "currentColor");
+    curve.setAttribute("stroke-width", "1.35");
+    curve.setAttribute("stroke-linecap", "round");
+    icon.append(arrow, curve);
+    button.append(icon);
     button.onmousedown = (event) => {
       event.preventDefault();
       rejectChunk(view, this.position);

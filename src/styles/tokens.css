@@ -6996,9 +6996,14 @@ code {
   background: rgba(54, 100, 71, 0.12);
   color: #587062;
   cursor: pointer;
-  font-family: system-ui, sans-serif;
-  font-size: 1rem;
-  line-height: 1;
+  line-height: 0;
+}
+
+.skill-diff__editor .skill-diff__revert-icon {
+  display: block;
+  width: 17px;
+  height: 17px;
+  margin: 0 auto;
 }
 
 .skill-diff__editor .skill-diff__revert-gutter-column .skill-diff__revert-gutter {
