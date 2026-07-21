@@ -157,21 +157,31 @@ class RevertChunkGutterMarker extends GutterMarker {
     button.title = this.label;
     const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
     icon.setAttribute("class", "skill-diff__revert-icon");
-    icon.setAttribute("viewBox", "0 0 20 20");
+    icon.setAttribute("viewBox", "0 0 14 14");
     icon.setAttribute("fill", "none");
     icon.setAttribute("aria-hidden", "true");
-    const arrow = document.createElementNS("http://www.w3.org/2000/svg", "path");
-    arrow.setAttribute("d", "M7.25 12.5 4.25 9.5l3-3");
-    arrow.setAttribute("stroke", "currentColor");
-    arrow.setAttribute("stroke-width", "1.35");
-    arrow.setAttribute("stroke-linecap", "round");
-    arrow.setAttribute("stroke-linejoin", "round");
     const curve = document.createElementNS("http://www.w3.org/2000/svg", "path");
-    curve.setAttribute("d", "M4.25 9.5h7.25a4 4 0 0 1 4 4v1.25");
+    curve.setAttribute(
+      "d",
+      "M4.6666 12.5h4.7917c2.1861 0 3.9583-1.7722 3.9583-3.9583s-1.7722-3.9584-3.9583-3.9584H.5",
+    );
     curve.setAttribute("stroke", "currentColor");
-    curve.setAttribute("stroke-width", "1.35");
+    curve.setAttribute("stroke-width", "1");
     curve.setAttribute("stroke-linecap", "round");
-    icon.append(arrow, curve);
+    curve.setAttribute("stroke-linejoin", "round");
+    const arrowTop = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    arrowTop.setAttribute("d", "M.5 4.5833 4.5.5");
+    arrowTop.setAttribute("stroke", "currentColor");
+    arrowTop.setAttribute("stroke-width", "1");
+    arrowTop.setAttribute("stroke-linecap", "round");
+    arrowTop.setAttribute("stroke-linejoin", "round");
+    const arrowBottom = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    arrowBottom.setAttribute("d", "m.5 4.5833 4 3.9167");
+    arrowBottom.setAttribute("stroke", "currentColor");
+    arrowBottom.setAttribute("stroke-width", "1");
+    arrowBottom.setAttribute("stroke-linecap", "round");
+    arrowBottom.setAttribute("stroke-linejoin", "round");
+    icon.append(curve, arrowTop, arrowBottom);
     button.append(icon);
     button.onmousedown = (event) => {
       event.preventDefault();
