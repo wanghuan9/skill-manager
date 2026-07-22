@@ -207,6 +207,31 @@ test("closes the managed Skill detail opened from a tool card", async () => {
   expect(screen.queryByRole("dialog", { name: "skill-publisher 详情" })).not.toBeInTheDocument();
 });
 
+test("does not reopen a managed Skill detail after leaving and returning to Skills", async () => {
+  const user = userEvent.setup();
+  render(<App />);
+
+  await user.click(screen.getByRole("button", { name: "分组" }));
+  await user.click(screen.getByRole("tab", { name: "Codex 5" }));
+  await user.click(screen.getByRole("button", { name: "卡片" }));
+
+  const sourceCard = screen.getByRole("article", { name: "skill-publisher" });
+  await user.click(within(sourceCard).getByRole("button", { name: "展开 skill-publisher" }));
+  const sourceDialog = screen.getByRole("dialog", { name: "skill-publisher 详情" });
+  await user.click(within(sourceDialog).getByRole("button", { name: "查看托管版本" }));
+
+  const managedDialog = screen.getByRole("dialog", { name: "skill-publisher 详情" });
+  await user.click(within(managedDialog).getByRole("button", { name: "关闭 skill-publisher 详情" }));
+  expect(screen.queryByRole("dialog", { name: "skill-publisher 详情" })).not.toBeInTheDocument();
+
+  await user.click(screen.getByRole("button", { name: "Plugins" }));
+  expect(await screen.findByRole("heading", { name: "Plugins", level: 1 })).toBeInTheDocument();
+
+  await user.click(screen.getByRole("button", { name: /Skills/ }));
+  expect(await screen.findByRole("heading", { name: "Skills", level: 1 })).toBeInTheDocument();
+  expect(screen.queryByRole("dialog", { name: "skill-publisher 详情" })).not.toBeInTheDocument();
+});
+
 test("keeps a source selected from More visible in the flat source bar", async () => {
   const user = userEvent.setup();
   render(<App />);
