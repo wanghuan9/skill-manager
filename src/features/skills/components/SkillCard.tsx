@@ -15,7 +15,6 @@ import { useSkillWorkspace } from "@/features/skills/state/skill-workspace";
 import type { SkillSummary } from "@/features/skills/state/skill-store";
 import { formatSkillDescription } from "@/features/skills/utils/skill-description";
 import { formatSkillLastEditor } from "@/features/skills/utils/skill-editor";
-import { formatSkillSourceLabel } from "@/features/skills/utils/skill-source";
 import { setSkillAllToolsEnabled } from "@/features/skills/utils/skill-bulk-status";
 import { mergeSkillToolsWithInstalledTools } from "@/features/skills/utils/skill-tools";
 import { formatSkillUpdatedAt } from "@/features/skills/utils/skill-time";
@@ -235,10 +234,6 @@ export function SkillCard({
   const cardRef = useRef<HTMLElement | null>(null);
   const deleteActionRef = useRef<HTMLButtonElement | null>(null);
   const skillTools = mergeSkillToolsWithInstalledTools(skill.tools, toolConfigs);
-  const sourceLabel = formatSkillSourceLabel(skill.sourceLabel, {
-    sourceType: skill.sourceType,
-    sourceUrl: skill.sourceUrl,
-  });
   const skillDescription = formatSkillDescription(skill.description) || t("skills.description.empty");
   const summaryDescription = formatSummaryDescription(skill.description, t("skills.description.empty"));
   const remoteUpdatedAt = formatSkillUpdatedAt(skill.remoteUpdatedAt);
@@ -264,11 +259,11 @@ export function SkillCard({
     : skill.managementOwner === "external"
       ? t("skill.card.owner.external")
       : t("skill.card.owner.skilldock");
+  const sourceMethodLabel = skill.gitLinked
+    ? t("skill.card.sourceMethod.git")
+    : t("skill.card.sourceMethod.local");
+  const gridSourceSummary = `${sourceMethodLabel} · ${managementOwnerLabel}`;
   const showDetailAction = skill.collabStatus === "update-available" || canUpdateWithAgentSkillsCli;
-  const displaySourceLabel =
-    sourceLabel === "本地" || sourceLabel === "Local"
-      ? t("skills.source.local")
-      : sourceLabel;
   const showRemoteMetadata = skill.gitLinked && skill.sourceType !== "local";
   const expanded = expandedProp ?? expandedState;
   const isGridLayout = layout === "grid";
@@ -520,42 +515,45 @@ export function SkillCard({
         <dl className="detail-grid detail-grid--source">
           <div>
             <dt>{t("skill.card.sourceType")}</dt>
-            <dd>{displaySourceLabel}</dd>
+            <dd>{sourceMethodLabel}</dd>
           </div>
           <div>
             <dt>{t("skill.card.owner")}</dt>
-            <dd>
-              <span>{managementOwnerLabel}</span>
-              <span className="detail-grid__single-line" data-tooltip={skill.canonicalPath ?? skill.localPath}>
-                {skill.canonicalPath ?? skill.localPath}
-              </span>
-            </dd>
+            <dd>{managementOwnerLabel}</dd>
           </div>
           <div>
-            <dt>{t("skill.card.source")}</dt>
-            <dd className="detail-grid__source-value">
-              {isHttpUrl(skill.sourceUrl) ? (
-                <a
-                  className="detail-grid__source-link detail-grid__single-line"
-                  data-tooltip={skill.sourceUrl}
-                  href={skill.sourceUrl}
-                  onClick={(event) => {
-                    event.preventDefault();
-                    void openExternalLink(skill.sourceUrl);
-                  }}
-                >
-                  {skill.sourceUrl}
-                </a>
-              ) : (
-                <span className="detail-grid__single-line" data-tooltip={skill.sourceUrl}>
-                  {skill.sourceUrl}
-                </span>
-              )}
-              <span className={`detail-git-badge${skill.gitLinked ? " is-linked" : " is-unlinked"}`}>
-                git
-              </span>
+            <dt>{t("skill.card.realPath")}</dt>
+            <dd className="detail-grid__single-line" data-tooltip={skill.canonicalPath ?? skill.localPath}>
+              {skill.canonicalPath ?? skill.localPath}
             </dd>
           </div>
+          {skill.sourceUrl ? (
+            <div>
+              <dt>{t("skill.card.source")}</dt>
+              <dd className="detail-grid__source-value">
+                {isHttpUrl(skill.sourceUrl) ? (
+                  <a
+                    className="detail-grid__source-link detail-grid__single-line"
+                    data-tooltip={skill.sourceUrl}
+                    href={skill.sourceUrl}
+                    onClick={(event) => {
+                      event.preventDefault();
+                      void openExternalLink(skill.sourceUrl);
+                    }}
+                  >
+                    {skill.sourceUrl}
+                  </a>
+                ) : (
+                  <span className="detail-grid__single-line" data-tooltip={skill.sourceUrl}>
+                    {skill.sourceUrl}
+                  </span>
+                )}
+                <span className={`detail-git-badge${skill.gitLinked ? " is-linked" : " is-unlinked"}`}>
+                  git
+                </span>
+              </dd>
+            </div>
+          ) : null}
         </dl>
         <dl className="tool-list-row__detail-grid">
           {showRemoteMetadata ? (
@@ -612,6 +610,7 @@ export function SkillCard({
                       <h3>{skill.name}</h3>
                       {!isGridLayout ? (
                         <>
+                          <span className="skill-card__owner-badge">{managementOwnerLabel}</span>
                           <button
                             className={`status-badge tone-info skill-card__enabled-toggle${enabledTools.length > 0 ? "" : " is-empty"}`}
                             type="button"
@@ -622,6 +621,7 @@ export function SkillCard({
                           >
                             {enabledToolsCountLabel}
                           </button>
+                          <SkillStatusBadge status={skill.collabStatus} />
                           {showEnabledTools && enabledTools.length > 0 ? (
                             <div className="skill-card__summary-tools" aria-label={summaryToolsLabel}>
                               {enabledTools.map((tool) => (
@@ -658,17 +658,9 @@ export function SkillCard({
           <div className="skill-card__list-actions">
             {isGridLayout ? (
               <span className="skill-card__grid-source-label">
-                <span className="skill-card__grid-source-text">{displaySourceLabel}</span>
-                <span className="skill-card__grid-source-text">{managementOwnerLabel}</span>
+                <span className="skill-card__grid-source-text">{gridSourceSummary}</span>
               </span>
-            ) : (
-              <>
-                <span className="skill-card__grid-source-label">
-                  <span className="skill-card__grid-source-text">{managementOwnerLabel}</span>
-                </span>
-                <SkillStatusBadge status={skill.collabStatus} />
-              </>
-            )}
+            ) : null}
             {showDetailAction ? (
               <button
                 className="skill-card__icon-button skill-card__icon-button--update"

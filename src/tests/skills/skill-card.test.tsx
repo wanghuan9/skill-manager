@@ -33,11 +33,14 @@ test("uses the neutral list color for disabled card status", () => {
     tools: skill.tools.map((tool) => ({ ...tool, statusLabel: "未启用" })),
   };
 
-  renderSkillCardWithProviders(disabledSkill, "grid");
+  const { container } = renderSkillCardWithProviders(disabledSkill, "grid");
 
   expect(screen.getByText("未启用")).toHaveClass("tone-neutral");
-  expect(screen.getByText("GitLab")).toBeInTheDocument();
-  expect(screen.queryByText("GitLab · 已托管")).not.toBeInTheDocument();
+  expect(screen.getByText("Git · SkillDock")).toBeInTheDocument();
+  expect(screen.queryByText("GitLab")).not.toBeInTheDocument();
+  expect(container.querySelector(".skill-card__list-actions .skill-card__grid-source-label")).toHaveTextContent(
+    "Git · SkillDock",
+  );
   expect(screen.getByRole("button", { name: "删除 drawio-diagram" })).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "drawio-diagram 更多操作" })).not.toBeInTheDocument();
 });
@@ -85,6 +88,21 @@ test("updates directly from list action when skill has remote update", async () 
   expect(screen.queryByText("将拉取提交")).not.toBeInTheDocument();
 });
 
+test("keeps ownership and status beside the name while list actions contain only buttons", () => {
+  const skill = installedSkillFixtures.find((item) => item.name === "drawio-diagram");
+  if (!skill) {
+    throw new Error("missing drawio-diagram fixture");
+  }
+
+  const { container } = renderSkillCardWithProviders(skill);
+  const titleRow = container.querySelector(".skill-card__title-row");
+  const actions = container.querySelector(".skill-card__list-actions");
+
+  expect(titleRow).toHaveTextContent("drawio-diagramSkillDock已启用 2待推送");
+  expect(titleRow?.querySelector(".skill-card__owner-badge")).toHaveTextContent("SkillDock");
+  expect(actions?.querySelectorAll(":scope > *")).toHaveLength(actions?.querySelectorAll(":scope > button").length ?? 0);
+});
+
 test("shows description in the list summary and keeps update metadata in details", async () => {
   const skill = installedSkillFixtures.find((item) => item.name === "drawio-diagram");
   if (!skill) {
@@ -103,6 +121,10 @@ test("shows description in the list summary and keeps update metadata in details
   expect(screen.getByText(/远端更新时间/)).toBeInTheDocument();
   expect(screen.getByText(/本地更新时间/)).toBeInTheDocument();
   expect(screen.getByText(/更新人/)).toBeInTheDocument();
+  expect(screen.getByText("来源方式")).toBeInTheDocument();
+  expect(screen.getByText("托管方")).toBeInTheDocument();
+  expect(screen.getByText("真实目录")).toBeInTheDocument();
+  expect(screen.getByText("Git 仓库")).toBeInTheDocument();
 });
 
 test("opens the shared file dialog in local changes mode from a pending-push file entry", async () => {
@@ -339,7 +361,7 @@ test("shows up to six enabled tools in the card summary", () => {
   expect(container.querySelectorAll(".skill-card__grid-meta .skill-card__tool-icon")).toHaveLength(6);
   expect(container.querySelector(".skill-card__grid-meta .skill-card__tool-tag--extra")).toHaveTextContent("+2");
   expect(container.querySelector(".skill-card__git-source-badge")).toBeNull();
-  expect(container.querySelector(".skill-card__list-actions .skill-card__grid-source-label")).toHaveTextContent("GitHub");
+  expect(container.querySelector(".skill-card__list-actions .skill-card__grid-source-label")).toHaveTextContent("Git · SkillDock");
 });
 
 test("uses inline confirmation before deleting a skill", async () => {

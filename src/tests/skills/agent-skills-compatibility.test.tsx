@@ -22,11 +22,11 @@ test("shows same-name Skill instances with their directory owners", async () => 
       sourceLabel: "Agent Skills CLI",
       sourceType: "local",
       sourceUrl: "",
-      localPath: "/Users/demo/.cursor/skills/duplicate-skill",
-      canonicalPath: "/Users/demo/.cursor/skills/duplicate-skill",
+      localPath: "/Users/demo/.agents/skills/duplicate-skill",
+      canonicalPath: "/Users/demo/.agents/skills/duplicate-skill",
       entryPath: "/Users/demo/.agents/skills/duplicate-skill",
-      managementOwner: "external",
-      updateDriver: "none",
+      managementOwner: "agent-skills-cli",
+      updateDriver: "agent-skills-cli",
       skillEntries: ["/Users/demo/.agents/skills/duplicate-skill"],
     },
   );
@@ -35,8 +35,9 @@ test("shows same-name Skill instances with their directory owners", async () => 
   await user.click(screen.getByRole("button", { name: "卡片" }));
 
   expect(screen.getAllByRole("article", { name: "duplicate-skill" })).toHaveLength(2);
-  expect(screen.getAllByText("SkillDock 托管").length).toBeGreaterThan(0);
-  expect(screen.getByText("外部目录")).toBeInTheDocument();
+  expect(screen.getAllByText("SkillDock").length).toBeGreaterThan(0);
+  expect(screen.getByText(/Agent CLI/)).toBeInTheDocument();
+  expect(screen.queryByText("外部目录")).not.toBeInTheDocument();
 });
 
 test("shows the managed directory type below a managed tool Skill", async () => {
@@ -47,7 +48,7 @@ test("shows the managed directory type below a managed tool Skill", async () => 
 
   const sourceCard = screen.getByRole("article", { name: "skill-publisher" });
   expect(within(sourceCard).getByText("已托管")).toBeInTheDocument();
-  expect(within(sourceCard).getByText("SkillDock 托管")).toHaveClass(
+  expect(within(sourceCard).getByText("SkillDock")).toHaveClass(
     "skill-source-card__managed-root",
   );
 });
