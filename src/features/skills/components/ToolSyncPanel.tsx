@@ -10,6 +10,7 @@ import { getToolStatusLabel, isToolEnabledStatus } from "@/features/skills/utils
 
 type ToolSyncPanelProps = {
   skillName: string;
+  skillPath?: string;
   tools: SkillToolSyncStatus[];
   isBulkUpdatingExternally?: boolean;
   onBulkUpdatingChange?: (isUpdating: boolean) => void;
@@ -36,6 +37,7 @@ function patchAllToolStatuses(tools: SkillToolSyncStatus[], nextStatusLabel: str
 
 export function ToolSyncPanel({
   skillName,
+  skillPath,
   tools,
   isBulkUpdatingExternally = false,
   onBulkUpdatingChange,
@@ -77,6 +79,7 @@ export function ToolSyncPanel({
     try {
       await toggleSkillTool({
         skillName,
+        skillPath,
         toolName,
         toolNames: displayTools.map((tool) => tool.name),
       });
@@ -102,6 +105,7 @@ export function ToolSyncPanel({
     const toolNames = latestToolsRef.current.map((tool) => tool.name);
     const failedToolNames = await setSkillAllToolsEnabled({
       skillName,
+      skillPath,
       enabled,
       toolNames,
       setSkillAllToolStatuses,

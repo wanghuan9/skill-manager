@@ -169,6 +169,12 @@ export type SkillSummary = {
   lifecycleSource?: PluginLifecycleSource;
   ownerPluginId?: string;
   ownerPluginName?: string;
+  entryPath?: string;
+  canonicalPath?: string;
+  managementOwner?: "skilldock" | "agent-skills-cli" | "external";
+  updateDriver?: "git" | "agent-skills-cli" | "none";
+  skillEntries?: string[];
+  pathError?: string;
   tools: SkillToolSyncStatus[];
 };
 
@@ -325,6 +331,7 @@ export type AppSettings = {
   storagePath: string;
   skillLibraryPath: string;
   skillLibraryProvider: SkillLibraryProvider;
+  agentSkillsCompatibilityEnabled: boolean;
   defaultOpenToolId: string;
   skillInstallActivation: InstallActivationMode;
   mcpInstallActivation: InstallActivationMode;

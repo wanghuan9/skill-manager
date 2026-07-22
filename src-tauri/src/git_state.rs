@@ -1082,6 +1082,7 @@ mod tests {
             lifecycle_source: "direct".into(),
             owner_plugin_id: String::new(),
             owner_plugin_name: String::new(),
+            instance: Default::default(),
             tools: vec![],
         }
     }

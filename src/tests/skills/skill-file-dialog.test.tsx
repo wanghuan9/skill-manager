@@ -373,6 +373,7 @@ test("confirms a file-level local change revert", async () => {
   await waitFor(() => {
     expect(mockedInvoke).toHaveBeenCalledWith("revert_skill_change", {
       skillName: "drawio-diagram",
+      skillPath: "/Users/demo/.skilldock/skills/drawio-diagram",
       relativePath: "SKILL.md",
       hunkIndex: null,
       expectedPatch: null,

@@ -1,5 +1,6 @@
 type SetSkillAllToolStatuses = (input: {
   skillName: string;
+  skillPath?: string;
   enabled: boolean;
   toolNames: string[];
 }) => Promise<void>;
@@ -13,6 +14,7 @@ type SetToolSkillStatuses = (input: {
 
 type SetSkillAllToolsEnabledInput = {
   skillName: string;
+  skillPath?: string;
   enabled: boolean;
   toolNames: string[];
   setSkillAllToolStatuses: SetSkillAllToolStatuses;
@@ -34,6 +36,7 @@ export async function setSkillAllToolsEnabled(input: SetSkillAllToolsEnabledInpu
   try {
     await input.setSkillAllToolStatuses({
       skillName: input.skillName,
+      skillPath: input.skillPath,
       enabled: input.enabled,
       toolNames: input.toolNames,
     });

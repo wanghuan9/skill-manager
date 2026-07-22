@@ -106,6 +106,10 @@ function resolveSkillGroupTone(sourceType?: SkillSummary["sourceType"]) {
   return "default";
 }
 
+function skillInstanceKey(skill: SkillSummary) {
+  return `${skill.name}\0${skill.canonicalPath ?? skill.localPath}`;
+}
+
 function formatGroupSourceUrl(sourceUrl: string) {
   try {
     const parsedUrl = new URL(sourceUrl);
@@ -366,7 +370,7 @@ type SkillListPageProps = {
 const SKILL_GRID_COLUMN_COUNT = 3;
 
 function getSkillOrderKey(skill: SkillSummary) {
-  return skill.name;
+  return skillInstanceKey(skill);
 }
 
 export function SkillListPage(props: SkillListPageProps) {
@@ -401,11 +405,11 @@ export function SkillListPage(props: SkillListPageProps) {
     skillOrderRevision,
   );
   const skills = useMemo(() => {
-    const visibleSkillNames = new Set(
+    const visibleSkillKeys = new Set(
       filterSkills(installedSkills, { query: deferredQuery, status: statusFilter })
-        .map((skill) => skill.name),
+        .map(skillInstanceKey),
     );
-    return orderedInstalledSkills.filter((skill) => visibleSkillNames.has(skill.name));
+    return orderedInstalledSkills.filter((skill) => visibleSkillKeys.has(skillInstanceKey(skill)));
   }, [deferredQuery, installedSkills, orderedInstalledSkills, statusFilter]);
   const groupedSkills = useMemo(
     () => groupSkillsBySource(skills, { localLabel: t("skills.source.local") }),
@@ -435,7 +439,10 @@ export function SkillListPage(props: SkillListPageProps) {
       return;
     }
 
-    setExpandedSkillName(focusedManagedSkillName);
+    const focusedSkill = orderedInstalledSkills.find((skill) => skill.name === focusedManagedSkillName);
+    if (focusedSkill) {
+      setExpandedSkillName(skillInstanceKey(focusedSkill));
+    }
   }, [activeSourceId, focusedManagedSkillName]);
 
   useEffect(() => {
@@ -579,11 +586,11 @@ export function SkillListPage(props: SkillListPageProps) {
                   <div className="skill-group-section__list">
                     {group.skills.map((skill) => (
                       <SkillCard
-                        key={skill.name}
+                        key={skillInstanceKey(skill)}
                         skill={skill}
-                        expanded={expandedSkillName === skill.name}
+                        expanded={expandedSkillName === skillInstanceKey(skill)}
                         autoAlignWhenExpanded={focusedManagedSkillName === skill.name}
-                        onExpandedChange={(expanded) => handleSkillExpandedChange(skill.name, expanded)}
+                        onExpandedChange={(expanded) => handleSkillExpandedChange(skillInstanceKey(skill), expanded)}
                       />
                     ))}
                   </div>
@@ -595,15 +602,15 @@ export function SkillListPage(props: SkillListPageProps) {
             viewMode === "grid" ? (
               skillGridRows.map((row) => {
                 return (
-                  <div key={row[0].name} className="skill-card-grid__row">
+                  <div key={skillInstanceKey(row[0])} className="skill-card-grid__row">
                     {row.map((skill) => (
                       <SkillCard
-                        key={skill.name}
+                        key={skillInstanceKey(skill)}
                         skill={skill}
                         layout="grid"
-                        expanded={expandedSkillName === skill.name}
+                        expanded={expandedSkillName === skillInstanceKey(skill)}
                         autoAlignWhenExpanded={focusedManagedSkillName === skill.name}
-                        onExpandedChange={(expanded) => handleSkillExpandedChange(skill.name, expanded)}
+                        onExpandedChange={(expanded) => handleSkillExpandedChange(skillInstanceKey(skill), expanded)}
                       />
                     ))}
                   </div>
@@ -612,11 +619,11 @@ export function SkillListPage(props: SkillListPageProps) {
             ) : (
               skills.map((skill) => (
                 <SkillCard
-                  key={skill.name}
+                  key={skillInstanceKey(skill)}
                   skill={skill}
-                  expanded={expandedSkillName === skill.name}
+                  expanded={expandedSkillName === skillInstanceKey(skill)}
                   autoAlignWhenExpanded={focusedManagedSkillName === skill.name}
-                  onExpandedChange={(expanded) => handleSkillExpandedChange(skill.name, expanded)}
+                  onExpandedChange={(expanded) => handleSkillExpandedChange(skillInstanceKey(skill), expanded)}
                 />
               ))
             )

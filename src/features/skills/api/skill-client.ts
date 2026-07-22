@@ -150,12 +150,14 @@ type InstallSelectedLocalSkillsInput = {
 
 type PushPreviewInput = {
   skillName: string;
+  skillPath?: string;
   targetBranch: string;
   createBranchName?: string;
 };
 
 type OpenSkillInEditorInput = {
   skillName: string;
+  skillPath?: string;
   editorId: string;
 };
 
@@ -179,10 +181,12 @@ type OpenPathInFinderInput = {
 
 type UpdateSkillInput = {
   skillName: string;
+  skillPath?: string;
 };
 
 type SkillFileInput = {
   skillName: string;
+  skillPath?: string;
   relativePath: string;
 };
 
@@ -214,6 +218,7 @@ type MarketplaceSkillFileContentInput = Pick<
 
 type ToggleSkillToolInput = {
   skillName: string;
+  skillPath?: string;
   toolName: string;
   toolNames: string[];
 };
@@ -227,6 +232,7 @@ type SetToolSkillStatusesInput = {
 
 type SetSkillAllToolStatusesInput = {
   skillName: string;
+  skillPath?: string;
   enabled: boolean;
   toolNames: string[];
 };
@@ -522,6 +528,12 @@ function normalizeSkillSummary(skill: LegacySkillSummary): SkillSummary {
     lifecycleSource,
     ownerPluginId,
     ownerPluginName,
+    entryPath: skill.entryPath ?? skill.localPath ?? "",
+    canonicalPath: skill.canonicalPath ?? skill.localPath ?? "",
+    managementOwner: skill.managementOwner ?? "skilldock",
+    updateDriver: skill.updateDriver ?? (skill.gitLinked ? "git" : "none"),
+    skillEntries: skill.skillEntries ?? [skill.entryPath ?? skill.localPath ?? ""].filter(Boolean),
+    pathError: skill.pathError ?? "",
     tools: (skill.tools ?? []).map((tool) => ({
       ...tool,
       statusLabel: localizeToolStatusLabel(tool.statusLabel, language),
@@ -1057,13 +1069,13 @@ export async function fetchGitStates(): Promise<SkillSummary[]> {
   return normalizeSkillSummaryList(skills);
 }
 
-export async function refreshLocalGitState(skillName: string): Promise<SkillSummary> {
+export async function refreshLocalGitState(skillName: string, skillPath?: string): Promise<SkillSummary> {
   const fallbackSource =
     installedSkillFixtures.find((skill) => skill.name === skillName) ??
     installedSkillFixtures[0];
   const updatedSkill = await invokeOrFallback<LegacySkillSummary>(
     "refresh_local_git_state",
-    { skillName },
+    { skillName, skillPath },
     fallbackSource,
   );
   return normalizeSkillSummary(updatedSkill);
@@ -1216,15 +1228,20 @@ export async function fetchGitAccount(): Promise<GitAccountSummary> {
 }
 
 export async function fetchAppSettings(): Promise<AppSettings> {
-  return invokeOrFallback("get_app_settings", {}, appSettingsFixture);
+  const settings = await invokeOrFallback("get_app_settings", {}, appSettingsFixture);
+  return {
+    ...settings,
+    agentSkillsCompatibilityEnabled:
+      settings.agentSkillsCompatibilityEnabled ?? settings.skillLibraryProvider === "agent-skills",
+  };
 }
 
 export async function updateAppSettings(input: UpdateAppSettingsInput): Promise<AppSettings> {
   if (shouldUseFixtureData()) {
     Object.assign(appSettingsFixture, input.settings);
-    appSettingsFixture.skillLibraryPath = appSettingsFixture.skillLibraryProvider === "agent-skills"
-      ? "/Users/demo/.agents/skills"
-      : "/Users/demo/.skilldock/skills";
+    appSettingsFixture.agentSkillsCompatibilityEnabled =
+      appSettingsFixture.skillLibraryProvider === "agent-skills";
+    appSettingsFixture.skillLibraryPath = "/Users/demo/.skilldock/skills";
     return { ...appSettingsFixture };
   }
 
@@ -1440,14 +1457,17 @@ export async function importLocalSkill(localPath: string): Promise<SkillSummary>
   return normalizeSkillSummary(importedSkill);
 }
 
-export async function fetchPushTargetSnapshot(skillName: string): Promise<PushTargetSnapshot> {
+export async function fetchPushTargetSnapshot(
+  skillName: string,
+  skillPath?: string,
+): Promise<PushTargetSnapshot> {
   const fallback =
     pushTargetFixtures[skillName] ?? {
       currentBranch: "main",
       branches: [{ name: "main", isCurrent: true }],
     };
 
-  return invokeOrFallback("get_push_target_snapshot", { skillName }, fallback);
+  return invokeOrFallback("get_push_target_snapshot", { skillName, skillPath }, fallback);
 }
 
 export async function fetchPushPreviewSnapshot(input: PushPreviewInput): Promise<PushPreviewSnapshot> {
@@ -1468,12 +1488,13 @@ export async function fetchPushPreviewSnapshot(input: PushPreviewInput): Promise
   return invokeOrFallback("get_push_preview_snapshot", input, fallback);
 }
 
-export async function fetchSkillLocalChanges(skillName: string): Promise<GitChangeFile[]> {
-  return invokeOrFallback("get_skill_local_changes", { skillName }, []);
+export async function fetchSkillLocalChanges(skillName: string, skillPath?: string): Promise<GitChangeFile[]> {
+  return invokeOrFallback("get_skill_local_changes", { skillName, skillPath }, []);
 }
 
 export async function revertSkillChange(input: {
   skillName: string;
+  skillPath?: string;
   relativePath: string;
   hunkIndex?: number;
   expectedPatch?: string;
@@ -1483,6 +1504,7 @@ export async function revertSkillChange(input: {
     ?? installedSkillFixtures[0];
   return invokeOrFallback("revert_skill_change", {
     skillName: input.skillName,
+    skillPath: input.skillPath,
     relativePath: input.relativePath,
     hunkIndex: input.hunkIndex ?? null,
     expectedPatch: input.expectedPatch ?? null,
@@ -1490,8 +1512,8 @@ export async function revertSkillChange(input: {
   }, fallback);
 }
 
-export async function openSkillRepository(skillName: string): Promise<void> {
-  return invokeOrFallback("open_skill_repository", { skillName }, undefined);
+export async function openSkillRepository(skillName: string, skillPath?: string): Promise<void> {
+  return invokeOrFallback("open_skill_repository", { skillName, skillPath }, undefined);
 }
 
 export async function openExternalLink(url: string): Promise<void> {
@@ -1624,7 +1646,10 @@ export async function updateSkill(
   return normalizeSkillSummary(updatedSkill);
 }
 
-export async function fetchSkillFileBrowser(skillName: string): Promise<SkillFileBrowserSnapshot> {
+export async function fetchSkillFileBrowser(
+  skillName: string,
+  skillPath?: string,
+): Promise<SkillFileBrowserSnapshot> {
   const fallback =
     skillFileBrowserFixtures[skillName] ?? {
       skillName,
@@ -1636,7 +1661,7 @@ export async function fetchSkillFileBrowser(skillName: string): Promise<SkillFil
       initialFilePath: "SKILL.md",
     };
 
-  return invokeOrFallback("get_skill_file_browser", { skillName }, fallback);
+  return invokeOrFallback("get_skill_file_browser", { skillName, skillPath }, fallback);
 }
 
 export async function fetchSkillFileContent(input: SkillFileInput): Promise<SkillFileDocument> {
@@ -1683,8 +1708,8 @@ export async function saveSkillFileContent(input: SaveSkillFileInput): Promise<S
   return invokeOrFallback("save_skill_file_content", input, fallback);
 }
 
-export async function deleteSkill(skillName: string): Promise<void> {
-  return invokeOrFallback("delete_skill", { skillName }, undefined);
+export async function deleteSkill(skillName: string, skillPath?: string): Promise<void> {
+  return invokeOrFallback("delete_skill", { skillName, skillPath }, undefined);
 }
 
 export async function deleteToolSkill(input: ToolSkillInput): Promise<void> {

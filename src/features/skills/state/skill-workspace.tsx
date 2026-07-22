@@ -135,14 +135,15 @@ type SkillWorkspaceContextValue = {
   refreshLocalCandidates: () => Promise<void>;
   alignLocalWorkspaceState: () => Promise<void>;
   refreshWorkspace: (options?: RefreshWorkspaceOptions) => Promise<void>;
-  updateSkill: (skillName: string) => Promise<void>;
+  updateSkill: (skillName: string, skillPath?: string) => Promise<void>;
   updateAllSkills: () => Promise<void>;
-  deleteSkill: (skillName: string) => Promise<void>;
+  deleteSkill: (skillName: string, skillPath?: string) => Promise<void>;
   deleteToolSkill: (input: { toolId: string; skillName: string }) => Promise<void>;
   markSkillAsActive: (skillName: string) => void;
-  loadSkillFileBrowser: (skillName: string) => Promise<SkillFileBrowserSnapshot>;
+  loadSkillFileBrowser: (skillName: string, skillPath?: string) => Promise<SkillFileBrowserSnapshot>;
   loadSkillFileContent: (input: {
     skillName: string;
+    skillPath?: string;
     relativePath: string;
   }) => Promise<SkillFileDocument>;
   loadToolSkillFileBrowser: (input: {
@@ -156,11 +157,17 @@ type SkillWorkspaceContextValue = {
   }) => Promise<SkillFileDocument>;
   saveSkillFileContent: (input: {
     skillName: string;
+    skillPath?: string;
     relativePath: string;
     content: string;
   }) => Promise<SkillFileDocument>;
-  refreshSkillLocalGitState: (skillName: string) => Promise<void>;
-  toggleSkillTool: (input: { skillName: string; toolName: string; toolNames: string[] }) => Promise<void>;
+  refreshSkillLocalGitState: (skillName: string, skillPath?: string) => Promise<void>;
+  toggleSkillTool: (input: {
+    skillName: string;
+    skillPath?: string;
+    toolName: string;
+    toolNames: string[];
+  }) => Promise<void>;
   setToolSkillStatuses: (input: {
     toolName: string;
     skillNames: string[];
@@ -169,25 +176,28 @@ type SkillWorkspaceContextValue = {
   }) => Promise<void>;
   setSkillAllToolStatuses: (input: {
     skillName: string;
+    skillPath?: string;
     enabled: boolean;
     toolNames: string[];
   }) => Promise<void>;
   loadPushPreview: (input: {
     skillName: string;
+    skillPath?: string;
     targetBranch: string;
     createBranchName?: string;
   }) => Promise<PushPreviewSnapshot>;
-  loadSkillLocalChanges: (skillName: string) => Promise<GitChangeFile[]>;
+  loadSkillLocalChanges: (skillName: string, skillPath?: string) => Promise<GitChangeFile[]>;
   revertSkillChange: (input: {
     skillName: string;
+    skillPath?: string;
     relativePath: string;
     hunkIndex?: number;
     expectedPatch?: string;
     staged?: boolean;
   }) => Promise<SkillSummary>;
-  loadPushTargets: (skillName: string) => Promise<PushTargetSnapshot>;
-  openSkillRepository: (skillName: string) => Promise<void>;
-  openSkillInEditor: (input: { skillName: string; editorId: string }) => Promise<void>;
+  loadPushTargets: (skillName: string, skillPath?: string) => Promise<PushTargetSnapshot>;
+  openSkillRepository: (skillName: string, skillPath?: string) => Promise<void>;
+  openSkillInEditor: (input: { skillName: string; skillPath?: string; editorId: string }) => Promise<void>;
   defaultOpenToolId: string;
   setDefaultOpenToolId: (toolId: string) => Promise<void>;
   appSettings: AppSettings;
@@ -198,7 +208,7 @@ type SkillWorkspaceContextValue = {
   setSkillInstallActivation: (mode: InstallActivationMode) => Promise<void>;
   setMcpInstallActivation: (mode: InstallActivationMode) => Promise<void>;
   setSkillSourceViewStyle: (style: SkillSourceViewStyle) => Promise<void>;
-  openSkillWithDefaultTool: (skillName: string) => Promise<void>;
+  openSkillWithDefaultTool: (skillName: string, skillPath?: string) => Promise<void>;
   openPathInFinder: (path: string) => Promise<void>;
 };
 
@@ -298,10 +308,11 @@ function mergeUpdatedSkillsPreservingOrder(
   currentSkills: SkillSummary[],
   updatedSkills: SkillSummary[],
 ) {
-  const updatedByName = new Map(updatedSkills.map((skill) => [skill.name, skill]));
-  const mergedSkills = currentSkills.map((skill) => updatedByName.get(skill.name) ?? skill);
-  const currentSkillNames = new Set(currentSkills.map((skill) => skill.name));
-  const newSkills = updatedSkills.filter((skill) => !currentSkillNames.has(skill.name));
+  const instanceKey = (skill: SkillSummary) => `${skill.name}\0${skill.canonicalPath ?? skill.localPath}`;
+  const updatedByInstance = new Map(updatedSkills.map((skill) => [instanceKey(skill), skill]));
+  const mergedSkills = currentSkills.map((skill) => updatedByInstance.get(instanceKey(skill)) ?? skill);
+  const currentInstances = new Set(currentSkills.map(instanceKey));
+  const newSkills = updatedSkills.filter((skill) => !currentInstances.has(instanceKey(skill)));
 
   return [...newSkills, ...mergedSkills];
 }
@@ -359,6 +370,12 @@ function normalizeCachedSkillSummary(skill: CachedSkillSummary): SkillSummary {
     commitLabel: skill.commitLabel ?? "",
     gitLinked: skill.gitLinked ?? false,
     localChangeCount: skill.localChangeCount ?? 0,
+    entryPath: skill.entryPath ?? skill.localPath ?? "",
+    canonicalPath: skill.canonicalPath ?? skill.localPath ?? "",
+    managementOwner: skill.managementOwner ?? "skilldock",
+    updateDriver: skill.updateDriver ?? (skill.gitLinked ? "git" : "none"),
+    skillEntries: skill.skillEntries ?? [skill.entryPath ?? skill.localPath ?? ""].filter(Boolean),
+    pathError: skill.pathError ?? "",
     tools: skill.tools ?? [],
   };
 }
@@ -493,6 +510,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
           storagePath: "",
           skillLibraryPath: "",
           skillLibraryProvider: "skilldock",
+          agentSkillsCompatibilityEnabled: false,
           defaultOpenToolId: "",
           skillInstallActivation: "apply-all-tools",
           mcpInstallActivation: "apply-all-tools",
@@ -631,6 +649,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
     await persistAppSettings({
       ...appSettings,
       skillLibraryProvider: provider,
+      agentSkillsCompatibilityEnabled: provider === "agent-skills",
     });
     await loadWorkspaceSnapshot({ showRefreshing: true });
   }
@@ -903,15 +922,17 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
 
   async function refreshSkillLocalGitStateInBackground(
     skillName: string,
+    skillPath?: string,
     shouldApply: () => boolean = () => true,
   ) {
-    if (localGitRefreshInFlightRef.current.has(skillName)) {
+    const refreshKey = `${skillName}:${skillPath ?? ""}`;
+    if (localGitRefreshInFlightRef.current.has(refreshKey)) {
       return;
     }
 
-    localGitRefreshInFlightRef.current.add(skillName);
+    localGitRefreshInFlightRef.current.add(refreshKey);
     try {
-      const updatedSkill = await refreshLocalGitState(skillName);
+      const updatedSkill = await refreshLocalGitState(skillName, skillPath);
       if (!shouldApply()) {
         return;
       }
@@ -919,7 +940,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
     } catch (error) {
       console.error(`Failed to refresh local git state for skill ${skillName}:`, error);
     } finally {
-      localGitRefreshInFlightRef.current.delete(skillName);
+      localGitRefreshInFlightRef.current.delete(refreshKey);
     }
   }
 
@@ -1027,7 +1048,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
 
       const timer = window.setTimeout(() => {
         localGitRefreshDebounceTimersRef.current.delete(skillName);
-        void refreshSkillLocalGitStateInBackground(skillName, () => active);
+        void refreshSkillLocalGitStateInBackground(skillName, undefined, () => active);
       }, SKILL_LIBRARY_CHANGE_DEBOUNCE_MS);
       localGitRefreshDebounceTimersRef.current.set(skillName, timer);
     }).then((cleanup) => {
@@ -1061,7 +1082,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
     setInstallingMarketplaceSkillIds(new Set(installingMarketplaceSkillIdsRef.current));
     try {
       const installedSkill = await installSkillFromMarket(skill);
-      setInstalledSkills((current) => [installedSkill, ...current.filter((item) => item.name !== installedSkill.name)]);
+      setInstalledSkills((current) => mergeUpdatedSkillsPreservingOrder(current, [installedSkill]));
     } finally {
       installingMarketplaceSkillIdsRef.current.delete(skill.id);
       setInstallingMarketplaceSkillIds(new Set(installingMarketplaceSkillIdsRef.current));
@@ -1175,7 +1196,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
     setInstalledSkills((current) => {
       const merged = [...current];
       for (const installedSkill of installed.reverse()) {
-        const next = [installedSkill, ...merged.filter((item) => item.name !== installedSkill.name)];
+        const next = mergeUpdatedSkillsPreservingOrder(merged, [installedSkill]);
         merged.splice(0, merged.length, ...next);
       }
       return merged;
@@ -1184,7 +1205,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
 
   async function handleInstallFromLocalPath(localPath: string, skillName?: string) {
     const installedSkill = await installLocalSkill({ localPath, skillName });
-    setInstalledSkills((current) => [installedSkill, ...current.filter((item) => item.name !== installedSkill.name)]);
+    setInstalledSkills((current) => mergeUpdatedSkillsPreservingOrder(current, [installedSkill]));
     setLocalCandidates((current) =>
       current.filter((candidate) => candidate.localPath !== localPath && candidate.localPath !== installedSkill.localPath),
     );
@@ -1195,7 +1216,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
     setInstalledSkills((current) => {
       const merged = [...current];
       for (const installedSkill of installed.reverse()) {
-        const next = [installedSkill, ...merged.filter((item) => item.name !== installedSkill.name)];
+        const next = mergeUpdatedSkillsPreservingOrder(merged, [installedSkill]);
         merged.splice(0, merged.length, ...next);
       }
       return merged;
@@ -1213,7 +1234,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
 
   async function handleImportCandidate(localPath: string) {
     const importedSkill = await importLocalSkill(localPath);
-    setInstalledSkills((current) => [importedSkill, ...current.filter((item) => item.name !== importedSkill.name)]);
+    setInstalledSkills((current) => mergeUpdatedSkillsPreservingOrder(current, [importedSkill]));
     setLocalCandidates((current) => removeImportedCandidate(current, importedSkill));
     setToolSkillEntries((current) => current.map((entry) => (
       entry.localPath === localPath
@@ -1233,25 +1254,29 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
     setLocalCandidates(candidates);
   }
 
-  async function handleUpdateSkill(skillName: string) {
+  async function handleUpdateSkill(skillName: string, skillPath?: string) {
     workspaceMutationVersionRef.current += 1;
     try {
-      const updatedSkill = await updateSkill({ skillName });
+      const updatedSkill = await updateSkill({
+        skillName,
+        skillPath,
+      });
       markSkillAsActive(skillName);
-      setInstalledSkills((current) => [updatedSkill, ...current.filter((item) => item.name !== updatedSkill.name)]);
+      setInstalledSkills((current) => mergeUpdatedSkillsPreservingOrder(current, [updatedSkill]));
     } finally {
       workspaceMutationVersionRef.current += 1;
     }
   }
 
-  async function handleRefreshSkillLocalGitState(skillName: string) {
+  async function handleRefreshSkillLocalGitState(skillName: string, skillPath?: string) {
     markSkillAsActive(skillName);
-    const updatedSkill = await refreshLocalGitState(skillName);
+    const updatedSkill = await refreshLocalGitState(skillName, skillPath);
     setInstalledSkills((current) => mergeUpdatedSkillsPreservingOrder(current, [updatedSkill]));
   }
 
   async function handleRevertSkillChange(input: {
     skillName: string;
+    skillPath?: string;
     relativePath: string;
     hunkIndex?: number;
     expectedPatch?: string;
@@ -1271,10 +1296,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       if (skill.collabStatus === "update-available") {
         return true;
       }
-      return appSettings.skillLibraryProvider === "agent-skills"
-        && !skill.gitLinked
-        && skill.sourceUrl.trim().length === 0
-        && skill.localPath.startsWith(appSettings.skillLibraryPath);
+      return skill.updateDriver === "agent-skills-cli";
     });
     let updatePromise: Promise<void> | null = null;
     workspaceMutationVersionRef.current += 1;
@@ -1287,13 +1309,13 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
         }
 
         const updateResults = await Promise.allSettled(
-          updatableSkills.map((skill) => updateSkill({ skillName: skill.name })),
+          updatableSkills.map((skill) => updateSkill({
+            skillName: skill.name,
+            skillPath: skill.canonicalPath ?? skill.localPath,
+          })),
         );
         const updatedSkills = updateResults.flatMap((result) => (result.status === "fulfilled" ? [result.value] : []));
-        const updatedSkillMap = new Map(updatedSkills.map((skill) => [skill.name, skill]));
-        setInstalledSkills((current) =>
-          current.map((skill) => updatedSkillMap.get(skill.name) ?? skill),
-        );
+        setInstalledSkills((current) => mergeUpdatedSkillsPreservingOrder(current, updatedSkills));
 
         const failedUpdates = updateResults
           .map((result, index) => ({
@@ -1322,9 +1344,11 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
     return updatePromise;
   }
 
-  async function handleDeleteSkill(skillName: string) {
-    await deleteSkill(skillName);
-    setInstalledSkills((current) => current.filter((skill) => skill.name !== skillName));
+  async function handleDeleteSkill(skillName: string, skillPath?: string) {
+    await deleteSkill(skillName, skillPath);
+    setInstalledSkills((current) => current.filter((skill) => (
+      skill.name !== skillName || (skill.canonicalPath ?? skill.localPath) !== skillPath
+    )));
   }
 
   async function handleDeleteToolSkill(input: { toolId: string; skillName: string }) {
@@ -1334,10 +1358,18 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
     )));
   }
 
-  async function handleToggleSkillTool(input: { skillName: string; toolName: string; toolNames: string[] }) {
+  async function handleToggleSkillTool(input: {
+    skillName: string;
+    skillPath?: string;
+    toolName: string;
+    toolNames: string[];
+  }) {
     let previousSkill: SkillSummary | null = null;
     setInstalledSkills((current) => current.map((skill) => {
-      if (skill.name !== input.skillName) {
+      if (
+        skill.name !== input.skillName
+        || (input.skillPath && (skill.canonicalPath ?? skill.localPath) !== input.skillPath)
+      ) {
         return skill;
       }
 
@@ -1399,12 +1431,16 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
 
   async function handleSetSkillAllToolStatuses(input: {
     skillName: string;
+    skillPath?: string;
     enabled: boolean;
     toolNames: string[];
   }) {
     let previousSkill: SkillSummary | null = null;
     setInstalledSkills((current) => current.map((skill) => {
-      if (skill.name !== input.skillName) {
+      if (
+        skill.name !== input.skillName
+        || (input.skillPath && (skill.canonicalPath ?? skill.localPath) !== input.skillPath)
+      ) {
         return skill;
       }
 
@@ -1427,7 +1463,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
     }
   }
 
-  async function handleOpenSkillWithDefaultTool(skillName: string) {
+  async function handleOpenSkillWithDefaultTool(skillName: string, skillPath?: string) {
     markSkillAsActive(skillName);
     const availableTools = buildOpenToolOptions(toolConfigs, appSettings.language);
     const availableToolIds = new Set(availableTools.map((tool) => tool.id));
@@ -1437,6 +1473,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
 
     await openSkillInEditor({
       skillName,
+      skillPath,
       editorId: resolvedOpenToolId,
     });
   }

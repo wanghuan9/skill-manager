@@ -18,7 +18,7 @@ import {
 } from "@/features/skills/utils/skill-file-language";
 
 type SkillFileDialogProps = {
-  skill: Pick<SkillSummary, "name"> & Partial<Pick<SkillSummary, "gitLinked">>;
+  skill: Pick<SkillSummary, "name"> & Partial<Pick<SkillSummary, "localPath" | "canonicalPath" | "gitLinked">>;
   isOpen: boolean;
   onClose: () => void;
   toolId?: string;
@@ -633,6 +633,7 @@ export function SkillFileDialog({
   const [browserRefreshVersion, setBrowserRefreshVersion] = useState(0);
   const [pendingRevert, setPendingRevert] = useState<PendingSkillRevert | null>(null);
   const canShowChanges = Boolean(skill.gitLinked) && !toolId && !readOnly;
+  const skillPath = skill.canonicalPath ?? skill.localPath;
 
   const fileEntries = useMemo(
     () => entries.filter((entry) => entry.entryType === "file"),
@@ -662,6 +663,7 @@ export function SkillFileDialog({
     try {
       const document = await saveSkillFileContent({
         skillName: skill.name,
+        skillPath,
         relativePath: selectedPath,
         content,
       });
@@ -669,7 +671,7 @@ export function SkillFileDialog({
       setHasDirtyChanges(false);
       setChangesRefreshVersion((current) => current + 1);
       setIsSaving(false);
-      void refreshSkillLocalGitState(skill.name).catch((error) => {
+      void refreshSkillLocalGitState(skill.name, skillPath).catch((error) => {
         reportFailure(error, {
           operation: "refresh_skill_local_git_state",
           fallbackMessage: t("skill.files.error.refreshState"),
@@ -690,6 +692,7 @@ export function SkillFileDialog({
     saveSkillFileContent,
     selectedChange,
     selectedPath,
+    skillPath,
     skill.name,
     t,
   ]);
@@ -718,7 +721,7 @@ export function SkillFileDialog({
       try {
         const snapshot = toolId
           ? await loadToolSkillFileBrowser({ toolId, skillName: skill.name })
-          : await loadSkillFileBrowser(skill.name);
+          : await loadSkillFileBrowser(skill.name, skillPath);
         if (!active) {
           return;
         }
@@ -743,6 +746,7 @@ export function SkillFileDialog({
               })
             : await loadSkillFileContent({
                 skillName: skill.name,
+                skillPath,
                 relativePath: initialPath,
               });
           if (!active) {
@@ -783,6 +787,7 @@ export function SkillFileDialog({
     loadToolSkillFileBrowser,
     loadToolSkillFileContent,
     skill.name,
+    skillPath,
     t,
     toolId,
   ]);
@@ -796,7 +801,7 @@ export function SkillFileDialog({
     async function loadChanges() {
       setIsChangesLoading(true);
       try {
-        const changes = await loadSkillLocalChanges(skill.name);
+        const changes = await loadSkillLocalChanges(skill.name, skillPath);
         if (!active) {
           return;
         }
@@ -817,7 +822,7 @@ export function SkillFileDialog({
     return () => {
       active = false;
     };
-  }, [canShowChanges, changesRefreshVersion, isOpen, loadSkillLocalChanges, skill.name, t]);
+  }, [canShowChanges, changesRefreshVersion, isOpen, loadSkillLocalChanges, skill.name, skillPath, t]);
 
   useEffect(() => {
     if (!isOpen) {
@@ -928,6 +933,7 @@ export function SkillFileDialog({
           })
         : await loadSkillFileContent({
             skillName: skill.name,
+            skillPath,
             relativePath: path,
           });
       setSelectedPath(path);
@@ -1001,6 +1007,7 @@ export function SkillFileDialog({
     try {
       await revertSkillChange({
         skillName: skill.name,
+        skillPath,
         relativePath: pendingRevert.path,
         ...pendingRevert.input,
       });

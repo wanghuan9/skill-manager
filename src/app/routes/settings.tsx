@@ -459,6 +459,11 @@ export function SettingsRoute() {
             onChange={(value) => void handleSkillLibraryProviderChange(value)}
           />
           <span className="settings-section-hint">{appSettings.skillLibraryPath}</span>
+          {appSettings.agentSkillsCompatibilityEnabled ? (
+            <span className="settings-section-hint">
+              {appSettings.skillLibraryPath.replace("/.skilldock/skills", "/.agents/skills")}
+            </span>
+          ) : null}
         </div>
       ),
     },

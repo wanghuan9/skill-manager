@@ -26,10 +26,10 @@ use crate::library::{
     install_market_skill_from_source, is_ssh_git_url, parse_market_source_url,
     reconcile_tool_skill_symlinks, remote_clone_candidates, remove_reserved_workspace_entries,
     remove_reserved_workspace_symlinks_from_all_tools, remove_skill_symlink,
-    remove_skill_symlinks_from_all_tools, remove_tool_skill_entry, repo_cache_directory_root,
-    resolve_clone_url_http_first, resolve_git_clone_url_with_instead_of, sanitize_storage_name,
-    skill_directory, summarize_git_error, tree_relative_path_for_branch,
-    with_temporary_discovery_repo_resolved, CloneProgressCallback, RemoteCloneCandidate,
+    remove_tool_skill_entry, repo_cache_directory_root, resolve_clone_url_http_first,
+    resolve_git_clone_url_with_instead_of, sanitize_storage_name, skill_directory,
+    summarize_git_error, tree_relative_path_for_branch, with_temporary_discovery_repo_resolved,
+    CloneProgressCallback, RemoteCloneCandidate,
 };
 use crate::models::{
     AppSettings, GitAccountSummary, GitBranchOption, GitChangeFile, LocalInstallSkillCandidate,
@@ -2642,7 +2642,7 @@ fn inspect_skill_tool_status(skill: &SkillSummary, tool_name: &str) -> String {
         return "需要重同步".into();
     };
     if target_path != expected_path {
-        return "需要重同步".into();
+        return "未启用".into();
     }
 
     "已同步".into()
@@ -2924,17 +2924,13 @@ fn enable_skill_for_all_installed_tools(
             .filter(|skill| skill.name != updated_skill.name)
             .collect::<Vec<_>>();
         enabled_skills.push(updated_skill.clone());
-        if let Err(error) = reconcile_tool_skill_symlinks(&tool_skills_path, &enabled_skills) {
-            if cfg!(windows) {
-                set_skill_tool_enabled_status(
-                    std::slice::from_mut(&mut updated_skill),
-                    &skill_name,
-                    &tool_name,
-                    false,
-                )?;
-                continue;
-            }
-            return Err(error);
+        if reconcile_tool_skill_symlinks(&tool_skills_path, &enabled_skills).is_err() {
+            set_skill_tool_enabled_status(
+                std::slice::from_mut(&mut updated_skill),
+                &skill_name,
+                &tool_name,
+                false,
+            )?;
         }
     }
 
@@ -2952,9 +2948,9 @@ fn recover_missing_managed_skills(
         return installed_skills;
     };
 
-    let mut existing_names = installed_skills
+    let mut existing_paths = installed_skills
         .iter()
-        .map(|skill| skill.name.clone())
+        .filter_map(|skill| Path::new(&skill.local_path).canonicalize().ok())
         .collect::<BTreeSet<_>>();
     let mut entry_paths = entries
         .flatten()
@@ -2974,7 +2970,7 @@ fn recover_missing_managed_skills(
         else {
             continue;
         };
-        if is_reserved_workspace_name(&name) || existing_names.contains(&name) {
+        if is_reserved_workspace_name(&name) {
             continue;
         }
 
@@ -2987,6 +2983,12 @@ fn recover_missing_managed_skills(
         } else {
             continue;
         };
+        let canonical_skill_path = skill_path
+            .canonicalize()
+            .unwrap_or_else(|_| skill_path.clone());
+        if existing_paths.contains(&canonical_skill_path) {
+            continue;
+        }
         let skill_path_label = skill_path.to_string_lossy().to_string();
         let git_root = git_repo_root(&skill_path_label);
         let git_linked = git_root.is_some();
@@ -3037,6 +3039,7 @@ fn recover_missing_managed_skills(
             lifecycle_source: String::new(),
             owner_plugin_id: String::new(),
             owner_plugin_name: String::new(),
+            instance: Default::default(),
             tools: Vec::new(),
         };
         let tool_entries = installed_tool_sync_entries_for_skill(&recovered, tool_configs);
@@ -3044,7 +3047,7 @@ fn recover_missing_managed_skills(
             &recovered,
             &tool_entries,
         ));
-        existing_names.insert(name);
+        existing_paths.insert(canonical_skill_path);
     }
 
     if installed_skills.len() != original_count {
@@ -3116,10 +3119,22 @@ fn set_skill_tool_enabled_status(
     tool_name: &str,
     enabled: bool,
 ) -> Result<SkillSummary, String> {
-    let skill = installed_skills
+    let skill_index = installed_skills
         .iter_mut()
-        .find(|skill| skill.name == skill_name)
+        .position(|skill| skill.name == skill_name)
         .ok_or_else(|| format!("未找到技能 {skill_name}"))?;
+    set_skill_tool_enabled_status_at_index(installed_skills, skill_index, tool_name, enabled)
+}
+
+fn set_skill_tool_enabled_status_at_index(
+    installed_skills: &mut [SkillSummary],
+    skill_index: usize,
+    tool_name: &str,
+    enabled: bool,
+) -> Result<SkillSummary, String> {
+    let skill = installed_skills
+        .get_mut(skill_index)
+        .ok_or_else(|| "未找到指定 Skill 实例".to_string())?;
     let tool = skill
         .tools
         .iter_mut()
@@ -3444,11 +3459,32 @@ fn tool_name_to_id(tool_name: &str) -> Result<String, String> {
     }
 }
 
-fn find_skill_by_name(skill_name: &str) -> Result<(Vec<SkillSummary>, usize), String> {
+fn find_skill_instance(
+    skill_name: &str,
+    skill_path: Option<&str>,
+) -> Result<(Vec<SkillSummary>, usize), String> {
     let installed_skills = load_installed_skills(&default_installed_skills());
+    let requested_path = skill_path
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
+        .map(|path| path.canonicalize().unwrap_or(path));
     let skill_index = installed_skills
         .iter()
-        .position(|skill| skill.name == skill_name)
+        .position(|skill| {
+            if skill.name != skill_name {
+                return false;
+            }
+            requested_path.as_ref().is_none_or(|requested| {
+                let instance_path = if skill.instance.canonical_path.trim().is_empty() {
+                    &skill.local_path
+                } else {
+                    &skill.instance.canonical_path
+                };
+                let current_path = PathBuf::from(instance_path);
+                current_path.canonicalize().unwrap_or(current_path) == *requested
+            })
+        })
         .ok_or_else(|| format!("未找到技能 {skill_name}"))?;
 
     Ok((installed_skills, skill_index))
@@ -3975,8 +4011,11 @@ fn revert_change_file(skill_path: &str, relative_path: &str, status: &str) -> Re
     Ok(())
 }
 
-fn refresh_and_persist_skill(skill_name: &str) -> Result<SkillSummary, String> {
-    let (mut installed_skills, skill_index) = find_skill_by_name(skill_name)?;
+fn refresh_and_persist_skill(
+    skill_name: &str,
+    skill_path: Option<&str>,
+) -> Result<SkillSummary, String> {
+    let (mut installed_skills, skill_index) = find_skill_instance(skill_name, skill_path)?;
     let normalized_skill = normalize_installed_skill_source_url(&installed_skills[skill_index]);
     let normalized_skill = normalize_skill_tools_from_local_state(&normalized_skill);
     let refreshed_skill = enrich_skill_with_git_state(&normalized_skill);
@@ -3985,8 +4024,11 @@ fn refresh_and_persist_skill(skill_name: &str) -> Result<SkillSummary, String> {
     Ok(refreshed_skill)
 }
 
-fn refresh_and_persist_local_git_skill(skill_name: &str) -> Result<SkillSummary, String> {
-    let (mut installed_skills, skill_index) = find_skill_by_name(skill_name)?;
+fn refresh_and_persist_local_git_skill(
+    skill_name: &str,
+    skill_path: Option<&str>,
+) -> Result<SkillSummary, String> {
+    let (mut installed_skills, skill_index) = find_skill_instance(skill_name, skill_path)?;
     let normalized_skill = normalize_installed_skill_source_url(&installed_skills[skill_index]);
     let normalized_skill = normalize_skill_tools_from_local_state(&normalized_skill);
     let refreshed_skill = enrich_skill_with_local_git_state(&normalized_skill);
@@ -4045,23 +4087,22 @@ fn merge_refreshed_skill_states_with_latest_state(
     refresh_started_skills: &[SkillSummary],
     latest_skills: Vec<SkillSummary>,
 ) -> Vec<SkillSummary> {
-    let refresh_started_by_name = refresh_started_skills
+    let refresh_started_by_instance = refresh_started_skills
         .iter()
-        .map(|skill| (skill.name.as_str(), skill))
+        .map(|skill| (skill_instance_key(skill), skill))
         .collect::<HashMap<_, _>>();
-    let mut refreshed_by_name = refreshed_skills
+    let mut refreshed_by_instance = refreshed_skills
         .into_iter()
-        .map(|skill| (skill.name.clone(), skill))
+        .map(|skill| (skill_instance_key(&skill), skill))
         .collect::<HashMap<_, _>>();
     latest_skills
         .into_iter()
         .map(|current_skill| {
-            let Some(refreshed_skill) = refreshed_by_name.remove(&current_skill.name) else {
+            let instance_key = skill_instance_key(&current_skill);
+            let Some(refreshed_skill) = refreshed_by_instance.remove(&instance_key) else {
                 return current_skill;
             };
-            let Some(refresh_started_skill) =
-                refresh_started_by_name.get(current_skill.name.as_str())
-            else {
+            let Some(refresh_started_skill) = refresh_started_by_instance.get(&instance_key) else {
                 return current_skill;
             };
 
@@ -4077,23 +4118,40 @@ fn merge_refreshed_skill_states_with_latest_state(
         .collect()
 }
 
-fn skill_base_path(skill_name: &str) -> Result<PathBuf, String> {
-    let (installed_skills, skill_index) = find_skill_by_name(skill_name)?;
+fn skill_instance_key(skill: &SkillSummary) -> String {
+    let path = if skill.instance.canonical_path.trim().is_empty() {
+        &skill.local_path
+    } else {
+        &skill.instance.canonical_path
+    };
+    format!("{}\n{}", skill.name, path)
+}
+
+fn skill_base_path(skill_name: &str, skill_path: Option<&str>) -> Result<PathBuf, String> {
+    let (installed_skills, skill_index) = find_skill_instance(skill_name, skill_path)?;
     Ok(PathBuf::from(&installed_skills[skill_index].local_path))
 }
 
-fn relative_file_path(skill_name: &str, relative_path: &str) -> Result<PathBuf, String> {
+fn relative_file_path(
+    skill_name: &str,
+    skill_path: Option<&str>,
+    relative_path: &str,
+) -> Result<PathBuf, String> {
     if relative_path.trim().is_empty() {
         return Err("文件路径不能为空".into());
     }
 
-    let base_path = skill_base_path(skill_name)?;
-    let full_path = base_path.join(relative_path);
-    if !full_path.starts_with(&base_path) {
+    let relative = Path::new(relative_path);
+    if relative.is_absolute()
+        || relative
+            .components()
+            .any(|component| !matches!(component, std::path::Component::Normal(_)))
+    {
         return Err("不允许访问 skill 目录之外的文件".into());
     }
 
-    Ok(full_path)
+    let base_path = skill_base_path(skill_name, skill_path)?;
+    Ok(base_path.join(relative))
 }
 
 fn tool_skill_base_path(tool_id: &str, skill_name: &str) -> Result<PathBuf, String> {
@@ -6041,10 +6099,15 @@ pub async fn refresh_local_git_states() -> Vec<SkillSummary> {
 }
 
 #[tauri::command]
-pub async fn refresh_local_git_state(skill_name: String) -> Result<SkillSummary, String> {
-    tauri::async_runtime::spawn_blocking(move || refresh_and_persist_local_git_skill(&skill_name))
-        .await
-        .map_err(|error| format!("后台刷新本地 Git 状态失败: {error}"))?
+pub async fn refresh_local_git_state(
+    skill_name: String,
+    skill_path: Option<String>,
+) -> Result<SkillSummary, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        refresh_and_persist_local_git_skill(&skill_name, skill_path.as_deref())
+    })
+    .await
+    .map_err(|error| format!("后台刷新本地 Git 状态失败: {error}"))?
 }
 
 #[tauri::command]
@@ -6086,6 +6149,7 @@ fn install_skill_from_market_blocking(skill: MarketplaceSkill) -> Result<SkillSu
         lifecycle_source: String::new(),
         owner_plugin_id: String::new(),
         owner_plugin_name: String::new(),
+        instance: Default::default(),
         tools: vec![ToolSyncStatus {
             name: "Codex".into(),
             status_label: "待同步".into(),
@@ -6159,6 +6223,7 @@ pub fn install_skill_from_repo(repo_url: &str) -> Result<SkillSummary, String> {
         lifecycle_source: String::new(),
         owner_plugin_id: String::new(),
         owner_plugin_name: String::new(),
+        instance: Default::default(),
         tools: vec![],
     };
 
@@ -6548,6 +6613,7 @@ fn install_selected_repo_skills_blocking(
             lifecycle_source: String::new(),
             owner_plugin_id: String::new(),
             owner_plugin_name: String::new(),
+            instance: Default::default(),
             tools: vec![],
         };
         let enriched = enrich_freshly_installed_skill(
@@ -6684,6 +6750,7 @@ fn install_local_skill_from_source_dir(
         lifecycle_source: String::new(),
         owner_plugin_id: String::new(),
         owner_plugin_name: String::new(),
+        instance: Default::default(),
         tools: vec![],
     };
 
@@ -7097,6 +7164,7 @@ pub fn import_local_skill(local_path: &str) -> Result<SkillSummary, String> {
             lifecycle_source: String::new(),
             owner_plugin_id: String::new(),
             owner_plugin_name: String::new(),
+            instance: Default::default(),
             tools: vec![],
         };
 
@@ -7112,8 +7180,11 @@ pub fn import_local_skill(local_path: &str) -> Result<SkillSummary, String> {
 }
 
 #[tauri::command]
-pub fn get_push_target_snapshot(skill_name: &str) -> Result<PushTargetSnapshot, String> {
-    let (installed_skills, skill_index) = find_skill_by_name(skill_name)?;
+pub fn get_push_target_snapshot(
+    skill_name: &str,
+    skill_path: Option<&str>,
+) -> Result<PushTargetSnapshot, String> {
+    let (installed_skills, skill_index) = find_skill_instance(skill_name, skill_path)?;
     let skill = &installed_skills[skill_index];
     let current_branch = current_branch_name(&skill.local_path)?;
     let branches = collect_known_branches(&skill.local_path, &current_branch)?
@@ -7133,10 +7204,11 @@ pub fn get_push_target_snapshot(skill_name: &str) -> Result<PushTargetSnapshot, 
 #[tauri::command]
 pub fn get_push_preview_snapshot(
     skill_name: &str,
+    skill_path: Option<&str>,
     target_branch: &str,
     create_branch_name: Option<String>,
 ) -> Result<PushPreviewSnapshot, String> {
-    let (installed_skills, skill_index) = find_skill_by_name(skill_name)?;
+    let (installed_skills, skill_index) = find_skill_instance(skill_name, skill_path)?;
     let skill = &installed_skills[skill_index];
     let branch_name = create_branch_name
         .as_deref()
@@ -7164,8 +7236,11 @@ pub fn get_push_preview_snapshot(
 }
 
 #[tauri::command]
-pub fn get_skill_local_changes(skill_name: &str) -> Result<Vec<GitChangeFile>, String> {
-    let (installed_skills, skill_index) = find_skill_by_name(skill_name)?;
+pub fn get_skill_local_changes(
+    skill_name: &str,
+    skill_path: Option<&str>,
+) -> Result<Vec<GitChangeFile>, String> {
+    let (installed_skills, skill_index) = find_skill_instance(skill_name, skill_path)?;
     let skill = &installed_skills[skill_index];
     collect_working_tree_changes(&skill.local_path)
 }
@@ -7173,13 +7248,14 @@ pub fn get_skill_local_changes(skill_name: &str) -> Result<Vec<GitChangeFile>, S
 #[tauri::command]
 pub fn revert_skill_change(
     skill_name: &str,
+    skill_path: Option<&str>,
     relative_path: &str,
     hunk_index: Option<usize>,
     expected_patch: Option<String>,
     staged: bool,
 ) -> Result<SkillSummary, String> {
     validate_git_change_path(relative_path)?;
-    let (installed_skills, skill_index) = find_skill_by_name(skill_name)?;
+    let (installed_skills, skill_index) = find_skill_instance(skill_name, skill_path)?;
     let skill = &installed_skills[skill_index];
     let changes = collect_working_tree_changes(&skill.local_path)?;
     let change = changes
@@ -7204,12 +7280,15 @@ pub fn revert_skill_change(
         revert_change_file(&skill.local_path, relative_path, &change.status)?;
     }
 
-    refresh_and_persist_local_git_skill(skill_name)
+    refresh_and_persist_local_git_skill(skill_name, skill_path)
 }
 
 #[tauri::command]
-pub fn push_skill_to_current_branch(skill_name: &str) -> Result<SkillSummary, String> {
-    let (installed_skills, skill_index) = find_skill_by_name(skill_name)?;
+pub fn push_skill_to_current_branch(
+    skill_name: &str,
+    skill_path: Option<&str>,
+) -> Result<SkillSummary, String> {
+    let (installed_skills, skill_index) = find_skill_instance(skill_name, skill_path)?;
     let skill = &installed_skills[skill_index];
     let current_branch = current_branch_name(&skill.local_path)?;
     if current_branch == "HEAD" {
@@ -7227,12 +7306,15 @@ pub fn push_skill_to_current_branch(skill_name: &str) -> Result<SkillSummary, St
     }
 
     run_git_command(&skill.local_path, &["push", ORIGIN_REMOTE, &current_branch])?;
-    refresh_and_persist_skill(skill_name)
+    refresh_and_persist_skill(skill_name, skill_path)
 }
 
 #[tauri::command]
-pub fn get_update_preview_snapshot(skill_name: &str) -> Result<UpdatePreviewSnapshot, String> {
-    let (installed_skills, skill_index) = find_skill_by_name(skill_name)?;
+pub fn get_update_preview_snapshot(
+    skill_name: &str,
+    skill_path: Option<&str>,
+) -> Result<UpdatePreviewSnapshot, String> {
+    let (installed_skills, skill_index) = find_skill_instance(skill_name, skill_path)?;
     let skill = &installed_skills[skill_index];
     let current_branch = current_branch_name(&skill.local_path)?;
     run_git_command(
@@ -7258,8 +7340,8 @@ pub fn get_update_preview_snapshot(skill_name: &str) -> Result<UpdatePreviewSnap
 }
 
 #[tauri::command]
-pub fn open_skill_repository(skill_name: &str) -> Result<(), String> {
-    let (installed_skills, skill_index) = find_skill_by_name(skill_name)?;
+pub fn open_skill_repository(skill_name: &str, skill_path: Option<&str>) -> Result<(), String> {
+    let (installed_skills, skill_index) = find_skill_instance(skill_name, skill_path)?;
     let skill = &installed_skills[skill_index];
     let repository_path = repository_root_path(&skill.local_path)?;
     open_path_cross_platform(&repository_path).map_err(|error| format!("打开仓库目录失败: {error}"))
@@ -7347,8 +7429,12 @@ pub fn open_tool_mcp_config(tool_id: &str, editor_id: Option<String>) -> Result<
 }
 
 #[tauri::command]
-pub fn open_skill_in_editor(skill_name: &str, editor_id: &str) -> Result<(), String> {
-    let (installed_skills, skill_index) = find_skill_by_name(skill_name)?;
+pub fn open_skill_in_editor(
+    skill_name: &str,
+    skill_path: Option<&str>,
+    editor_id: &str,
+) -> Result<(), String> {
+    let (installed_skills, skill_index) = find_skill_instance(skill_name, skill_path)?;
     let skill = &installed_skills[skill_index];
     let target_path = open_target_path_for_skill(&skill.local_path);
     let resolved_target_path = if editor_id == "intellij" {
@@ -7370,30 +7456,45 @@ pub fn open_skill_in_editor(skill_name: &str, editor_id: &str) -> Result<(), Str
 }
 
 #[tauri::command]
-pub async fn update_skill(skill_name: String) -> Result<SkillSummary, String> {
-    tauri::async_runtime::spawn_blocking(move || update_skill_blocking(&skill_name))
-        .await
-        .map_err(|error| format!("更新任务执行失败: {error}"))?
+pub async fn update_skill(
+    skill_name: String,
+    skill_path: Option<String>,
+) -> Result<SkillSummary, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        update_skill_blocking(&skill_name, skill_path.as_deref())
+    })
+    .await
+    .map_err(|error| format!("更新任务执行失败: {error}"))?
 }
 
-fn update_skill_blocking(skill_name: &str) -> Result<SkillSummary, String> {
-    let (installed_skills, skill_index) = find_skill_by_name(skill_name)?;
+fn update_skill_blocking(
+    skill_name: &str,
+    skill_path: Option<&str>,
+) -> Result<SkillSummary, String> {
+    let (installed_skills, skill_index) = find_skill_instance(skill_name, skill_path)?;
     let skill = &installed_skills[skill_index];
-    if skill.source_url.trim().is_empty()
-        && !skill.git_linked
-        && crate::agent_skills_cli::is_global_skill_path(Path::new(&skill.local_path))
-    {
+    if skill.instance.update_driver == "agent-skills-cli" {
         crate::agent_skills_cli::update_global_skill(&skill.name)?;
-    } else {
+    } else if skill.instance.update_driver == "git" || skill.git_linked {
         update_skill_repo(skill)?;
+    } else {
+        return Err("此 Skill 没有可用的自动更新方式。".into());
     }
     clear_skill_update_cache(skill);
-    refresh_and_persist_skill(skill_name)
+    let refreshed = if skill.instance.update_driver == "git" || skill.git_linked {
+        enrich_skill_with_git_state(skill)
+    } else {
+        skill.clone()
+    };
+    Ok(refreshed)
 }
 
 #[tauri::command]
-pub fn get_skill_file_browser(skill_name: &str) -> Result<SkillFileBrowserSnapshot, String> {
-    let base_path = skill_base_path(skill_name)?;
+pub fn get_skill_file_browser(
+    skill_name: &str,
+    skill_path: Option<&str>,
+) -> Result<SkillFileBrowserSnapshot, String> {
+    let base_path = skill_base_path(skill_name, skill_path)?;
     let root_name = base_path
         .file_name()
         .and_then(|value| value.to_str())
@@ -7422,9 +7523,10 @@ pub fn get_skill_file_browser(skill_name: &str) -> Result<SkillFileBrowserSnapsh
 #[tauri::command]
 pub fn get_skill_file_content(
     skill_name: &str,
+    skill_path: Option<&str>,
     relative_path: &str,
 ) -> Result<SkillFileDocument, String> {
-    let full_path = relative_file_path(skill_name, relative_path)?;
+    let full_path = relative_file_path(skill_name, skill_path, relative_path)?;
     let content =
         fs::read_to_string(&full_path).map_err(|error| format!("读取文件失败: {error}"))?;
 
@@ -7488,10 +7590,11 @@ pub fn delete_tool_skill(tool_id: &str, skill_name: &str) -> Result<(), String> 
 #[tauri::command]
 pub fn save_skill_file_content(
     skill_name: &str,
+    skill_path: Option<&str>,
     relative_path: &str,
     content: &str,
 ) -> Result<SkillFileDocument, String> {
-    let full_path = relative_file_path(skill_name, relative_path)?;
+    let full_path = relative_file_path(skill_name, skill_path, relative_path)?;
     if let Some(parent_dir) = full_path.parent() {
         fs::create_dir_all(parent_dir).map_err(|error| format!("创建父目录失败: {error}"))?;
     }
@@ -7504,38 +7607,40 @@ pub fn save_skill_file_content(
 }
 
 #[tauri::command]
-pub fn delete_skill(skill_name: &str) -> Result<(), String> {
-    let (installed_skills, skill_index) = find_skill_by_name(skill_name)?;
+pub fn delete_skill(skill_name: &str, skill_path: Option<&str>) -> Result<(), String> {
+    let (installed_skills, skill_index) = find_skill_instance(skill_name, skill_path)?;
     let skill = installed_skills[skill_index].clone();
-    let is_non_git_agent_skill = skill.source_url.trim().is_empty()
-        && !skill.git_linked
-        && crate::agent_skills_cli::is_global_skill_path(Path::new(&skill.local_path));
-    if is_non_git_agent_skill {
-        let _ = crate::agent_skills_cli::remove_global_skill(&skill.name);
-    }
 
-    // 删除所有工具中的符号链接
-    let skill_path = PathBuf::from(&skill.local_path);
-    remove_skill_symlinks_from_all_tools(&skill.name)?;
-    if let Some(legacy_skill_dir_name) = skill_path.file_name().and_then(|name| name.to_str()) {
-        if legacy_skill_dir_name != skill.name {
-            remove_skill_symlinks_from_all_tools(legacy_skill_dir_name)?;
+    match skill.instance.management_owner.as_str() {
+        "agent-skills-cli" => crate::agent_skills_cli::remove_global_skill(&skill.name)?,
+        "external" => {
+            let entry_path = PathBuf::from(&skill.instance.entry_path);
+            let metadata = fs::symlink_metadata(&entry_path)
+                .map_err(|error| format!("读取 Agent Skill 入口失败: {error}"))?;
+            if !metadata.file_type().is_symlink() {
+                return Err("该 Skill 是外部真实目录，SkillDock 不会直接删除其内容。".into());
+            }
+            fs::remove_file(&entry_path)
+                .map_err(|error| format!("删除 Agent Skill 入口失败: {error}"))?;
+        }
+        _ => {
+            let local_path = PathBuf::from(&skill.local_path);
+            let delete_target = managed_delete_target(&local_path)?;
+            if delete_target.exists() && should_remove_local_directory(&delete_target)? {
+                let metadata = fs::symlink_metadata(&delete_target)
+                    .map_err(|error| format!("读取 skill 目录失败: {error}"))?;
+                if metadata.file_type().is_symlink() {
+                    fs::remove_file(&delete_target)
+                        .map_err(|error| format!("删除 skill 链接失败: {error}"))?;
+                } else {
+                    fs::remove_dir_all(&delete_target)
+                        .map_err(|error| format!("删除 skill 目录失败: {error}"))?;
+                }
+            }
         }
     }
 
-    let local_path = PathBuf::from(&skill.local_path);
-    let delete_target = managed_delete_target(&local_path)?;
-    if delete_target.exists() && should_remove_local_directory(&delete_target)? {
-        let metadata = fs::symlink_metadata(&delete_target)
-            .map_err(|error| format!("读取 skill 目录失败: {error}"))?;
-        if metadata.file_type().is_symlink() {
-            fs::remove_file(&delete_target)
-                .map_err(|error| format!("删除 skill 链接失败: {error}"))?;
-        } else {
-            fs::remove_dir_all(&delete_target)
-                .map_err(|error| format!("删除 skill 目录失败: {error}"))?;
-        }
-    }
+    remove_matching_skill_links_from_all_tools(&skill)?;
 
     let mut next_installed_skills = installed_skills;
     next_installed_skills.remove(skill_index);
@@ -7544,14 +7649,66 @@ pub fn delete_skill(skill_name: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn remove_matching_skill_links_from_all_tools(skill: &SkillSummary) -> Result<(), String> {
+    let expected_path = PathBuf::from(if skill.instance.canonical_path.trim().is_empty() {
+        &skill.local_path
+    } else {
+        &skill.instance.canonical_path
+    });
+    let expected_path = expected_path.canonicalize().unwrap_or(expected_path);
+    for tool in build_tool_configs() {
+        if tool.skills_path.trim().is_empty() {
+            continue;
+        }
+        let link_path = PathBuf::from(&tool.skills_path).join(&skill.name);
+        let Ok(metadata) = fs::symlink_metadata(&link_path) else {
+            continue;
+        };
+        if metadata.file_type().is_symlink()
+            && link_path.canonicalize().ok().as_ref() == Some(&expected_path)
+        {
+            fs::remove_file(&link_path)
+                .map_err(|error| format!("删除工具 Skill 链接失败: {error}"))?;
+        }
+    }
+    Ok(())
+}
+
+fn remove_matching_skill_link(tool_skills_path: &str, skill: &SkillSummary) -> Result<(), String> {
+    let link_path = PathBuf::from(tool_skills_path).join(&skill.name);
+    let Ok(metadata) = fs::symlink_metadata(&link_path) else {
+        return Ok(());
+    };
+    if !metadata.file_type().is_symlink() {
+        return Ok(());
+    }
+
+    let expected_path = PathBuf::from(if skill.instance.canonical_path.trim().is_empty() {
+        &skill.local_path
+    } else {
+        &skill.instance.canonical_path
+    });
+    let expected_path = expected_path.canonicalize().unwrap_or(expected_path);
+    if link_path.canonicalize().ok().as_ref() == Some(&expected_path) {
+        fs::remove_file(&link_path).map_err(|error| format!("删除工具 Skill 链接失败: {error}"))?;
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn toggle_skill_tool_status(
     skill_name: String,
+    skill_path: Option<String>,
     tool_name: String,
     tool_names: Vec<String>,
 ) -> Result<SkillSummary, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        toggle_skill_tool_status_blocking(&skill_name, &tool_name, &tool_names)
+        toggle_skill_tool_status_blocking(
+            &skill_name,
+            skill_path.as_deref(),
+            &tool_name,
+            &tool_names,
+        )
     })
     .await
     .map_err(|error| format!("切换 skill 工具状态失败: {error}"))?
@@ -7559,6 +7716,7 @@ pub async fn toggle_skill_tool_status(
 
 fn toggle_skill_tool_status_blocking(
     skill_name: &str,
+    skill_path: Option<&str>,
     tool_name: &str,
     tool_names: &[String],
 ) -> Result<SkillSummary, String> {
@@ -7573,10 +7731,7 @@ fn toggle_skill_tool_status_blocking(
         &[skill_name.to_string()],
         tool_names,
     );
-    let skill_index = installed_skills
-        .iter()
-        .position(|skill| skill.name == skill_name)
-        .ok_or_else(|| format!("未找到技能 {skill_name}"))?;
+    let (_, skill_index) = find_skill_instance(skill_name, skill_path)?;
     let tool_id = tool_name_to_id(tool_name)?;
     let tool_skills_path = get_tool_skills_path(&tool_id)?;
     let is_enabling = installed_skills[skill_index]
@@ -7585,18 +7740,16 @@ fn toggle_skill_tool_status_blocking(
         .find(|tool| tool.name == tool_name)
         .is_none_or(|tool| !tool_status_is_enabled(&tool.status_label));
 
-    let updated_skill =
-        set_skill_tool_enabled_status(&mut installed_skills, skill_name, tool_name, is_enabling)?;
+    let updated_skill = set_skill_tool_enabled_status_at_index(
+        &mut installed_skills,
+        skill_index,
+        tool_name,
+        is_enabling,
+    )?;
     if is_enabling {
         create_skill_symlink(&updated_skill.local_path, skill_name, &tool_skills_path)?;
     } else {
-        remove_skill_symlink(&tool_skills_path, skill_name)?;
-        let skill_path = PathBuf::from(&updated_skill.local_path);
-        if let Some(legacy_skill_dir_name) = skill_path.file_name().and_then(|name| name.to_str()) {
-            if legacy_skill_dir_name != skill_name {
-                remove_skill_symlink(&tool_skills_path, legacy_skill_dir_name)?;
-            }
-        }
+        remove_matching_skill_link(&tool_skills_path, &updated_skill)?;
     }
 
     save_installed_skills(&installed_skills)?;
@@ -7677,11 +7830,17 @@ fn set_tool_skill_statuses_blocking(
 #[tauri::command]
 pub async fn set_skill_all_tool_statuses(
     skill_name: String,
+    skill_path: Option<String>,
     enabled: bool,
     tool_names: Vec<String>,
 ) -> Result<SkillSummary, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        set_skill_all_tool_statuses_blocking(&skill_name, enabled, &tool_names)
+        set_skill_all_tool_statuses_blocking(
+            &skill_name,
+            skill_path.as_deref(),
+            enabled,
+            &tool_names,
+        )
     })
     .await
     .map_err(|error| format!("批量切换 skill 全部工具状态失败: {error}"))?
@@ -7689,6 +7848,7 @@ pub async fn set_skill_all_tool_statuses(
 
 fn set_skill_all_tool_statuses_blocking(
     skill_name: &str,
+    skill_path: Option<&str>,
     enabled: bool,
     tool_names: &[String],
 ) -> Result<SkillSummary, String> {
@@ -7704,10 +7864,7 @@ fn set_skill_all_tool_statuses_blocking(
         &[skill_name.to_string()],
         tool_names,
     );
-    let skill_index = installed_skills
-        .iter()
-        .position(|skill| skill.name == skill_name)
-        .ok_or_else(|| format!("未找到技能 {skill_name}"))?;
+    let (_, skill_index) = find_skill_instance(skill_name, skill_path)?;
     let target_tool_name_set = normalize_known_tool_names(tool_names)
         .into_iter()
         .collect::<BTreeSet<_>>();
@@ -7728,21 +7885,17 @@ fn set_skill_all_tool_statuses_blocking(
     for tool_name in &target_tool_names {
         let tool_id = tool_name_to_id(tool_name)?;
         let tool_skills_path = get_tool_skills_path(&tool_id)?;
-        let updated_skill =
-            set_skill_tool_enabled_status(&mut installed_skills, skill_name, tool_name, enabled)?;
+        let updated_skill = set_skill_tool_enabled_status_at_index(
+            &mut installed_skills,
+            skill_index,
+            tool_name,
+            enabled,
+        )?;
 
         if enabled {
             create_skill_symlink(&updated_skill.local_path, skill_name, &tool_skills_path)?;
         } else {
-            remove_skill_symlink(&tool_skills_path, skill_name)?;
-            let skill_path = PathBuf::from(&updated_skill.local_path);
-            if let Some(legacy_skill_dir_name) =
-                skill_path.file_name().and_then(|name| name.to_str())
-            {
-                if legacy_skill_dir_name != skill_name {
-                    remove_skill_symlink(&tool_skills_path, legacy_skill_dir_name)?;
-                }
-            }
+            remove_matching_skill_link(&tool_skills_path, &updated_skill)?;
         }
     }
 
@@ -8298,6 +8451,7 @@ mod tests {
             lifecycle_source: String::new(),
             owner_plugin_id: String::new(),
             owner_plugin_name: String::new(),
+            instance: Default::default(),
             tools: Vec::new(),
         }
     }
@@ -9331,7 +9485,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn local_install_default_activation_replaces_existing_external_symlink() {
+    fn local_install_preserves_existing_external_symlink_on_activation_conflict() {
         let _guard = TEST_ENV_LOCK
             .lock()
             .unwrap_or_else(|error| error.into_inner());
@@ -9384,19 +9538,19 @@ mod tests {
         assert!(managed_skill_dir.join("SKILL.md").is_file());
         assert_eq!(
             fs::read_link(&codex_skill_link).expect("read codex symlink"),
-            managed_skill_dir
+            legacy_skill_dir
         );
         assert!(installed[0]
             .tools
             .iter()
-            .any(|tool| { tool.name == "Codex" && tool.status_label == "已启用" }));
+            .any(|tool| { tool.name == "Codex" && tool.status_label == "未启用" }));
 
         let _ = fs::remove_dir_all(temp_dir);
     }
 
     #[cfg(unix)]
     #[test]
-    fn local_import_copies_external_skill_into_skilldock_before_syncing() {
+    fn local_import_copies_external_skill_without_overwriting_source_link() {
         let _guard = TEST_ENV_LOCK
             .lock()
             .unwrap_or_else(|error| error.into_inner());
@@ -9436,12 +9590,12 @@ mod tests {
         assert!(managed_skill_dir.join("SKILL.md").is_file());
         assert_eq!(
             fs::read_link(&codex_skill_link).expect("read codex symlink"),
-            managed_skill_dir
+            legacy_skill_dir
         );
         assert!(imported
             .tools
             .iter()
-            .any(|tool| { tool.name == "Codex" && tool.status_label == "已启用" }));
+            .any(|tool| { tool.name == "Codex" && tool.status_label == "未启用" }));
 
         let _ = fs::remove_dir_all(temp_dir);
     }
@@ -9489,7 +9643,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn local_import_replaces_existing_tool_directory_with_symlink() {
+    fn local_import_preserves_existing_tool_directory_on_activation_conflict() {
         let _guard = TEST_ENV_LOCK
             .lock()
             .unwrap_or_else(|error| error.into_inner());
@@ -9522,15 +9676,12 @@ mod tests {
             managed_skill_dir.to_string_lossy().to_string()
         );
         assert!(managed_skill_dir.join("SKILL.md").is_file());
-        assert!(cursor_skill_dir.is_symlink());
-        assert_eq!(
-            fs::read_link(&cursor_skill_dir).expect("read cursor symlink"),
-            managed_skill_dir
-        );
+        assert!(cursor_skill_dir.is_dir());
+        assert!(!cursor_skill_dir.is_symlink());
         assert!(imported
             .tools
             .iter()
-            .any(|tool| { tool.name == "Cursor" && tool.status_label == "已启用" }));
+            .any(|tool| { tool.name == "Cursor" && tool.status_label == "未启用" }));
 
         let _ = fs::remove_dir_all(temp_dir);
     }
@@ -9729,6 +9880,7 @@ mod tests {
             lifecycle_source: String::new(),
             owner_plugin_id: String::new(),
             owner_plugin_name: String::new(),
+            instance: Default::default(),
             tools: vec![],
         };
         let installed =
@@ -9819,6 +9971,7 @@ mod tests {
             lifecycle_source: "direct".into(),
             owner_plugin_id: String::new(),
             owner_plugin_name: String::new(),
+            instance: Default::default(),
             tools: vec![],
         };
 
@@ -9883,6 +10036,7 @@ mod tests {
             lifecycle_source: "direct".into(),
             owner_plugin_id: String::new(),
             owner_plugin_name: String::new(),
+            instance: Default::default(),
             tools: vec![],
         };
 
@@ -9958,6 +10112,7 @@ mod tests {
                 lifecycle_source: "direct".into(),
                 owner_plugin_id: String::new(),
                 owner_plugin_name: String::new(),
+                instance: Default::default(),
                 tools: vec![],
             }],
         };
@@ -10023,6 +10178,7 @@ mod tests {
             lifecycle_source: "direct".into(),
             owner_plugin_id: String::new(),
             owner_plugin_name: String::new(),
+            instance: Default::default(),
             tools: vec![],
         };
 
@@ -10092,6 +10248,7 @@ mod tests {
             lifecycle_source: "direct".into(),
             owner_plugin_id: String::new(),
             owner_plugin_name: String::new(),
+            instance: Default::default(),
             tools: vec![crate::models::ToolSyncStatus {
                 name: "Claude Code".into(),
                 status_label: "已同步".into(),

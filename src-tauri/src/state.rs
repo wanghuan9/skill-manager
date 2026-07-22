@@ -4,11 +4,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-use crate::models::{AppSettings, SkillSummary, WorkspacePersistence};
+use crate::models::{AppSettings, SkillInstanceMetadata, SkillSummary, WorkspacePersistence};
 use crate::workspace::{
-    display_path_value, home_dir_option, link_skilldock_skills_into_agent_library,
-    managed_skill_library_root, managed_workspace_root_option, normalize_skill_library_provider,
-    normalize_workspace_path, remove_legacy_workspace_file, skill_library_root_for_provider,
+    display_path_value, home_dir_option, managed_skill_library_root, managed_workspace_root_option,
+    normalize_skill_library_provider, normalize_workspace_path, remove_legacy_workspace_file,
     workspace_file_candidates, workspace_file_path, SKILL_LIBRARY_PROVIDER_AGENT_SKILLS,
     SKILL_LIBRARY_PROVIDER_SKILLDOCK,
 };
@@ -39,6 +38,8 @@ struct SettingsPersistence {
     #[serde(default)]
     skill_library_provider: String,
     #[serde(default)]
+    agent_skills_compatibility_enabled: bool,
+    #[serde(default)]
     default_open_tool_id: String,
     #[serde(default)]
     skill_install_activation: String,
@@ -55,34 +56,25 @@ struct SettingsPersistence {
 }
 
 pub fn load_installed_skills(default_skills: &[SkillSummary]) -> Vec<SkillSummary> {
-    let Some((loaded_from, contents)) =
-        workspace_state_candidates()
-            .into_iter()
-            .find_map(|state_file| {
-                fs::read_to_string(&state_file)
-                    .ok()
-                    .map(|contents| (state_file, contents))
-            })
-    else {
-        return default_skills.to_vec();
-    };
-
-    let Ok(persistence) = serde_json::from_str::<WorkspacePersistence>(&contents) else {
-        return default_skills.to_vec();
-    };
-
-    if persistence.installed_skills.is_empty() {
-        return default_skills.to_vec();
-    }
-
-    let original_skills = persistence.installed_skills;
-    let original_paths = original_skills
+    let loaded_state = workspace_state_candidates()
+        .into_iter()
+        .find_map(|state_file| {
+            let contents = fs::read_to_string(&state_file).ok()?;
+            let persistence = serde_json::from_str::<WorkspacePersistence>(&contents).ok()?;
+            Some((state_file, persistence.installed_skills))
+        });
+    let loaded_from_legacy = loaded_state
+        .as_ref()
+        .is_some_and(|(path, _)| path.to_string_lossy().contains("/.skillm/"));
+    let persisted_skills = loaded_state
+        .map(|(_, skills)| skills)
+        .unwrap_or_else(|| default_skills.to_vec());
+    let original_count = persisted_skills.len();
+    let original_paths = persisted_skills
         .iter()
         .map(|skill| skill.local_path.clone())
         .collect::<Vec<_>>();
-    let original_count = original_skills.len();
-    let loaded_from_legacy = loaded_from.to_string_lossy().contains("/.skillm/");
-    let filtered_skills = original_skills
+    let filtered_skills = persisted_skills
         .into_iter()
         .map(normalize_skill_workspace_path)
         .map(repair_skill_local_path)
@@ -98,7 +90,217 @@ pub fn load_installed_skills(default_skills: &[SkillSummary]) -> Vec<SkillSummar
     {
         let _ = save_installed_skills(&filtered_skills);
     }
-    filtered_skills
+
+    let mut skills = merge_agent_skill_entries(filtered_skills);
+    if skills.is_empty() && !default_skills.is_empty() {
+        skills = default_skills.to_vec();
+    }
+    skills
+}
+
+fn merge_agent_skill_entries(skills: Vec<SkillSummary>) -> Vec<SkillSummary> {
+    let mut merged = skills
+        .into_iter()
+        .map(hydrate_skill_instance_metadata)
+        .collect::<Vec<_>>();
+    if !load_app_settings().agent_skills_compatibility_enabled {
+        return merged;
+    }
+
+    let Ok(agent_root) = crate::agent_skills_cli::global_skill_root() else {
+        return merged;
+    };
+    let Ok(entries) = fs::read_dir(&agent_root) else {
+        return merged;
+    };
+    let locked_names = crate::agent_skills_cli::locked_global_skill_names();
+    let mut entry_paths = entries
+        .flatten()
+        .map(|entry| entry.path())
+        .collect::<Vec<_>>();
+    entry_paths.sort();
+
+    for entry_path in entry_paths {
+        let Some(name) = entry_path.file_name().and_then(|value| value.to_str()) else {
+            continue;
+        };
+        if is_reserved_workspace_name(name) {
+            continue;
+        }
+
+        let resolved = crate::agent_skills_cli::resolve_skill_entry_path(&entry_path);
+        let canonical_path = resolved.canonical_path.as_deref();
+        if canonical_path.is_some_and(|path| !path.join("SKILL.md").is_file()) {
+            continue;
+        }
+        let canonical_key = canonical_path.map(path_key).unwrap_or_default();
+        if let Some(existing) = merged.iter_mut().find(|skill| {
+            skill.name.eq_ignore_ascii_case(name)
+                && !canonical_key.is_empty()
+                && path_key(Path::new(skill_instance_path(skill))) == canonical_key
+        }) {
+            add_skill_entry(existing, &entry_path);
+            continue;
+        }
+
+        merged.push(build_agent_skill_summary(
+            name,
+            &entry_path,
+            canonical_path,
+            &resolved.path_error,
+            locked_names.contains(name),
+        ));
+    }
+    merged
+}
+
+fn hydrate_skill_instance_metadata(mut skill: SkillSummary) -> SkillSummary {
+    let canonical_path = Path::new(&skill.local_path)
+        .canonicalize()
+        .unwrap_or_else(|_| PathBuf::from(&skill.local_path));
+    if skill.instance.entry_path.trim().is_empty() {
+        skill.instance.entry_path = skill.local_path.clone();
+    }
+    if skill.instance.canonical_path.trim().is_empty() {
+        skill.instance.canonical_path = canonical_path.to_string_lossy().to_string();
+    }
+    if skill.instance.skill_entries.is_empty() {
+        skill.instance.skill_entries = vec![skill.instance.entry_path.clone()];
+    }
+    if skill.instance.management_owner.trim().is_empty() {
+        skill.instance.management_owner = if is_skilldock_path(&canonical_path) {
+            "skilldock"
+        } else {
+            "external"
+        }
+        .into();
+    }
+    if skill.instance.update_driver.trim().is_empty() {
+        skill.instance.update_driver = if skill.git_linked { "git" } else { "none" }.into();
+    }
+    skill
+}
+
+fn build_agent_skill_summary(
+    name: &str,
+    entry_path: &Path,
+    canonical_path: Option<&Path>,
+    path_error: &str,
+    locked_by_cli: bool,
+) -> SkillSummary {
+    let effective_path = canonical_path.unwrap_or(entry_path);
+    let git_linked = find_git_root(effective_path).is_some();
+    let management_owner = if is_skilldock_path(effective_path) {
+        "skilldock"
+    } else if locked_by_cli {
+        "agent-skills-cli"
+    } else {
+        "external"
+    };
+    let update_driver = if git_linked {
+        "git"
+    } else if locked_by_cli {
+        "agent-skills-cli"
+    } else {
+        "none"
+    };
+    let description = canonical_path
+        .and_then(|path| read_skill_description(&path.join("SKILL.md")))
+        .unwrap_or_default();
+
+    SkillSummary {
+        name: name.to_string(),
+        source_label: if locked_by_cli {
+            "Agent Skills CLI"
+        } else {
+            "外部 Skill"
+        }
+        .into(),
+        source_type: "local".into(),
+        source_url: String::new(),
+        description,
+        local_path: effective_path.to_string_lossy().to_string(),
+        branch: if git_linked { "main" } else { "local" }.into(),
+        collab_status: "clean".into(),
+        status_text: if path_error.is_empty() {
+            "已从 Agent Skills CLI 全局目录识别。"
+        } else {
+            "Agent Skills CLI 入口路径不可用。"
+        }
+        .into(),
+        remote_updated_at: String::new(),
+        local_updated_at: String::new(),
+        last_synced_at: String::new(),
+        last_checked_at: "刚刚检查".into(),
+        synced_tool_count: 0,
+        last_editor: String::new(),
+        commit_label: String::new(),
+        git_linked,
+        local_change_count: 0,
+        lifecycle_source: String::new(),
+        owner_plugin_id: String::new(),
+        owner_plugin_name: String::new(),
+        instance: SkillInstanceMetadata {
+            entry_path: entry_path.to_string_lossy().to_string(),
+            canonical_path: canonical_path
+                .map(|path| path.to_string_lossy().to_string())
+                .unwrap_or_default(),
+            management_owner: management_owner.into(),
+            update_driver: update_driver.into(),
+            skill_entries: vec![entry_path.to_string_lossy().to_string()],
+            path_error: path_error.to_string(),
+        },
+        tools: Vec::new(),
+    }
+}
+
+fn add_skill_entry(skill: &mut SkillSummary, entry_path: &Path) {
+    let entry = entry_path.to_string_lossy().to_string();
+    if !skill.instance.skill_entries.contains(&entry) {
+        skill.instance.skill_entries.push(entry.clone());
+    }
+    if skill.instance.entry_path.trim().is_empty() {
+        skill.instance.entry_path = entry;
+    }
+}
+
+fn skill_instance_path(skill: &SkillSummary) -> &str {
+    if skill.instance.canonical_path.trim().is_empty() {
+        &skill.local_path
+    } else {
+        &skill.instance.canonical_path
+    }
+}
+
+fn find_git_root(path: &Path) -> Option<PathBuf> {
+    let mut current = path.to_path_buf();
+    loop {
+        if current.join(".git").exists() {
+            return Some(current);
+        }
+        if !current.pop() {
+            return None;
+        }
+    }
+}
+
+fn is_skilldock_path(path: &Path) -> bool {
+    managed_skill_library_root()
+        .ok()
+        .and_then(|root| root.canonicalize().ok())
+        .is_some_and(|root| {
+            path.canonicalize()
+                .unwrap_or_else(|_| path.to_path_buf())
+                .starts_with(root)
+        })
+}
+
+fn should_persist_skill(skill: &SkillSummary) -> bool {
+    let Ok(agent_root) = crate::agent_skills_cli::global_skill_root() else {
+        return true;
+    };
+    skill.instance.management_owner == "skilldock"
+        || !Path::new(&skill.instance.entry_path).starts_with(agent_root)
 }
 
 pub fn save_installed_skills(skills: &[SkillSummary]) -> Result<(), String> {
@@ -114,6 +316,7 @@ pub fn save_installed_skills(skills: &[SkillSummary]) -> Result<(), String> {
         .iter()
         .cloned()
         .map(normalize_skill_workspace_path)
+        .filter(|skill| should_persist_skill(skill))
         .collect::<Vec<_>>();
     let persistence = WorkspacePersistence {
         installed_skills: normalized_skills,
@@ -142,8 +345,17 @@ pub fn load_app_settings() -> AppSettings {
         skill_library_path: managed_skill_library_root()
             .map(|path| path.to_string_lossy().to_string())
             .unwrap_or_default(),
-        skill_library_provider: normalize_skill_library_provider(&persisted.skill_library_provider)
-            .to_string(),
+        skill_library_provider: if persisted.agent_skills_compatibility_enabled
+            || normalize_skill_library_provider(&persisted.skill_library_provider)
+                == SKILL_LIBRARY_PROVIDER_AGENT_SKILLS
+        {
+            SKILL_LIBRARY_PROVIDER_AGENT_SKILLS.to_string()
+        } else {
+            SKILL_LIBRARY_PROVIDER_SKILLDOCK.to_string()
+        },
+        agent_skills_compatibility_enabled: persisted.agent_skills_compatibility_enabled
+            || normalize_skill_library_provider(&persisted.skill_library_provider)
+                == SKILL_LIBRARY_PROVIDER_AGENT_SKILLS,
         default_open_tool_id: persisted.default_open_tool_id,
         skill_install_activation: normalize_skill_install_activation(
             &persisted.skill_install_activation,
@@ -170,17 +382,22 @@ pub fn save_app_settings(input: AppSettings) -> Result<AppSettings, String> {
 
     fs::create_dir_all(parent_dir).map_err(|error| format!("创建设置目录失败: {error}"))?;
 
-    let skill_library_provider = normalize_skill_library_provider(&input.skill_library_provider);
-    let skill_library_path = home_dir_option()
-        .and_then(|home_dir| {
-            skill_library_root_for_provider(skill_library_provider, &home_dir).ok()
-        })
+    let compatibility_enabled = input.agent_skills_compatibility_enabled
+        || normalize_skill_library_provider(&input.skill_library_provider)
+            == SKILL_LIBRARY_PROVIDER_AGENT_SKILLS;
+    let skill_library_provider = if compatibility_enabled {
+        SKILL_LIBRARY_PROVIDER_AGENT_SKILLS
+    } else {
+        SKILL_LIBRARY_PROVIDER_SKILLDOCK
+    };
+    let skill_library_path = managed_skill_library_root()
         .map(|path| path.to_string_lossy().to_string())
         .unwrap_or_default();
     let normalized = AppSettings {
         storage_path: settings_file.to_string_lossy().to_string(),
         skill_library_path,
         skill_library_provider: skill_library_provider.to_string(),
+        agent_skills_compatibility_enabled: compatibility_enabled,
         default_open_tool_id: input.default_open_tool_id.trim().to_string(),
         skill_install_activation: normalize_skill_install_activation(
             &input.skill_install_activation,
@@ -196,6 +413,7 @@ pub fn save_app_settings(input: AppSettings) -> Result<AppSettings, String> {
     };
     let persistence = SettingsPersistence {
         skill_library_provider: normalized.skill_library_provider.clone(),
+        agent_skills_compatibility_enabled: normalized.agent_skills_compatibility_enabled,
         default_open_tool_id: normalized.default_open_tool_id.clone(),
         skill_install_activation: normalized.skill_install_activation.clone(),
         mcp_install_activation: normalized.mcp_install_activation.clone(),
@@ -207,65 +425,11 @@ pub fn save_app_settings(input: AppSettings) -> Result<AppSettings, String> {
     let payload = serde_json::to_string_pretty(&persistence)
         .map_err(|error| format!("序列化设置失败: {error}"))?;
 
-    if normalized.skill_library_provider == SKILL_LIBRARY_PROVIDER_AGENT_SKILLS {
-        link_skilldock_skills_into_agent_library()?;
-    }
     fs::create_dir_all(&normalized.skill_library_path)
         .map_err(|error| format!("创建 Skill 托管目录失败: {error}"))?;
-    align_installed_skills_for_provider(&normalized.skill_library_provider)?;
     fs::write(&settings_file, payload).map_err(|error| format!("写入设置文件失败: {error}"))?;
     remove_legacy_workspace_file(SETTINGS_FILE_NAME);
     Ok(normalized)
-}
-
-fn align_installed_skills_for_provider(provider: &str) -> Result<(), String> {
-    let Some(home_dir) = home_dir_option() else {
-        return Ok(());
-    };
-    let skilldock_root =
-        skill_library_root_for_provider(SKILL_LIBRARY_PROVIDER_SKILLDOCK, &home_dir)?;
-    let agent_skills_root =
-        skill_library_root_for_provider(SKILL_LIBRARY_PROVIDER_AGENT_SKILLS, &home_dir)?;
-    let installed_skills = load_installed_skills(&[]);
-    let mut changed = false;
-    let aligned_skills = installed_skills
-        .into_iter()
-        .filter_map(|mut skill| {
-            let current_path = PathBuf::from(&skill.local_path);
-            if provider == SKILL_LIBRARY_PROVIDER_AGENT_SKILLS {
-                let Ok(relative_path) = current_path.strip_prefix(&skilldock_root) else {
-                    return Some(skill);
-                };
-                let target_path = agent_skills_root.join(relative_path);
-                if target_path.exists() {
-                    skill.local_path = target_path.to_string_lossy().to_string();
-                    changed = true;
-                }
-                return Some(skill);
-            }
-
-            if !current_path.starts_with(&agent_skills_root) {
-                return Some(skill);
-            }
-            let Ok(canonical_path) = current_path.canonicalize() else {
-                changed = true;
-                return None;
-            };
-            if canonical_path.starts_with(&skilldock_root) {
-                skill.local_path = canonical_path.to_string_lossy().to_string();
-                changed = true;
-                Some(skill)
-            } else {
-                changed = true;
-                None
-            }
-        })
-        .collect::<Vec<_>>();
-
-    if changed {
-        save_installed_skills(&aligned_skills)?;
-    }
-    Ok(())
 }
 
 fn normalize_app_language(value: &str) -> &'static str {
@@ -390,6 +554,11 @@ fn installed_skill_path_keys(installed_skills: &[SkillSummary]) -> Vec<String> {
 fn installed_skill_path_key_candidates(skill: &SkillSummary) -> Vec<String> {
     let mut paths = Vec::new();
     push_installed_skill_path_key(&mut paths, &skill.local_path);
+    push_installed_skill_path_key(&mut paths, &skill.instance.entry_path);
+    push_installed_skill_path_key(&mut paths, &skill.instance.canonical_path);
+    for entry in &skill.instance.skill_entries {
+        push_installed_skill_path_key(&mut paths, entry);
+    }
     push_installed_skill_path_key(&mut paths, &skill.source_url);
     paths
 }
@@ -541,6 +710,16 @@ fn hydrate_skill_description(mut skill: SkillSummary) -> SkillSummary {
 
 fn normalize_skill_workspace_path(mut skill: SkillSummary) -> SkillSummary {
     skill.local_path = display_path_value(&normalize_workspace_path(&skill.local_path));
+    skill.instance.entry_path =
+        display_path_value(&normalize_workspace_path(&skill.instance.entry_path));
+    skill.instance.canonical_path =
+        display_path_value(&normalize_workspace_path(&skill.instance.canonical_path));
+    skill.instance.skill_entries = skill
+        .instance
+        .skill_entries
+        .into_iter()
+        .map(|path| display_path_value(&normalize_workspace_path(&path)))
+        .collect();
     if skill.source_url.contains(r"\\?\") {
         skill.source_url = display_path_value(&skill.source_url);
     }
@@ -744,6 +923,7 @@ mod tests {
             lifecycle_source: "direct".into(),
             owner_plugin_id: String::new(),
             owner_plugin_name: String::new(),
+            instance: Default::default(),
             tools: vec![],
         }
     }
@@ -773,6 +953,7 @@ mod tests {
                 lifecycle_source: "direct".into(),
                 owner_plugin_id: String::new(),
                 owner_plugin_name: String::new(),
+                instance: Default::default(),
                 tools: vec![ToolSyncStatus {
                     name: "Codex".into(),
                     status_label: "已同步".into(),
@@ -854,6 +1035,7 @@ mod tests {
             lifecycle_source: "direct".into(),
             owner_plugin_id: String::new(),
             owner_plugin_name: String::new(),
+            instance: Default::default(),
             tools: vec![ToolSyncStatus {
                 name: "Codex".into(),
                 status_label: "已同步".into(),
@@ -900,6 +1082,7 @@ mod tests {
                         lifecycle_source: "direct".into(),
                         owner_plugin_id: String::new(),
                         owner_plugin_name: String::new(),
+                        instance: Default::default(),
                         tools: vec![],
                     },
                     SkillSummary {
@@ -924,6 +1107,7 @@ mod tests {
                         lifecycle_source: "direct".into(),
                         owner_plugin_id: String::new(),
                         owner_plugin_name: String::new(),
+                        instance: Default::default(),
                         tools: vec![],
                     },
                 ],
@@ -986,6 +1170,7 @@ mod tests {
                     lifecycle_source: "direct".into(),
                     owner_plugin_id: String::new(),
                     owner_plugin_name: String::new(),
+                    instance: Default::default(),
                     tools: vec![],
                 }],
             };
@@ -1055,6 +1240,7 @@ mod tests {
                         lifecycle_source: "direct".into(),
                         owner_plugin_id: String::new(),
                         owner_plugin_name: String::new(),
+                        instance: Default::default(),
                         tools: vec![],
                     },
                     SkillSummary {
@@ -1079,6 +1265,7 @@ mod tests {
                         lifecycle_source: "direct".into(),
                         owner_plugin_id: String::new(),
                         owner_plugin_name: String::new(),
+                        instance: Default::default(),
                         tools: vec![],
                     },
                 ],
@@ -1309,6 +1496,7 @@ mod tests {
                 lifecycle_source: "direct".into(),
                 owner_plugin_id: String::new(),
                 owner_plugin_name: String::new(),
+                instance: Default::default(),
                 tools: vec![],
             }];
 
@@ -1343,6 +1531,100 @@ mod tests {
                         .to_string()
                 )]
             );
+        });
+    }
+
+    fn enable_agent_skills_compatibility(temp_home: &PathBuf) {
+        let settings_path = temp_home.join(".skilldock/settings.json");
+        fs::create_dir_all(settings_path.parent().expect("settings parent"))
+            .expect("create settings parent");
+        fs::write(
+            settings_path,
+            r#"{"agentSkillsCompatibilityEnabled":true,"skillLibraryProvider":"agent-skills"}"#,
+        )
+        .expect("write settings");
+    }
+
+    #[test]
+    fn compatibility_scan_marks_cli_and_external_agent_entries() {
+        with_temp_home(|temp_home| {
+            enable_agent_skills_compatibility(&temp_home);
+            let cli_skill = temp_home.join(".agents/skills/cli-skill");
+            let external_skill = temp_home.join(".cursor/skills/external-skill");
+            let external_entry = temp_home.join(".agents/skills/external-skill");
+            fs::create_dir_all(&cli_skill).expect("create cli skill");
+            fs::create_dir_all(&external_skill).expect("create external skill");
+            fs::write(cli_skill.join("SKILL.md"), "# cli-skill").expect("write cli skill");
+            fs::write(external_skill.join("SKILL.md"), "# external-skill")
+                .expect("write external skill");
+            std::os::unix::fs::symlink(&external_skill, &external_entry)
+                .expect("create external entry");
+            fs::write(
+                temp_home.join(".agents/.skill-lock.json"),
+                r#"{"version":3,"skills":{"cli-skill":{"source":"example"}}}"#,
+            )
+            .expect("write lock file");
+
+            let skills = load_installed_skills(&[]);
+            let cli = skills
+                .iter()
+                .find(|skill| skill.name == "cli-skill")
+                .expect("find cli skill");
+            let external = skills
+                .iter()
+                .find(|skill| skill.name == "external-skill")
+                .expect("find external skill");
+
+            assert_eq!(cli.instance.management_owner, "agent-skills-cli");
+            assert_eq!(cli.instance.update_driver, "agent-skills-cli");
+            assert_eq!(external.instance.management_owner, "external");
+            assert_eq!(
+                external.instance.canonical_path,
+                external_skill.canonicalize().unwrap().to_string_lossy()
+            );
+            assert!(scan_local_skill_candidates(&skills).is_empty());
+        });
+    }
+
+    #[test]
+    fn compatibility_scan_merges_same_path_and_keeps_different_paths() {
+        with_temp_home(|temp_home| {
+            enable_agent_skills_compatibility(&temp_home);
+            let managed_skill = temp_home.join(".skilldock/skills/demo");
+            let external_skill = temp_home.join(".cursor/skills/demo");
+            let agent_entry = temp_home.join(".agents/skills/demo");
+            fs::create_dir_all(&managed_skill).expect("create managed skill");
+            fs::create_dir_all(&external_skill).expect("create external skill");
+            fs::create_dir_all(agent_entry.parent().expect("agent parent"))
+                .expect("create agent root");
+            fs::write(managed_skill.join("SKILL.md"), "# managed demo")
+                .expect("write managed skill");
+            fs::write(external_skill.join("SKILL.md"), "# external demo")
+                .expect("write external skill");
+            save_installed_skills(&[test_skill_summary("demo", &managed_skill)])
+                .expect("save managed skill");
+
+            std::os::unix::fs::symlink(&managed_skill, &agent_entry)
+                .expect("link same managed skill");
+            let merged = load_installed_skills(&[]);
+            assert_eq!(merged.len(), 1);
+            assert_eq!(merged[0].instance.skill_entries.len(), 2);
+
+            fs::remove_file(&agent_entry).expect("remove same-path link");
+            std::os::unix::fs::symlink(&external_skill, &agent_entry)
+                .expect("link different external skill");
+            let variants = load_installed_skills(&[]);
+            assert_eq!(variants.len(), 2);
+            assert!(variants.iter().any(|skill| {
+                skill.instance.canonical_path
+                    == managed_skill.canonicalize().unwrap().to_string_lossy()
+                    && skill.instance.management_owner == "skilldock"
+            }));
+            assert!(variants.iter().any(|skill| {
+                skill.instance.canonical_path
+                    == external_skill.canonicalize().unwrap().to_string_lossy()
+                    && skill.instance.management_owner == "external"
+            }));
         });
     }
 }

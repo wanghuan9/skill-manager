@@ -2369,7 +2369,6 @@ pub fn create_skill_symlink(
             skill_path.to_string_lossy()
         ));
     }
-    ensure_managed_skill_sync_source(&skill_path)?;
     if is_reserved_workspace_dir(&skill_path) {
         return Err(format!(
             "同步失败：不能把内部工作区目录 {} 当作 skill 链接",
@@ -2395,10 +2394,22 @@ pub fn create_skill_symlink(
 
     let symlink_path = tool_path.join(normalized_skill_name);
 
-    // 如果同名条目已存在，先按条目类型清理，再创建新的符号链接。
+    // Preserve an existing entry that points to another real Skill instance.
     if fs::symlink_metadata(&symlink_path).is_ok() {
+        let expected_path = skill_path
+            .canonicalize()
+            .map_err(|error| format!("解析 Skill 真实目录失败: {error}"))?;
+        if symlink_path.canonicalize().ok().as_ref() == Some(&expected_path) {
+            return Ok(());
+        }
         let metadata = fs::symlink_metadata(&symlink_path)
             .map_err(|error| format!("读取现有技能条目失败: {error}"))?;
+        if metadata.file_type().is_symlink() || metadata.is_dir() {
+            return Err(format!(
+                "{} 已存在同名 Skill，并指向另一个真实目录，请先确认后手动解除冲突。",
+                symlink_path.to_string_lossy()
+            ));
+        }
         remove_existing_skill_entry(&symlink_path, &metadata)?;
     }
 
@@ -2562,26 +2573,6 @@ fn managed_workspace_root() -> Result<PathBuf, String> {
 
 fn managed_skill_library_root() -> Result<PathBuf, String> {
     workspace::managed_skill_library_root()
-}
-
-fn ensure_managed_skill_sync_source(skill_path: &Path) -> Result<(), String> {
-    let canonical_skill_path = skill_path
-        .canonicalize()
-        .map_err(|error| format!("解析 skill 目录失败: {error}"))?;
-    let canonical_skill_root = managed_skill_library_root()?
-        .canonicalize()
-        .map_err(|error| format!("解析 skill 库目录失败: {error}"))?;
-
-    if canonical_skill_path == canonical_skill_root
-        || !canonical_skill_path.starts_with(&canonical_skill_root)
-    {
-        return Err(format!(
-            "同步失败：只允许同步 {} 下的 skill 目录",
-            canonical_skill_root.to_string_lossy()
-        ));
-    }
-
-    Ok(())
 }
 
 fn is_managed_workspace_path(path: &Path) -> bool {
@@ -2886,6 +2877,7 @@ fn tool_ids() -> [&'static str; 30] {
     ]
 }
 
+#[allow(dead_code)]
 pub fn remove_skill_symlinks_from_all_tools(skill_name: &str) -> Result<(), String> {
     for tool_id in tool_ids() {
         if let Ok(tool_skills_path) = get_tool_skills_path(tool_id) {
@@ -3544,7 +3536,7 @@ url.git@git.example.com:example-org/.insteadof https://git.example.com/example-o
     }
 
     #[test]
-    fn create_skill_symlink_rejects_source_outside_managed_skill_root() {
+    fn create_skill_symlink_supports_external_skill_instances() {
         let _guard = TEST_ENV_LOCK
             .lock()
             .unwrap_or_else(|error| error.into_inner());
@@ -3563,15 +3555,22 @@ url.git@git.example.com:example-org/.insteadof https://git.example.com/example-o
             std::env::set_var("HOME", &home_dir);
         }
 
-        let error = create_skill_symlink(
+        create_skill_symlink(
             external_skill_dir.to_string_lossy().as_ref(),
             "external-skill",
             tool_skills_dir.to_string_lossy().as_ref(),
         )
-        .expect_err("external skill path should be rejected");
+        .expect("external skill path should be supported");
 
-        assert!(error.contains("只允许同步"));
-        assert!(!tool_skills_dir.join("external-skill").exists());
+        assert_eq!(
+            tool_skills_dir
+                .join("external-skill")
+                .canonicalize()
+                .expect("resolve tool link"),
+            external_skill_dir
+                .canonicalize()
+                .expect("resolve external skill")
+        );
 
         if let Some(home) = original_home {
             // SAFETY: restore HOME after the test mutation above.
@@ -3775,6 +3774,7 @@ url.git@git.example.com:example-org/.insteadof https://git.example.com/example-o
                 lifecycle_source: "direct".into(),
                 owner_plugin_id: String::new(),
                 owner_plugin_name: String::new(),
+                instance: Default::default(),
                 tools: vec![],
             }],
         )

@@ -7,7 +7,9 @@ SkillDock 同时识别两个目录：
 ~/.agents/skills/           # Agent Skills CLI 的全局 Skill 入口
 ```
 
-兼容模式不会迁移、复制或删除任何 Skill 实体。它只是让 SkillDock 直接识别 `~/.agents/skills` 中的目录和软链接。
+兼容模式不会迁移、复制或删除任何 Skill 实体。它只读扫描 `~/.agents/skills` 中的目录和软链接，也不会自动创建或替换入口。
+
+每个 Skill 实例都会显示 `SkillDock 托管`、`Agent CLI 托管` 或 `外部目录`，并显示解析后的真实路径。
 
 ## Agent CLI 的 Skill 不需要导入
 
@@ -44,6 +46,8 @@ SkillDock 不会因为名称相同就自动覆盖某个目录或软链接。
 ```
 
 关闭 Cursor 时只删除 Cursor 自己的分发链接，不删除真实 Skill，也不改动其他软件已有的链接。
+
+如果 Cursor 已有同名 Skill 且指向另一个真实目录，SkillDock 会保留原链接并提示冲突，不会静默覆盖。
 
 ## 更新、删除和 Git 推送
 

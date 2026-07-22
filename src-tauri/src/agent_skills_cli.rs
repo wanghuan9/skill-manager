@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
@@ -28,8 +30,51 @@ pub struct AgentSkillsCliStatus {
     pub error: String,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SkillEntryPath {
+    pub entry_path: PathBuf,
+    pub canonical_path: Option<PathBuf>,
+    pub path_error: String,
+}
+
 pub fn global_skill_root() -> Result<PathBuf, String> {
     Ok(home_dir()?.join(".agents/skills"))
+}
+
+pub fn resolve_skill_entry_path(entry: &Path) -> SkillEntryPath {
+    match entry.canonicalize() {
+        Ok(canonical_path) => SkillEntryPath {
+            entry_path: entry.to_path_buf(),
+            canonical_path: Some(canonical_path),
+            path_error: String::new(),
+        },
+        Err(error) => SkillEntryPath {
+            entry_path: entry.to_path_buf(),
+            canonical_path: None,
+            path_error: format!("无法解析 Skill 入口: {error}"),
+        },
+    }
+}
+
+pub fn locked_global_skill_names() -> BTreeSet<String> {
+    let Ok(lock_path) = home_dir().map(|home| home.join(".agents/.skill-lock.json")) else {
+        return BTreeSet::new();
+    };
+    let Ok(contents) = fs::read_to_string(lock_path) else {
+        return BTreeSet::new();
+    };
+    parse_locked_global_skill_names(&contents)
+}
+
+pub fn parse_locked_global_skill_names(contents: &str) -> BTreeSet<String> {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(contents) else {
+        return BTreeSet::new();
+    };
+    value
+        .get("skills")
+        .and_then(serde_json::Value::as_object)
+        .map(|skills| skills.keys().cloned().collect())
+        .unwrap_or_default()
 }
 
 pub fn global_status() -> AgentSkillsCliStatus {
@@ -156,6 +201,7 @@ impl CliProgram {
     }
 }
 
+#[allow(dead_code)]
 pub fn is_global_skill_path(path: &Path) -> bool {
     let Ok(root) = global_skill_root() else {
         return false;
@@ -174,7 +220,10 @@ pub fn is_global_skill_path(path: &Path) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_global_skill_path, parse_global_skill_list_json, CliSkillEntry};
+    use super::{
+        is_global_skill_path, parse_global_skill_list_json, parse_locked_global_skill_names,
+        resolve_skill_entry_path, CliSkillEntry,
+    };
     use std::env;
     use std::fs;
     use std::path::PathBuf;
@@ -200,6 +249,33 @@ mod tests {
     #[test]
     fn rejects_malformed_global_skill_list_json() {
         assert!(parse_global_skill_list_json("not-json").is_err());
+    }
+
+    #[test]
+    fn parses_skill_names_from_v3_lock_file() {
+        let names = parse_locked_global_skill_names(
+            r#"{"version":3,"skills":{"demo":{"source":"example"},"other":{}}}"#,
+        );
+
+        assert_eq!(names.into_iter().collect::<Vec<_>>(), vec!["demo", "other"]);
+        assert!(parse_locked_global_skill_names("not-json").is_empty());
+    }
+
+    #[test]
+    fn resolves_real_and_broken_skill_entries() {
+        let temp_dir = env::temp_dir().join("skilldock-entry-path-test");
+        let skill_dir = temp_dir.join("demo");
+        fs::create_dir_all(&skill_dir).expect("create skill path");
+
+        let resolved = resolve_skill_entry_path(&skill_dir);
+        assert_eq!(resolved.canonical_path, skill_dir.canonicalize().ok());
+        assert!(resolved.path_error.is_empty());
+
+        let broken = resolve_skill_entry_path(&temp_dir.join("missing"));
+        assert!(broken.canonical_path.is_none());
+        assert!(!broken.path_error.is_empty());
+
+        let _ = fs::remove_dir_all(temp_dir);
     }
 
     #[test]

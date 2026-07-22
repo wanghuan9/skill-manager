@@ -258,10 +258,12 @@ export function SkillCard({
   const enabledToolsCountLabel = enabledTools.length > 0
     ? t("skill.card.enabledCount", { count: enabledTools.length })
     : t("skill.card.disabled");
-  const canUpdateWithAgentSkillsCli = appSettings.skillLibraryProvider === "agent-skills"
-    && !skill.gitLinked
-    && skill.sourceUrl.trim().length === 0
-    && skill.localPath.startsWith(appSettings.skillLibraryPath);
+  const canUpdateWithAgentSkillsCli = skill.updateDriver === "agent-skills-cli";
+  const managementOwnerLabel = skill.managementOwner === "agent-skills-cli"
+    ? t("skill.card.owner.agentSkillsCli")
+    : skill.managementOwner === "external"
+      ? t("skill.card.owner.external")
+      : t("skill.card.owner.skilldock");
   const showDetailAction = skill.collabStatus === "update-available" || canUpdateWithAgentSkillsCli;
   const displaySourceLabel =
     sourceLabel === "本地" || sourceLabel === "Local"
@@ -316,7 +318,7 @@ export function SkillCard({
     if (skill.collabStatus === "update-available" || canUpdateWithAgentSkillsCli) {
       setIsUpdating(true);
       try {
-        await updateSkill(skill.name);
+        await updateSkill(skill.name, skill.canonicalPath ?? skill.localPath);
       } catch (error) {
         reportFailure(error, {
           operation: "update_skill",
@@ -342,7 +344,7 @@ export function SkillCard({
     setIsDeleteConfirming(false);
     setIsDeleting(true);
     try {
-      await deleteSkill(skill.name);
+      await deleteSkill(skill.name, skill.canonicalPath ?? skill.localPath);
       notify({ tone: "success", message: t("skill.card.success.deleted", { name: skill.name }) });
     } catch (error) {
       reportFailure(error, {
@@ -357,7 +359,7 @@ export function SkillCard({
 
   async function handleOpenSkill() {
     try {
-      await openSkillWithDefaultTool(skill.name);
+      await openSkillWithDefaultTool(skill.name, skill.canonicalPath ?? skill.localPath);
     } catch (error) {
       reportFailure(error, {
         operation: "open_skill_with_default_tool",
@@ -388,6 +390,7 @@ export function SkillCard({
       await waitForNextPaint();
       const failedToolNames = await setSkillAllToolsEnabled({
         skillName: skill.name,
+        skillPath: skill.canonicalPath ?? skill.localPath,
         enabled,
         toolNames,
         setSkillAllToolStatuses,
@@ -520,6 +523,15 @@ export function SkillCard({
             <dd>{displaySourceLabel}</dd>
           </div>
           <div>
+            <dt>{t("skill.card.owner")}</dt>
+            <dd>
+              <span>{managementOwnerLabel}</span>
+              <span className="detail-grid__single-line" data-tooltip={skill.canonicalPath ?? skill.localPath}>
+                {skill.canonicalPath ?? skill.localPath}
+              </span>
+            </dd>
+          </div>
+          <div>
             <dt>{t("skill.card.source")}</dt>
             <dd className="detail-grid__source-value">
               {isHttpUrl(skill.sourceUrl) ? (
@@ -566,6 +578,7 @@ export function SkillCard({
       </section>
       <ToolSyncPanel
         skillName={skill.name}
+        skillPath={skill.canonicalPath ?? skill.localPath}
         tools={skillTools}
         isBulkUpdatingExternally={isBulkUpdating}
         onBulkUpdatingChange={setIsBulkUpdating}
@@ -646,9 +659,15 @@ export function SkillCard({
             {isGridLayout ? (
               <span className="skill-card__grid-source-label">
                 <span className="skill-card__grid-source-text">{displaySourceLabel}</span>
+                <span className="skill-card__grid-source-text">{managementOwnerLabel}</span>
               </span>
             ) : (
-              <SkillStatusBadge status={skill.collabStatus} />
+              <>
+                <span className="skill-card__grid-source-label">
+                  <span className="skill-card__grid-source-text">{managementOwnerLabel}</span>
+                </span>
+                <SkillStatusBadge status={skill.collabStatus} />
+              </>
             )}
             {showDetailAction ? (
               <button

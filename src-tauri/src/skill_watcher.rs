@@ -8,7 +8,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
 use crate::state::load_installed_skills;
-use crate::workspace::managed_skill_library_root;
+use crate::workspace::skill_root_paths;
 
 static WATCHED_SKILL_ROOTS: OnceLock<Mutex<HashSet<PathBuf>>> = OnceLock::new();
 const SKILL_LIBRARY_CHANGE_EVENT: &str = "skill-library-changed";
@@ -26,8 +26,12 @@ pub struct SkillLibraryChangeEvent {
 }
 
 pub fn start_skill_library_watcher(app_handle: AppHandle) -> Result<(), String> {
-    let skills_root = managed_skill_library_root()?;
-    start_skill_root_watcher(app_handle, skills_root)
+    let compatibility_enabled =
+        crate::state::load_app_settings().agent_skills_compatibility_enabled;
+    for skills_root in skill_root_paths(compatibility_enabled)? {
+        start_skill_root_watcher(app_handle.clone(), skills_root)?;
+    }
+    Ok(())
 }
 
 fn start_skill_root_watcher(app_handle: AppHandle, skills_root: PathBuf) -> Result<(), String> {

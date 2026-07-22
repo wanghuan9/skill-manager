@@ -815,6 +815,7 @@ export const appSettingsFixture: AppSettings = {
   storagePath: "/Users/demo/.skilldock/settings.json",
   skillLibraryPath: "/Users/demo/.skilldock/skills",
   skillLibraryProvider: "skilldock",
+  agentSkillsCompatibilityEnabled: false,
   defaultOpenToolId: "",
   skillInstallActivation: "apply-all-tools",
   mcpInstallActivation: "apply-all-tools",

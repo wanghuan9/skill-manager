@@ -197,7 +197,26 @@ pub struct SkillSummary {
     pub owner_plugin_id: String,
     #[serde(default)]
     pub owner_plugin_name: String,
+    #[serde(flatten, default)]
+    pub instance: SkillInstanceMetadata,
     pub tools: Vec<ToolSyncStatus>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillInstanceMetadata {
+    #[serde(default)]
+    pub entry_path: String,
+    #[serde(default)]
+    pub canonical_path: String,
+    #[serde(default)]
+    pub management_owner: String,
+    #[serde(default)]
+    pub update_driver: String,
+    #[serde(default)]
+    pub skill_entries: Vec<String>,
+    #[serde(default)]
+    pub path_error: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -309,6 +328,8 @@ pub struct AppSettings {
     pub storage_path: String,
     pub skill_library_path: String,
     pub skill_library_provider: String,
+    #[serde(default)]
+    pub agent_skills_compatibility_enabled: bool,
     pub default_open_tool_id: String,
     pub skill_install_activation: String,
     pub mcp_install_activation: String,
