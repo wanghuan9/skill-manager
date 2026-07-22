@@ -3082,7 +3082,7 @@ fn resolve_startup_installed_skills() -> Vec<SkillSummary> {
         let _ = save_installed_skills(&normalized_skills);
     }
 
-    map_in_parallel_preserving_order(
+    let resolved_skills = map_in_parallel_preserving_order(
         &normalized_skills,
         LOCAL_SKILL_TOOL_STATE_CONCURRENCY,
         |skill| {
@@ -3093,7 +3093,9 @@ fn resolve_startup_installed_skills() -> Vec<SkillSummary> {
     )
     .into_iter()
     .map(|skill| enrich_skill_with_cached_update_state(&skill))
-    .collect()
+    .collect::<Vec<_>>();
+    let _ = save_installed_skills(&resolved_skills);
+    resolved_skills
 }
 
 fn resolve_installed_skills() -> Vec<SkillSummary> {
@@ -3102,6 +3104,9 @@ fn resolve_installed_skills() -> Vec<SkillSummary> {
 
 fn load_interactive_installed_skills() -> Vec<SkillSummary> {
     load_installed_skills(&default_installed_skills())
+        .iter()
+        .map(normalize_skill_tools_from_local_state)
+        .collect()
 }
 
 const ORIGIN_REMOTE: &str = "origin";
@@ -10365,6 +10370,93 @@ mod tests {
             .tools
             .iter()
             .any(|tool| { tool.name == "Claude Code" && tool.status_label == "未启用" }));
+
+        let _ = fs::remove_dir_all(temp_home);
+    }
+
+    #[test]
+    fn toggling_agent_cli_skill_preserves_other_enabled_tools() {
+        let _guard = TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let original_home = env::var_os("HOME");
+        let temp_home = temp_test_dir("toggle-agent-cli-skill-home");
+        let agent_skill_path = temp_home.join(".agents/skills/tdd");
+        let codex_skill_path = temp_home.join(".codex/skills/tdd");
+        fs::create_dir_all(&agent_skill_path).expect("create Agent CLI skill");
+        fs::write(agent_skill_path.join("SKILL.md"), "# tdd").expect("write Agent CLI skill");
+        fs::create_dir_all(codex_skill_path.parent().expect("Codex skills parent"))
+            .expect("create Codex skills directory");
+        std::os::unix::fs::symlink(&agent_skill_path, &codex_skill_path)
+            .expect("link Agent CLI skill to Codex");
+        fs::create_dir_all(temp_home.join(".skilldock")).expect("create SkillDock directory");
+        fs::write(
+            temp_home.join(".skilldock/settings.json"),
+            r#"{"agentSkillsCompatibilityEnabled":true,"skillLibraryProvider":"agent-skills"}"#,
+        )
+        .expect("enable Agent CLI compatibility");
+
+        unsafe {
+            env::set_var("HOME", &temp_home);
+        }
+
+        let updated = super::toggle_skill_tool_status_blocking(
+            "tdd",
+            Some(agent_skill_path.to_string_lossy().as_ref()),
+            "Claude Code",
+            &["Claude Code".into(), "Codex".into()],
+        )
+        .expect("enable Agent CLI skill for Claude Code");
+
+        restore_env_var("HOME", original_home);
+
+        assert!(updated
+            .tools
+            .iter()
+            .any(|tool| tool.name == "Claude Code" && tool.status_label == "已启用"));
+        assert!(updated
+            .tools
+            .iter()
+            .any(|tool| tool.name == "Codex" && tool.status_label == "已同步"));
+        assert!(temp_home.join(".claude/skills/tdd").is_symlink());
+
+        let _ = fs::remove_dir_all(temp_home);
+    }
+
+    #[test]
+    fn startup_scan_persists_agent_cli_skill_state() {
+        let _guard = TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let original_home = env::var_os("HOME");
+        let temp_home = temp_test_dir("persist-agent-cli-startup-home");
+        let agent_skill_path = temp_home.join(".agents/skills/tdd");
+        fs::create_dir_all(&agent_skill_path).expect("create Agent CLI skill");
+        fs::write(agent_skill_path.join("SKILL.md"), "# tdd").expect("write Agent CLI skill");
+        fs::create_dir_all(temp_home.join(".skilldock")).expect("create SkillDock directory");
+        fs::write(
+            temp_home.join(".skilldock/settings.json"),
+            r#"{"agentSkillsCompatibilityEnabled":true,"skillLibraryProvider":"agent-skills"}"#,
+        )
+        .expect("enable Agent CLI compatibility");
+
+        unsafe {
+            env::set_var("HOME", &temp_home);
+        }
+
+        let loaded = resolve_startup_installed_skills();
+        let persisted: WorkspacePersistence = serde_json::from_str(
+            &fs::read_to_string(temp_home.join(".skilldock/state.json"))
+                .expect("read persisted startup state"),
+        )
+        .expect("deserialize persisted startup state");
+
+        restore_env_var("HOME", original_home);
+
+        assert!(loaded.iter().any(|skill| skill.name == "tdd"));
+        assert!(persisted.installed_skills.iter().any(|skill| {
+            skill.name == "tdd" && skill.instance.management_owner == "agent-skills-cli"
+        }));
 
         let _ = fs::remove_dir_all(temp_home);
     }

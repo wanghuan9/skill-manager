@@ -150,6 +150,16 @@ fn merge_agent_skill_entries(skills: Vec<SkillSummary>) -> Vec<SkillSummary> {
                 && !canonical_key.is_empty()
                 && path_key(Path::new(skill_instance_path(skill))) == canonical_key
         }) {
+            if existing.instance.management_owner == "agent-skills-cli" {
+                let scanned = build_agent_skill_summary(
+                    name,
+                    &entry_path,
+                    canonical_path,
+                    &resolved.path_error,
+                    lock_entries.get(name),
+                );
+                refresh_agent_skill_metadata(existing, &scanned);
+            }
             add_skill_entry(existing, &entry_path);
             continue;
         }
@@ -277,6 +287,21 @@ fn build_agent_skill_summary(
     }
 }
 
+fn refresh_agent_skill_metadata(existing: &mut SkillSummary, scanned: &SkillSummary) {
+    existing.source_label = scanned.source_label.clone();
+    existing.source_type = scanned.source_type.clone();
+    existing.source_url = scanned.source_url.clone();
+    existing.description = scanned.description.clone();
+    existing.local_path = scanned.local_path.clone();
+    existing.branch = scanned.branch.clone();
+    existing.git_linked = scanned.git_linked;
+    existing.instance.entry_path = scanned.instance.entry_path.clone();
+    existing.instance.canonical_path = scanned.instance.canonical_path.clone();
+    existing.instance.management_owner = scanned.instance.management_owner.clone();
+    existing.instance.update_driver = scanned.instance.update_driver.clone();
+    existing.instance.path_error = scanned.instance.path_error.clone();
+}
+
 fn add_skill_entry(skill: &mut SkillSummary, entry_path: &Path) {
     let entry = entry_path.to_string_lossy().to_string();
     if !skill.instance.skill_entries.contains(&entry) {
@@ -338,14 +363,6 @@ fn is_visible_managed_skill_instance(skill: &SkillSummary, compatibility_enabled
     is_skilldock_path(path) || (compatibility_enabled && is_agent_skills_path(path))
 }
 
-fn should_persist_skill(skill: &SkillSummary) -> bool {
-    let Ok(agent_root) = crate::agent_skills_cli::global_skill_root() else {
-        return true;
-    };
-    skill.instance.management_owner == "skilldock"
-        || !Path::new(&skill.instance.entry_path).starts_with(agent_root)
-}
-
 pub fn save_installed_skills(skills: &[SkillSummary]) -> Result<(), String> {
     let state_file =
         workspace_state_file().ok_or_else(|| "无法定位用户目录，不能保存状态".to_string())?;
@@ -359,7 +376,6 @@ pub fn save_installed_skills(skills: &[SkillSummary]) -> Result<(), String> {
         .iter()
         .cloned()
         .map(normalize_skill_workspace_path)
-        .filter(|skill| should_persist_skill(skill))
         .collect::<Vec<_>>();
     let persistence = WorkspacePersistence {
         installed_skills: normalized_skills,
@@ -1006,6 +1022,38 @@ mod tests {
             let result = save_installed_skills(&skills);
             assert!(result.is_ok());
             assert!(temp_home.join(".skilldock/state.json").exists());
+        });
+    }
+
+    #[test]
+    fn persists_agent_cli_skill_tool_statuses() {
+        with_temp_home(|temp_home| {
+            enable_agent_skills_compatibility(&temp_home);
+            let agent_skill_dir = temp_home.join(".agents/skills/tdd");
+            fs::create_dir_all(&agent_skill_dir).expect("create Agent CLI skill");
+            fs::write(agent_skill_dir.join("SKILL.md"), "# tdd").expect("write Agent CLI skill");
+            let mut agent_skill = test_skill_summary("tdd", &agent_skill_dir);
+            agent_skill.instance.entry_path = agent_skill_dir.to_string_lossy().to_string();
+            agent_skill.instance.canonical_path = agent_skill_dir.to_string_lossy().to_string();
+            agent_skill.instance.management_owner = "agent-skills-cli".into();
+            agent_skill.instance.update_driver = "agent-skills-cli".into();
+            agent_skill.tools = vec![ToolSyncStatus {
+                name: "Codex".into(),
+                status_label: "已同步".into(),
+            }];
+
+            save_installed_skills(&[agent_skill]).expect("save Agent CLI skill");
+
+            let loaded = load_installed_skills(&[]);
+            let persisted = loaded
+                .iter()
+                .find(|skill| skill.name == "tdd")
+                .expect("load persisted Agent CLI skill");
+            assert_eq!(persisted.instance.management_owner, "agent-skills-cli");
+            assert!(persisted
+                .tools
+                .iter()
+                .any(|tool| tool.name == "Codex" && tool.status_label == "已同步"));
         });
     }
 
@@ -1661,6 +1709,50 @@ mod tests {
             assert!(scan_local_skill_candidates(&skills)
                 .iter()
                 .any(|(name, _)| { name == "external-skill" }));
+        });
+    }
+
+    #[test]
+    fn compatibility_scan_refreshes_persisted_agent_source_and_keeps_tool_statuses() {
+        with_temp_home(|temp_home| {
+            enable_agent_skills_compatibility(&temp_home);
+            let agent_skill_dir = temp_home.join(".agents/skills/tdd");
+            fs::create_dir_all(&agent_skill_dir).expect("create Agent CLI skill");
+            fs::write(agent_skill_dir.join("SKILL.md"), "# tdd").expect("write Agent CLI skill");
+            fs::write(
+                temp_home.join(".agents/.skill-lock.json"),
+                r#"{"version":3,"skills":{"tdd":{"sourceType":"well-known","sourceUrl":"https://example.com/.well-known/skills/tdd/SKILL.md"}}}"#,
+            )
+            .expect("write Agent CLI lock");
+            let mut persisted = test_skill_summary("tdd", &agent_skill_dir);
+            persisted.source_label = "本地".into();
+            persisted.source_type = "local".into();
+            persisted.source_url = String::new();
+            persisted.instance.entry_path = agent_skill_dir.to_string_lossy().to_string();
+            persisted.instance.canonical_path = agent_skill_dir.to_string_lossy().to_string();
+            persisted.instance.management_owner = "agent-skills-cli".into();
+            persisted.instance.update_driver = "agent-skills-cli".into();
+            persisted.tools = vec![ToolSyncStatus {
+                name: "Codex".into(),
+                status_label: "已同步".into(),
+            }];
+            save_installed_skills(&[persisted]).expect("save Agent CLI skill");
+
+            let loaded = load_installed_skills(&[]);
+            let skill = loaded
+                .iter()
+                .find(|skill| skill.name == "tdd")
+                .expect("load Agent CLI skill");
+
+            assert_eq!(skill.source_type, "well-known");
+            assert_eq!(
+                skill.source_url,
+                "https://example.com/.well-known/skills/tdd/SKILL.md"
+            );
+            assert!(skill
+                .tools
+                .iter()
+                .any(|tool| tool.name == "Codex" && tool.status_label == "已同步"));
         });
     }
 
