@@ -253,7 +253,6 @@ export function SkillCard({
   const enabledToolsCountLabel = enabledTools.length > 0
     ? t("skill.card.enabledCount", { count: enabledTools.length })
     : t("skill.card.disabled");
-  const canUpdateWithAgentSkillsCli = skill.updateDriver === "agent-skills-cli";
   const managementOwnerLabel = skill.managementOwner === "agent-skills-cli"
     ? t("skill.card.owner.agentSkillsCli")
     : skill.managementOwner === "external"
@@ -263,7 +262,7 @@ export function SkillCard({
     ? t("skill.card.sourceMethod.git")
     : t("skill.card.sourceMethod.local");
   const gridSourceSummary = `${sourceMethodLabel} · ${managementOwnerLabel}`;
-  const showDetailAction = skill.collabStatus === "update-available" || canUpdateWithAgentSkillsCli;
+  const showDetailAction = skill.collabStatus === "update-available";
   const showRemoteMetadata = skill.gitLinked && skill.sourceType !== "local";
   const expanded = expandedProp ?? expandedState;
   const isGridLayout = layout === "grid";
@@ -310,7 +309,7 @@ export function SkillCard({
       return;
     }
 
-    if (skill.collabStatus === "update-available" || canUpdateWithAgentSkillsCli) {
+    if (skill.collabStatus === "update-available") {
       setIsUpdating(true);
       try {
         await updateSkill(skill.name, skill.canonicalPath ?? skill.localPath);
@@ -621,7 +620,6 @@ export function SkillCard({
                           >
                             {enabledToolsCountLabel}
                           </button>
-                          <SkillStatusBadge status={skill.collabStatus} />
                           {showEnabledTools && enabledTools.length > 0 ? (
                             <div className="skill-card__summary-tools" aria-label={summaryToolsLabel}>
                               {enabledTools.map((tool) => (
@@ -661,6 +659,7 @@ export function SkillCard({
                 <span className="skill-card__grid-source-text">{gridSourceSummary}</span>
               </span>
             ) : null}
+            {!isGridLayout ? <SkillStatusBadge status={skill.collabStatus} /> : null}
             {showDetailAction ? (
               <button
                 className="skill-card__icon-button skill-card__icon-button--update"

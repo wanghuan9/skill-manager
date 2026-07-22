@@ -952,6 +952,68 @@ test("keeps update-all active across route switches", async () => {
   });
 });
 
+test("bulk updates only skills whose update check found a new version", async () => {
+  const updateAvailableSkill: SkillSummary = {
+    ...installedSkillFixtures[0],
+    collabStatus: "update-available",
+  };
+  const cleanAgentSkill: SkillSummary = {
+    ...installedSkillFixtures[1],
+    name: "agent-clean-skill",
+    localPath: "/Users/demo/.agents/skills/agent-clean-skill",
+    canonicalPath: "/Users/demo/.agents/skills/agent-clean-skill",
+    managementOwner: "agent-skills-cli",
+    updateDriver: "agent-skills-cli",
+    collabStatus: "clean",
+  };
+  const skills = [updateAvailableSkill, cleanAgentSkill];
+
+  mockedInvoke.mockImplementation(async (command, args) => {
+    switch (command) {
+      case "list_startup_installed_skills":
+      case "refresh_git_states":
+        return skills;
+      case "list_local_skill_candidates":
+        return localSkillFixtures;
+      case "list_tool_configs":
+        return toolConfigFixtures;
+      case "get_git_account_summary":
+        return gitAccountFixture;
+      case "get_app_settings":
+        return appSettingsFixture;
+      case "update_app_settings":
+        return (args as { settings: AppSettings }).settings;
+      case "update_skill": {
+        const skillName = (args as { skillName: string }).skillName;
+        expect(skillName).toBe(updateAvailableSkill.name);
+        return { ...updateAvailableSkill, collabStatus: "clean" };
+      }
+      default:
+        throw new Error(`Unexpected command: ${command}`);
+    }
+  });
+
+  render(
+    <SkillWorkspaceProvider>
+      <UpdateAllProbe />
+    </SkillWorkspaceProvider>,
+  );
+
+  await waitFor(() => {
+    expect(screen.getByTestId("loading-state").textContent).toBe("ready");
+  });
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "全部更新" }));
+  });
+  await waitFor(() => {
+    expect(screen.getByTestId("update-all-state").textContent).toBe("idle");
+  });
+
+  expect(
+    mockedInvoke.mock.calls.filter(([command]) => command === "update_skill"),
+  ).toHaveLength(1);
+});
+
 test("refreshes a startup skill once after debounced library change events", async () => {
   vi.useFakeTimers();
   try {

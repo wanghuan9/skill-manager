@@ -38,13 +38,15 @@ SkillDock 可以识别 Agent Skills CLI 的全局 Skill，同时继续保留自�
 SkillDock 会根据实例的真实目录和来源执行操作：
 
 - SkillDock 托管的 Git Skill：使用 Git 更新、删除和推送能力。
-- Agent CLI 托管的 Skill：保留 Agent CLI 的目录和锁文件；SkillDock 可以直接打开、启用、关闭、更新和删除。
+- Agent CLI 托管的 Skill：保留 Agent CLI 的目录和锁文件；SkillDock 可以直接打开、启用、关闭、检查更新、更新和删除。
 - 外部目录 Skill：只作为工具目录中的未托管项展示，可导入到 SkillDock；导入前不纳入已托管操作。
 
 卡片底部会用 `Git · SkillDock`、`Git · Agent CLI` 或 `本地 · SkillDock` 这样的摘要标识来源和托管方；GitHub、GitLab、Gitee 等 Git 服务统一显示为 `Git`。
 
+Agent CLI Skill 会复用 SkillDock 原有的更新检查链路：启动后检查、每 10 分钟定时检查、窗口重新聚焦检查，以及手动刷新。检查过程不会修改真实的 `~/.agents/skills` 或 `~/.agents/.skill-lock.json`；只有确认存在新版本时，列表右侧才显示“可更新”状态和更新按钮，“全部更新”也只处理这些 Skill。
+
 ## 兼容模式开关
 
 - 关闭：管理 `~/.skilldock/skills`，不扫描 Agent CLI 全局目录。
-- 开启：额外识别 `~/.agents/skills` 中真实位于托管根目录内的 Skill，并按上述规则扫描已启用到工具目录的外部 Skill。
+- 开启：额外识别 `~/.agents/skills` 中真实位于托管根目录内的 Skill；工具目录中的外部 Skill 仍按原有规则扫描。
 - 关闭兼容模式不会修改 `~/.agents/skills` 的任何内容。

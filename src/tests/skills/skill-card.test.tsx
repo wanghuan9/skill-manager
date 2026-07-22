@@ -88,7 +88,7 @@ test("updates directly from list action when skill has remote update", async () 
   expect(screen.queryByText("将拉取提交")).not.toBeInTheDocument();
 });
 
-test("keeps ownership and status beside the name while list actions contain only buttons", () => {
+test("keeps ownership beside the name and collaboration status in the right actions", () => {
   const skill = installedSkillFixtures.find((item) => item.name === "drawio-diagram");
   if (!skill) {
     throw new Error("missing drawio-diagram fixture");
@@ -98,9 +98,44 @@ test("keeps ownership and status beside the name while list actions contain only
   const titleRow = container.querySelector(".skill-card__title-row");
   const actions = container.querySelector(".skill-card__list-actions");
 
-  expect(titleRow).toHaveTextContent("drawio-diagramSkillDock已启用 2待推送");
+  expect(titleRow).toHaveTextContent("drawio-diagramSkillDock已启用 2");
+  expect(titleRow).not.toHaveTextContent("待推送");
   expect(titleRow?.querySelector(".skill-card__owner-badge")).toHaveTextContent("SkillDock");
-  expect(actions?.querySelectorAll(":scope > *")).toHaveLength(actions?.querySelectorAll(":scope > button").length ?? 0);
+  expect(actions).toHaveTextContent("待推送");
+  expect(actions?.firstElementChild).toHaveTextContent("待推送");
+  expect(actions?.firstElementChild?.tagName).toBe("SPAN");
+});
+
+test("shows Agent CLI update action only after an update is detected", () => {
+  const baseSkill = installedSkillFixtures.find((item) => item.name === "excalidraw-diagram");
+  if (!baseSkill) {
+    throw new Error("missing excalidraw-diagram fixture");
+  }
+  const cleanAgentSkill = {
+    ...baseSkill,
+    name: "agent-clean-skill",
+    localPath: "/Users/demo/.agents/skills/agent-clean-skill",
+    managementOwner: "agent-skills-cli" as const,
+    updateDriver: "agent-skills-cli" as const,
+    collabStatus: "clean" as const,
+  };
+
+  const { rerender } = renderSkillCardWithProviders(cleanAgentSkill);
+  expect(screen.queryByRole("button", { name: /更新 agent-clean-skill/ })).not.toBeInTheDocument();
+
+  rerender(
+    <SkillWorkspaceProvider>
+      <AppI18nProvider>
+        <NotificationProvider>
+          <SkillCard
+            skill={{ ...cleanAgentSkill, collabStatus: "update-available" }}
+            layout="list"
+          />
+        </NotificationProvider>
+      </AppI18nProvider>
+    </SkillWorkspaceProvider>,
+  );
+  expect(screen.getByRole("button", { name: /更新 agent-clean-skill/ })).toBeInTheDocument();
 });
 
 test("shows description in the list summary and keeps update metadata in details", async () => {

@@ -45,6 +45,10 @@ use crate::state::{
 use crate::workspace::{self, APP_BRAND_NAME};
 
 const REFRESH_GIT_STATES_CONCURRENCY: usize = 5;
+const SKILL_STATUS_CLEAN: &str = "clean";
+const SKILL_STATUS_UPDATE_AVAILABLE: &str = "update-available";
+const AGENT_CLI_UPDATE_AVAILABLE_TEXT: &str = "Agent Skills CLI 检测到可更新版本。";
+const AGENT_CLI_UP_TO_DATE_TEXT: &str = "Agent CLI Skill 已是最新版本。";
 const LOCAL_SKILL_TOOL_STATE_CONCURRENCY: usize = 2;
 const PACKAGE_ID_HASH_LEN: usize = 8;
 
@@ -4040,6 +4044,10 @@ fn refresh_and_persist_local_git_skill(
 fn refresh_installed_skill_git_state(skill: &SkillSummary) -> SkillSummary {
     let normalized_skill = normalize_installed_skill_source_url(skill);
     let normalized_skill = normalize_skill_tools_from_local_state(&normalized_skill);
+    if normalized_skill.instance.update_driver == "agent-skills-cli" && !normalized_skill.git_linked
+    {
+        return normalized_skill;
+    }
     enrich_skill_with_git_state(&normalized_skill)
 }
 
@@ -4080,6 +4088,31 @@ fn refresh_installed_skill_git_states(skills: &[SkillSummary]) -> Vec<SkillSumma
         REFRESH_GIT_STATES_CONCURRENCY,
         refresh_installed_skill_git_state,
     )
+}
+
+fn apply_agent_cli_update_statuses(
+    skills: Vec<SkillSummary>,
+    check: &crate::agent_skills_cli::AgentSkillUpdateCheck,
+) -> Vec<SkillSummary> {
+    skills
+        .into_iter()
+        .map(|mut skill| {
+            if skill.instance.update_driver != "agent-skills-cli"
+                || !check.checked_names.contains(&skill.name)
+            {
+                return skill;
+            }
+            skill.last_checked_at = "刚刚检查".into();
+            if check.updated_names.contains(&skill.name) {
+                skill.collab_status = SKILL_STATUS_UPDATE_AVAILABLE.into();
+                skill.status_text = AGENT_CLI_UPDATE_AVAILABLE_TEXT.into();
+            } else if skill.collab_status == SKILL_STATUS_UPDATE_AVAILABLE {
+                skill.collab_status = SKILL_STATUS_CLEAN.into();
+                skill.status_text = AGENT_CLI_UP_TO_DATE_TEXT.into();
+            }
+            skill
+        })
+        .collect()
 }
 
 fn merge_refreshed_skill_states_with_latest_state(
@@ -6056,7 +6089,27 @@ fn parse_apple_languages_output(output: &str) -> Option<&'static str> {
 pub async fn refresh_git_states() -> Vec<SkillSummary> {
     let (refresh_started_skills, refreshed_skills) = tauri::async_runtime::spawn_blocking(|| {
         let skills = load_installed_skills(&default_installed_skills());
-        let refreshed_skills = refresh_installed_skill_git_states(&skills);
+        let refreshed_git_skills = refresh_installed_skill_git_states(&skills);
+        let agent_skill_paths = refreshed_git_skills
+            .iter()
+            .filter(|skill| skill.instance.update_driver == "agent-skills-cli")
+            .map(|skill| {
+                let path = if skill.instance.canonical_path.trim().is_empty() {
+                    &skill.local_path
+                } else {
+                    &skill.instance.canonical_path
+                };
+                (skill.name.clone(), PathBuf::from(path))
+            })
+            .collect::<BTreeMap<_, _>>();
+        let refreshed_skills =
+            match crate::agent_skills_cli::detect_global_updates(&agent_skill_paths) {
+                Ok(check) => apply_agent_cli_update_statuses(refreshed_git_skills, &check),
+                Err(error) => {
+                    log::warn!("Agent Skills CLI update check skipped: {error}");
+                    refreshed_git_skills
+                }
+            };
         if sync_trace_enabled() {
             for skill in &refreshed_skills {
                 let tool_statuses = skill
@@ -7484,7 +7537,11 @@ fn update_skill_blocking(
     let refreshed = if skill.instance.update_driver == "git" || skill.git_linked {
         enrich_skill_with_git_state(skill)
     } else {
-        skill.clone()
+        let mut refreshed = skill.clone();
+        refreshed.collab_status = SKILL_STATUS_CLEAN.into();
+        refreshed.status_text = "Agent CLI Skill 已更新。".into();
+        refreshed.last_checked_at = "刚刚检查".into();
+        refreshed
     };
     Ok(refreshed)
 }
@@ -7920,8 +7977,9 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        apply_skill_install_activation, build_local_candidates, build_repo_skill_source_url,
-        build_tool_skill_entries, cleanup_local_skill_install_on_error, collect_local_skill_dirs,
+        apply_agent_cli_update_statuses, apply_skill_install_activation, build_local_candidates,
+        build_repo_skill_source_url, build_tool_skill_entries,
+        cleanup_local_skill_install_on_error, collect_local_skill_dirs,
         collect_skills_manager_cached_items, collect_skillsmp_items, copy_local_skill_dir,
         detect_preferred_app_language_from_system, ensure_intellij_git_project_files,
         import_local_skill, insert_trusted_project_path, inspect_skill_tool_status,
@@ -7937,10 +7995,12 @@ mod tests {
         should_use_skills_sh_homepage_page, tool_name_to_id, update_skill_repo,
         REFRESH_GIT_STATES_CONCURRENCY,
     };
+    use crate::agent_skills_cli::AgentSkillUpdateCheck;
     use crate::models::{
         MarketplaceSkill, SkillFileEntry, SkillSummary, ToolConfig, WorkspacePersistence,
     };
     use crate::workspace::TEST_ENV_LOCK;
+    use std::collections::BTreeSet;
     use std::env;
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -8457,6 +8517,46 @@ mod tests {
     }
 
     #[test]
+    fn applies_agent_cli_update_status_without_changing_git_skills() {
+        let mut agent_skill = installed_skill_fixture("agent-skill", "", "/tmp/agent-skill");
+        agent_skill.git_linked = false;
+        agent_skill.instance.update_driver = "agent-skills-cli".into();
+        let mut git_skill =
+            installed_skill_fixture("git-skill", "https://example.com/git", "/tmp/git-skill");
+        git_skill.collab_status = "pending-push".into();
+        let check = AgentSkillUpdateCheck {
+            checked_names: BTreeSet::from(["agent-skill".to_string()]),
+            updated_names: BTreeSet::from(["agent-skill".to_string()]),
+        };
+
+        let refreshed = apply_agent_cli_update_statuses(vec![agent_skill, git_skill], &check);
+
+        assert_eq!(refreshed[0].collab_status, "update-available");
+        assert_eq!(refreshed[1].collab_status, "pending-push");
+    }
+
+    #[test]
+    fn clears_only_successfully_checked_agent_cli_update_statuses() {
+        let mut checked_skill = installed_skill_fixture("checked", "", "/tmp/checked");
+        checked_skill.git_linked = false;
+        checked_skill.instance.update_driver = "agent-skills-cli".into();
+        checked_skill.collab_status = "update-available".into();
+        let mut failed_skill = installed_skill_fixture("failed", "", "/tmp/failed");
+        failed_skill.git_linked = false;
+        failed_skill.instance.update_driver = "agent-skills-cli".into();
+        failed_skill.collab_status = "update-available".into();
+        let check = AgentSkillUpdateCheck {
+            checked_names: BTreeSet::from(["checked".to_string()]),
+            updated_names: BTreeSet::new(),
+        };
+
+        let refreshed = apply_agent_cli_update_statuses(vec![checked_skill, failed_skill], &check);
+
+        assert_eq!(refreshed[0].collab_status, "clean");
+        assert_eq!(refreshed[1].collab_status, "update-available");
+    }
+
+    #[test]
     fn tool_skill_entries_scan_every_valid_skill_in_the_real_tool_directory() {
         let _guard = TEST_ENV_LOCK
             .lock()
@@ -8492,11 +8592,8 @@ mod tests {
                 tool_skills_dir.join("skilldock-skill"),
             )
             .expect("link SkillDock skill into tool");
-            std::os::unix::fs::symlink(
-                &agent_skill_dir,
-                tool_skills_dir.join("agent-skill"),
-            )
-            .expect("link Agent skill into tool");
+            std::os::unix::fs::symlink(&agent_skill_dir, tool_skills_dir.join("agent-skill"))
+                .expect("link Agent skill into tool");
             let agent_external_entry = home_dir.join(".agents/skills/external-skill");
             std::os::unix::fs::symlink(&external_skill_dir, &agent_external_entry)
                 .expect("link external skill into Agent root");

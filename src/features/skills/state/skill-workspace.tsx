@@ -1285,12 +1285,9 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       return updateAllSkillsInFlightRef.current;
     }
 
-    const updatableSkills = installedSkills.filter((skill) => {
-      if (skill.collabStatus === "update-available") {
-        return true;
-      }
-      return skill.updateDriver === "agent-skills-cli";
-    });
+    const updatableSkills = installedSkills.filter(
+      (skill) => skill.collabStatus === "update-available",
+    );
     let updatePromise: Promise<void> | null = null;
     workspaceMutationVersionRef.current += 1;
     updatePromise = (async () => {
