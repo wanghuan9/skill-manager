@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { App } from "@/app/App";
 import { workspaceSnapshotFixture } from "@/features/skills/state/skill-fixtures";
@@ -37,4 +37,17 @@ test("shows same-name Skill instances with their directory owners", async () => 
   expect(screen.getAllByRole("article", { name: "duplicate-skill" })).toHaveLength(2);
   expect(screen.getAllByText("SkillDock 托管").length).toBeGreaterThan(0);
   expect(screen.getByText("外部目录")).toBeInTheDocument();
+});
+
+test("shows the managed directory type below a managed tool Skill", async () => {
+  const user = userEvent.setup();
+  render(<App />);
+
+  await user.click(screen.getByRole("tab", { name: "Codex 5" }));
+
+  const sourceCard = screen.getByRole("article", { name: "skill-publisher" });
+  expect(within(sourceCard).getByText("已托管")).toBeInTheDocument();
+  expect(within(sourceCard).getByText("SkillDock 托管")).toHaveClass(
+    "skill-source-card__managed-root",
+  );
 });

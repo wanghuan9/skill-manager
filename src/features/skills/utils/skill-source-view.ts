@@ -12,6 +12,7 @@ export const MANAGED_SKILL_SOURCE_ID = "managed";
 export type SkillSourceId = typeof MANAGED_SKILL_SOURCE_ID | string;
 export type ToolSkillManagementStatus = "managed" | "unmanaged" | "mismatch";
 export type ToolSkillManagementFilter = "all" | ToolSkillManagementStatus;
+export type ToolSkillManagedRoot = "skilldock" | "agent-skills-cli" | "";
 
 export type ToolSkillViewItem = {
   id: string;
@@ -20,6 +21,7 @@ export type ToolSkillViewItem = {
   localPath: string;
   resolvedPath: string;
   status: ToolSkillManagementStatus;
+  managedRoot: ToolSkillManagedRoot;
   entryKind: ToolSkillEntryKind;
   managedSkill?: SkillSummary;
 };
@@ -74,7 +76,10 @@ export function buildToolSkillViewItems(input: {
   toolSkillEntries: ToolSkillEntry[];
 }) {
   const { tool, installedSkills, toolSkillEntries } = input;
-  const installedSkillsByName = new Map(installedSkills.map((skill) => [skill.name, skill]));
+  const installedSkillsByInstance = new Map(installedSkills.map((skill) => [
+    `${skill.name}:${normalizePath(skill.canonicalPath ?? skill.localPath)}`,
+    skill,
+  ]));
   const statusOrder: Record<ToolSkillManagementStatus, number> = {
     managed: 0,
     mismatch: 1,
@@ -83,16 +88,24 @@ export function buildToolSkillViewItems(input: {
 
   return toolSkillEntries
     .filter((entry) => entry.toolId === tool.id)
-    .map<ToolSkillViewItem>((entry) => ({
-      id: `${entry.toolId}:${normalizePath(entry.localPath)}`,
-      name: entry.name,
-      description: entry.description,
-      localPath: entry.localPath,
-      resolvedPath: entry.resolvedPath,
-      status: entry.managementStatus,
-      entryKind: entry.entryKind ?? "directory",
-      managedSkill: installedSkillsByName.get(entry.name),
-    }))
+    .map<ToolSkillViewItem>((entry) => {
+      const resolvedPath = normalizePath(entry.resolvedPath);
+      return {
+        id: `${entry.toolId}:${normalizePath(entry.localPath)}`,
+        name: entry.name,
+        description: entry.description,
+        localPath: entry.localPath,
+        resolvedPath: entry.resolvedPath,
+        status: entry.managementStatus,
+        managedRoot: entry.managementStatus === "managed"
+          ? entry.managedRoot
+          : "",
+        entryKind: entry.entryKind ?? "directory",
+        managedSkill: entry.managementStatus === "managed"
+          ? installedSkillsByInstance.get(`${entry.name}:${resolvedPath}`)
+          : undefined,
+      };
+    })
     .sort((left, right) => (
       statusOrder[left.status] - statusOrder[right.status]
       || left.name.localeCompare(right.name, "zh-CN", { sensitivity: "base", numeric: true })

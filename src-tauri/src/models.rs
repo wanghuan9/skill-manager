@@ -258,6 +258,8 @@ pub struct ToolSkillEntry {
     pub resolved_path: String,
     pub management_status: String,
     #[serde(default)]
+    pub managed_root: String,
+    #[serde(default)]
     pub entry_kind: String,
 }
 

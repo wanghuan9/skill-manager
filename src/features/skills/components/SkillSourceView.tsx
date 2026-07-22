@@ -16,6 +16,7 @@ import {
   resolveManagedSkillRootPath,
   type SkillSourceId,
   type ToolSkillManagementFilter,
+  type ToolSkillManagedRoot,
   type ToolSkillManagementStatus,
   type ToolSkillViewItem,
 } from "@/features/skills/utils/skill-source-view";
@@ -33,6 +34,11 @@ const statusTranslationKeys: Record<ToolSkillManagementStatus, TranslationKey> =
   managed: "skills.source.status.managed",
   unmanaged: "skills.source.status.unmanaged",
   mismatch: "skills.source.status.mismatch",
+};
+
+const managedRootTranslationKeys: Record<Exclude<ToolSkillManagedRoot, "">, TranslationKey> = {
+  skilldock: "skill.card.owner.skilldock",
+  "agent-skills-cli": "skill.card.owner.agentSkillsCli",
 };
 
 function FolderIcon() {
@@ -146,13 +152,14 @@ function SkillSourceRow(props: {
   const [isDeleting, setIsDeleting] = useState(false);
   const deleteActionRef = useRef<HTMLButtonElement | null>(null);
   const statusLabel = t(statusTranslationKeys[item.status]);
+  const managedRootLabel = item.managedRoot ? t(managedRootTranslationKeys[item.managedRoot]) : "";
   const description = formatSkillDescription(item.description) || t("skills.description.empty");
   const entryKindLabel = t(item.entryKind === "symlink"
     ? "skills.source.entryKind.symlink"
     : "skills.source.entryKind.directory");
   const isUnmanaged = item.status === "unmanaged";
-  const managedRootPath = item.managedSkill
-    ? resolveManagedSkillRootPath(item.managedSkill.localPath)
+  const managedRootPath = item.status === "managed"
+    ? resolveManagedSkillRootPath(item.resolvedPath)
     : "";
   const detailsId = `skill-source-details-${item.id.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
   const isGridLayout = layout === "grid";
@@ -246,7 +253,7 @@ function SkillSourceRow(props: {
         </div>
         <div>
           <dt>{t("skills.source.details.managementStatus")}</dt>
-          <dd>{statusLabel}</dd>
+          <dd>{managedRootLabel ? `${statusLabel} · ${managedRootLabel}` : statusLabel}</dd>
         </div>
         {isUnmanaged ? (
           <>
@@ -314,6 +321,9 @@ function SkillSourceRow(props: {
             <div className="skill-card__title-row">
               <h3>{item.name}</h3>
               <span className={`status-badge ${statusTone(item.status)}`}>{statusLabel}</span>
+              {managedRootLabel && !isGridLayout ? (
+                <span className="status-badge tone-info">{managedRootLabel}</span>
+              ) : null}
               {item.status === "unmanaged" && !isGridLayout ? (
                 <span className="status-badge tone-info">
                   {entryKindLabel}
@@ -324,6 +334,11 @@ function SkillSourceRow(props: {
           </div>
         </button>
         <div className="skill-card__list-actions">
+          {managedRootLabel && isGridLayout ? (
+            <span className="status-badge tone-info skill-source-card__managed-root">
+              {managedRootLabel}
+            </span>
+          ) : null}
           {isUnmanaged && isGridLayout ? (
             <span className="status-badge tone-info skill-source-card__entry-kind">
               {entryKindLabel}
@@ -429,6 +444,9 @@ function SkillSourceRow(props: {
                   <div className="skill-card-detail-modal__title">
                     <h3>{item.name}</h3>
                     <span className={`status-badge ${statusTone(item.status)}`}>{statusLabel}</span>
+                    {managedRootLabel ? (
+                      <span className="status-badge tone-info">{managedRootLabel}</span>
+                    ) : null}
                   </div>
                 </div>
               </div>

@@ -9657,7 +9657,8 @@ button.settings-form-item:disabled {
   overflow: hidden;
 }
 
-.skill-source-card--grid .skill-source-card__entry-kind {
+.skill-source-card--grid .skill-source-card__entry-kind,
+.skill-source-card--grid .skill-source-card__managed-root {
   min-width: 0;
   margin-right: auto;
   overflow: hidden;

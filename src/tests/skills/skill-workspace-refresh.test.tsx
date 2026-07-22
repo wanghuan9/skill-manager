@@ -19,6 +19,7 @@ import type {
   MarketplaceSkill,
   SkillSummary,
   ToolConfig,
+  ToolSkillEntry,
 } from "@/features/skills/state/skill-store";
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -160,6 +161,26 @@ function SkillSourceViewStyleProbe() {
   return <span data-testid="skill-source-view-style">{appSettings.skillSourceViewStyle}</span>;
 }
 
+function ImportCandidateProbe() {
+  const { importCandidate, toolSkillEntries } = useSkillWorkspace();
+
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={() => void importCandidate("/Users/demo/.codex/skills/external-skill")}
+      >
+        导入外部 Skill
+      </button>
+      <span data-testid="tool-skill-state">
+        {toolSkillEntries.map((entry) => (
+          `${entry.managementStatus}:${entry.resolvedPath}`
+        )).join(",")}
+      </span>
+    </div>
+  );
+}
+
 function MarketplaceProbe() {
   const { loadInitialMarketplaceSkills, marketplaceSkills } = useSkillWorkspace();
   const [loadState, setLoadState] = useState("idle");
@@ -227,7 +248,7 @@ test("uses the stored source layout before native settings finish loading", asyn
   const settingsDeferred = createDeferred<AppSettings>();
   window.localStorage.setItem("skilldock.settings.skillSourceViewStyle", "flat");
 
-  mockedInvoke.mockImplementation(async (command) => {
+  mockedInvoke.mockImplementation(async (command, args) => {
     switch (command) {
       case "list_startup_installed_skills":
         return installedSkillFixtures;
@@ -256,6 +277,74 @@ test("uses the stored source layout before native settings finish loading", asyn
 
   await act(async () => {
     settingsDeferred.resolve({ ...appSettingsFixture, skillSourceViewStyle: "flat" });
+  });
+});
+
+test("rescans tool entries after importing without changing an external real path", async () => {
+  const externalEntry: ToolSkillEntry = {
+    toolId: "codex",
+    toolName: "Codex",
+    name: "external-skill",
+    description: "External skill",
+    localPath: "/Users/demo/.codex/skills/external-skill",
+    resolvedPath: "/Users/demo/shared-skills/external-skill",
+    managementStatus: "unmanaged",
+    managedRoot: "",
+    entryKind: "symlink",
+  };
+  const importedSkill: SkillSummary = {
+    ...installedSkillFixtures[0],
+    name: "external-skill",
+    localPath: "/Users/demo/.skilldock/skills/external-skill",
+    canonicalPath: "/Users/demo/.skilldock/skills/external-skill",
+  };
+  let toolEntryScanCount = 0;
+
+  mockedInvoke.mockImplementation(async (command, args) => {
+    switch (command) {
+      case "list_startup_installed_skills":
+      case "refresh_git_states":
+        return installedSkillFixtures;
+      case "list_local_skill_candidates":
+        return [];
+      case "list_tool_configs":
+        return toolConfigFixtures;
+      case "list_tool_skill_entries":
+        toolEntryScanCount += 1;
+        return [externalEntry];
+      case "get_git_account_summary":
+        return gitAccountFixture;
+      case "get_app_settings":
+        return appSettingsFixture;
+      case "update_app_settings":
+        return (args as { settings: AppSettings }).settings;
+      case "import_local_skill":
+        return importedSkill;
+      default:
+        throw new Error(`Unexpected command: ${command}`);
+    }
+  });
+
+  render(
+    <SkillWorkspaceProvider>
+      <ImportCandidateProbe />
+    </SkillWorkspaceProvider>,
+  );
+
+  await waitFor(() => {
+    expect(screen.getByTestId("tool-skill-state")).toHaveTextContent(
+      "unmanaged:/Users/demo/shared-skills/external-skill",
+    );
+  });
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "导入外部 Skill" }));
+  });
+
+  await waitFor(() => {
+    expect(toolEntryScanCount).toBe(2);
+    expect(screen.getByTestId("tool-skill-state")).toHaveTextContent(
+      "unmanaged:/Users/demo/shared-skills/external-skill",
+    );
   });
 });
 

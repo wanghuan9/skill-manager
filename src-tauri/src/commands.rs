@@ -1865,21 +1865,8 @@ fn build_local_candidates(installed_skills: &[SkillSummary]) -> Vec<LocalSkillCa
 
 fn build_tool_skill_entries(
     tool_configs: &[ToolConfig],
-    installed_skills: &[SkillSummary],
+    _installed_skills: &[SkillSummary],
 ) -> Vec<ToolSkillEntry> {
-    let installed_skill_paths = installed_skills
-        .iter()
-        .filter_map(|skill| {
-            Path::new(&skill.local_path)
-                .canonicalize()
-                .ok()
-                .map(|path| (path, skill.name.as_str()))
-        })
-        .collect::<Vec<_>>();
-    let installed_skill_names = installed_skills
-        .iter()
-        .map(|skill| skill.name.as_str())
-        .collect::<BTreeSet<_>>();
     let mut entries = Vec::new();
 
     for tool in tool_configs {
@@ -1910,15 +1897,11 @@ fn build_tool_skill_entries(
             let resolved_path = local_path
                 .canonicalize()
                 .unwrap_or_else(|_| local_path.clone());
-            let management_status = if installed_skill_paths
-                .iter()
-                .any(|(managed_path, _)| *managed_path == resolved_path)
-            {
-                "managed"
-            } else if installed_skill_names.contains(name) {
-                "mismatch"
-            } else {
+            let managed_root = managed_root_for_path(&resolved_path);
+            let management_status = if managed_root.is_empty() {
                 "unmanaged"
+            } else {
+                "managed"
             };
 
             entries.push(ToolSkillEntry {
@@ -1929,6 +1912,7 @@ fn build_tool_skill_entries(
                 local_path: local_path.to_string_lossy().to_string(),
                 resolved_path: resolved_path.to_string_lossy().to_string(),
                 management_status: management_status.to_string(),
+                managed_root,
                 entry_kind: entry_kind.to_string(),
             });
         }
@@ -1941,6 +1925,22 @@ fn build_tool_skill_entries(
             .then_with(|| left.local_path.cmp(&right.local_path))
     });
     entries
+}
+
+fn managed_root_for_path(path: &Path) -> String {
+    let Ok(home_dir) = workspace::home_dir() else {
+        return String::new();
+    };
+    let resolved_home = home_dir.canonicalize().unwrap_or(home_dir);
+    let roots = [
+        (resolved_home.join(".skilldock/skills"), "skilldock"),
+        (resolved_home.join(".agents/skills"), "agent-skills-cli"),
+    ];
+
+    roots
+        .into_iter()
+        .find_map(|(root, owner)| path.starts_with(root).then(|| owner.to_string()))
+        .unwrap_or_default()
 }
 
 fn local_candidate_source_hint(local_path: &str) -> &'static str {
@@ -8458,14 +8458,21 @@ mod tests {
 
     #[test]
     fn tool_skill_entries_scan_every_valid_skill_in_the_real_tool_directory() {
+        let _guard = TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         let temp_dir = temp_test_dir("tool-skill-entries");
+        let home_dir = temp_dir.join("home");
         let tool_skills_dir = temp_dir.join("tool-skills");
-        let managed_library_dir = temp_dir.join("managed-library");
+        let skilldock_skill_dir = home_dir.join(".skilldock/skills/skilldock-skill");
+        let agent_skill_dir = home_dir.join(".agents/skills/agent-skill");
+        let external_skill_dir = temp_dir.join("external-skill");
         fs::create_dir_all(&tool_skills_dir).expect("create tool skills directory");
-        fs::create_dir_all(&managed_library_dir).expect("create managed library directory");
-
-        for name in ["managed-skill", "changed-skill", "unmanaged-skill"] {
-            let skill_dir = tool_skills_dir.join(name);
+        for (skill_dir, name) in [
+            (&skilldock_skill_dir, "skilldock-skill"),
+            (&agent_skill_dir, "agent-skill"),
+            (&external_skill_dir, "external-skill"),
+        ] {
             fs::create_dir_all(&skill_dir).expect("create tool skill directory");
             fs::write(
                 skill_dir.join("SKILL.md"),
@@ -8473,24 +8480,42 @@ mod tests {
             )
             .expect("write skill markdown");
         }
-        let changed_managed_dir = managed_library_dir.join("changed-skill");
-        fs::create_dir_all(&changed_managed_dir).expect("create changed managed skill directory");
-        fs::write(
-            changed_managed_dir.join("SKILL.md"),
-            "---\nname: changed-skill\n---\n",
-        )
-        .expect("write managed skill markdown");
+        let previous_home = env::var_os("HOME");
+        // SAFETY: this test holds TEST_ENV_LOCK and restores HOME before returning.
+        unsafe {
+            env::set_var("HOME", &home_dir);
+        }
         #[cfg(unix)]
         {
-            let symlink_target = temp_dir.join("symlink-target");
-            fs::create_dir_all(&symlink_target).expect("create symlink target");
-            fs::write(
-                symlink_target.join("SKILL.md"),
-                "---\nname: symlink-skill\ndescription: symlink skill description\n---\n",
+            std::os::unix::fs::symlink(
+                &skilldock_skill_dir,
+                tool_skills_dir.join("skilldock-skill"),
             )
-            .expect("write symlink skill markdown");
-            std::os::unix::fs::symlink(&symlink_target, tool_skills_dir.join("symlink-skill"))
-                .expect("create tool skill symlink");
+            .expect("link SkillDock skill into tool");
+            std::os::unix::fs::symlink(
+                &agent_skill_dir,
+                tool_skills_dir.join("agent-skill"),
+            )
+            .expect("link Agent skill into tool");
+            let agent_external_entry = home_dir.join(".agents/skills/external-skill");
+            std::os::unix::fs::symlink(&external_skill_dir, &agent_external_entry)
+                .expect("link external skill into Agent root");
+            std::os::unix::fs::symlink(
+                &agent_external_entry,
+                tool_skills_dir.join("external-skill"),
+            )
+            .expect("link Agent entry into tool");
+        }
+        #[cfg(not(unix))]
+        for (source, name) in [
+            (&skilldock_skill_dir, "skilldock-skill"),
+            (&agent_skill_dir, "agent-skill"),
+            (&external_skill_dir, "external-skill"),
+        ] {
+            let target = tool_skills_dir.join(name);
+            fs::create_dir_all(&target).expect("create tool skill copy");
+            fs::copy(source.join("SKILL.md"), target.join("SKILL.md"))
+                .expect("copy tool skill markdown");
         }
 
         let tool = ToolConfig {
@@ -8506,53 +8531,32 @@ mod tests {
             surface_types: vec!["cli".into()],
             supports_direct_open: false,
         };
-        let installed_skills = vec![
-            installed_skill_fixture(
-                "managed-skill",
-                "",
-                tool_skills_dir
-                    .join("managed-skill")
-                    .to_string_lossy()
-                    .as_ref(),
-            ),
-            installed_skill_fixture(
-                "changed-skill",
-                "",
-                changed_managed_dir.to_string_lossy().as_ref(),
-            ),
-        ];
-
-        let entries = build_tool_skill_entries(&[tool], &installed_skills);
-        #[cfg(unix)]
-        assert_eq!(entries.len(), 4);
-        #[cfg(not(unix))]
+        let entries = build_tool_skill_entries(&[tool], &[]);
         assert_eq!(entries.len(), 3);
-        let changed_entry = entries
+        let skilldock_entry = entries
             .iter()
-            .find(|entry| entry.name == "changed-skill")
-            .expect("changed skill entry");
-        assert_eq!(changed_entry.management_status, "mismatch");
-        let managed_entry = entries
+            .find(|entry| entry.name == "skilldock-skill")
+            .expect("SkillDock skill entry");
+        let agent_entry = entries
             .iter()
-            .find(|entry| entry.name == "managed-skill")
-            .expect("managed skill entry");
-        assert_eq!(managed_entry.management_status, "managed");
-        let unmanaged_entry = entries
+            .find(|entry| entry.name == "agent-skill")
+            .expect("Agent skill entry");
+        let external_entry = entries
             .iter()
-            .find(|entry| entry.name == "unmanaged-skill")
-            .expect("unmanaged skill entry");
-        assert_eq!(unmanaged_entry.management_status, "unmanaged");
-        assert_eq!(unmanaged_entry.entry_kind, "directory");
+            .find(|entry| entry.name == "external-skill")
+            .expect("external skill entry");
         #[cfg(unix)]
         {
-            let symlink_entry = entries
-                .iter()
-                .find(|entry| entry.name == "symlink-skill")
-                .expect("symlink skill entry");
-            assert_eq!(symlink_entry.management_status, "unmanaged");
-            assert_eq!(symlink_entry.entry_kind, "symlink");
+            assert_eq!(skilldock_entry.management_status, "managed");
+            assert_eq!(skilldock_entry.managed_root, "skilldock");
+            assert_eq!(agent_entry.management_status, "managed");
+            assert_eq!(agent_entry.managed_root, "agent-skills-cli");
+            assert_eq!(external_entry.management_status, "unmanaged");
+            assert!(external_entry.managed_root.is_empty());
+            assert_eq!(external_entry.entry_kind, "symlink");
         }
 
+        restore_env_var("HOME", previous_home);
         let _ = fs::remove_dir_all(temp_dir);
     }
 

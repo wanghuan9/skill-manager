@@ -1236,17 +1236,10 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
     const importedSkill = await importLocalSkill(localPath);
     setInstalledSkills((current) => mergeUpdatedSkillsPreservingOrder(current, [importedSkill]));
     setLocalCandidates((current) => removeImportedCandidate(current, importedSkill));
-    setToolSkillEntries((current) => current.map((entry) => (
-      entry.localPath === localPath
-        ? {
-            ...entry,
-            name: importedSkill.name,
-            description: importedSkill.description,
-            resolvedPath: importedSkill.localPath,
-            managementStatus: "managed",
-          }
-        : entry
-    )));
+    const refreshedToolSkills = await fetchToolSkillEntries().catch(() => null);
+    if (refreshedToolSkills) {
+      setToolSkillEntries(refreshedToolSkills);
+    }
   }
 
   async function handleRefreshLocalCandidates() {

@@ -274,6 +274,7 @@ export type ToolSkillEntry = {
   localPath: string;
   resolvedPath: string;
   managementStatus: "managed" | "unmanaged" | "mismatch";
+  managedRoot: "skilldock" | "agent-skills-cli" | "";
   entryKind?: ToolSkillEntryKind;
 };
 

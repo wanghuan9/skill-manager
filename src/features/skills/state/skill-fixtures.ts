@@ -382,6 +382,9 @@ const managedToolSkillEntryFixtures: ToolSkillEntry[] = toolConfigFixtures.flatM
       localPath: `${tool.skillsPath.replace(/[\\/]+$/, "")}/${skill.name}`,
       resolvedPath: skill.localPath,
       managementStatus: toolStatus.statusLabel === "需要重同步" ? "mismatch" as const : "managed" as const,
+      managedRoot: skill.localPath.includes("/.agents/skills/")
+        ? "agent-skills-cli" as const
+        : "skilldock" as const,
       entryKind: "symlink" as const,
     }];
   }),
@@ -409,6 +412,7 @@ export const toolSkillEntryFixtures: ToolSkillEntry[] = [
         ? `/Users/demo/shared-skills/${candidate.name}`
         : candidate.localPath,
       managementStatus: "unmanaged" as const,
+      managedRoot: "" as const,
       entryKind: candidate.sourceHint === "符号链接" ? "symlink" as const : "directory" as const,
     }];
   }),
