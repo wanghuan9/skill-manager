@@ -2678,18 +2678,8 @@ code {
 }
 
 .skill-card__owner-badge {
-  display: inline-flex;
-  align-items: center;
   flex: 0 0 auto;
-  min-height: 20px;
-  padding: 1px 7px;
-  border: 1px solid color-mix(in srgb, var(--line) 88%, var(--muted) 12%);
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--surface-strong) 88%, var(--muted) 12%);
-  color: var(--muted);
-  font-size: 0.68rem;
-  font-weight: 500;
-  line-height: 1;
+  border: 0;
   white-space: nowrap;
 }
 
@@ -3176,8 +3166,13 @@ code {
   align-self: start;
 }
 
-.skill-card__list-actions .skill-card__icon-button {
+.skill-card__list-actions .skill-card__icon-button:not(.skill-card__icon-button--update) {
   color: #64748b;
+  opacity: 0.96;
+}
+
+.skill-card__list-actions .skill-card__icon-button--update {
+  color: var(--accent);
   opacity: 0.96;
 }
 

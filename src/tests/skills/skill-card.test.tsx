@@ -100,6 +100,10 @@ test("keeps ownership beside the name and collaboration status in the right acti
 
   expect(titleRow).toHaveTextContent("drawio-diagramSkillDock已启用 2");
   expect(titleRow).not.toHaveTextContent("待推送");
+  expect(titleRow?.querySelector(".skill-card__owner-badge")).toHaveClass(
+    "status-badge",
+    "tone-neutral",
+  );
   expect(titleRow?.querySelector(".skill-card__owner-badge")).toHaveTextContent("SkillDock");
   expect(actions).toHaveTextContent("待推送");
   expect(actions?.firstElementChild).toHaveTextContent("待推送");

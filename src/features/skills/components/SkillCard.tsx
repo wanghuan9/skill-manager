@@ -609,7 +609,9 @@ export function SkillCard({
                       <h3>{skill.name}</h3>
                       {!isGridLayout ? (
                         <>
-                          <span className="skill-card__owner-badge">{managementOwnerLabel}</span>
+                          <span className="status-badge tone-neutral skill-card__owner-badge">
+                            {managementOwnerLabel}
+                          </span>
                           <button
                             className={`status-badge tone-info skill-card__enabled-toggle${enabledTools.length > 0 ? "" : " is-empty"}`}
                             type="button"
