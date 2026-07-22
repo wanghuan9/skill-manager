@@ -130,6 +130,20 @@ function OpenFolderIcon() {
   );
 }
 
+function FolderIcon() {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+      <path
+        d="M3.5 6.6c0-.97.78-1.75 1.75-1.75h3.18c.52 0 1.01.23 1.34.63l.67.8h4.31c.97 0 1.75.78 1.75 1.75v5.37c0 .97-.78 1.75-1.75 1.75h-9.5c-.97 0-1.75-.78-1.75-1.75V6.6Z"
+        stroke="currentColor"
+        strokeWidth="1.55"
+        strokeLinejoin="round"
+      />
+      <path d="M3.75 8.1h12.5" stroke="currentColor" strokeWidth="1.55" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 function SkillFilePreviewButton(props: {
   skill: SkillSummary;
   onClick: () => void;
@@ -579,7 +593,7 @@ export function SkillCard({
                 aria-label={t("skills.source.openPath", { path: managedPath })}
                 data-tooltip={t("skills.source.openFolder")}
               >
-                <OpenFolderIcon />
+                <FolderIcon />
               </button>
             </dd>
           </div>
