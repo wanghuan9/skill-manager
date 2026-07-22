@@ -307,6 +307,8 @@ pub struct WorkspaceSnapshot {
 #[serde(rename_all = "camelCase")]
 pub struct AppSettings {
     pub storage_path: String,
+    pub skill_library_path: String,
+    pub skill_library_provider: String,
     pub default_open_tool_id: String,
     pub skill_install_activation: String,
     pub mcp_install_activation: String,

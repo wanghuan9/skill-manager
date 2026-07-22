@@ -6,9 +6,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::models::{AppSettings, SkillSummary, WorkspacePersistence};
 use crate::workspace::{
-    display_path_value, home_dir_option, managed_skill_library_root, managed_workspace_root_option,
-    normalize_workspace_path, remove_legacy_workspace_file, workspace_file_candidates,
-    workspace_file_path,
+    display_path_value, home_dir_option, link_skilldock_skills_into_agent_library,
+    managed_skill_library_root, managed_workspace_root_option, normalize_skill_library_provider,
+    normalize_workspace_path, remove_legacy_workspace_file, skill_library_root_for_provider,
+    workspace_file_candidates, workspace_file_path, SKILL_LIBRARY_PROVIDER_AGENT_SKILLS,
+    SKILL_LIBRARY_PROVIDER_SKILLDOCK,
 };
 
 const STATE_FILE_NAME: &str = "state.json";
@@ -34,6 +36,8 @@ const APP_THEME_SYSTEM: &str = "system";
 #[derive(Clone, Debug, Deserialize, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 struct SettingsPersistence {
+    #[serde(default)]
+    skill_library_provider: String,
     #[serde(default)]
     default_open_tool_id: String,
     #[serde(default)]
@@ -135,6 +139,11 @@ pub fn load_app_settings() -> AppSettings {
 
     AppSettings {
         storage_path: settings_path,
+        skill_library_path: managed_skill_library_root()
+            .map(|path| path.to_string_lossy().to_string())
+            .unwrap_or_default(),
+        skill_library_provider: normalize_skill_library_provider(&persisted.skill_library_provider)
+            .to_string(),
         default_open_tool_id: persisted.default_open_tool_id,
         skill_install_activation: normalize_skill_install_activation(
             &persisted.skill_install_activation,
@@ -161,8 +170,17 @@ pub fn save_app_settings(input: AppSettings) -> Result<AppSettings, String> {
 
     fs::create_dir_all(parent_dir).map_err(|error| format!("创建设置目录失败: {error}"))?;
 
+    let skill_library_provider = normalize_skill_library_provider(&input.skill_library_provider);
+    let skill_library_path = home_dir_option()
+        .and_then(|home_dir| {
+            skill_library_root_for_provider(skill_library_provider, &home_dir).ok()
+        })
+        .map(|path| path.to_string_lossy().to_string())
+        .unwrap_or_default();
     let normalized = AppSettings {
         storage_path: settings_file.to_string_lossy().to_string(),
+        skill_library_path,
+        skill_library_provider: skill_library_provider.to_string(),
         default_open_tool_id: input.default_open_tool_id.trim().to_string(),
         skill_install_activation: normalize_skill_install_activation(
             &input.skill_install_activation,
@@ -177,6 +195,7 @@ pub fn save_app_settings(input: AppSettings) -> Result<AppSettings, String> {
         theme: normalize_app_theme(&input.theme).to_string(),
     };
     let persistence = SettingsPersistence {
+        skill_library_provider: normalized.skill_library_provider.clone(),
         default_open_tool_id: normalized.default_open_tool_id.clone(),
         skill_install_activation: normalized.skill_install_activation.clone(),
         mcp_install_activation: normalized.mcp_install_activation.clone(),
@@ -188,9 +207,65 @@ pub fn save_app_settings(input: AppSettings) -> Result<AppSettings, String> {
     let payload = serde_json::to_string_pretty(&persistence)
         .map_err(|error| format!("序列化设置失败: {error}"))?;
 
+    if normalized.skill_library_provider == SKILL_LIBRARY_PROVIDER_AGENT_SKILLS {
+        link_skilldock_skills_into_agent_library()?;
+    }
+    fs::create_dir_all(&normalized.skill_library_path)
+        .map_err(|error| format!("创建 Skill 托管目录失败: {error}"))?;
+    align_installed_skills_for_provider(&normalized.skill_library_provider)?;
     fs::write(&settings_file, payload).map_err(|error| format!("写入设置文件失败: {error}"))?;
     remove_legacy_workspace_file(SETTINGS_FILE_NAME);
     Ok(normalized)
+}
+
+fn align_installed_skills_for_provider(provider: &str) -> Result<(), String> {
+    let Some(home_dir) = home_dir_option() else {
+        return Ok(());
+    };
+    let skilldock_root =
+        skill_library_root_for_provider(SKILL_LIBRARY_PROVIDER_SKILLDOCK, &home_dir)?;
+    let agent_skills_root =
+        skill_library_root_for_provider(SKILL_LIBRARY_PROVIDER_AGENT_SKILLS, &home_dir)?;
+    let installed_skills = load_installed_skills(&[]);
+    let mut changed = false;
+    let aligned_skills = installed_skills
+        .into_iter()
+        .filter_map(|mut skill| {
+            let current_path = PathBuf::from(&skill.local_path);
+            if provider == SKILL_LIBRARY_PROVIDER_AGENT_SKILLS {
+                let Ok(relative_path) = current_path.strip_prefix(&skilldock_root) else {
+                    return Some(skill);
+                };
+                let target_path = agent_skills_root.join(relative_path);
+                if target_path.exists() {
+                    skill.local_path = target_path.to_string_lossy().to_string();
+                    changed = true;
+                }
+                return Some(skill);
+            }
+
+            if !current_path.starts_with(&agent_skills_root) {
+                return Some(skill);
+            }
+            let Ok(canonical_path) = current_path.canonicalize() else {
+                changed = true;
+                return None;
+            };
+            if canonical_path.starts_with(&skilldock_root) {
+                skill.local_path = canonical_path.to_string_lossy().to_string();
+                changed = true;
+                Some(skill)
+            } else {
+                changed = true;
+                None
+            }
+        })
+        .collect::<Vec<_>>();
+
+    if changed {
+        save_installed_skills(&aligned_skills)?;
+    }
+    Ok(())
 }
 
 fn normalize_app_language(value: &str) -> &'static str {
@@ -603,7 +678,7 @@ mod tests {
     use crate::workspace::TEST_ENV_LOCK;
 
     use super::{
-        hydrate_skill_description, load_installed_skills, normalize_app_theme,
+        hydrate_skill_description, load_app_settings, load_installed_skills, normalize_app_theme,
         normalize_skill_source_view_style, save_installed_skills, scan_local_skill_candidates,
     };
 
@@ -726,6 +801,24 @@ mod tests {
         assert_eq!(normalize_app_theme("dark"), "dark");
         assert_eq!(normalize_app_theme("system"), "system");
         assert_eq!(normalize_app_theme(""), "system");
+    }
+
+    #[test]
+    fn loads_legacy_settings_with_skilldock_provider() {
+        with_temp_home(|temp_home| {
+            let workspace_root = temp_home.join(".skilldock");
+            fs::create_dir_all(&workspace_root).expect("create workspace");
+            fs::write(workspace_root.join("settings.json"), "{\"theme\":\"dark\"}")
+                .expect("write legacy settings");
+
+            let settings = load_app_settings();
+
+            assert_eq!(settings.skill_library_provider, "skilldock");
+            assert_eq!(
+                settings.skill_library_path,
+                temp_home.join(".skilldock/skills").to_string_lossy()
+            );
+        });
     }
 
     #[test]

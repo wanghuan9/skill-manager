@@ -1,5 +1,6 @@
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::{mpsc, OnceLock};
+use std::sync::{mpsc, Mutex, OnceLock};
 use std::thread;
 
 use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
@@ -9,7 +10,7 @@ use tauri::{AppHandle, Emitter};
 use crate::state::load_installed_skills;
 use crate::workspace::managed_skill_library_root;
 
-static SKILL_LIBRARY_WATCHER_STARTED: OnceLock<()> = OnceLock::new();
+static WATCHED_SKILL_ROOTS: OnceLock<Mutex<HashSet<PathBuf>>> = OnceLock::new();
 const SKILL_LIBRARY_CHANGE_EVENT: &str = "skill-library-changed";
 
 #[derive(Clone, Debug)]
@@ -25,32 +26,23 @@ pub struct SkillLibraryChangeEvent {
 }
 
 pub fn start_skill_library_watcher(app_handle: AppHandle) -> Result<(), String> {
-    if SKILL_LIBRARY_WATCHER_STARTED.get().is_some() {
-        return Ok(());
-    }
-
     let skills_root = managed_skill_library_root()?;
+    start_skill_root_watcher(app_handle, skills_root)
+}
+
+fn start_skill_root_watcher(app_handle: AppHandle, skills_root: PathBuf) -> Result<(), String> {
     if !skills_root.exists() {
         return Ok(());
     }
 
-    let watched_skills = load_installed_skills(&Vec::new())
-        .into_iter()
-        .filter_map(|skill| {
-            let local_path = PathBuf::from(skill.local_path.trim());
-            if !local_path.exists() {
-                return None;
-            }
-
-            Some(WatchedSkill {
-                name: skill.name,
-                local_path,
-            })
-        })
-        .collect::<Vec<_>>();
-    if watched_skills.is_empty() {
+    let watched_roots = WATCHED_SKILL_ROOTS.get_or_init(|| Mutex::new(HashSet::new()));
+    let mut watched_roots = watched_roots
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    if !watched_roots.insert(skills_root.clone()) {
         return Ok(());
     }
+    drop(watched_roots);
 
     let thread_app_handle = app_handle.clone();
     let thread_skills_root = skills_root.clone();
@@ -86,7 +78,10 @@ pub fn start_skill_library_watcher(app_handle: AppHandle) -> Result<(), String> 
                 }
             };
 
-            for skill_name in classify_skill_change_event(&event, &watched_skills) {
+            let watched_skills = current_watched_skills();
+            for skill_name in
+                classify_skill_change_event_for_root(&event, &watched_skills, &thread_skills_root)
+            {
                 let payload = SkillLibraryChangeEvent { skill_name };
                 if let Err(error) = thread_app_handle.emit(SKILL_LIBRARY_CHANGE_EVENT, payload) {
                     log::warn!("Failed to emit skill library change event: {error}");
@@ -95,15 +90,48 @@ pub fn start_skill_library_watcher(app_handle: AppHandle) -> Result<(), String> 
         }
     });
 
-    let _ = SKILL_LIBRARY_WATCHER_STARTED.set(());
     Ok(())
 }
 
-fn classify_skill_change_event(event: &Event, watched_skills: &[WatchedSkill]) -> Vec<String> {
-    classify_skill_change_paths(&event.paths, watched_skills)
+fn current_watched_skills() -> Vec<WatchedSkill> {
+    load_installed_skills(&Vec::new())
+        .into_iter()
+        .filter_map(|skill| {
+            let local_path = PathBuf::from(skill.local_path.trim());
+            local_path.exists().then_some(WatchedSkill {
+                name: skill.name,
+                local_path,
+            })
+        })
+        .collect()
 }
 
+fn classify_skill_change_event_for_root(
+    event: &Event,
+    watched_skills: &[WatchedSkill],
+    skills_root: &Path,
+) -> Vec<String> {
+    classify_skill_change_paths_for_root(&event.paths, watched_skills, skills_root)
+}
+
+#[cfg(test)]
 fn classify_skill_change_paths(paths: &[PathBuf], watched_skills: &[WatchedSkill]) -> Vec<String> {
+    classify_skill_change_paths_internal(paths, watched_skills, None)
+}
+
+fn classify_skill_change_paths_for_root(
+    paths: &[PathBuf],
+    watched_skills: &[WatchedSkill],
+    skills_root: &Path,
+) -> Vec<String> {
+    classify_skill_change_paths_internal(paths, watched_skills, Some(skills_root))
+}
+
+fn classify_skill_change_paths_internal(
+    paths: &[PathBuf],
+    watched_skills: &[WatchedSkill],
+    skills_root: Option<&Path>,
+) -> Vec<String> {
     let mut matched_skill_names = std::collections::BTreeSet::new();
 
     for path in paths {
@@ -113,10 +141,24 @@ fn classify_skill_change_paths(paths: &[PathBuf], watched_skills: &[WatchedSkill
 
         if let Some(skill_name) = match_skill_name_for_path(path, watched_skills) {
             matched_skill_names.insert(skill_name.to_string());
+            continue;
+        }
+        if let Some(skill_name) = skills_root.and_then(|root| skill_name_under_root(path, root)) {
+            matched_skill_names.insert(skill_name);
         }
     }
 
     matched_skill_names.into_iter().collect()
+}
+
+fn skill_name_under_root(path: &Path, skills_root: &Path) -> Option<String> {
+    path.strip_prefix(skills_root)
+        .ok()?
+        .components()
+        .next()?
+        .as_os_str()
+        .to_str()
+        .map(ToOwned::to_owned)
 }
 
 fn match_skill_name_for_path<'a>(
@@ -181,5 +223,18 @@ mod tests {
         );
 
         assert_eq!(matched, vec!["technical-design-test"]);
+    }
+
+    #[test]
+    fn classify_skill_change_paths_falls_back_to_root_entry_name() {
+        let matched = super::classify_skill_change_paths_for_root(
+            &[PathBuf::from(
+                "/Users/demo/.agents/skills/new-skill/SKILL.md",
+            )],
+            &[],
+            PathBuf::from("/Users/demo/.agents/skills").as_path(),
+        );
+
+        assert_eq!(matched, vec!["new-skill"]);
     }
 }

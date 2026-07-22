@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, expect, test, vi } from "vitest";
 import { NotificationProvider } from "@/app/notifications";
 import { SkillCard } from "@/features/skills/components/SkillCard";
-import { installedSkillFixtures } from "@/features/skills/state/skill-fixtures";
+import { appSettingsFixture, installedSkillFixtures } from "@/features/skills/state/skill-fixtures";
 import { useSkillWorkspace } from "@/features/skills/state/skill-workspace";
 import { renderWithI18n } from "@/tests/helpers/render-with-i18n";
 
@@ -19,6 +19,11 @@ beforeEach(() => {
   deleteSkillMock = vi.fn().mockResolvedValue(undefined);
   mockedUseSkillWorkspace.mockReturnValue({
     language: "zh-CN",
+    appSettings: {
+      ...appSettingsFixture,
+      skillLibraryProvider: "skilldock",
+      skillLibraryPath: "/Users/demo/.skilldock/skills",
+    },
     deleteSkill: deleteSkillMock,
     openSkillWithDefaultTool: vi.fn(),
     toolConfigs: [],

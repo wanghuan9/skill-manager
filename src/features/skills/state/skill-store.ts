@@ -319,9 +319,12 @@ export type SkillSourceViewStyle = "flat" | "select";
 export type AppLanguage = "zh-CN" | "en";
 export type AppLanguageSource = "auto" | "user";
 export type AppTheme = "light" | "dark" | "system";
+export type SkillLibraryProvider = "skilldock" | "agent-skills";
 
 export type AppSettings = {
   storagePath: string;
+  skillLibraryPath: string;
+  skillLibraryProvider: SkillLibraryProvider;
   defaultOpenToolId: string;
   skillInstallActivation: InstallActivationMode;
   mcpInstallActivation: InstallActivationMode;

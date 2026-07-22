@@ -17,7 +17,6 @@ use serde::Deserialize;
 /// 进度回调：接收来自 git clone stderr 的实时输出行。
 pub type CloneProgressCallback = Arc<dyn Fn(&str) + Send + Sync + 'static>;
 
-const SKILL_LIBRARY_DIR: &str = "skills";
 const REPO_CACHE_DIR: &str = "repo-cache";
 const RESERVED_WORKSPACE_LINK_NAMES: [&str; 5] =
     ["state.json", "skills", "repo-cache", "cache", "imports"];
@@ -1362,9 +1361,7 @@ pub fn ensure_repo_skill_from_local_batch_source(
 }
 
 pub fn skill_directory(skill_name: &str) -> Result<PathBuf, String> {
-    Ok(workspace::managed_workspace_root()?
-        .join(SKILL_LIBRARY_DIR)
-        .join(skill_name))
+    Ok(workspace::managed_skill_library_root()?.join(skill_name))
 }
 
 pub fn repo_cache_directory(repo_key: &str) -> Result<PathBuf, String> {
@@ -2591,14 +2588,16 @@ fn is_managed_workspace_path(path: &Path) -> bool {
     let Ok(target_path) = path.canonicalize() else {
         return false;
     };
-    let Ok(workspace_root) = managed_workspace_root() else {
-        return false;
-    };
-    let Ok(workspace_root) = workspace_root.canonicalize() else {
-        return false;
-    };
+    let workspace_match = managed_workspace_root()
+        .ok()
+        .and_then(|root| root.canonicalize().ok())
+        .is_some_and(|root| target_path.starts_with(root));
+    let skill_library_match = managed_skill_library_root()
+        .ok()
+        .and_then(|root| root.canonicalize().ok())
+        .is_some_and(|root| target_path.starts_with(root));
 
-    target_path.starts_with(&workspace_root)
+    workspace_match || skill_library_match
 }
 
 fn migrate_legacy_skill_symlink(entry_path: &Path) -> Result<bool, String> {

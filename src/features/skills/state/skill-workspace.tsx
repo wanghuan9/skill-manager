@@ -61,6 +61,7 @@ import type {
   AppLanguageSource,
   AppSettings,
   AppTheme,
+  SkillLibraryProvider,
   GitAccountSummary,
   GitChangeFile,
   InstallActivationMode,
@@ -193,6 +194,7 @@ type SkillWorkspaceContextValue = {
   language: AppLanguage;
   setLanguage: (language: AppLanguage) => Promise<void>;
   setTheme: (theme: AppTheme) => Promise<void>;
+  setSkillLibraryProvider: (provider: SkillLibraryProvider) => Promise<void>;
   setSkillInstallActivation: (mode: InstallActivationMode) => Promise<void>;
   setMcpInstallActivation: (mode: InstallActivationMode) => Promise<void>;
   setSkillSourceViewStyle: (style: SkillSourceViewStyle) => Promise<void>;
@@ -489,6 +491,8 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       ? appSettingsFixture
       : {
           storagePath: "",
+          skillLibraryPath: "",
+          skillLibraryProvider: "skilldock",
           defaultOpenToolId: "",
           skillInstallActivation: "apply-all-tools",
           mcpInstallActivation: "apply-all-tools",
@@ -621,6 +625,14 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       ...appSettings,
       theme,
     });
+  }
+
+  async function handleSetSkillLibraryProvider(provider: SkillLibraryProvider) {
+    await persistAppSettings({
+      ...appSettings,
+      skillLibraryProvider: provider,
+    });
+    await loadWorkspaceSnapshot({ showRefreshing: true });
   }
 
   useLayoutEffect(() => {
@@ -1255,7 +1267,15 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       return updateAllSkillsInFlightRef.current;
     }
 
-    const updatableSkills = installedSkills.filter((skill) => skill.collabStatus === "update-available");
+    const updatableSkills = installedSkills.filter((skill) => {
+      if (skill.collabStatus === "update-available") {
+        return true;
+      }
+      return appSettings.skillLibraryProvider === "agent-skills"
+        && !skill.gitLinked
+        && skill.sourceUrl.trim().length === 0
+        && skill.localPath.startsWith(appSettings.skillLibraryPath);
+    });
     let updatePromise: Promise<void> | null = null;
     workspaceMutationVersionRef.current += 1;
     updatePromise = (async () => {
@@ -1510,6 +1530,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       language,
       setLanguage: handleSetLanguage,
       setTheme: handleSetTheme,
+      setSkillLibraryProvider: handleSetSkillLibraryProvider,
       setSkillInstallActivation: handleSetSkillInstallActivation,
       setMcpInstallActivation: handleSetMcpInstallActivation,
       setSkillSourceViewStyle: handleSetSkillSourceViewStyle,

@@ -7,6 +7,9 @@ use std::time::SystemTime;
 
 pub const APP_BRAND_NAME: &str = "SkillDock";
 pub const WORKSPACE_DIR_NAME: &str = ".skilldock";
+pub const SKILL_LIBRARY_PROVIDER_SKILLDOCK: &str = "skilldock";
+pub const SKILL_LIBRARY_PROVIDER_AGENT_SKILLS: &str = "agent-skills";
+const SETTINGS_FILE_NAME: &str = "settings.json";
 const LEGACY_WORKSPACE_DIR_NAME: &str = ".skillm";
 const LEGACY_MACOS_APP_STORAGE_NAMES: [&str; 2] = ["com.wanghuan.skilldock", "skill-manager"];
 const MACOS_APP_STORAGE_ROOTS: [&str; 3] = ["Library/Caches", "Library/WebKit", "Library/Logs"];
@@ -114,6 +117,8 @@ pub fn ensure_workspace_initialized() -> Result<PathBuf, String> {
         .map_err(|error| format!("创建 repo-cache 目录失败: {error}"))?;
     fs::create_dir_all(workspace_root.join("imports"))
         .map_err(|error| format!("创建 imports 目录失败: {error}"))?;
+    fs::create_dir_all(managed_skill_library_root()?)
+        .map_err(|error| format!("创建 Skill 托管目录失败: {error}"))?;
 
     ensure_workspace_file_with_default_content(
         &workspace_root.join("state.json"),
@@ -121,7 +126,7 @@ pub fn ensure_workspace_initialized() -> Result<PathBuf, String> {
     )?;
     ensure_workspace_file_with_default_content(
         &workspace_root.join("settings.json"),
-        "{\n  \"defaultOpenToolId\": \"\",\n  \"skillInstallActivation\": \"apply-all-tools\",\n  \"mcpInstallActivation\": \"apply-all-tools\",\n  \"skillSourceViewStyle\": \"select\"\n}\n",
+        "{\n  \"defaultOpenToolId\": \"\",\n  \"skillInstallActivation\": \"apply-all-tools\",\n  \"mcpInstallActivation\": \"apply-all-tools\",\n  \"skillSourceViewStyle\": \"select\",\n  \"skillLibraryProvider\": \"skilldock\"\n}\n",
     )?;
     ensure_workspace_file_with_default_content(
         &workspace_root.join("mcp-servers.json"),
@@ -136,7 +141,109 @@ pub fn managed_workspace_root_option() -> Option<PathBuf> {
 }
 
 pub fn managed_skill_library_root() -> Result<PathBuf, String> {
-    Ok(managed_workspace_root()?.join("skills"))
+    let home_dir = home_dir()?;
+    let provider = skill_library_provider_for_home(&home_dir);
+    skill_library_root_for_provider(&provider, &home_dir)
+}
+
+pub fn skill_library_root_for_provider(provider: &str, home_dir: &Path) -> Result<PathBuf, String> {
+    match normalize_skill_library_provider(provider) {
+        SKILL_LIBRARY_PROVIDER_AGENT_SKILLS => Ok(home_dir.join(".agents/skills")),
+        SKILL_LIBRARY_PROVIDER_SKILLDOCK => Ok(home_dir.join(WORKSPACE_DIR_NAME).join("skills")),
+        _ => Err("不支持的 Skill 托管方式".to_string()),
+    }
+}
+
+pub fn normalize_skill_library_provider(value: &str) -> &'static str {
+    match value.trim() {
+        SKILL_LIBRARY_PROVIDER_AGENT_SKILLS => SKILL_LIBRARY_PROVIDER_AGENT_SKILLS,
+        _ => SKILL_LIBRARY_PROVIDER_SKILLDOCK,
+    }
+}
+
+pub fn link_skilldock_skills_into_agent_library() -> Result<usize, String> {
+    let home_dir = home_dir()?;
+    let source_root = home_dir.join(WORKSPACE_DIR_NAME).join("skills");
+    let target_root = home_dir.join(".agents/skills");
+    if !source_root.is_dir() {
+        fs::create_dir_all(&target_root)
+            .map_err(|error| format!("创建 Agent Skills 目录失败: {error}"))?;
+        return Ok(0);
+    }
+
+    fs::create_dir_all(&target_root)
+        .map_err(|error| format!("创建 Agent Skills 目录失败: {error}"))?;
+    let mut pending_links = Vec::new();
+    let mut conflicts = Vec::new();
+    let entries = fs::read_dir(&source_root)
+        .map_err(|error| format!("读取 SkillDock Skill 目录失败: {error}"))?;
+    for entry in entries {
+        let entry = entry.map_err(|error| format!("读取 SkillDock Skill 失败: {error}"))?;
+        let source_path = entry.path();
+        if !source_path.is_dir() {
+            continue;
+        }
+        let target_path = target_root.join(entry.file_name());
+        if fs::symlink_metadata(&target_path).is_ok() {
+            let source_canonical = source_path.canonicalize().ok();
+            let target_canonical = target_path.canonicalize().ok();
+            if source_canonical == target_canonical {
+                continue;
+            }
+            conflicts.push(target_path);
+            continue;
+        }
+        pending_links.push((source_path, target_path));
+    }
+
+    if !conflicts.is_empty() {
+        let names = conflicts
+            .iter()
+            .filter_map(|path| path.file_name())
+            .map(|name| name.to_string_lossy())
+            .collect::<Vec<_>>()
+            .join("、");
+        return Err(format!(
+            "Agent Skills 目录存在同名 Skill，请先处理冲突：{names}"
+        ));
+    }
+
+    for (source_path, target_path) in &pending_links {
+        create_directory_link(source_path, target_path)?;
+    }
+    Ok(pending_links.len())
+}
+
+fn create_directory_link(source_path: &Path, target_path: &Path) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(source_path, target_path)
+            .map_err(|error| format!("创建 Agent Skills 兼容链接失败: {error}"))?;
+    }
+
+    #[cfg(windows)]
+    {
+        std::os::windows::fs::symlink_dir(source_path, target_path)
+            .map_err(|error| format!("创建 Agent Skills 兼容链接失败: {error}"))?;
+    }
+
+    Ok(())
+}
+
+fn skill_library_provider_for_home(home_dir: &Path) -> String {
+    let settings_path = home_dir.join(WORKSPACE_DIR_NAME).join(SETTINGS_FILE_NAME);
+    let Ok(contents) = fs::read_to_string(settings_path) else {
+        return SKILL_LIBRARY_PROVIDER_SKILLDOCK.to_string();
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&contents) else {
+        return SKILL_LIBRARY_PROVIDER_SKILLDOCK.to_string();
+    };
+    value
+        .get("skillLibraryProvider")
+        .and_then(serde_json::Value::as_str)
+        .map(normalize_skill_library_provider)
+        .unwrap_or(SKILL_LIBRARY_PROVIDER_SKILLDOCK)
+        .to_string()
 }
 
 pub fn workspace_file_path(file_name: &str) -> Result<PathBuf, String> {
@@ -398,7 +505,10 @@ fn prune_legacy_workspace_root_if_empty(home_dir: &Path) {
 mod tests {
     use super::{
         cleanup_legacy_macos_app_storage_for_home, ensure_workspace_initialized,
-        managed_workspace_root, normalize_workspace_path, workspace_file_candidates, TEST_ENV_LOCK,
+        link_skilldock_skills_into_agent_library, managed_skill_library_root,
+        managed_workspace_root, normalize_skill_library_provider, normalize_workspace_path,
+        skill_library_root_for_provider, workspace_file_candidates,
+        SKILL_LIBRARY_PROVIDER_AGENT_SKILLS, SKILL_LIBRARY_PROVIDER_SKILLDOCK, TEST_ENV_LOCK,
         WORKSPACE_DIR_NAME,
     };
     use std::env;
@@ -631,6 +741,87 @@ mod tests {
             assert!(settings_content.contains("\"skillInstallActivation\": \"apply-all-tools\""));
             assert!(settings_content.contains("\"mcpInstallActivation\": \"apply-all-tools\""));
             assert!(settings_content.contains("\"skillSourceViewStyle\": \"select\""));
+            assert!(settings_content.contains("\"skillLibraryProvider\": \"skilldock\""));
+        });
+    }
+
+    #[test]
+    fn resolves_skill_library_root_for_each_provider() {
+        run_with_temp_home("skill-library-providers", |temp_home| {
+            assert_eq!(
+                skill_library_root_for_provider(SKILL_LIBRARY_PROVIDER_SKILLDOCK, &temp_home)
+                    .expect("resolve SkillDock root"),
+                temp_home.join(".skilldock/skills")
+            );
+            assert_eq!(
+                skill_library_root_for_provider(SKILL_LIBRARY_PROVIDER_AGENT_SKILLS, &temp_home)
+                    .expect("resolve Agent Skills root"),
+                temp_home.join(".agents/skills")
+            );
+        });
+    }
+
+    #[test]
+    fn reads_agent_skills_provider_from_settings() {
+        run_with_temp_home("active-agent-skills", |temp_home| {
+            let workspace_root = temp_home.join(WORKSPACE_DIR_NAME);
+            fs::create_dir_all(&workspace_root).expect("create workspace");
+            fs::write(
+                workspace_root.join("settings.json"),
+                "{\"skillLibraryProvider\":\"agent-skills\"}",
+            )
+            .expect("write settings");
+
+            assert_eq!(
+                managed_skill_library_root().expect("resolve active Skill root"),
+                temp_home.join(".agents/skills")
+            );
+        });
+    }
+
+    #[test]
+    fn normalizes_unknown_skill_library_provider_to_skilldock() {
+        assert_eq!(
+            normalize_skill_library_provider("agent-skills"),
+            SKILL_LIBRARY_PROVIDER_AGENT_SKILLS
+        );
+        assert_eq!(
+            normalize_skill_library_provider("unknown"),
+            SKILL_LIBRARY_PROVIDER_SKILLDOCK
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn links_skilldock_skills_into_agent_library() {
+        run_with_temp_home("link-agent-skills", |temp_home| {
+            let source_path = temp_home.join(".skilldock/skills/demo");
+            fs::create_dir_all(&source_path).expect("create source Skill");
+            fs::write(source_path.join("SKILL.md"), "# demo").expect("write Skill");
+
+            let linked_count = link_skilldock_skills_into_agent_library().expect("link Skills");
+            let target_path = temp_home.join(".agents/skills/demo");
+
+            assert_eq!(linked_count, 1);
+            assert_eq!(
+                target_path.canonicalize().expect("resolve target"),
+                source_path.canonicalize().expect("resolve source")
+            );
+        });
+    }
+
+    #[test]
+    fn rejects_same_name_agent_skill_conflicts_before_linking() {
+        run_with_temp_home("agent-skill-conflict", |temp_home| {
+            let source_path = temp_home.join(".skilldock/skills/demo");
+            let target_path = temp_home.join(".agents/skills/demo");
+            fs::create_dir_all(&source_path).expect("create source Skill");
+            fs::create_dir_all(&target_path).expect("create conflicting Skill");
+
+            let error = link_skilldock_skills_into_agent_library()
+                .expect_err("same-name conflict should block switching");
+
+            assert!(error.contains("demo"));
         });
     }
 

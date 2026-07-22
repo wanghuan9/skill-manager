@@ -216,6 +216,7 @@ export function SkillCard({
   const { notify } = useNotifications();
   const reportFailure = useFailureReporter();
   const {
+    appSettings,
     deleteSkill,
     openSkillWithDefaultTool,
     setSkillAllToolStatuses,
@@ -257,7 +258,11 @@ export function SkillCard({
   const enabledToolsCountLabel = enabledTools.length > 0
     ? t("skill.card.enabledCount", { count: enabledTools.length })
     : t("skill.card.disabled");
-  const showDetailAction = skill.collabStatus === "update-available";
+  const canUpdateWithAgentSkillsCli = appSettings.skillLibraryProvider === "agent-skills"
+    && !skill.gitLinked
+    && skill.sourceUrl.trim().length === 0
+    && skill.localPath.startsWith(appSettings.skillLibraryPath);
+  const showDetailAction = skill.collabStatus === "update-available" || canUpdateWithAgentSkillsCli;
   const displaySourceLabel =
     sourceLabel === "本地" || sourceLabel === "Local"
       ? t("skills.source.local")
@@ -308,7 +313,7 @@ export function SkillCard({
       return;
     }
 
-    if (skill.collabStatus === "update-available") {
+    if (skill.collabStatus === "update-available" || canUpdateWithAgentSkillsCli) {
       setIsUpdating(true);
       try {
         await updateSkill(skill.name);

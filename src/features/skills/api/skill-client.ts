@@ -1222,6 +1222,9 @@ export async function fetchAppSettings(): Promise<AppSettings> {
 export async function updateAppSettings(input: UpdateAppSettingsInput): Promise<AppSettings> {
   if (shouldUseFixtureData()) {
     Object.assign(appSettingsFixture, input.settings);
+    appSettingsFixture.skillLibraryPath = appSettingsFixture.skillLibraryProvider === "agent-skills"
+      ? "/Users/demo/.agents/skills"
+      : "/Users/demo/.skilldock/skills";
     return { ...appSettingsFixture };
   }
 

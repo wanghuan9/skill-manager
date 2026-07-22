@@ -79,7 +79,6 @@ type RouteErrorBoundaryState = {
 };
 
 const ROUTE_LOCAL_ALIGN_COOLDOWN_MS = 10_000;
-const MANAGED_SKILL_DIRECTORY = "~/.skilldock/skills";
 
 class RouteErrorBoundary extends Component<
   RouteErrorBoundaryProps,
@@ -597,9 +596,13 @@ function AppContent() {
   const lastRouteLocalAlignRef = useRef<{ key: string; timestamp: number } | null>(null);
   const activeDefinition =
     routes.find((route) => route.key === activeRoute) ?? routes[0];
-  const updatableSkillCount = installedSkills.filter(
-    (skill) => skill.collabStatus === "update-available",
-  ).length;
+  const updatableSkillCount = installedSkills.filter((skill) => (
+    skill.collabStatus === "update-available"
+    || (appSettings.skillLibraryProvider === "agent-skills"
+      && !skill.gitLinked
+      && skill.sourceUrl.trim().length === 0
+      && skill.localPath.startsWith(appSettings.skillLibraryPath))
+  )).length;
   const pendingSkillCount = installedSkills.filter(
     (skill) => skill.collabStatus === "pending-commit" || skill.collabStatus === "pending-push",
   ).length;
@@ -635,7 +638,7 @@ function AppContent() {
             mismatch: activeToolSkillCounts.mismatch,
           })
         : tx(language, "app.header.skills.summary", {
-            path: MANAGED_SKILL_DIRECTORY,
+            path: formatSkillDirectoryPath(appSettings.skillLibraryPath),
             installed: enabledManagedSkillCount,
             updatable: updatableSkillCount,
             pending: pendingSkillCount,

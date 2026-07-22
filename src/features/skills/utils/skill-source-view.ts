@@ -30,13 +30,16 @@ function normalizePath(value: string) {
 
 export function resolveManagedSkillRootPath(localPath: string) {
   const normalizedPath = normalizePath(localPath);
-  const managedSkillsMarker = "/.skilldock/skills/";
-  const markerIndex = normalizedPath.indexOf(managedSkillsMarker);
-  if (markerIndex < 0) {
+  const managedSkillsMarkers = ["/.skilldock/skills/", "/.agents/skills/"];
+  const marker = managedSkillsMarkers
+    .map((value) => ({ value, index: normalizedPath.indexOf(value) }))
+    .filter((item) => item.index >= 0)
+    .sort((left, right) => left.index - right.index)[0];
+  if (!marker) {
     return normalizedPath;
   }
 
-  const managedSkillNameStart = markerIndex + managedSkillsMarker.length;
+  const managedSkillNameStart = marker.index + marker.value.length;
   const managedSkillNameEnd = normalizedPath.indexOf("/", managedSkillNameStart);
   return managedSkillNameEnd < 0 ? normalizedPath : normalizedPath.slice(0, managedSkillNameEnd);
 }

@@ -169,6 +169,7 @@ export function SettingsRoute() {
     openPathInFinder,
     setLanguage,
     setTheme,
+    setSkillLibraryProvider,
     setMcpInstallActivation,
     setDefaultOpenToolId,
     setSkillInstallActivation,
@@ -227,6 +228,17 @@ export function SettingsRoute() {
         ? t("settings.cache.empty")
         : formatBytes(repoCacheSize);
   const canClearRepoCache = !isClearingCache && repoCacheSize !== null && repoCacheSize > 0;
+
+  async function handleSkillLibraryProviderChange(value: string) {
+    try {
+      await setSkillLibraryProvider(value as "skilldock" | "agent-skills");
+    } catch (error) {
+      reportFailure(error, {
+        operation: "switch_skill_library_provider",
+        fallbackMessage: t("settings.skillLibrary.switchFailed"),
+      });
+    }
+  }
 
   useEffect(() => {
     if (!shouldShowAppUpdateReleaseNotes && isAppUpdateReleaseNotesOpen) {
@@ -429,6 +441,24 @@ export function SettingsRoute() {
             onChange={setDefaultOpenToolId}
             disabled={openToolOptions.length === 0}
           />
+        </div>
+      ),
+    },
+    {
+      label: t("settings.skillLibrary.label"),
+      description: t("settings.skillLibrary.description"),
+      value: (
+        <div className="settings-form-item__control">
+          <AppSelect
+            ariaLabel={t("settings.skillLibrary.aria")}
+            value={appSettings.skillLibraryProvider}
+            options={[
+              { value: "skilldock", label: t("settings.skillLibrary.option.skilldock") },
+              { value: "agent-skills", label: t("settings.skillLibrary.option.agentSkills") },
+            ]}
+            onChange={(value) => void handleSkillLibraryProviderChange(value)}
+          />
+          <span className="settings-section-hint">{appSettings.skillLibraryPath}</span>
         </div>
       ),
     },

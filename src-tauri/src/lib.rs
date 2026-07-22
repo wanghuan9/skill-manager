@@ -1,3 +1,4 @@
+mod agent_skills_cli;
 mod commands;
 mod diagnostics;
 mod git_state;
@@ -61,6 +62,7 @@ pub fn run() {
             commands::list_tool_configs,
             commands::get_git_account_summary,
             commands::get_app_settings,
+            commands::get_agent_skills_cli_status,
             commands::update_app_settings,
             commands::detect_preferred_app_language,
             commands::install_skill_from_market,

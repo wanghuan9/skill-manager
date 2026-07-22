@@ -4326,13 +4326,19 @@ fn should_remove_local_directory(path: &Path) -> Result<bool, String> {
     let workspace_root = managed_workspace_root()?;
     let managed_skills_root = workspace_root.join("skills");
     let managed_imports_root = workspace_root.join("imports");
+    let active_skill_root = workspace::managed_skill_library_root()?;
 
     let removable_under_skills =
         path.starts_with(&managed_skills_root) && path != managed_skills_root.as_path();
     let removable_under_imports =
         path.starts_with(&managed_imports_root) && path != managed_imports_root.as_path();
+    let removable_under_active_skill_root =
+        path.starts_with(&active_skill_root) && path != active_skill_root.as_path();
 
-    Ok((removable_under_skills || removable_under_imports) && !is_reserved_workspace_path(path))
+    Ok(
+        (removable_under_skills || removable_under_imports || removable_under_active_skill_root)
+            && !is_reserved_workspace_path(path),
+    )
 }
 
 fn is_reserved_workspace_path(path: &Path) -> bool {
@@ -4349,9 +4355,10 @@ fn managed_delete_target(path: &Path) -> Result<PathBuf, String> {
     }
 
     let workspace_root = managed_workspace_root()?;
+    let active_skill_root = workspace::managed_skill_library_root()?;
     let mut current = path.to_path_buf();
     while let Some(parent) = current.parent() {
-        if parent == workspace_root {
+        if parent == workspace_root || parent == active_skill_root {
             break;
         }
         if parent.join(".git").exists() {
@@ -5892,8 +5899,19 @@ pub fn get_app_settings() -> AppSettings {
 }
 
 #[tauri::command]
-pub fn update_app_settings(settings: AppSettings) -> Result<AppSettings, String> {
-    save_app_settings(settings)
+pub fn get_agent_skills_cli_status() -> crate::agent_skills_cli::AgentSkillsCliStatus {
+    crate::agent_skills_cli::global_status()
+}
+
+#[tauri::command]
+pub fn update_app_settings(
+    app_handle: tauri::AppHandle,
+    settings: AppSettings,
+) -> Result<AppSettings, String> {
+    let saved_settings = save_app_settings(settings)?;
+    let _ = resolve_startup_installed_skills();
+    crate::skill_watcher::start_skill_library_watcher(app_handle)?;
+    Ok(saved_settings)
 }
 
 #[tauri::command]
@@ -7361,7 +7379,14 @@ pub async fn update_skill(skill_name: String) -> Result<SkillSummary, String> {
 fn update_skill_blocking(skill_name: &str) -> Result<SkillSummary, String> {
     let (installed_skills, skill_index) = find_skill_by_name(skill_name)?;
     let skill = &installed_skills[skill_index];
-    update_skill_repo(skill)?;
+    if skill.source_url.trim().is_empty()
+        && !skill.git_linked
+        && crate::agent_skills_cli::is_global_skill_path(Path::new(&skill.local_path))
+    {
+        crate::agent_skills_cli::update_global_skill(&skill.name)?;
+    } else {
+        update_skill_repo(skill)?;
+    }
     clear_skill_update_cache(skill);
     refresh_and_persist_skill(skill_name)
 }
@@ -7482,6 +7507,12 @@ pub fn save_skill_file_content(
 pub fn delete_skill(skill_name: &str) -> Result<(), String> {
     let (installed_skills, skill_index) = find_skill_by_name(skill_name)?;
     let skill = installed_skills[skill_index].clone();
+    let is_non_git_agent_skill = skill.source_url.trim().is_empty()
+        && !skill.git_linked
+        && crate::agent_skills_cli::is_global_skill_path(Path::new(&skill.local_path));
+    if is_non_git_agent_skill {
+        let _ = crate::agent_skills_cli::remove_global_skill(&skill.name);
+    }
 
     // 删除所有工具中的符号链接
     let skill_path = PathBuf::from(&skill.local_path);
@@ -7495,8 +7526,15 @@ pub fn delete_skill(skill_name: &str) -> Result<(), String> {
     let local_path = PathBuf::from(&skill.local_path);
     let delete_target = managed_delete_target(&local_path)?;
     if delete_target.exists() && should_remove_local_directory(&delete_target)? {
-        fs::remove_dir_all(&delete_target)
-            .map_err(|error| format!("删除 skill 目录失败: {error}"))?;
+        let metadata = fs::symlink_metadata(&delete_target)
+            .map_err(|error| format!("读取 skill 目录失败: {error}"))?;
+        if metadata.file_type().is_symlink() {
+            fs::remove_file(&delete_target)
+                .map_err(|error| format!("删除 skill 链接失败: {error}"))?;
+        } else {
+            fs::remove_dir_all(&delete_target)
+                .map_err(|error| format!("删除 skill 目录失败: {error}"))?;
+        }
     }
 
     let mut next_installed_skills = installed_skills;
