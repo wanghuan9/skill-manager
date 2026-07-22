@@ -84,24 +84,15 @@ pub fn resolve_skill_entry_path(entry: &Path) -> SkillEntryPath {
     }
 }
 
-pub fn locked_global_skill_names() -> BTreeSet<String> {
+pub fn global_skill_lock_entries() -> BTreeMap<String, GlobalSkillLockEntry> {
     let Ok(lock_path) = home_dir().map(|home| home.join(".agents/.skill-lock.json")) else {
-        return BTreeSet::new();
+        return BTreeMap::new();
     };
     let Ok(contents) = fs::read_to_string(lock_path) else {
-        return BTreeSet::new();
+        return BTreeMap::new();
     };
-    parse_locked_global_skill_names(&contents)
-}
-
-pub fn parse_locked_global_skill_names(contents: &str) -> BTreeSet<String> {
-    let Ok(value) = serde_json::from_str::<serde_json::Value>(contents) else {
-        return BTreeSet::new();
-    };
-    value
-        .get("skills")
-        .and_then(serde_json::Value::as_object)
-        .map(|skills| skills.keys().cloned().collect())
+    parse_global_skill_lock(&contents)
+        .map(|lock| lock.skills)
         .unwrap_or_default()
 }
 
@@ -456,8 +447,8 @@ pub fn is_global_skill_path(path: &Path) -> bool {
 mod tests {
     use super::{
         changed_global_skill_names, detect_global_updates, is_global_skill_path,
-        parse_global_skill_list_json, parse_global_skill_lock, parse_locked_global_skill_names,
-        resolve_skill_entry_path, CliSkillEntry,
+        parse_global_skill_list_json, parse_global_skill_lock, resolve_skill_entry_path,
+        CliSkillEntry,
     };
     use std::collections::BTreeMap;
     use std::env;
@@ -485,16 +476,6 @@ mod tests {
     #[test]
     fn rejects_malformed_global_skill_list_json() {
         assert!(parse_global_skill_list_json("not-json").is_err());
-    }
-
-    #[test]
-    fn parses_skill_names_from_v3_lock_file() {
-        let names = parse_locked_global_skill_names(
-            r#"{"version":3,"skills":{"demo":{"source":"example"},"other":{}}}"#,
-        );
-
-        assert_eq!(names.into_iter().collect::<Vec<_>>(), vec!["demo", "other"]);
-        assert!(parse_locked_global_skill_names("not-json").is_empty());
     }
 
     #[test]

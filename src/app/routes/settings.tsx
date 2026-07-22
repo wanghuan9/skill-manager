@@ -229,12 +229,13 @@ export function SettingsRoute() {
         : formatBytes(repoCacheSize);
   const canClearRepoCache = !isClearingCache && repoCacheSize !== null && repoCacheSize > 0;
 
-  async function handleSkillLibraryProviderChange(value: string) {
+  async function handleAgentSkillsCompatibilityToggle() {
+    const provider = appSettings.agentSkillsCompatibilityEnabled ? "skilldock" : "agent-skills";
     try {
-      await setSkillLibraryProvider(value as "skilldock" | "agent-skills");
+      await setSkillLibraryProvider(provider);
     } catch (error) {
       reportFailure(error, {
-        operation: "switch_skill_library_provider",
+        operation: "toggle_agent_skills_compatibility",
         fallbackMessage: t("settings.skillLibrary.switchFailed"),
       });
     }
@@ -448,22 +449,19 @@ export function SettingsRoute() {
       label: t("settings.skillLibrary.label"),
       description: t("settings.skillLibrary.description"),
       value: (
-        <div className="settings-form-item__control">
-          <AppSelect
-            ariaLabel={t("settings.skillLibrary.aria")}
-            value={appSettings.skillLibraryProvider}
-            options={[
-              { value: "skilldock", label: t("settings.skillLibrary.option.skilldock") },
-              { value: "agent-skills", label: t("settings.skillLibrary.option.agentSkills") },
-            ]}
-            onChange={(value) => void handleSkillLibraryProviderChange(value)}
-          />
-          <span className="settings-section-hint">{appSettings.skillLibraryPath}</span>
-          {appSettings.agentSkillsCompatibilityEnabled ? (
-            <span className="settings-section-hint">
-              {appSettings.skillLibraryPath.replace("/.skilldock/skills", "/.agents/skills")}
-            </span>
-          ) : null}
+        <div className="settings-toggle-control">
+          <span className="settings-toggle-control__state">
+            {appSettings.agentSkillsCompatibilityEnabled ? t("settings.toggle.on") : t("settings.toggle.off")}
+          </span>
+          <button
+            className={`switch-button${appSettings.agentSkillsCompatibilityEnabled ? " is-enabled" : ""}`}
+            type="button"
+            onClick={() => void handleAgentSkillsCompatibilityToggle()}
+            aria-pressed={appSettings.agentSkillsCompatibilityEnabled}
+            aria-label={t("settings.skillLibrary.aria")}
+          >
+            <span className="switch-button__thumb" />
+          </button>
         </div>
       ),
     },

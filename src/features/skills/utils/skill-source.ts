@@ -16,6 +16,10 @@ function resolveSourceLabelFromType(sourceType?: string) {
     return "Gitee";
   }
 
+  if (sourceType === "well-known") {
+    return "远程";
+  }
+
   if (sourceType === "local") {
     return "本地";
   }

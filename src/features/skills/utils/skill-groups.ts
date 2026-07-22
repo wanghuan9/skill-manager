@@ -69,6 +69,18 @@ function parseRepository(sourceUrl: string): ParsedRepository | null {
   return null;
 }
 
+function resolveWellKnownSourceHost(skill: SkillSummary) {
+  if (skill.sourceType !== "well-known") {
+    return null;
+  }
+
+  try {
+    return new URL(skill.sourceUrl).host || null;
+  } catch {
+    return null;
+  }
+}
+
 function resolveFallbackGroupLabel(skill: SkillSummary, options: GroupLabelOptions) {
   if (isLocalSourceUrl(skill.sourceUrl)) {
     return options.localLabel ?? "本地";
@@ -86,6 +98,11 @@ function buildPreferredGroupLabel(parsedRepository: ParsedRepository) {
 }
 
 function resolveInitialGroupLabel(skill: SkillSummary, options: GroupLabelOptions) {
+  const wellKnownSourceHost = resolveWellKnownSourceHost(skill);
+  if (wellKnownSourceHost) {
+    return wellKnownSourceHost;
+  }
+
   if (skill.sourceType === "local") {
     return options.localLabel ?? "本地";
   }
@@ -106,9 +123,9 @@ export function groupSkillsBySource(skills: SkillSummary[], options: GroupLabelO
   const groupedItems = skills.map((skill) => {
     const parsedRepository = parseRepository(skill.sourceUrl);
     const preferredLabel = resolveInitialGroupLabel(skill, options);
-    const fallbackLabel = parsedRepository
+    const fallbackLabel = resolveWellKnownSourceHost(skill) || (parsedRepository
       ? formatOwnerRepoLabel(parsedRepository.owner, parsedRepository.repo)
-      : resolveFallbackGroupLabel(skill, options);
+      : resolveFallbackGroupLabel(skill, options));
 
     return {
       skill,

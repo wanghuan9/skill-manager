@@ -142,6 +142,39 @@ test("shows Agent CLI update action only after an update is detected", () => {
   expect(screen.getByRole("button", { name: /更新 agent-clean-skill/ })).toBeInTheDocument();
 });
 
+test("shows the official source link for a well-known Agent CLI skill", async () => {
+  const baseSkill = installedSkillFixtures.find((item) => item.name === "drawio-diagram");
+  if (!baseSkill) {
+    throw new Error("missing drawio-diagram fixture");
+  }
+  const agentSkill = {
+    ...baseSkill,
+    name: "lark-okr",
+    sourceLabel: "Agent Skills CLI",
+    sourceType: "well-known" as const,
+    sourceUrl: "https://open.feishu.cn/.well-known/skills/lark-okr/SKILL.md",
+    localPath: "/Users/demo/.agents/skills/lark-okr",
+    canonicalPath: "/Users/demo/.agents/skills/lark-okr",
+    gitLinked: false,
+    managementOwner: "agent-skills-cli" as const,
+    updateDriver: "agent-skills-cli" as const,
+    collabStatus: "clean" as const,
+  };
+
+  renderSkillCardWithProviders(agentSkill, "grid");
+
+  expect(screen.getByText("远程 · Agent CLI")).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: /展开 lark-okr/ }));
+
+  const detailDialog = screen.getByRole("dialog", { name: "lark-okr 详情" });
+  expect(within(detailDialog).getByText("来源方式").parentElement).toHaveTextContent("远程");
+  expect(within(detailDialog).getByText("来源链接")).toBeInTheDocument();
+  expect(within(detailDialog).queryByText("Git 仓库")).not.toBeInTheDocument();
+  expect(within(detailDialog).getByRole("link", {
+    name: "https://open.feishu.cn/.well-known/skills/lark-okr/SKILL.md",
+  })).toBeInTheDocument();
+});
+
 test("shows description in the list summary and keeps update metadata in details", async () => {
   const skill = installedSkillFixtures.find((item) => item.name === "drawio-diagram");
   if (!skill) {

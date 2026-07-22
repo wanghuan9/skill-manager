@@ -121,7 +121,7 @@ fn merge_agent_skill_entries(skills: Vec<SkillSummary>) -> Vec<SkillSummary> {
     let Ok(entries) = fs::read_dir(&agent_root) else {
         return merged;
     };
-    let locked_names = crate::agent_skills_cli::locked_global_skill_names();
+    let lock_entries = crate::agent_skills_cli::global_skill_lock_entries();
     let mut entry_paths = entries
         .flatten()
         .map(|entry| entry.path())
@@ -159,7 +159,7 @@ fn merge_agent_skill_entries(skills: Vec<SkillSummary>) -> Vec<SkillSummary> {
             &entry_path,
             canonical_path,
             &resolved.path_error,
-            locked_names.contains(name),
+            lock_entries.get(name),
         ));
     }
     merged
@@ -199,10 +199,19 @@ fn build_agent_skill_summary(
     entry_path: &Path,
     canonical_path: Option<&Path>,
     path_error: &str,
-    locked_by_cli: bool,
+    lock_entry: Option<&crate::agent_skills_cli::GlobalSkillLockEntry>,
 ) -> SkillSummary {
     let effective_path = canonical_path.unwrap_or(entry_path);
     let git_linked = find_git_root(effective_path).is_some();
+    let locked_by_cli = lock_entry.is_some();
+    let source_type = lock_entry
+        .map(|entry| entry.source_type.as_str())
+        .filter(|value| matches!(*value, "github" | "gitlab" | "gitee" | "well-known"))
+        .unwrap_or("local");
+    let source_url = lock_entry
+        .map(|entry| entry.source_url.trim())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_default();
     let management_owner = if is_skilldock_path(effective_path) {
         "skilldock"
     } else {
@@ -221,14 +230,17 @@ fn build_agent_skill_summary(
 
     SkillSummary {
         name: name.to_string(),
-        source_label: if locked_by_cli {
-            "Agent Skills CLI"
-        } else {
-            "外部 Skill"
+        source_label: match source_type {
+            "github" => "GitHub",
+            "gitlab" => "GitLab",
+            "gitee" => "Gitee",
+            "well-known" => "Agent Skills CLI",
+            _ if locked_by_cli => "Agent Skills CLI",
+            _ => "外部 Skill",
         }
         .into(),
-        source_type: "local".into(),
-        source_url: String::new(),
+        source_type: source_type.into(),
+        source_url: source_url.into(),
         description,
         local_path: effective_path.to_string_lossy().to_string(),
         branch: if git_linked { "main" } else { "local" }.into(),
@@ -1605,18 +1617,22 @@ mod tests {
         with_temp_home(|temp_home| {
             enable_agent_skills_compatibility(&temp_home);
             let cli_skill = temp_home.join(".agents/skills/cli-skill");
+            let github_skill = temp_home.join(".agents/skills/github-skill");
             let external_skill = temp_home.join(".cursor/skills/external-skill");
             let external_entry = temp_home.join(".agents/skills/external-skill");
             fs::create_dir_all(&cli_skill).expect("create cli skill");
+            fs::create_dir_all(&github_skill).expect("create GitHub CLI skill");
             fs::create_dir_all(&external_skill).expect("create external skill");
             fs::write(cli_skill.join("SKILL.md"), "# cli-skill").expect("write cli skill");
+            fs::write(github_skill.join("SKILL.md"), "# github-skill")
+                .expect("write GitHub CLI skill");
             fs::write(external_skill.join("SKILL.md"), "# external-skill")
                 .expect("write external skill");
             std::os::unix::fs::symlink(&external_skill, &external_entry)
                 .expect("create external entry");
             fs::write(
                 temp_home.join(".agents/.skill-lock.json"),
-                r#"{"version":3,"skills":{"cli-skill":{"source":"example"}}}"#,
+                r#"{"version":3,"skills":{"cli-skill":{"sourceType":"well-known","sourceUrl":"https://open.example.com/.well-known/skills/cli-skill/SKILL.md"},"github-skill":{"sourceType":"github","sourceUrl":"https://github.com/example/skills.git","skillPath":"skills/github-skill/SKILL.md","skillFolderHash":"abc"}}}"#,
             )
             .expect("write lock file");
 
@@ -1627,6 +1643,20 @@ mod tests {
                 .expect("find cli skill");
             assert_eq!(cli.instance.management_owner, "agent-skills-cli");
             assert_eq!(cli.instance.update_driver, "agent-skills-cli");
+            assert_eq!(cli.source_type, "well-known");
+            assert_eq!(
+                cli.source_url,
+                "https://open.example.com/.well-known/skills/cli-skill/SKILL.md"
+            );
+            assert!(!cli.git_linked);
+            let github = skills
+                .iter()
+                .find(|skill| skill.name == "github-skill")
+                .expect("find GitHub CLI skill");
+            assert_eq!(github.source_type, "github");
+            assert_eq!(github.source_url, "https://github.com/example/skills.git");
+            assert_eq!(github.instance.update_driver, "agent-skills-cli");
+            assert!(!github.git_linked);
             assert!(skills.iter().all(|skill| skill.name != "external-skill"));
             assert!(scan_local_skill_candidates(&skills)
                 .iter()

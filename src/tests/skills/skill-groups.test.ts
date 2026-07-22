@@ -96,4 +96,19 @@ describe("groupSkillsBySource", () => {
     expect(groups).toHaveLength(1);
     expect(groups[0]?.label).toBe("本地");
   });
+
+  it("groups well-known Agent CLI sources by host", () => {
+    const groups = groupSkillsBySource([
+      createSkill({
+        name: "lark-okr",
+        sourceType: "well-known",
+        sourceUrl: "https://open.feishu.cn/.well-known/skills/lark-okr/SKILL.md",
+        sourceLabel: "Agent Skills CLI",
+        gitLinked: false,
+      }),
+    ]);
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0]?.label).toBe("open.feishu.cn");
+  });
 });

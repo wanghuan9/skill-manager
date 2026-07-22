@@ -6,7 +6,7 @@ export type SkillCollabStatus =
   | "diverged";
 export type SkillStatusFilter = "all" | SkillCollabStatus | "disabled";
 
-export type SourceType = "github" | "gitlab" | "gitee" | "local";
+export type SourceType = "github" | "gitlab" | "gitee" | "well-known" | "local";
 export type MarketplaceSourceSite = "skills.sh" | "skillsmp";
 export type McpMarketplaceSourceSite = "MCP.Directory";
 export type PluginHostTool = "claude-code" | "cursor" | "codex";

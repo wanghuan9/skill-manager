@@ -22,4 +22,11 @@ describe("formatSkillSourceLabel", () => {
     expect(formatSkillSourceLabel("GitHub", { sourceType: "github" })).toBe("GitHub");
     expect(formatSkillSourceLabel("第三方仓库", { sourceType: "gitlab" })).toBe("GitLab");
   });
+
+  it("identifies well-known Agent CLI sources as remote", () => {
+    expect(formatSkillSourceLabel("Agent Skills CLI", {
+      sourceType: "well-known",
+      sourceUrl: "https://open.feishu.cn/.well-known/skills/lark-okr/SKILL.md",
+    })).toBe("远程");
+  });
 });
