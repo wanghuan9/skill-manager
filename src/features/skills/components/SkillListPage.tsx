@@ -304,23 +304,6 @@ export function SkillListToolbar(props: SkillToolbarProps) {
           </button>
         ) : null}
       </div>
-      {isManagedSource ? (
-        <div className="skill-status-filter skill-owner-filter">
-          <span className="sr-only">{t("skills.ownerFilter.aria")}</span>
-          <span className="skill-status-filter__icon" aria-hidden="true">
-            <FilterIcon />
-          </span>
-          <AppSelect
-            value={ownerFilter}
-            options={ownerFilterOptions}
-            onChange={onOwnerFilterChange}
-            ariaLabel={t("skills.ownerFilter.aria")}
-            className="skill-status-filter__select"
-            menuClassName="skill-status-filter__popover"
-            minMenuWidth={112}
-          />
-        </div>
-      ) : null}
       <div className="skill-status-filter">
         <span className="sr-only">{t(isManagedSource ? "skills.filter.aria" : "skills.source.filter.aria")}</span>
         <span className="skill-status-filter__icon" aria-hidden="true">
@@ -354,6 +337,23 @@ export function SkillListToolbar(props: SkillToolbarProps) {
           />
         )}
       </div>
+      {isManagedSource ? (
+        <div className="skill-status-filter">
+          <span className="sr-only">{t("skills.ownerFilter.aria")}</span>
+          <span className="skill-status-filter__icon" aria-hidden="true">
+            <FilterIcon />
+          </span>
+          <AppSelect
+            value={ownerFilter}
+            options={ownerFilterOptions}
+            onChange={onOwnerFilterChange}
+            ariaLabel={t("skills.ownerFilter.aria")}
+            className="skill-status-filter__select"
+            menuClassName="skill-status-filter__popover"
+            minMenuWidth={112}
+          />
+        </div>
+      ) : null}
       <button
         className={`secondary-button secondary-button--compact skills-toolbar-button skills-toolbar-button--refresh${isWorkspaceRefreshing ? " is-loading" : ""}`}
         type="button"

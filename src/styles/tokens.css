@@ -1965,10 +1965,6 @@ code {
   overflow: hidden;
 }
 
-.skill-owner-filter {
-  flex-basis: 108px;
-}
-
 .skill-status-filter__icon {
   position: absolute;
   left: 8px;

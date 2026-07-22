@@ -265,9 +265,14 @@ test("filters managed skills by management owner", async () => {
     </NotificationProvider>,
   );
 
+  const statusFilter = screen.getByLabelText("按状态筛选技能");
+  const ownerFilter = screen.getByLabelText("按托管方筛选 Skill");
+  expect(statusFilter.compareDocumentPosition(ownerFilter)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+  expect(ownerFilter).toHaveTextContent("全部");
+
   await user.click(screen.getByLabelText("按托管方筛选 Skill"));
 
-  expect(screen.getByRole("option", { name: "全部托管方" })).toBeInTheDocument();
+  expect(screen.getByRole("option", { name: "全部" })).toBeInTheDocument();
   expect(screen.getByRole("option", { name: "SkillDock" })).toBeInTheDocument();
   await user.click(screen.getByRole("option", { name: "Agent CLI" }));
   expect(onOwnerFilterChange).toHaveBeenCalledWith("agent-skills-cli");
