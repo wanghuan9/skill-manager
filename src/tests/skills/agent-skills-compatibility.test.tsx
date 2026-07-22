@@ -40,7 +40,7 @@ test("shows same-name Skill instances with their directory owners", async () => 
   expect(screen.queryByText("外部目录")).not.toBeInTheDocument();
 });
 
-test("uses consistent owner placement in tool Skill list and card layouts", async () => {
+test("shows only the owner in tool Skill list and card layouts", async () => {
   const user = userEvent.setup();
   render(<App />);
 
@@ -56,9 +56,11 @@ test("uses consistent owner placement in tool Skill list and card layouts", asyn
   await user.click(screen.getByRole("button", { name: "卡片" }));
 
   sourceCard = screen.getByRole("article", { name: "skill-publisher" });
-  const sourceSummary = within(sourceCard).getByText("Git · SkillDock");
-  expect(sourceSummary).toHaveClass("skill-card__grid-source-text");
-  expect(sourceSummary).not.toHaveClass(
+  expect(within(sourceCard).getByText("已托管")).toBeInTheDocument();
+  const ownerLabel = within(sourceCard).getByText("SkillDock");
+  expect(ownerLabel).toHaveClass("skill-card__grid-source-text");
+  expect(ownerLabel).not.toHaveClass(
     "status-badge",
   );
+  expect(within(sourceCard).queryByText("Git · SkillDock")).not.toBeInTheDocument();
 });

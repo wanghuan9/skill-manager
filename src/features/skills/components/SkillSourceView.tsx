@@ -153,12 +153,6 @@ function SkillSourceRow(props: {
   const deleteActionRef = useRef<HTMLButtonElement | null>(null);
   const statusLabel = t(statusTranslationKeys[item.status]);
   const managedRootLabel = item.managedRoot ? t(managedRootTranslationKeys[item.managedRoot]) : "";
-  const sourceMethodLabel = item.managedSkill?.gitLinked
-    ? t("skill.card.sourceMethod.git")
-    : t("skill.card.sourceMethod.local");
-  const managedSourceSummary = managedRootLabel
-    ? `${sourceMethodLabel} · ${managedRootLabel}`
-    : "";
   const description = formatSkillDescription(item.description) || t("skills.description.empty");
   const entryKindLabel = t(item.entryKind === "symlink"
     ? "skills.source.entryKind.symlink"
@@ -342,9 +336,9 @@ function SkillSourceRow(props: {
           </div>
         </button>
         <div className="skill-card__list-actions">
-          {managedSourceSummary && isGridLayout ? (
+          {managedRootLabel && isGridLayout ? (
             <span className="skill-card__grid-source-label">
-              <span className="skill-card__grid-source-text">{managedSourceSummary}</span>
+              <span className="skill-card__grid-source-text">{managedRootLabel}</span>
             </span>
           ) : null}
           {isUnmanaged && isGridLayout ? (
