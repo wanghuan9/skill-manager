@@ -272,6 +272,7 @@ test("filters managed skills by management owner", async () => {
 
   await user.click(screen.getByLabelText("按托管方筛选 Skill"));
 
+  expect(screen.getByRole("listbox", { name: "按托管方筛选 Skill" })).toHaveStyle({ width: "92px" });
   expect(screen.getByRole("option", { name: "全部" })).toBeInTheDocument();
   expect(screen.getByRole("option", { name: "SkillDock" })).toBeInTheDocument();
   await user.click(screen.getByRole("option", { name: "Agent CLI" }));

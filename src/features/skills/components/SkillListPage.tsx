@@ -350,7 +350,7 @@ export function SkillListToolbar(props: SkillToolbarProps) {
             ariaLabel={t("skills.ownerFilter.aria")}
             className="skill-status-filter__select"
             menuClassName="skill-status-filter__popover"
-            minMenuWidth={112}
+            minMenuWidth={92}
           />
         </div>
       ) : null}
