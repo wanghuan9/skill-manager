@@ -153,6 +153,12 @@ function SkillSourceRow(props: {
   const deleteActionRef = useRef<HTMLButtonElement | null>(null);
   const statusLabel = t(statusTranslationKeys[item.status]);
   const managedRootLabel = item.managedRoot ? t(managedRootTranslationKeys[item.managedRoot]) : "";
+  const sourceMethodLabel = item.managedSkill?.gitLinked
+    ? t("skill.card.sourceMethod.git")
+    : t("skill.card.sourceMethod.local");
+  const managedSourceSummary = managedRootLabel
+    ? `${sourceMethodLabel} · ${managedRootLabel}`
+    : "";
   const description = formatSkillDescription(item.description) || t("skills.description.empty");
   const entryKindLabel = t(item.entryKind === "symlink"
     ? "skills.source.entryKind.symlink"
@@ -320,10 +326,12 @@ function SkillSourceRow(props: {
           <div className="skill-card__title-stack">
             <div className="skill-card__title-row">
               <h3>{item.name}</h3>
-              <span className={`status-badge ${statusTone(item.status)}`}>{statusLabel}</span>
               {managedRootLabel && !isGridLayout ? (
-                <span className="status-badge tone-info">{managedRootLabel}</span>
+                <span className="status-badge tone-neutral skill-card__owner-badge">
+                  {managedRootLabel}
+                </span>
               ) : null}
+              <span className={`status-badge ${statusTone(item.status)}`}>{statusLabel}</span>
               {item.status === "unmanaged" && !isGridLayout ? (
                 <span className="status-badge tone-info">
                   {entryKindLabel}
@@ -334,9 +342,9 @@ function SkillSourceRow(props: {
           </div>
         </button>
         <div className="skill-card__list-actions">
-          {managedRootLabel && isGridLayout ? (
-            <span className="status-badge tone-info skill-source-card__managed-root">
-              {managedRootLabel}
+          {managedSourceSummary && isGridLayout ? (
+            <span className="skill-card__grid-source-label">
+              <span className="skill-card__grid-source-text">{managedSourceSummary}</span>
             </span>
           ) : null}
           {isUnmanaged && isGridLayout ? (

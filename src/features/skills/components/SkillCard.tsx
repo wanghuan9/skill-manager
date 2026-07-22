@@ -217,6 +217,7 @@ export function SkillCard({
   const {
     appSettings,
     deleteSkill,
+    openPathInFinder,
     openSkillWithDefaultTool,
     setSkillAllToolStatuses,
     setToolSkillStatuses,
@@ -261,6 +262,7 @@ export function SkillCard({
   const sourceMethodLabel = skill.gitLinked
     ? t("skill.card.sourceMethod.git")
     : t("skill.card.sourceMethod.local");
+  const managedPath = skill.canonicalPath ?? skill.localPath;
   const gridSourceSummary = `${sourceMethodLabel} · ${managementOwnerLabel}`;
   const showDetailAction = skill.collabStatus === "update-available";
   const showRemoteMetadata = skill.gitLinked && skill.sourceType !== "local";
@@ -359,6 +361,18 @@ export function SkillCard({
         operation: "open_skill_with_default_tool",
         fallbackMessage: t("skill.card.error.openFolder"),
         context: { skillName: skill.name },
+      });
+    }
+  }
+
+  async function handleOpenManagedFolder() {
+    try {
+      await openPathInFinder(managedPath);
+    } catch (error) {
+      reportFailure(error, {
+        operation: "open_managed_skill_folder",
+        fallbackMessage: t("skills.source.error.openFolder"),
+        context: { skillName: skill.name, managedPath },
       });
     }
   }
@@ -516,16 +530,6 @@ export function SkillCard({
             <dt>{t("skill.card.sourceType")}</dt>
             <dd>{sourceMethodLabel}</dd>
           </div>
-          <div>
-            <dt>{t("skill.card.owner")}</dt>
-            <dd>{managementOwnerLabel}</dd>
-          </div>
-          <div>
-            <dt>{t("skill.card.realPath")}</dt>
-            <dd className="detail-grid__single-line" data-tooltip={skill.canonicalPath ?? skill.localPath}>
-              {skill.canonicalPath ?? skill.localPath}
-            </dd>
-          </div>
           {skill.sourceUrl ? (
             <div>
               <dt>{t("skill.card.source")}</dt>
@@ -547,12 +551,33 @@ export function SkillCard({
                     {skill.sourceUrl}
                   </span>
                 )}
-                <span className={`detail-git-badge${skill.gitLinked ? " is-linked" : " is-unlinked"}`}>
-                  git
-                </span>
               </dd>
             </div>
           ) : null}
+          <div className={skill.sourceUrl ? undefined : "detail-grid__new-row"}>
+            <dt>{t("skill.card.owner")}</dt>
+            <dd>{managementOwnerLabel}</dd>
+          </div>
+          <div>
+            <dt>{t("skill.card.managedPath")}</dt>
+            <dd className="skill-source-card__directory-value">
+              <span
+                className="skill-source-card__directory-path detail-grid__single-line"
+                data-tooltip={managedPath}
+              >
+                {managedPath}
+              </span>
+              <button
+                className="skill-card__icon-button skill-source-card__directory-open-button"
+                type="button"
+                onClick={() => void handleOpenManagedFolder()}
+                aria-label={t("skills.source.openPath", { path: managedPath })}
+                data-tooltip={t("skills.source.openFolder")}
+              >
+                <OpenFolderIcon />
+              </button>
+            </dd>
+          </div>
         </dl>
         <dl className="tool-list-row__detail-grid">
           {showRemoteMetadata ? (

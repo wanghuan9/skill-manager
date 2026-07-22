@@ -148,6 +148,7 @@ test("shows description in the list summary and keeps update metadata in details
     throw new Error("missing drawio-diagram fixture");
   }
 
+  const openFinderSpy = vi.spyOn(skillClient, "openPathInFinder").mockResolvedValue(undefined);
   renderSkillCardWithProviders(skill);
 
   expect(screen.getByText("将结构描述转成可编辑的 Draw.io 图表。")).toBeInTheDocument();
@@ -160,10 +161,25 @@ test("shows description in the list summary and keeps update metadata in details
   expect(screen.getByText(/远端更新时间/)).toBeInTheDocument();
   expect(screen.getByText(/本地更新时间/)).toBeInTheDocument();
   expect(screen.getByText(/更新人/)).toBeInTheDocument();
-  expect(screen.getByText("来源方式")).toBeInTheDocument();
-  expect(screen.getByText("托管方")).toBeInTheDocument();
-  expect(screen.getByText("真实目录")).toBeInTheDocument();
-  expect(screen.getByText("Git 仓库")).toBeInTheDocument();
+  const sourceMethod = screen.getByText("来源方式").parentElement;
+  const gitRepository = screen.getByText("Git 仓库").parentElement;
+  const owner = screen.getByText("托管方").parentElement;
+  const managedFolder = screen.getByText("托管目录").parentElement;
+  expect(sourceMethod?.compareDocumentPosition(gitRepository as Node)).toBe(
+    Node.DOCUMENT_POSITION_FOLLOWING,
+  );
+  expect(owner?.compareDocumentPosition(managedFolder as Node)).toBe(
+    Node.DOCUMENT_POSITION_FOLLOWING,
+  );
+  expect(screen.queryByText("真实目录")).not.toBeInTheDocument();
+
+  await userEvent.click(screen.getByRole("button", {
+    name: "打开目录 /Users/demo/.skilldock/skills/drawio-diagram",
+  }));
+  expect(openFinderSpy).toHaveBeenCalledWith({
+    path: "/Users/demo/.skilldock/skills/drawio-diagram",
+  });
+  openFinderSpy.mockRestore();
 });
 
 test("opens the shared file dialog in local changes mode from a pending-push file entry", async () => {

@@ -3630,6 +3630,10 @@ code {
   white-space: nowrap;
 }
 
+.detail-grid__new-row {
+  grid-column: 1;
+}
+
 .detail-grid__source-value {
   display: flex;
   align-items: center;
@@ -9668,8 +9672,7 @@ button.settings-form-item:disabled {
   overflow: hidden;
 }
 
-.skill-source-card--grid .skill-source-card__entry-kind,
-.skill-source-card--grid .skill-source-card__managed-root {
+.skill-source-card--grid .skill-source-card__entry-kind {
   min-width: 0;
   margin-right: auto;
   overflow: hidden;

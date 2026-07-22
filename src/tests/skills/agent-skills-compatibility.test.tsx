@@ -40,15 +40,25 @@ test("shows same-name Skill instances with their directory owners", async () => 
   expect(screen.queryByText("外部目录")).not.toBeInTheDocument();
 });
 
-test("shows the managed directory type below a managed tool Skill", async () => {
+test("uses consistent owner placement in tool Skill list and card layouts", async () => {
   const user = userEvent.setup();
   render(<App />);
 
   await user.click(screen.getByRole("tab", { name: "Codex 5" }));
+  await user.click(screen.getByRole("button", { name: "列表" }));
 
-  const sourceCard = screen.getByRole("article", { name: "skill-publisher" });
-  expect(within(sourceCard).getByText("已托管")).toBeInTheDocument();
-  expect(within(sourceCard).getByText("SkillDock")).toHaveClass(
-    "skill-source-card__managed-root",
+  let sourceCard = screen.getByRole("article", { name: "skill-publisher" });
+  const listOwner = within(sourceCard).getByText("SkillDock");
+  const listStatus = within(sourceCard).getByText("已托管");
+  expect(listOwner).toHaveClass("status-badge", "tone-neutral", "skill-card__owner-badge");
+  expect(listOwner.compareDocumentPosition(listStatus)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+
+  await user.click(screen.getByRole("button", { name: "卡片" }));
+
+  sourceCard = screen.getByRole("article", { name: "skill-publisher" });
+  const sourceSummary = within(sourceCard).getByText("Git · SkillDock");
+  expect(sourceSummary).toHaveClass("skill-card__grid-source-text");
+  expect(sourceSummary).not.toHaveClass(
+    "status-badge",
   );
 });
