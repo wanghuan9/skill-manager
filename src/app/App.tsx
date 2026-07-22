@@ -702,6 +702,14 @@ function AppContent() {
     setHasSavedSkillViewPreference(true);
   }, [activeRoute, skillViewMode]);
 
+  useEffect(() => {
+    if (activeRoute === "skills" && activeSkillsSection === "skills") {
+      return;
+    }
+
+    setFocusedManagedSkillName("");
+  }, [activeRoute, activeSkillsSection]);
+
   useLayoutEffect(() => {
     if (!usesExternalSidebarToggle || typeof window === "undefined") {
       setSidebarHandleTop(null);
