@@ -134,6 +134,7 @@ type SkillWorkspaceContextValue = {
   refreshLocalCandidates: () => Promise<void>;
   alignLocalWorkspaceState: () => Promise<void>;
   refreshWorkspace: (options?: RefreshWorkspaceOptions) => Promise<void>;
+  refreshToolSkillEntries: (toolId: string) => Promise<void>;
   updateSkill: (skillName: string) => Promise<void>;
   updateAllSkills: () => Promise<void>;
   deleteSkill: (skillName: string) => Promise<void>;
@@ -729,6 +730,14 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       settings,
     };
   }
+
+  const refreshToolSkillEntries = useCallback(async (toolId: string) => {
+    const refreshedEntries = await fetchToolSkillEntries(toolId);
+    setToolSkillEntries((currentEntries) => [
+      ...currentEntries.filter((entry) => entry.toolId !== toolId),
+      ...refreshedEntries,
+    ]);
+  }, []);
 
   async function alignLocalWorkspaceState(
     shouldApply: () => boolean = () => true,
@@ -1484,6 +1493,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       refreshLocalCandidates: handleRefreshLocalCandidates,
       alignLocalWorkspaceState: handleAlignLocalWorkspaceState,
       refreshWorkspace: loadWorkspaceSnapshot,
+      refreshToolSkillEntries,
       updateSkill: handleUpdateSkill,
       updateAllSkills: handleUpdateAllSkills,
       deleteSkill: handleDeleteSkill,
@@ -1533,6 +1543,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       localCandidates,
       marketplacePageBySource,
       marketplaceSkills,
+      refreshToolSkillEntries,
       toolConfigs,
       toolSkillEntries,
       handleSetSkillAllToolStatuses,

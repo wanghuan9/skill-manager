@@ -104,8 +104,9 @@ test("shows a tool source as three-column cards with modal details", async () =>
   expect(within(technicalDesignCard).getByRole("button", { name: "导入 SkillDock" })).toBeInTheDocument();
   expect(within(technicalDesignCard).getByRole("button", { name: "查看 technical-design 文件" })).toBeInTheDocument();
   expect(within(technicalDesignCard).getByRole("button", { name: "删除 technical-design" })).toBeInTheDocument();
+  expect(technicalDesignCard.querySelector(".skill-card__chevron-button")).not.toBeInTheDocument();
 
-  await user.click(within(technicalDesignCard).getByRole("button", { name: "展开 technical-design" }));
+  await user.click(within(technicalDesignCard).getByRole("button", { name: "technical-design" }));
 
   const detailDialog = screen.getByRole("dialog", { name: "technical-design 详情" });
   expect(detailDialog).toHaveClass("skill-card-detail-modal--source");
@@ -196,7 +197,7 @@ test("closes the managed Skill detail opened from a tool card", async () => {
   await user.click(screen.getByRole("button", { name: "卡片" }));
 
   const sourceCard = screen.getByRole("article", { name: "skill-publisher" });
-  await user.click(within(sourceCard).getByRole("button", { name: "展开 skill-publisher" }));
+  await user.click(within(sourceCard).getByRole("button", { name: "skill-publisher" }));
 
   const sourceDialog = screen.getByRole("dialog", { name: "skill-publisher 详情" });
   await user.click(within(sourceDialog).getByRole("button", { name: "查看托管版本" }));
@@ -216,7 +217,7 @@ test("does not reopen a managed Skill detail after leaving and returning to Skil
   await user.click(screen.getByRole("button", { name: "卡片" }));
 
   const sourceCard = screen.getByRole("article", { name: "skill-publisher" });
-  await user.click(within(sourceCard).getByRole("button", { name: "展开 skill-publisher" }));
+  await user.click(within(sourceCard).getByRole("button", { name: "skill-publisher" }));
   const sourceDialog = screen.getByRole("dialog", { name: "skill-publisher 详情" });
   await user.click(within(sourceDialog).getByRole("button", { name: "查看托管版本" }));
 
@@ -390,8 +391,12 @@ test("opens card details in a modal without changing the card grid order", async
 
   const firstRow = container.querySelector(".skill-card-grid__row");
   const initialSkillNames = Array.from(firstRow?.children ?? []).map((element) => element.getAttribute("aria-label"));
+  const excalidrawCard = screen.getByRole("article", { name: "excalidraw-diagram" });
+  const excalidrawSummary = excalidrawCard.querySelector<HTMLElement>(".skill-card__summary-button");
+  expect(excalidrawCard.querySelector(".skill-card__chevron-button")).not.toBeInTheDocument();
+  expect(excalidrawSummary).toBeInTheDocument();
 
-  await user.click(screen.getByRole("button", { name: "展开 excalidraw-diagram" }));
+  await user.click(excalidrawSummary as HTMLElement);
 
   const expandedCard = screen.getByRole("article", { name: "excalidraw-diagram" });
   expect(expandedCard).toHaveClass("skill-card--grid", "is-expanded");

@@ -103,6 +103,73 @@ test("offers list and card views for a tool source", () => {
   expect(onViewModeChange).toHaveBeenNthCalledWith(2, "list");
 });
 
+test("refreshes the complete workspace for the managed source", async () => {
+  const refreshWorkspace = vi.fn().mockResolvedValue(undefined);
+  const refreshToolSkillEntries = vi.fn().mockResolvedValue(undefined);
+
+  mockedUseSkillWorkspace.mockReturnValue({
+    language: "zh-CN",
+    installedSkills: installedSkillFixtures,
+    isLoading: false,
+    isWorkspaceRefreshing: false,
+    refreshWorkspace,
+    refreshToolSkillEntries,
+    updateAllSkills: vi.fn(),
+  } as unknown as ReturnType<typeof useSkillWorkspace>);
+
+  renderWithI18n(
+    <NotificationProvider>
+      <SkillListToolbar
+        query=""
+        statusFilter="all"
+        onQueryChange={vi.fn()}
+        onStatusFilterChange={vi.fn()}
+        viewMode="list"
+        onViewModeChange={vi.fn()}
+      />
+    </NotificationProvider>,
+  );
+
+  await userEvent.click(screen.getByRole("button", { name: "刷新" }));
+
+  expect(refreshWorkspace).toHaveBeenCalledWith({ showRefreshing: true });
+  expect(refreshToolSkillEntries).not.toHaveBeenCalled();
+});
+
+test("refreshes only the selected tool Skill directory", async () => {
+  const refreshWorkspace = vi.fn().mockResolvedValue(undefined);
+  const refreshToolSkillEntries = vi.fn().mockResolvedValue(undefined);
+
+  mockedUseSkillWorkspace.mockReturnValue({
+    language: "zh-CN",
+    installedSkills: installedSkillFixtures,
+    isLoading: false,
+    isWorkspaceRefreshing: false,
+    refreshWorkspace,
+    refreshToolSkillEntries,
+    updateAllSkills: vi.fn(),
+  } as unknown as ReturnType<typeof useSkillWorkspace>);
+
+  renderWithI18n(
+    <NotificationProvider>
+      <SkillListToolbar
+        activeSourceId="codex"
+        query=""
+        statusFilter="all"
+        onQueryChange={vi.fn()}
+        onStatusFilterChange={vi.fn()}
+        viewMode="list"
+        onViewModeChange={vi.fn()}
+      />
+    </NotificationProvider>,
+  );
+
+  await userEvent.click(screen.getByRole("button", { name: "刷新" }));
+
+  expect(refreshToolSkillEntries).toHaveBeenCalledWith("codex");
+  expect(refreshWorkspace).not.toHaveBeenCalled();
+});
+
 test("shows update-all loading state from the workspace session", () => {
   const updateAllSkills = vi.fn().mockResolvedValue(undefined);
 

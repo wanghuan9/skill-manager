@@ -167,9 +167,11 @@ export function SkillListToolbar(props: SkillToolbarProps) {
     isLoading,
     isWorkspaceRefreshing,
     isUpdatingAllSkills,
+    refreshToolSkillEntries,
     refreshWorkspace,
     updateAllSkills,
   } = useSkillWorkspace();
+  const [isToolSourceRefreshing, setIsToolSourceRefreshing] = useState(false);
   const reportFailure = useFailureReporter();
   const statusFilterCounts = useMemo(
     () => ({
@@ -201,22 +203,31 @@ export function SkillListToolbar(props: SkillToolbarProps) {
     { value: "mismatch", label: t("skills.source.filter.mismatch") },
   ];
   const isManagedSource = activeSourceId === MANAGED_SKILL_SOURCE_ID;
+  const isRefreshLoading = isManagedSource ? isWorkspaceRefreshing : isToolSourceRefreshing;
   const updateAllButtonLabel = updatableSkillCount > 0
     ? t("skills.updateAllWithCount", { count: updatableSkillCount })
     : t("skills.updateAll");
 
   async function handleRefreshWorkspace() {
-    if (isWorkspaceRefreshing) {
+    if (isRefreshLoading) {
       return;
     }
 
     try {
-      await refreshWorkspace({ showRefreshing: true });
+      if (isManagedSource) {
+        await refreshWorkspace({ showRefreshing: true });
+        return;
+      }
+
+      setIsToolSourceRefreshing(true);
+      await refreshToolSkillEntries(activeSourceId);
     } catch (error) {
       reportFailure(error, {
-        operation: "refresh_workspace",
+        operation: isManagedSource ? "refresh_workspace" : "refresh_tool_skill_entries",
         fallbackMessage: t("skills.error.refresh"),
       });
+    } finally {
+      setIsToolSourceRefreshing(false);
     }
   }
 
@@ -321,13 +332,13 @@ export function SkillListToolbar(props: SkillToolbarProps) {
         )}
       </div>
       <button
-        className={`secondary-button secondary-button--compact skills-toolbar-button skills-toolbar-button--refresh${isWorkspaceRefreshing ? " is-loading" : ""}`}
+        className={`secondary-button secondary-button--compact skills-toolbar-button skills-toolbar-button--refresh${isRefreshLoading ? " is-loading" : ""}`}
         type="button"
         onClick={() => void handleRefreshWorkspace()}
-        disabled={isWorkspaceRefreshing}
+        disabled={isRefreshLoading}
       >
         <span aria-hidden="true" className="skills-toolbar-button__icon">
-          <RefreshIcon isSpinning={isWorkspaceRefreshing} />
+          <RefreshIcon isSpinning={isRefreshLoading} />
         </span>
         <span>{t("skills.refresh")}</span>
       </button>

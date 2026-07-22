@@ -109,7 +109,7 @@ test("switches plugins to cards, opens details in a dialog, and restores the pre
   expect(repoScoutCard?.querySelector(".tool-list-row__grid-meta .plugins-page__host-coverage-icon")).not.toBeNull();
   expect(repoScoutCard?.querySelector(".skill-card__git-source-badge")).toBeNull();
   expect(repoScoutCard?.querySelector(".tool-list-row__grid-footer")).toHaveTextContent("Git 仓库");
-  expect(repoScoutCard?.querySelector(".tool-list-row__actions > .tool-list-row__chevron")).not.toBeNull();
+  expect(repoScoutCard?.querySelector(".tool-list-row__actions > .tool-list-row__chevron")).toBeNull();
 
   await userEvent.click(screen.getByRole("button", { name: "展开 Repo Scout" }));
   const detailDialog = screen.getByRole("dialog", { name: "Repo Scout" });

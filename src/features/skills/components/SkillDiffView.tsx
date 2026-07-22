@@ -1,8 +1,24 @@
 import { useEffect, useRef } from "react";
 import { minimalSetup } from "codemirror";
-import { Annotation, EditorState, Prec, RangeSet, RangeSetBuilder, Transaction } from "@codemirror/state";
-import { EditorView, GutterMarker, gutter, lineNumbers } from "@codemirror/view";
-import { getChunks, rejectChunk, unifiedMergeView } from "@codemirror/merge";
+import {
+  Annotation,
+  EditorState,
+  Prec,
+  RangeSet,
+  RangeSetBuilder,
+  StateField,
+  Transaction,
+} from "@codemirror/state";
+import {
+  EditorView,
+  GutterMarker,
+  gutter,
+  gutterLineClass,
+  lineNumbers,
+  lineNumberWidgetMarker,
+  type BlockInfo,
+} from "@codemirror/view";
+import { getChunks, getOriginalDoc, rejectChunk, unifiedMergeView } from "@codemirror/merge";
 import { useTranslate } from "@/app/i18n";
 import type { GitChangeFile } from "@/features/skills/state/skill-store";
 
@@ -191,6 +207,95 @@ class RevertChunkGutterMarker extends GutterMarker {
   }
 }
 
+class AddedLineNumberMarker extends GutterMarker {
+  elementClass = "skill-diff__added-line-number";
+}
+
+class DeletedLineNumberMarker extends GutterMarker {
+  elementClass = "skill-diff__deleted-line-number-block";
+
+  constructor(
+    private readonly firstLineNumber: number,
+    private readonly lineCount: number,
+  ) {
+    super();
+  }
+
+  eq(other: GutterMarker) {
+    return other instanceof DeletedLineNumberMarker
+      && other.firstLineNumber === this.firstLineNumber
+      && other.lineCount === this.lineCount;
+  }
+
+  toDOM() {
+    const container = document.createElement("span");
+    for (let offset = 0; offset < this.lineCount; offset += 1) {
+      const lineNumber = document.createElement("span");
+      lineNumber.className = "skill-diff__deleted-line-number";
+      lineNumber.textContent = String(this.firstLineNumber + offset);
+      container.append(lineNumber);
+    }
+    return container;
+  }
+}
+
+const addedLineNumberMarker = new AddedLineNumberMarker();
+
+function buildAddedLineNumberMarkers(state: EditorState) {
+  const chunkInfo = getChunks(state);
+  if (!chunkInfo) {
+    return RangeSet.empty;
+  }
+
+  const builder = new RangeSetBuilder<GutterMarker>();
+  for (const chunk of chunkInfo.chunks) {
+    if (chunk.fromB >= chunk.toB) {
+      continue;
+    }
+
+    const firstPosition = Math.min(chunk.fromB, state.doc.length);
+    const lastPosition = Math.max(firstPosition, Math.min(chunk.toB, state.doc.length) - 1);
+    const firstLineNumber = state.doc.lineAt(firstPosition).number;
+    const lastLineNumber = state.doc.lineAt(lastPosition).number;
+    for (let lineNumber = firstLineNumber; lineNumber <= lastLineNumber; lineNumber += 1) {
+      const line = state.doc.line(lineNumber);
+      builder.add(line.from, line.from, addedLineNumberMarker);
+    }
+  }
+  return builder.finish();
+}
+
+const addedLineNumberMarkers = StateField.define<RangeSet<GutterMarker>>({
+  create: buildAddedLineNumberMarkers,
+  update(markers, transaction) {
+    return transaction.docChanged ? buildAddedLineNumberMarkers(transaction.state) : markers;
+  },
+  provide: (field) => gutterLineClass.from(field),
+});
+
+function buildDeletedLineNumberMarker(view: EditorView, block: BlockInfo) {
+  const chunk = getChunks(view.state)?.chunks.find((item) => (
+    item.fromB === block.from && item.fromA < item.toA
+  ));
+  if (!chunk) {
+    return null;
+  }
+
+  const originalDoc = getOriginalDoc(view.state);
+  const firstPosition = Math.min(chunk.fromA, originalDoc.length);
+  const lastPosition = Math.max(firstPosition, Math.min(chunk.toA, originalDoc.length) - 1);
+  const firstLineNumber = originalDoc.lineAt(firstPosition).number;
+  const lastLineNumber = originalDoc.lineAt(lastPosition).number;
+  return new DeletedLineNumberMarker(firstLineNumber, lastLineNumber - firstLineNumber + 1);
+}
+
+function buildDiffLineNumberExtensions() {
+  return [
+    addedLineNumberMarkers,
+    lineNumberWidgetMarker.of((view, _widget, block) => buildDeletedLineNumberMarker(view, block)),
+  ];
+}
+
 function buildRevertChunkGutter(label: string) {
   return gutter({
     class: "skill-diff__revert-gutter-column",
@@ -257,6 +362,7 @@ function SkillDiffEditor({
           gutter: true,
           mergeControls: () => renderMergeControl(),
         }),
+        buildDiffLineNumberExtensions(),
         EditorView.updateListener.of((update) => {
           const isExternalSync = update.transactions.some(
             (transaction) => transaction.annotation(externalContentSync),

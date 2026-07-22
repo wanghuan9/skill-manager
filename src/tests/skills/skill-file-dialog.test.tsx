@@ -153,16 +153,18 @@ beforeEach(() => {
           "new file mode 100644",
           "--- /dev/null",
           "+++ b/scripts/new.ts",
-          "@@ -0,0 +1 @@",
+          "@@ -0,0 +1,2 @@",
           "+new file content",
+          "+second added line",
         ].join("\n");
         const deletedDiff = [
           "diff --git a/references/old.md b/references/old.md",
           "deleted file mode 100644",
           "--- a/references/old.md",
           "+++ /dev/null",
-          "@@ -1 +0,0 @@",
+          "@@ -1,2 +0,0 @@",
           "-deleted file content",
+          "-second deleted line",
         ].join("\n");
         return [
           {
@@ -203,7 +205,7 @@ beforeEach(() => {
             stagedDiff: "",
             unstagedDiff: addedDiff,
             originalContent: "",
-            currentContent: "new file content",
+            currentContent: "new file content\nsecond added line",
           },
           {
             path: "references/old.md",
@@ -211,7 +213,7 @@ beforeEach(() => {
             diff: deletedDiff,
             stagedDiff: "",
             unstagedDiff: deletedDiff,
-            originalContent: "deleted file content",
+            originalContent: "deleted file content\nsecond deleted line",
             currentContent: "",
           },
         ];
@@ -282,12 +284,20 @@ test("edits local changes and switches between changed and full file views", asy
   await waitFor(() => {
     expect(screen.getByRole("textbox", { name: "可编辑的文件变更" })).toHaveTextContent("new file content");
   });
+  expect(Array.from(
+    document.querySelectorAll(".cm-lineNumbers .skill-diff__added-line-number"),
+    (element) => element.textContent,
+  )).toEqual(["1", "2"]);
   expect(await screen.findByRole("button", { name: "回退此变更块" })).toBeInTheDocument();
   expect(document.querySelector(".cm-changedLineGutter")).toBeInTheDocument();
   await userEvent.click(screen.getByRole("button", { name: "old.md references" }));
   await waitFor(() => {
     expect(document.querySelector(".cm-deletedChunk")).toHaveTextContent("deleted file content");
   });
+  expect(Array.from(
+    document.querySelectorAll(".skill-diff__deleted-line-number"),
+    (element) => element.textContent,
+  )).toEqual(["1", "2"]);
   expect(await screen.findByRole("button", { name: "回退此变更块" })).toBeInTheDocument();
   expect(document.querySelector(".cm-deletedLineGutter")).toBeInTheDocument();
   await userEvent.click(screen.getByRole("button", { name: "SKILL.md" }));
@@ -300,6 +310,9 @@ test("edits local changes and switches between changed and full file views", asy
   expect(document.querySelector(".cm-changedLineGutter")).toBeInTheDocument();
   expect(document.querySelector(".cm-deletedLineGutter")).toBeInTheDocument();
   expect(document.querySelectorAll(".cm-lineNumbers")).toHaveLength(1);
+  expect(document.querySelector(".skill-diff__deleted-line-number-block")).toHaveTextContent("2");
+  expect(document.querySelector(".skill-diff__deleted-line-number")).toHaveTextContent("2");
+  expect(document.querySelector(".cm-lineNumbers .skill-diff__added-line-number")).toHaveTextContent("2");
   const gutterClasses = Array.from(document.querySelector(".cm-gutters")?.children ?? [])
     .map((element) => element.className);
   expect(gutterClasses).toEqual([
@@ -318,6 +331,8 @@ test("edits local changes and switches between changed and full file views", asy
   await waitFor(() => {
     expect(screen.getByRole("textbox", { name: "可编辑的文件变更" })).toHaveTextContent("old description");
   });
+  expect(document.querySelector(".skill-diff__deleted-line-number-block")).not.toBeInTheDocument();
+  expect(document.querySelector(".cm-lineNumbers .skill-diff__added-line-number")).not.toBeInTheDocument();
   expect(screen.getByText("未保存")).toBeInTheDocument();
 
   const editor = screen.getByRole("textbox", { name: "可编辑的文件变更" });

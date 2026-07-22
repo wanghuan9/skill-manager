@@ -5863,9 +5863,17 @@ pub fn list_local_skill_candidates() -> Vec<LocalSkillCandidate> {
 }
 
 #[tauri::command]
-pub fn list_tool_skill_entries() -> Vec<ToolSkillEntry> {
+pub fn list_tool_skill_entries(tool_id: Option<String>) -> Vec<ToolSkillEntry> {
     let installed_skills = load_installed_skills(&default_installed_skills());
-    build_tool_skill_entries(&build_tool_configs(), &installed_skills)
+    let tool_configs = build_tool_configs()
+        .into_iter()
+        .filter(|tool| {
+            tool_id
+                .as_ref()
+                .map_or(true, |selected_id| tool.id == *selected_id)
+        })
+        .collect::<Vec<_>>();
+    build_tool_skill_entries(&tool_configs, &installed_skills)
 }
 
 #[tauri::command]

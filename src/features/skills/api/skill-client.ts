@@ -1201,8 +1201,12 @@ export async function fetchLocalSkillCandidates(): Promise<LocalSkillCandidate[]
   return invokeOrFallback("list_local_skill_candidates", {}, localSkillFixtures);
 }
 
-export async function fetchToolSkillEntries(): Promise<ToolSkillEntry[]> {
-  return invokeOrFallback("list_tool_skill_entries", {}, toolSkillEntryFixtures);
+export async function fetchToolSkillEntries(toolId?: string): Promise<ToolSkillEntry[]> {
+  const args = toolId ? { toolId } : {};
+  const fallback = toolId
+    ? toolSkillEntryFixtures.filter((entry) => entry.toolId === toolId)
+    : toolSkillEntryFixtures;
+  return invokeOrFallback("list_tool_skill_entries", args, fallback);
 }
 
 export async function fetchToolConfigs(): Promise<ToolConfig[]> {

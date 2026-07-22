@@ -678,20 +678,22 @@ export function SkillCard({
               <OpenFolderIcon />
             </button>
             {deleteAction}
-            <button
-              className="skill-card__chevron-button"
-              type="button"
-              onClick={() => handleExpandedChange(!expanded)}
-              aria-expanded={expanded}
-              aria-label={t("skill.card.aria.expand", {
-                state: expanded ? t("skill.card.collapse") : t("skill.card.expand"),
-                name: skill.name,
-              })}
-            >
-              <span className="skill-card__chevron" aria-hidden="true">
-                {expanded ? "⌄" : "›"}
-              </span>
-            </button>
+            {!isGridLayout ? (
+              <button
+                className="skill-card__chevron-button"
+                type="button"
+                onClick={() => handleExpandedChange(!expanded)}
+                aria-expanded={expanded}
+                aria-label={t("skill.card.aria.expand", {
+                  state: expanded ? t("skill.card.collapse") : t("skill.card.expand"),
+                  name: skill.name,
+                })}
+              >
+                <span className="skill-card__chevron" aria-hidden="true">
+                  {expanded ? "⌄" : "›"}
+                </span>
+              </button>
+            ) : null}
           </div>
         </div>
         {expanded && !isGridLayout ? (

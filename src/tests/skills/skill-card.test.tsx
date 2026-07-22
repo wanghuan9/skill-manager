@@ -127,8 +127,11 @@ test("keeps the file entry expanded in the grid detail header", async () => {
     throw new Error("missing skill-publisher fixture");
   }
 
-  renderSkillCardWithProviders(skill, "grid");
-  await userEvent.click(screen.getByRole("button", { name: /展开 skill-publisher/ }));
+  const { container } = renderSkillCardWithProviders(skill, "grid");
+  const summary = container.querySelector<HTMLElement>(".skill-card__summary-button");
+  expect(summary).toBeInTheDocument();
+  expect(container.querySelector(".skill-card__chevron-button")).not.toBeInTheDocument();
+  await userEvent.click(summary as HTMLElement);
 
   const detailDialog = screen.getByRole("dialog", { name: "skill-publisher 详情" });
   const filesButton = within(detailDialog).getByRole("button", {

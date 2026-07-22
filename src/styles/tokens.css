@@ -3383,7 +3383,8 @@ code {
   width: 100%;
   min-width: 0;
   margin: 0;
-  padding: 8px 0 0;
+  gap: 4px;
+  padding: 6px 0 0;
   border-top: 1px solid var(--line);
   flex-wrap: wrap;
   overflow: visible;
@@ -3398,15 +3399,14 @@ code {
 }
 
 .skill-card--grid .skill-card__list-actions > button {
-  flex: 0 0 28px;
+  flex: 0 0 24px;
 }
 
-.skill-card--grid .skill-card__icon-button,
-.skill-card--grid .skill-card__chevron-button {
-  width: 28px;
-  height: 28px;
+.skill-card--grid .skill-card__icon-button {
+  width: 24px;
+  height: 24px;
   border: 1px solid rgba(15, 23, 42, 0.08);
-  border-radius: 8px;
+  border-radius: 7px;
   background: rgba(246, 249, 253, 0.9);
 }
 
@@ -7018,6 +7018,7 @@ code {
 }
 
 .skill-diff__editor .cm-scroller {
+  container-type: inline-size;
   overflow: auto;
   font-family: inherit;
   line-height: 1.65;
@@ -7077,6 +7078,27 @@ code {
   padding: 0 5px;
 }
 
+.skill-diff__editor .cm-lineNumbers .cm-gutterElement.skill-diff__added-line-number {
+  background: rgba(39, 179, 106, 0.11);
+  color: #27a866;
+}
+
+.skill-diff__editor .cm-lineNumbers .cm-gutterElement.skill-diff__deleted-line-number-block {
+  background: rgba(225, 61, 75, 0.095);
+  color: #d23d4c;
+}
+
+.skill-diff__editor .skill-diff__deleted-line-number-block > span {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+}
+
+.skill-diff__editor .skill-diff__deleted-line-number {
+  height: 1.65em;
+  line-height: 1.65;
+}
+
 .skill-diff__editor .cm-content {
   padding: 9px 0;
   caret-color: var(--accent);
@@ -7119,8 +7141,11 @@ code {
 }
 
 .skill-diff__editor .cm-editor .cm-collapsedLines {
+  position: sticky;
+  left: 78px;
   display: flex;
   align-items: center;
+  width: calc(100cqw - 78px);
   min-height: 22px;
   padding: 0;
   border: 0;
@@ -9651,10 +9676,18 @@ button.settings-form-item:disabled {
   width: 100%;
   min-width: 0;
   margin: 0;
-  padding: 10px 0 0;
+  gap: 4px;
+  padding: 6px 0 0;
   border-top: 1px solid var(--line);
   flex-wrap: wrap;
   overflow: hidden;
+}
+
+.skill-source-card--grid .skill-card__list-actions > .skill-card__icon-button {
+  flex: 0 0 24px;
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
 }
 
 .skill-source-card--grid .skill-source-card__entry-kind {
@@ -11778,8 +11811,9 @@ button.settings-form-item:disabled {
 
 .tool-list-row--grid .tool-list-row__actions {
   align-self: end;
-  min-height: 37px;
-  padding-top: 8px;
+  min-height: 31px;
+  gap: 4px;
+  padding-top: 6px;
   border-top: 1px solid var(--line);
   justify-content: flex-end;
   width: 100%;
@@ -11814,10 +11848,10 @@ button.settings-form-item:disabled {
 }
 
 .tool-list-row--grid .tool-list-row__actions .skill-card__icon-button {
-  flex: 0 0 28px;
-  width: 28px;
-  height: 28px;
-  border-radius: 8px;
+  flex: 0 0 24px;
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
 }
 
 .tool-list-row--grid .tool-list-row__actions .skill-card__icon-button:not(.plugins-page__toggle-icon-button) {
@@ -11932,7 +11966,8 @@ button.settings-form-item:disabled {
   width: 100%;
   min-width: 0;
   margin: 0;
-  padding: 8px 0 0;
+  gap: 4px;
+  padding: 6px 0 0;
   border-top: 1px solid var(--line);
   justify-content: flex-end;
   overflow: visible;
@@ -11992,9 +12027,9 @@ button.settings-form-item:disabled {
 }
 
 .mcp-server-card--grid .mcp-server-card__actions .skill-card__icon-button {
-  width: 28px;
-  height: 28px;
-  border-radius: 8px;
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
 }
 
 .mcp-server-card--grid .mcp-server-card__actions .skill-card__icon-button:not(.plugins-page__toggle-icon-button) {
@@ -12865,6 +12900,16 @@ button.settings-form-item:disabled {
 }
 
 :root[data-theme="dark"] .skill-diff__editor .cm-gutterElement.cm-deletedLineGutter::before {
+  color: #f07883;
+}
+
+:root[data-theme="dark"] .skill-diff__editor .cm-lineNumbers .cm-gutterElement.skill-diff__added-line-number {
+  background: rgba(52, 168, 103, 0.17);
+  color: #63d598;
+}
+
+:root[data-theme="dark"] .skill-diff__editor .cm-lineNumbers .cm-gutterElement.skill-diff__deleted-line-number-block {
+  background: rgba(214, 70, 82, 0.16);
   color: #f07883;
 }
 
