@@ -32,7 +32,7 @@ import {
   useSkillWorkspace,
 } from "@/features/skills/state/skill-workspace";
 import { SkillListToolbar } from "@/features/skills/components/SkillListPage";
-import type { SkillStatusFilter } from "@/features/skills/state/skill-store";
+import type { ManagedSkillOwnerFilter, SkillStatusFilter } from "@/features/skills/state/skill-store";
 import {
   readSkillViewModePreference,
   resolveSkillViewModePreference,
@@ -290,6 +290,7 @@ function renderRoute(
   onShowManagedSkill: (skillName: string) => void,
   skillQuery: string,
   skillStatusFilter: SkillStatusFilter,
+  skillOwnerFilter: ManagedSkillOwnerFilter,
   skillManagementFilter: ToolSkillManagementFilter,
   skillViewMode: SkillViewMode,
   activeInstallCategory: InstallCategory,
@@ -347,6 +348,7 @@ function renderRoute(
       onInstallFromMarketplace={onInstallSkillFromMarketplace}
       query={skillQuery}
       statusFilter={skillStatusFilter}
+      ownerFilter={skillOwnerFilter}
       managementFilter={skillManagementFilter}
       viewMode={skillViewMode}
     />
@@ -575,6 +577,8 @@ function AppContent() {
   const [focusedManagedSkillName, setFocusedManagedSkillName] = useState("");
   const [skillStatusFilter, setSkillStatusFilter] =
     useState<SkillStatusFilter>("all");
+  const [skillOwnerFilter, setSkillOwnerFilter] =
+    useState<ManagedSkillOwnerFilter>("all");
   const [skillManagementFilter, setSkillManagementFilter] =
     useState<ToolSkillManagementFilter>("all");
   const [skillViewMode, setSkillViewMode] = useState<SkillViewMode>(
@@ -705,6 +709,14 @@ function AppContent() {
     setHasSavedSkillViewPreference(true);
   }, [activeRoute, skillViewMode]);
 
+  useEffect(() => {
+    if (activeRoute === "skills" && activeSkillsSection === "skills") {
+      return;
+    }
+
+    setFocusedManagedSkillName("");
+  }, [activeRoute, activeSkillsSection]);
+
   useLayoutEffect(() => {
     if (!usesExternalSidebarToggle || typeof window === "undefined") {
       setSidebarHandleTop(null);
@@ -818,10 +830,12 @@ function AppContent() {
       activeSourceId={activeSkillSourceId}
       query={skillQuery}
       statusFilter={skillStatusFilter}
+      ownerFilter={skillOwnerFilter}
       managementFilter={skillManagementFilter}
       managementFilterCounts={activeToolSkillCounts ?? undefined}
       onQueryChange={setSkillQuery}
       onStatusFilterChange={setSkillStatusFilter}
+      onOwnerFilterChange={setSkillOwnerFilter}
       onManagementFilterChange={setSkillManagementFilter}
       viewMode={skillViewMode}
       onViewModeChange={handleSkillViewModeChange}
@@ -1212,6 +1226,7 @@ function AppContent() {
               handleShowManagedSkill,
               skillQuery,
               skillStatusFilter,
+              skillOwnerFilter,
               skillManagementFilter,
               skillViewMode,
               activeInstallCategory,

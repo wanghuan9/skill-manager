@@ -5,6 +5,8 @@ export type SkillCollabStatus =
   | "pending-push"
   | "diverged";
 export type SkillStatusFilter = "all" | SkillCollabStatus | "disabled";
+export type SkillManagementOwner = "skilldock" | "agent-skills-cli" | "external";
+export type ManagedSkillOwnerFilter = "all" | Exclude<SkillManagementOwner, "external">;
 
 export type SourceType = "github" | "gitlab" | "gitee" | "well-known" | "local";
 export type MarketplaceSourceSite = "skills.sh" | "skillsmp";
@@ -171,7 +173,7 @@ export type SkillSummary = {
   ownerPluginName?: string;
   entryPath?: string;
   canonicalPath?: string;
-  managementOwner?: "skilldock" | "agent-skills-cli" | "external";
+  managementOwner?: SkillManagementOwner;
   updateDriver?: "git" | "agent-skills-cli" | "none";
   skillEntries?: string[];
   pathError?: string;

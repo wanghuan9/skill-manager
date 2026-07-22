@@ -17,7 +17,11 @@ import { getMonogramLabel } from "@/features/skills/utils/monogram";
 import { ToolbarGoInstallButton } from "@/app/components/ToolbarGoInstallButton";
 import { useStableListOrder } from "@/app/hooks/useStableListOrder";
 import { AppSelect } from "@/app/components/AppSelect";
-import type { SkillStatusFilter, SkillSummary } from "@/features/skills/state/skill-store";
+import type {
+  ManagedSkillOwnerFilter,
+  SkillStatusFilter,
+  SkillSummary,
+} from "@/features/skills/state/skill-store";
 import {
   MANAGED_SKILL_SOURCE_ID,
   type SkillSourceId,
@@ -28,10 +32,12 @@ type SkillToolbarProps = {
   activeSourceId?: SkillSourceId;
   query: string;
   statusFilter: SkillStatusFilter;
+  ownerFilter?: ManagedSkillOwnerFilter;
   managementFilter?: ToolSkillManagementFilter;
   managementFilterCounts?: Record<ToolSkillManagementFilter, number>;
   onQueryChange: (value: string) => void;
   onStatusFilterChange: (value: SkillStatusFilter) => void;
+  onOwnerFilterChange?: (value: ManagedSkillOwnerFilter) => void;
   onManagementFilterChange?: (value: ToolSkillManagementFilter) => void;
   viewMode: SkillViewMode;
   onViewModeChange: (value: SkillViewMode) => void;
@@ -157,10 +163,12 @@ export function SkillListToolbar(props: SkillToolbarProps) {
     query,
     activeSourceId = MANAGED_SKILL_SOURCE_ID,
     statusFilter,
+    ownerFilter = "all",
     managementFilter = "all",
     managementFilterCounts = { all: 0, managed: 0, unmanaged: 0, mismatch: 0 },
     onQueryChange,
     onStatusFilterChange,
+    onOwnerFilterChange = () => undefined,
     onManagementFilterChange = () => undefined,
     viewMode,
     onViewModeChange,
@@ -197,6 +205,11 @@ export function SkillListToolbar(props: SkillToolbarProps) {
     { value: "pending-commit", label: t("skills.filter.pendingCommit") },
     { value: "pending-push", label: t("skills.filter.pendingPush") },
     { value: "disabled", label: t("skills.filter.disabled") },
+  ];
+  const ownerFilterOptions: Array<{ value: ManagedSkillOwnerFilter; label: string }> = [
+    { value: "all", label: t("skills.ownerFilter.all") },
+    { value: "skilldock", label: t("skill.card.owner.skilldock") },
+    { value: "agent-skills-cli", label: t("skill.card.owner.agentSkillsCli") },
   ];
   const managementFilterOptions: Array<{ value: ToolSkillManagementFilter; label: string }> = [
     { value: "all", label: t("skills.source.filter.all") },
@@ -291,6 +304,23 @@ export function SkillListToolbar(props: SkillToolbarProps) {
           </button>
         ) : null}
       </div>
+      {isManagedSource ? (
+        <div className="skill-status-filter skill-owner-filter">
+          <span className="sr-only">{t("skills.ownerFilter.aria")}</span>
+          <span className="skill-status-filter__icon" aria-hidden="true">
+            <FilterIcon />
+          </span>
+          <AppSelect
+            value={ownerFilter}
+            options={ownerFilterOptions}
+            onChange={onOwnerFilterChange}
+            ariaLabel={t("skills.ownerFilter.aria")}
+            className="skill-status-filter__select"
+            menuClassName="skill-status-filter__popover"
+            minMenuWidth={112}
+          />
+        </div>
+      ) : null}
       <div className="skill-status-filter">
         <span className="sr-only">{t(isManagedSource ? "skills.filter.aria" : "skills.source.filter.aria")}</span>
         <span className="skill-status-filter__icon" aria-hidden="true">
@@ -363,6 +393,7 @@ type SkillListPageProps = {
   onInstallFromMarketplace?: () => void;
   query: string;
   statusFilter: SkillStatusFilter;
+  ownerFilter?: ManagedSkillOwnerFilter;
   managementFilter?: ToolSkillManagementFilter;
   viewMode: SkillViewMode;
 };
@@ -381,6 +412,7 @@ export function SkillListPage(props: SkillListPageProps) {
     onInstallFromMarketplace,
     query,
     statusFilter,
+    ownerFilter = "all",
     managementFilter = "all",
     viewMode,
     activeSourceId = MANAGED_SKILL_SOURCE_ID,
@@ -406,11 +438,11 @@ export function SkillListPage(props: SkillListPageProps) {
   );
   const skills = useMemo(() => {
     const visibleSkillKeys = new Set(
-      filterSkills(installedSkills, { query: deferredQuery, status: statusFilter })
+      filterSkills(installedSkills, { query: deferredQuery, status: statusFilter, owner: ownerFilter })
         .map(skillInstanceKey),
     );
     return orderedInstalledSkills.filter((skill) => visibleSkillKeys.has(skillInstanceKey(skill)));
-  }, [deferredQuery, installedSkills, orderedInstalledSkills, statusFilter]);
+  }, [deferredQuery, installedSkills, orderedInstalledSkills, ownerFilter, statusFilter]);
   const groupedSkills = useMemo(
     () => groupSkillsBySource(skills, { localLabel: t("skills.source.local") }),
     [skills, t],

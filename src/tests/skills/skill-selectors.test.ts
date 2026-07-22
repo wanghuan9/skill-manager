@@ -105,6 +105,35 @@ describe("filterSkills", () => {
     expect(skills.map((skill) => skill.name)).toEqual(["diagram-helper"]);
   });
 
+  it("combines management owner, query, and status filters", () => {
+    const skills = filterSkills(
+      [
+        createSkill({
+          name: "skilldock-agent-update",
+          collabStatus: "update-available",
+          managementOwner: "skilldock",
+        }),
+        createSkill({
+          name: "agent-update",
+          collabStatus: "update-available",
+          managementOwner: "agent-skills-cli",
+        }),
+        createSkill({
+          name: "agent-clean",
+          collabStatus: "clean",
+          managementOwner: "agent-skills-cli",
+        }),
+      ],
+      {
+        query: "agent",
+        status: "update-available",
+        owner: "agent-skills-cli",
+      },
+    );
+
+    expect(skills.map((skill) => skill.name)).toEqual(["agent-update"]);
+  });
+
   it("filters skills that are not enabled in any tool", () => {
     const skills = filterSkills(
       [

@@ -96,6 +96,7 @@ test("offers list and card views for a tool source", () => {
 
   expect(screen.getByRole("button", { name: "列表" })).toHaveAttribute("aria-pressed", "true");
   expect(screen.queryByRole("button", { name: "分组" })).not.toBeInTheDocument();
+  expect(screen.queryByLabelText("按托管方筛选 Skill")).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "卡片" }));
   fireEvent.click(screen.getByRole("button", { name: "列表" }));
 
@@ -229,4 +230,45 @@ test("notifies status filter changes", async () => {
 
   await user.click(screen.getByRole("option", { name: "待提交 (1)" }));
   expect(onStatusFilterChange).toHaveBeenCalledWith("pending-commit");
+});
+
+test("filters managed skills by management owner", async () => {
+  const user = userEvent.setup();
+  const onOwnerFilterChange = vi.fn();
+  const agentCliSkillFixture: SkillSummary = {
+    ...installedSkillFixtures[0],
+    name: "agent-cli-skill",
+    localPath: "/Users/demo/.agents/skills/agent-cli-skill",
+    managementOwner: "agent-skills-cli",
+  };
+
+  mockedUseSkillWorkspace.mockReturnValue({
+    language: "zh-CN",
+    installedSkills: [...installedSkillFixtures, agentCliSkillFixture],
+    isLoading: false,
+    refreshWorkspace: vi.fn(),
+    updateAllSkills: vi.fn(),
+  } as unknown as ReturnType<typeof useSkillWorkspace>);
+
+  renderWithI18n(
+    <NotificationProvider>
+      <SkillListToolbar
+        query=""
+        statusFilter="all"
+        ownerFilter="all"
+        onQueryChange={vi.fn()}
+        onStatusFilterChange={vi.fn()}
+        onOwnerFilterChange={onOwnerFilterChange}
+        viewMode="grouped"
+        onViewModeChange={vi.fn()}
+      />
+    </NotificationProvider>,
+  );
+
+  await user.click(screen.getByLabelText("按托管方筛选 Skill"));
+
+  expect(screen.getByRole("option", { name: "全部托管方" })).toBeInTheDocument();
+  expect(screen.getByRole("option", { name: "SkillDock" })).toBeInTheDocument();
+  await user.click(screen.getByRole("option", { name: "Agent CLI" }));
+  expect(onOwnerFilterChange).toHaveBeenCalledWith("agent-skills-cli");
 });

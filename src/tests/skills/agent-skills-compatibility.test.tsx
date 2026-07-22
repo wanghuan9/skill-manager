@@ -38,6 +38,11 @@ test("shows same-name Skill instances with their directory owners", async () => 
   expect(screen.getAllByText("SkillDock").length).toBeGreaterThan(0);
   expect(screen.getByText(/Agent CLI/)).toBeInTheDocument();
   expect(screen.queryByText("外部目录")).not.toBeInTheDocument();
+
+  await user.click(screen.getByLabelText("按托管方筛选 Skill"));
+  await user.click(screen.getByRole("option", { name: "Agent CLI" }));
+
+  expect(screen.getAllByRole("article", { name: "duplicate-skill" })).toHaveLength(1);
 });
 
 test("shows only the owner in tool Skill list and card layouts", async () => {

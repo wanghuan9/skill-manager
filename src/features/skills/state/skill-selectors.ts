@@ -1,10 +1,16 @@
-import type { SkillStatusFilter, SkillSummary } from "@/features/skills/state/skill-store";
+import type {
+  ManagedSkillOwnerFilter,
+  SkillManagementOwner,
+  SkillStatusFilter,
+  SkillSummary,
+} from "@/features/skills/state/skill-store";
 import { parseSkillTimestamp } from "@/features/skills/utils/skill-time";
 import { isToolEnabledStatus } from "@/features/skills/utils/tool-status";
 
 type FilterOptions = {
   query: string;
   status: SkillStatusFilter;
+  owner?: ManagedSkillOwnerFilter;
 };
 
 const statusPriority: Record<SkillSummary["collabStatus"], number> = {
@@ -17,6 +23,10 @@ const statusPriority: Record<SkillSummary["collabStatus"], number> = {
 
 export function hasEnabledTool(skill: SkillSummary) {
   return skill.tools.some((tool) => isToolEnabledStatus(tool.statusLabel));
+}
+
+export function resolveSkillManagementOwner(skill: SkillSummary): SkillManagementOwner {
+  return skill.managementOwner ?? "skilldock";
 }
 
 function matchesStatusFilter(skill: SkillSummary, status: SkillStatusFilter) {
@@ -33,6 +43,7 @@ function matchesStatusFilter(skill: SkillSummary, status: SkillStatusFilter) {
 
 export function filterSkills(skills: SkillSummary[], options: FilterOptions) {
   const normalizedQuery = options.query.trim().toLowerCase();
+  const ownerFilter = options.owner ?? "all";
 
   const filteredSkills = skills.filter((skill) => {
     const matchesQuery =
@@ -42,8 +53,9 @@ export function filterSkills(skills: SkillSummary[], options: FilterOptions) {
       skill.description.toLowerCase().includes(normalizedQuery) ||
       skill.sourceType.toLowerCase().includes(normalizedQuery);
     const matchesStatus = matchesStatusFilter(skill, options.status);
+    const matchesOwner = ownerFilter === "all" || resolveSkillManagementOwner(skill) === ownerFilter;
 
-    return matchesQuery && matchesStatus;
+    return matchesQuery && matchesStatus && matchesOwner;
   });
 
   return [...filteredSkills].sort((left, right) => {
