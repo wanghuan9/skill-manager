@@ -268,7 +268,7 @@ test("filters managed skills by management owner", async () => {
   const statusFilter = screen.getByLabelText("按状态筛选技能");
   const ownerFilter = screen.getByLabelText("按托管方筛选 Skill");
   expect(statusFilter.compareDocumentPosition(ownerFilter)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
-  expect(ownerFilter).toHaveTextContent("全部");
+  expect(ownerFilter).toHaveTextContent("托管方");
 
   await user.click(screen.getByLabelText("按托管方筛选 Skill"));
 

@@ -22,6 +22,7 @@ type AppSelectProps<T extends string> = {
   className?: string;
   menuClassName?: string;
   minMenuWidth?: number;
+  selectedLabel?: string;
   disabled?: boolean;
 };
 
@@ -71,6 +72,7 @@ export function AppSelect<T extends string>(props: AppSelectProps<T>) {
     minMenuWidth = DEFAULT_MIN_MENU_WIDTH,
     onChange,
     options,
+    selectedLabel,
     value,
   } = props;
   const [isOpen, setIsOpen] = useState(false);
@@ -227,7 +229,7 @@ export function AppSelect<T extends string>(props: AppSelectProps<T>) {
         onClick={() => (isOpen ? closeMenu() : openMenu())}
         onKeyDown={handleTriggerKeyDown}
       >
-        <span className="app-select__value">{selectedOption?.label ?? ""}</span>
+        <span className="app-select__value">{selectedLabel ?? selectedOption?.label ?? ""}</span>
         <svg className="app-select__chevron" viewBox="0 0 12 12" fill="none" aria-hidden="true">
           <path d="m2.5 4.5 3.5 3 3.5-3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
         </svg>

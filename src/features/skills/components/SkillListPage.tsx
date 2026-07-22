@@ -347,6 +347,7 @@ export function SkillListToolbar(props: SkillToolbarProps) {
             value={ownerFilter}
             options={ownerFilterOptions}
             onChange={onOwnerFilterChange}
+            selectedLabel={ownerFilter === "all" ? t("skills.ownerFilter.placeholder") : undefined}
             ariaLabel={t("skills.ownerFilter.aria")}
             className="skill-status-filter__select"
             menuClassName="skill-status-filter__popover"
