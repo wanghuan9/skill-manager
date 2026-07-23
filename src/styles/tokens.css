@@ -108,6 +108,14 @@ select {
   font: inherit;
 }
 
+button,
+button *,
+[role="tab"],
+[role="tab"] * {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
 .app-select {
   position: relative;
   display: inline-flex;
@@ -1075,6 +1083,31 @@ code {
   margin: 0;
 }
 
+.brand-title,
+.brand-icon,
+.brand-icon svg,
+.nav-item,
+.nav-icon,
+.nav-icon svg,
+.page-header h1,
+.page-header p,
+.management-page-header__identity {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.brand-icon,
+.brand-icon svg,
+.nav-icon,
+.nav-icon svg {
+  -webkit-user-drag: none;
+}
+
+.brand-icon svg,
+.nav-icon svg {
+  pointer-events: none;
+}
+
 .brand-title {
   font-size: 0.9375rem;
   font-weight: 600;
@@ -1342,6 +1375,16 @@ code {
 .app-shell.is-windows-window .main-panel {
   padding-top: 0;
   grid-template-rows: auto auto auto minmax(0, 1fr);
+}
+
+.app-shell.is-macos-window .main-panel {
+  padding-bottom: 16px;
+}
+
+.app-shell.is-macos-window .window-topbar--main {
+  height: 14px;
+  flex-basis: 14px;
+  margin-bottom: 2px;
 }
 
 .app-shell.is-macos-window .brand-block,
@@ -1713,10 +1756,6 @@ code {
   margin-left: 0;
 }
 
-.management-page-header--compact .plugins-page__toolbar-actions--right {
-  margin-left: auto;
-}
-
 .management-page-header--compact .skills-toolbar-button--refresh {
   margin-left: auto;
 }
@@ -1732,10 +1771,10 @@ code {
   align-items: center;
   justify-content: center;
   gap: 5px;
-  height: 34px;
-  min-height: 34px;
+  height: 33px;
+  min-height: 33px;
   padding: 0 10px;
-  border-radius: 10px;
+  border-radius: 9px;
   font-size: 0.78rem;
   font-weight: 500;
   line-height: 1;
@@ -1798,10 +1837,10 @@ code {
 }
 
 .ghost-button.tools-refresh-button {
-  height: 34px;
-  min-height: 34px;
+  height: 33px;
+  min-height: 33px;
   padding: 0 10px;
-  border-radius: 10px;
+  border-radius: 9px;
   transition:
     background-color 120ms ease,
     border-color 120ms ease,
@@ -1814,10 +1853,10 @@ code {
   display: inline-flex;
   align-items: center;
   gap: 2px;
-  height: 34px;
-  padding: 3px;
+  height: 33px;
+  padding: 2px;
   border: 1px solid var(--line);
-  border-radius: 11px;
+  border-radius: 9px;
   background: var(--surface-strong);
   box-sizing: border-box;
 }
@@ -1830,7 +1869,7 @@ code {
   height: 27px;
   padding: 0;
   border: 0;
-  border-radius: 8px;
+  border-radius: 7px;
   background: transparent;
   color: var(--muted);
   cursor: pointer;
@@ -1904,13 +1943,13 @@ code {
   flex: 0 1 230px;
   display: flex;
   align-items: center;
-  height: 34px;
-  min-height: 34px;
+  height: 33px;
+  min-height: 33px;
   min-width: 180px;
   gap: 8px;
   border: 1px solid var(--line);
-  border-radius: 11px;
-  padding: 0 11px;
+  border-radius: 9px;
+  padding: 0 10px;
   background: var(--surface);
   overflow: hidden;
   box-sizing: border-box;
@@ -1961,10 +2000,10 @@ code {
   display: flex;
   align-items: center;
   flex: 0 0 92px;
-  height: 36px;
-  min-height: 36px;
+  height: 33px;
+  min-height: 33px;
   border: 1px solid var(--line);
-  border-radius: 9px;
+  border-radius: 8px;
   background: var(--surface-strong);
   color: #374151;
   overflow: hidden;
@@ -1972,7 +2011,7 @@ code {
 
 .skill-status-filter__icon {
   position: absolute;
-  left: 8px;
+  left: 7px;
   top: 50%;
   display: inline-flex;
   width: 14px;
@@ -1998,7 +2037,7 @@ code {
   gap: 3px;
   border: 0;
   border-radius: 0;
-  padding: 0 7px 0 26px;
+  padding: 0 6px 0 24px;
   background: transparent;
   color: inherit;
   font-size: 0.76rem;
@@ -2042,11 +2081,12 @@ code {
 }
 
 .plugins-page__toolbar-filter {
-  flex-basis: 104px;
+  flex-basis: 96px;
+  width: 96px;
 }
 
 .plugins-page__toolbar-filter .app-select__trigger {
-  padding-right: 8px;
+  padding-right: 6px;
 }
 
 .toolbar {
@@ -2972,6 +3012,9 @@ code {
 }
 
 .secondary-button--compact.skills-toolbar-button {
+  min-height: 33px;
+  padding: 0 10px;
+  border-radius: 9px;
   font-weight: 500;
 }
 
@@ -9287,27 +9330,14 @@ button.settings-form-item:disabled {
   padding: 4px 0 2px;
 }
 
-.plugins-page__toolbar-primary,
-.plugins-page__toolbar-actions {
+.plugins-page__toolbar-primary {
   display: flex;
   align-items: center;
   gap: 8px;
   min-width: 0;
-}
-
-.plugins-page__toolbar-primary {
   justify-content: flex-end;
   flex-wrap: wrap;
-  gap: 8px;
   padding-right: 12px;
-}
-
-.plugins-page__toolbar-actions {
-  flex: 0 0 auto;
-}
-
-.plugins-page__toolbar-actions--right {
-  flex-wrap: nowrap;
 }
 
 .plugins-page__search {
