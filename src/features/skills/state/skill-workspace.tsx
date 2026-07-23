@@ -27,6 +27,7 @@ import {
   fetchPushPreviewSnapshot,
   fetchPushTargetSnapshot,
   fetchSkillLocalChanges,
+  fetchSkillUpdatePreview,
   fetchToolConfigs,
   fetchToolSkillEntries,
   fetchStartupInstalledSkills,
@@ -77,7 +78,9 @@ import type {
   SkillSourceViewStyle,
   ToolConfig,
   ToolSkillEntry,
+  UpdatePreviewSnapshot,
 } from "@/features/skills/state/skill-store";
+import { getSkillIdentity } from "@/features/skills/state/skill-selectors";
 import { buildOpenToolOptions, resolveDefaultOpenToolId } from "@/features/skills/utils/open-tools";
 import {
   localizeGitAccountSummary,
@@ -178,6 +181,7 @@ type SkillWorkspaceContextValue = {
     createBranchName?: string;
   }) => Promise<PushPreviewSnapshot>;
   loadSkillLocalChanges: (skillName: string) => Promise<GitChangeFile[]>;
+  loadSkillUpdatePreview: (skillName: string, localPath?: string) => Promise<UpdatePreviewSnapshot>;
   revertSkillChange: (input: {
     skillName: string;
     relativePath: string;
@@ -297,10 +301,10 @@ function mergeUpdatedSkillsPreservingOrder(
   currentSkills: SkillSummary[],
   updatedSkills: SkillSummary[],
 ) {
-  const updatedByName = new Map(updatedSkills.map((skill) => [skill.name, skill]));
-  const mergedSkills = currentSkills.map((skill) => updatedByName.get(skill.name) ?? skill);
-  const currentSkillNames = new Set(currentSkills.map((skill) => skill.name));
-  const newSkills = updatedSkills.filter((skill) => !currentSkillNames.has(skill.name));
+  const updatedByIdentity = new Map(updatedSkills.map((skill) => [getSkillIdentity(skill), skill]));
+  const mergedSkills = currentSkills.map((skill) => updatedByIdentity.get(getSkillIdentity(skill)) ?? skill);
+  const currentSkillIdentities = new Set(currentSkills.map(getSkillIdentity));
+  const newSkills = updatedSkills.filter((skill) => !currentSkillIdentities.has(getSkillIdentity(skill)));
 
   return [...newSkills, ...mergedSkills];
 }
@@ -1510,6 +1514,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       setSkillAllToolStatuses: handleSetSkillAllToolStatuses,
       loadPushPreview: fetchPushPreviewSnapshot,
       loadSkillLocalChanges: fetchSkillLocalChanges,
+      loadSkillUpdatePreview: fetchSkillUpdatePreview,
       revertSkillChange: handleRevertSkillChange,
       loadPushTargets: fetchPushTargetSnapshot,
       openSkillRepository,

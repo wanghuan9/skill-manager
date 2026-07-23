@@ -19,6 +19,11 @@ export function hasEnabledTool(skill: SkillSummary) {
   return skill.tools.some((tool) => isToolEnabledStatus(tool.statusLabel));
 }
 
+export function getSkillIdentity(skill: SkillSummary) {
+  const localPath = skill.localPath.trim();
+  return localPath || `${skill.sourceType}:${skill.sourceUrl}:${skill.name}`;
+}
+
 function matchesStatusFilter(skill: SkillSummary, status: SkillStatusFilter) {
   if (status === "all") {
     return true;

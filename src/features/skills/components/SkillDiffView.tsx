@@ -53,6 +53,8 @@ type SkillDiffViewProps = {
   onDisplayModeChange: (mode: SkillDiffDisplayMode) => void;
   onSave: () => void;
   onRevertFile: () => void;
+  readOnly?: boolean;
+  emptyLabel?: string;
 };
 
 const externalContentSync = Annotation.define<boolean>();
@@ -320,11 +322,13 @@ function SkillDiffEditor({
   content,
   displayMode,
   onContentChange,
+  readOnly,
 }: {
   change: GitChangeFile;
   content: string;
   displayMode: SkillDiffDisplayMode;
   onContentChange: (content: string) => void;
+  readOnly: boolean;
 }) {
   const { t } = useTranslate();
   const editorHostRef = useRef<HTMLDivElement | null>(null);
@@ -346,13 +350,15 @@ function SkillDiffEditor({
       doc: content,
       extensions: [
         minimalSetup,
-        Prec.highest(buildRevertChunkGutter(t("skill.changes.revertHunk"))),
+        readOnly ? [] : Prec.highest(buildRevertChunkGutter(t("skill.changes.revertHunk"))),
         lineNumbers(),
+        EditorState.readOnly.of(readOnly),
+        EditorView.editable.of(!readOnly),
         EditorState.phrases.of({
           "$ unchanged lines": t("skill.changes.unchangedLines"),
         }),
         EditorView.contentAttributes.of({
-          "aria-label": t("skill.changes.editor"),
+          "aria-label": t(readOnly ? "skill.updates.editor" : "skill.changes.editor"),
         }),
         unifiedMergeView({
           original: change.originalContent,
@@ -363,7 +369,7 @@ function SkillDiffEditor({
           mergeControls: () => renderMergeControl(),
         }),
         buildDiffLineNumberExtensions(),
-        EditorView.updateListener.of((update) => {
+        readOnly ? [] : EditorView.updateListener.of((update) => {
           const isExternalSync = update.transactions.some(
             (transaction) => transaction.annotation(externalContentSync),
           );
@@ -385,7 +391,7 @@ function SkillDiffEditor({
       }
       editorView.destroy();
     };
-  }, [change.currentContent, change.originalContent, change.path, displayMode, t]);
+  }, [change.currentContent, change.originalContent, change.path, displayMode, readOnly, t]);
 
   useEffect(() => {
     const editorView = editorViewRef.current;
@@ -415,14 +421,17 @@ export function SkillDiffView({
   onDisplayModeChange,
   onSave,
   onRevertFile,
+  readOnly = false,
+  emptyLabel,
 }: SkillDiffViewProps) {
   const { t } = useTranslate();
 
   if (!change) {
-    return <div className="skill-file-dialog__empty">{t("skill.changes.empty")}</div>;
+    return <div className="skill-file-dialog__empty">{emptyLabel ?? t("skill.changes.empty")}</div>;
   }
 
-  const canEdit = change.originalContent != null && change.currentContent != null;
+  const canDisplayDiff = change.originalContent != null && change.currentContent != null;
+  const canEdit = canDisplayDiff && !readOnly;
 
   return (
     <>
@@ -434,7 +443,7 @@ export function SkillDiffView({
           </span>
         </div>
         <div className="skill-diff__actions">
-          {canEdit ? (
+          {canDisplayDiff ? (
             <div
               className="skill-diff__display-toggle"
               role="group"
@@ -471,22 +480,25 @@ export function SkillDiffView({
               {isSaving ? t("skill.files.saving") : t("skill.files.save")}
             </button>
           ) : null}
-          <button
-            className="secondary-button secondary-button--compact skill-diff__revert-file"
-            type="button"
-            onClick={onRevertFile}
-            disabled={isLoading || isReverting}
-          >
-            {t("skill.changes.revertFile")}
-          </button>
+          {!readOnly ? (
+            <button
+              className="secondary-button secondary-button--compact skill-diff__revert-file"
+              type="button"
+              onClick={onRevertFile}
+              disabled={isLoading || isReverting}
+            >
+              {t("skill.changes.revertFile")}
+            </button>
+          ) : null}
         </div>
       </div>
-      {canEdit ? (
+      {canDisplayDiff ? (
         <SkillDiffEditor
           change={change}
           content={content}
           displayMode={displayMode}
           onContentChange={onContentChange}
+          readOnly={readOnly}
         />
       ) : (
         <div className="skill-diff skill-file-dialog__empty">

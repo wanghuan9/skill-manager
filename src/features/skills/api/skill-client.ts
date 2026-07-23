@@ -62,6 +62,7 @@ import type {
   SkillSummary,
   ToolConfig,
   ToolSkillEntry,
+  UpdatePreviewSnapshot,
   WorkspaceSnapshot,
 } from "@/features/skills/state/skill-store";
 import {
@@ -1471,6 +1472,17 @@ export async function fetchPushPreviewSnapshot(input: PushPreviewInput): Promise
 
 export async function fetchSkillLocalChanges(skillName: string): Promise<GitChangeFile[]> {
   return invokeOrFallback("get_skill_local_changes", { skillName }, []);
+}
+
+export async function fetchSkillUpdatePreview(skillName: string, localPath = ""): Promise<UpdatePreviewSnapshot> {
+  const fallback: UpdatePreviewSnapshot = {
+    currentBranch: "main",
+    remoteBranch: "origin/main",
+    commitsToPull: 0,
+    changedFiles: [],
+    hasLocalChanges: false,
+  };
+  return invokeOrFallback("get_update_preview_snapshot", { skillName, localPath }, fallback);
 }
 
 export async function revertSkillChange(input: {

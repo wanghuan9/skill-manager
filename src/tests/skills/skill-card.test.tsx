@@ -85,6 +85,55 @@ test("updates directly from list action when skill has remote update", async () 
   expect(screen.queryByText("将拉取提交")).not.toBeInTheDocument();
 });
 
+test("opens update contents from the preview entry for an updateable git skill", async () => {
+  const updateSkill = installedSkillFixtures.find((skill) => skill.name === "excalidraw-diagram");
+  if (!updateSkill) {
+    throw new Error("missing excalidraw-diagram fixture");
+  }
+
+  renderSkillCardWithProviders(updateSkill);
+
+  const previewButton = screen.getByRole("button", { name: "查看 excalidraw-diagram 更新预览" });
+  expect(previewButton.querySelector(".skill-card__update-preview-detail-icon")).not.toBeInTheDocument();
+  await userEvent.click(previewButton);
+
+  expect(await screen.findByRole("dialog", { name: "excalidraw-diagram" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "待更新内容 0" })).toHaveAttribute("aria-pressed", "true");
+});
+
+test("uses the detail-only update preview icon after expanding an updateable skill", async () => {
+  const updateSkill = installedSkillFixtures.find((skill) => skill.name === "excalidraw-diagram");
+  if (!updateSkill) {
+    throw new Error("missing excalidraw-diagram fixture");
+  }
+
+  const { container } = renderSkillCardWithProviders(updateSkill);
+  const listPreviewButton = screen.getByRole("button", { name: "查看 excalidraw-diagram 更新预览" });
+  expect(listPreviewButton.querySelector(".skill-card__update-preview-detail-icon")).not.toBeInTheDocument();
+
+  await userEvent.click(screen.getByRole("button", { name: /展开 excalidraw-diagram/ }));
+
+  const details = container.querySelector<HTMLElement>(".skill-card__details");
+  if (!details) {
+    throw new Error("missing expanded list details");
+  }
+  const detailPreviewButton = within(details).getByRole("button", { name: "查看 excalidraw-diagram 更新预览" });
+  expect(detailPreviewButton.querySelector(".skill-card__update-preview-detail-icon")).toBeInTheDocument();
+});
+
+test("does not expose update contents for an updateable skill without a git repository", async () => {
+  const updateSkill = installedSkillFixtures.find((skill) => skill.name === "excalidraw-diagram");
+  if (!updateSkill) {
+    throw new Error("missing excalidraw-diagram fixture");
+  }
+
+  renderSkillCardWithProviders({ ...updateSkill, gitLinked: false });
+
+  expect(screen.queryByRole("button", { name: "查看 excalidraw-diagram 更新预览" })).not.toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "查看 excalidraw-diagram 文件" }));
+  expect(screen.queryByRole("button", { name: /待更新内容/ })).not.toBeInTheDocument();
+});
+
 test("shows description in the list summary and keeps update metadata in details", async () => {
   const skill = installedSkillFixtures.find((item) => item.name === "drawio-diagram");
   if (!skill) {

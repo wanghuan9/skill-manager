@@ -305,6 +305,40 @@ test("uses list view by default when installed skill count is at or below thresh
   expect(screen.queryByRole("button", { name: /来源分组/ })).not.toBeInTheDocument();
 });
 
+test("keeps same-named skills separate when filtering for updates", async () => {
+  const user = userEvent.setup();
+  const gitSkill = {
+    ...installedSkillFixtures[1],
+    name: "lark-calendar",
+    localPath: "/Users/demo/.skilldock/skills/github/lark-calendar",
+    collabStatus: "update-available" as const,
+  };
+  const cliSkill = {
+    ...installedSkillFixtures[3],
+    name: "lark-calendar",
+    sourceLabel: "Agent Skills CLI",
+    sourceType: "local" as const,
+    sourceUrl: "agent-skills-cli",
+    localPath: "/Users/demo/.skilldock/skills/agent-cli/lark-calendar",
+    collabStatus: "clean" as const,
+    gitLinked: false,
+  };
+  workspaceSnapshotFixture.installedSkills = [gitSkill, cliSkill];
+  const startupSkillsSpy = vi.spyOn(skillClient, "fetchStartupInstalledSkills")
+    .mockResolvedValue([gitSkill, cliSkill]);
+
+  render(<App />);
+
+  expect(screen.getAllByRole("article", { name: "lark-calendar" })).toHaveLength(2);
+
+  await user.click(screen.getByLabelText("按状态筛选技能"));
+  await user.click(screen.getByRole("option", { name: "可更新 (1)" }));
+
+  expect(screen.getAllByRole("article", { name: "lark-calendar" })).toHaveLength(1);
+  expect(screen.getByText("可更新")).toBeInTheDocument();
+  startupSkillsSpy.mockRestore();
+});
+
 test("places disabled skills after enabled skills in list and card views", async () => {
   const user = userEvent.setup();
   const disabledSkill = {
@@ -408,14 +442,16 @@ test("opens card details in a modal without changing the card grid order", async
   expect(managedDescriptions[0].closest("dd")).toBeInTheDocument();
   expect(within(detailDialog).getByText("本地更新时间")).toBeInTheDocument();
   expect(within(detailDialog).getByRole("button", { name: "更新 excalidraw-diagram" })).toBeInTheDocument();
-  expect(within(detailDialog).getByRole("button", { name: "查看 excalidraw-diagram 文件" })).toBeInTheDocument();
+  expect(within(detailDialog).getByRole("button", {
+    name: "查看 excalidraw-diagram 更新预览",
+  })).toBeInTheDocument();
   expect(within(detailDialog).getByRole("button", { name: "打开 excalidraw-diagram 目录" })).toBeInTheDocument();
   expect(within(detailDialog).getByRole("button", { name: "关闭 excalidraw-diagram 详情" })).toBeInTheDocument();
 
   const currentSkillNames = Array.from(firstRow?.children ?? []).map((element) => element.getAttribute("aria-label"));
   expect(currentSkillNames).toEqual(initialSkillNames);
 
-  await user.click(within(detailDialog).getByRole("button", { name: "查看 excalidraw-diagram 文件" }));
+  await user.click(within(detailDialog).getByRole("button", { name: "查看 excalidraw-diagram 更新预览" }));
   expect(screen.queryByRole("dialog", { name: "excalidraw-diagram 详情" })).not.toBeInTheDocument();
   const fileDialog = await screen.findByRole("dialog", { name: "excalidraw-diagram" });
   await user.click(within(fileDialog).getByRole("button", { name: "关闭" }));

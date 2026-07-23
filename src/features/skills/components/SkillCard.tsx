@@ -117,6 +117,27 @@ function LocalChangesIcon() {
   );
 }
 
+function UpdatePreviewDetailIcon() {
+  return (
+    <svg className="skill-card__update-preview-detail-icon" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+      <path
+        d="M5 2.75h5.75L15.25 7v10.25H5A1.25 1.25 0 0 1 3.75 16V4A1.25 1.25 0 0 1 5 2.75Z"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinejoin="round"
+      />
+      <path d="M10.75 2.75V7h4.5" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
+      <path
+        d="M6.75 13.25c1.55-2.1 4.95-2.1 6.5 0-1.55 2.1-4.95 2.1-6.5 0Z"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinejoin="round"
+      />
+      <circle cx="10" cy="13.25" r="1.05" fill="currentColor" />
+    </svg>
+  );
+}
+
 function OpenFolderIcon() {
   return (
     <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
@@ -133,12 +154,29 @@ function OpenFolderIcon() {
 
 function SkillFilePreviewButton(props: {
   skill: SkillSummary;
+  mode: SkillFilePanelMode;
   onClick: () => void;
   showLabel?: boolean;
 }) {
   const { t } = useTranslate();
   const localChangeCount = props.skill.localChangeCount ?? 0;
-  const hasLocalChanges = localChangeCount > 0;
+  const showsLocalChanges = props.mode === "changes";
+  const showsUpdateContents = props.mode === "updates";
+  const ariaLabelKey = showsLocalChanges
+    ? "skill.card.aria.viewFilesWithChanges"
+    : showsUpdateContents
+      ? "skill.card.aria.viewUpdateContents"
+      : "skill.card.aria.viewFiles";
+  const tooltipKey = showsLocalChanges
+    ? "skill.card.tooltip.viewFilesWithChanges"
+    : showsUpdateContents
+      ? "skill.card.tooltip.viewUpdateContents"
+      : "skill.card.tooltip.viewFiles";
+  const actionLabelKey = showsLocalChanges
+    ? "skill.card.action.viewChanges"
+    : showsUpdateContents
+      ? "skill.card.action.viewUpdateContents"
+      : "skill.card.action.viewFiles";
   const className = [
     props.showLabel
       ? "secondary-button secondary-button--compact skill-card-detail-modal__action"
@@ -151,19 +189,18 @@ function SkillFilePreviewButton(props: {
       className={className}
       type="button"
       onClick={props.onClick}
-      aria-label={t(
-        hasLocalChanges ? "skill.card.aria.viewFilesWithChanges" : "skill.card.aria.viewFiles",
-        { name: props.skill.name },
-      )}
-      data-tooltip={t(
-        hasLocalChanges ? "skill.card.tooltip.viewFilesWithChanges" : "skill.card.tooltip.viewFiles",
-      )}
+      aria-label={t(ariaLabelKey, { name: props.skill.name })}
+      data-tooltip={t(tooltipKey)}
     >
-      {hasLocalChanges && props.showLabel ? <LocalChangesIcon /> : <ViewFileIcon />}
+      {showsUpdateContents && props.showLabel
+        ? <UpdatePreviewDetailIcon />
+        : showsLocalChanges && props.showLabel
+          ? <LocalChangesIcon />
+          : <ViewFileIcon />}
       {props.showLabel ? (
-        <span>{t(hasLocalChanges ? "skill.card.action.viewChanges" : "skill.card.action.viewFiles")}</span>
+        <span>{t(actionLabelKey)}</span>
       ) : null}
-      {hasLocalChanges ? (
+      {showsLocalChanges ? (
         <span className="skill-card__change-count" aria-hidden="true">{localChangeCount}</span>
       ) : null}
     </button>
@@ -258,6 +295,12 @@ export function SkillCard({
     ? t("skill.card.enabledCount", { count: enabledTools.length })
     : t("skill.card.disabled");
   const showDetailAction = skill.collabStatus === "update-available";
+  const canPreviewUpdates = showDetailAction && skill.gitLinked;
+  const previewMode: SkillFilePanelMode = (skill.localChangeCount ?? 0) > 0
+    ? "changes"
+    : canPreviewUpdates
+      ? "updates"
+      : "files";
   const displaySourceLabel =
     sourceLabel === "本地" || sourceLabel === "Local"
       ? t("skills.source.local")
@@ -368,7 +411,7 @@ export function SkillCard({
   }
 
   function handleOpenFiles() {
-    handleOpenFileDialog((skill.localChangeCount ?? 0) > 0 ? "changes" : "files");
+    handleOpenFileDialog(previewMode);
   }
 
   async function handleToggleAllSkillTools() {
@@ -499,8 +542,8 @@ export function SkillCard({
       <section>
         <div className="skill-card__section-header">
           <h4>{t("skill.card.basicInfo")}</h4>
-          {!isGridLayout && (skill.localChangeCount ?? 0) > 0 ? (
-            <SkillFilePreviewButton skill={skill} onClick={handleOpenFiles} showLabel />
+          {!isGridLayout && previewMode !== "files" ? (
+            <SkillFilePreviewButton skill={skill} mode={previewMode} onClick={handleOpenFiles} showLabel />
           ) : null}
         </div>
         <dl className="detail-grid detail-grid--single">
@@ -667,7 +710,7 @@ export function SkillCard({
             >
               <PowerToggleIcon isSpinning={isBulkUpdating} />
             </button>
-            <SkillFilePreviewButton skill={skill} onClick={handleOpenFiles} />
+            <SkillFilePreviewButton skill={skill} mode={previewMode} onClick={handleOpenFiles} />
             <button
               className="skill-card__icon-button"
               type="button"
@@ -740,6 +783,7 @@ export function SkillCard({
                 ) : null}
                 <SkillFilePreviewButton
                   skill={skill}
+                  mode={previewMode}
                   onClick={handleOpenFiles}
                   showLabel
                 />
