@@ -21,7 +21,7 @@ import { SettingsRoute } from "@/app/routes/settings";
 import { AboutRoute } from "@/app/routes/about";
 import { PluginsRoute } from "@/app/routes/plugins";
 import { AppI18nProvider, tx, useTranslate } from "@/app/i18n";
-import { NotificationProvider } from "@/app/notifications";
+import { NotificationProvider, useNotifications } from "@/app/notifications";
 import { useFailureReporter } from "@/app/failure-feedback";
 import { FailureTracker } from "@/app/failure-tracker";
 import { waitForNextPaint } from "@/app/utils/wait-for-next-paint";
@@ -551,6 +551,8 @@ function AppContent() {
     alignLocalWorkspaceState,
     appSettings,
     installedSkills,
+    isStartupGitStateRefreshComplete,
+    didStartupGitStateRefreshSucceed,
     isWorkspaceRefreshing,
     language,
     toolSkillEntries,
@@ -558,6 +560,7 @@ function AppContent() {
     toolConfigs,
   } = useSkillWorkspace();
   const { t } = useTranslate();
+  const { notify } = useNotifications();
   const reportFailure = useFailureReporter();
   const initialSkillViewMode = readSkillViewModePreference();
   const isMacOS = isMacOSWindow();
@@ -595,6 +598,7 @@ function AppContent() {
   );
   const routeLocalAlignInFlightRef = useRef(false);
   const lastRouteLocalAlignRef = useRef<{ key: string; timestamp: number } | null>(null);
+  const hasShownSkillUpdateNotificationRef = useRef(false);
   const activeDefinition =
     routes.find((route) => route.key === activeRoute) ?? routes[0];
   const updatableSkillCount = installedSkills.filter(
@@ -668,6 +672,16 @@ function AppContent() {
     setSkillManagementFilter("all");
   }
 
+  function handleShowUpdatableSkills() {
+    setActiveRoute("skills");
+    setActiveSkillsSection("skills");
+    setActiveSkillSourceId(MANAGED_SKILL_SOURCE_ID);
+    setSkillStatusFilter("update-available");
+    setSkillQuery("");
+    setSkillManagementFilter("all");
+    setFocusedManagedSkillName("");
+  }
+
   useEffect(
     () =>
       subscribeMcpWorkspaceChange((snapshot) => {
@@ -675,6 +689,33 @@ function AppContent() {
       }),
     [],
   );
+
+  useEffect(() => {
+    if (
+      !isStartupGitStateRefreshComplete
+      || !didStartupGitStateRefreshSucceed
+      || hasShownSkillUpdateNotificationRef.current
+    ) {
+      return;
+    }
+
+    hasShownSkillUpdateNotificationRef.current = true;
+    if (updatableSkillCount === 0) {
+      return;
+    }
+
+    notify({
+      message: t("notifications.skillsUpdateAvailable", { count: updatableSkillCount }),
+      actionLabel: t("notifications.viewUpdates"),
+      onAction: handleShowUpdatableSkills,
+    });
+  }, [
+    isStartupGitStateRefreshComplete,
+    didStartupGitStateRefreshSucceed,
+    notify,
+    t,
+    updatableSkillCount,
+  ]);
 
   useEffect(() => {
     if (hasSavedSkillViewPreference) {

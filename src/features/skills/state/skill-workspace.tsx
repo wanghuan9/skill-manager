@@ -118,6 +118,8 @@ type SkillWorkspaceContextValue = {
   toolSkillEntries: ToolSkillEntry[];
   gitAccount: GitAccountSummary | null;
   isLoading: boolean;
+  isStartupGitStateRefreshComplete: boolean;
+  didStartupGitStateRefreshSucceed: boolean;
   isWorkspaceRefreshing: boolean;
   isUpdatingAllSkills: boolean;
   isMarketplaceLoadingBySource: Record<MarketplaceSourceSite, boolean>;
@@ -504,6 +506,10 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
         },
   );
   const [isLoading, setIsLoading] = useState(!usesFixtureData && startupCache === null);
+  const [isStartupGitStateRefreshComplete, setIsStartupGitStateRefreshComplete] =
+    useState(usesFixtureData);
+  const [didStartupGitStateRefreshSucceed, setDidStartupGitStateRefreshSucceed] =
+    useState(usesFixtureData);
   const [isMarketplaceLoadingBySource, setIsMarketplaceLoadingBySource] = useState<
     Record<MarketplaceSourceSite, boolean>
   >({
@@ -534,6 +540,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
     skillsmp: true,
   });
   const gitStateRefreshInFlightRef = useRef<Promise<void> | null>(null);
+  const startupGitStateRefreshCompletedRef = useRef(usesFixtureData);
   const workspaceMutationVersionRef = useRef(0);
   const lastGitStateRefreshAtRef = useRef(0);
   const lastLocalWorkspaceAlignAtRef = useRef(0);
@@ -872,9 +879,16 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
           return;
         }
         setInstalledSkills(skillsWithGitState);
+        if (!startupGitStateRefreshCompletedRef.current) {
+          setDidStartupGitStateRefreshSucceed(true);
+        }
       } catch (error) {
         console.error("Failed to refresh git states:", error);
       } finally {
+        if (!startupGitStateRefreshCompletedRef.current) {
+          startupGitStateRefreshCompletedRef.current = true;
+          setIsStartupGitStateRefreshComplete(true);
+        }
         lastGitStateRefreshAtRef.current = Date.now();
         if (gitStateRefreshInFlightRef.current === nextRefreshPromise) {
           gitStateRefreshInFlightRef.current = null;
@@ -1478,6 +1492,8 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       toolSkillEntries,
       gitAccount,
       isLoading,
+      isStartupGitStateRefreshComplete,
+      didStartupGitStateRefreshSucceed,
       isWorkspaceRefreshing,
       isUpdatingAllSkills,
       isMarketplaceLoadingBySource,
