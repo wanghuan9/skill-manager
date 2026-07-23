@@ -24,7 +24,7 @@ test("preserves the current Skill header layout and opens Skill install", async 
   const searchInput = screen.getByPlaceholderText("搜索技能、描述或来源");
   expect(searchInput).toBeInTheDocument();
   expect(searchInput.closest("label")?.querySelector(".search-field__icon")).toBeInTheDocument();
-  expect(screen.getByLabelText("按状态筛选技能")).toBeInTheDocument();
+  expect(screen.getByRole("combobox", { name: "筛选 Skill" })).toBeInTheDocument();
   const installButton = screen.getByRole("button", { name: "去安装" });
   expect(installButton).toHaveClass("skills-toolbar-button--go-install");
   expect(installButton).toHaveClass("secondary-button");
@@ -171,7 +171,7 @@ test("opens and focuses the corresponding managed Skill from a tool directory", 
   render(<App />);
 
   await user.click(screen.getByRole("button", { name: "分组" }));
-  await user.click(screen.getByLabelText("按状态筛选技能"));
+  await user.click(screen.getByRole("combobox", { name: "筛选 Skill" }));
   await user.click(screen.getByRole("option", { name: "可更新 (1)" }));
   await user.click(screen.getByRole("tab", { name: "Codex 5" }));
   await user.type(screen.getByPlaceholderText("搜索技能、描述或路径"), "skill-publisher");
@@ -181,7 +181,7 @@ test("opens and focuses the corresponding managed Skill from a tool directory", 
   await user.click(within(sourceCard).getByRole("button", { name: "查看托管版本" }));
 
   expect(screen.getByRole("tab", { name: "已托管 4" })).toHaveAttribute("aria-selected", "true");
-  expect(screen.getByLabelText("按状态筛选技能")).toHaveAttribute("data-value", "all");
+  expect(screen.getByRole("combobox", { name: "筛选 Skill" })).toHaveAttribute("data-value", "all");
   expect(screen.getByPlaceholderText("搜索技能、描述或来源")).toHaveValue("");
   expect(screen.getByRole("button", { name: "收起来源分组 team-skills" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "收起 skill-publisher" })).toHaveAttribute("aria-expanded", "true");
@@ -204,6 +204,31 @@ test("closes the managed Skill detail opened from a tool card", async () => {
   const managedDialog = screen.getByRole("dialog", { name: "skill-publisher 详情" });
   await user.click(within(managedDialog).getByRole("button", { name: "关闭 skill-publisher 详情" }));
 
+  expect(screen.queryByRole("dialog", { name: "skill-publisher 详情" })).not.toBeInTheDocument();
+});
+
+test("does not reopen a managed Skill detail after leaving and returning to Skills", async () => {
+  const user = userEvent.setup();
+  render(<App />);
+
+  await user.click(screen.getByRole("button", { name: "分组" }));
+  await user.click(screen.getByRole("tab", { name: "Codex 5" }));
+  await user.click(screen.getByRole("button", { name: "卡片" }));
+
+  const sourceCard = screen.getByRole("article", { name: "skill-publisher" });
+  await user.click(within(sourceCard).getByRole("button", { name: "展开 skill-publisher" }));
+  const sourceDialog = screen.getByRole("dialog", { name: "skill-publisher 详情" });
+  await user.click(within(sourceDialog).getByRole("button", { name: "查看托管版本" }));
+
+  const managedDialog = screen.getByRole("dialog", { name: "skill-publisher 详情" });
+  await user.click(within(managedDialog).getByRole("button", { name: "关闭 skill-publisher 详情" }));
+  expect(screen.queryByRole("dialog", { name: "skill-publisher 详情" })).not.toBeInTheDocument();
+
+  await user.click(screen.getByRole("button", { name: "Plugins" }));
+  expect(await screen.findByRole("heading", { name: "Plugins", level: 1 })).toBeInTheDocument();
+
+  await user.click(screen.getByRole("button", { name: /Skills/ }));
+  expect(await screen.findByRole("heading", { name: "Skills", level: 1 })).toBeInTheDocument();
   expect(screen.queryByRole("dialog", { name: "skill-publisher 详情" })).not.toBeInTheDocument();
 });
 
@@ -424,7 +449,7 @@ test("filters grouped skills by selected status", async () => {
   render(<App />);
 
   await user.click(screen.getByRole("button", { name: "分组" }));
-  await user.click(screen.getByLabelText("按状态筛选技能"));
+  await user.click(screen.getByRole("combobox", { name: "筛选 Skill" }));
   await user.click(screen.getByRole("option", { name: "可更新 (1)" }));
 
   expect(screen.getByRole("button", { name: "展开来源分组 best-skills" })).toBeInTheDocument();

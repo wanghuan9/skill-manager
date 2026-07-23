@@ -49,6 +49,7 @@ const SKILL_STATUS_CLEAN: &str = "clean";
 const SKILL_STATUS_UPDATE_AVAILABLE: &str = "update-available";
 const AGENT_CLI_UPDATE_AVAILABLE_TEXT: &str = "Agent Skills CLI 检测到可更新版本。";
 const AGENT_CLI_UP_TO_DATE_TEXT: &str = "Agent CLI Skill 已是最新版本。";
+const SKILL_LIBRARY_REFRESHED_EVENT: &str = "skill-library-refreshed";
 const LOCAL_SKILL_TOOL_STATE_CONCURRENCY: usize = 2;
 const PACKAGE_ID_HASH_LEN: usize = 8;
 
@@ -4102,9 +4103,17 @@ fn apply_agent_cli_update_statuses(
     skills
         .into_iter()
         .map(|mut skill| {
-            if skill.instance.update_driver != "agent-skills-cli"
-                || !check.checked_names.contains(&skill.name)
-            {
+            if skill.instance.update_driver != "agent-skills-cli" {
+                return skill;
+            }
+            if skill.source_type == "well-known" {
+                if skill.collab_status == SKILL_STATUS_UPDATE_AVAILABLE {
+                    skill.collab_status = SKILL_STATUS_CLEAN.into();
+                    skill.status_text.clear();
+                }
+                return skill;
+            }
+            if !check.checked_names.contains(&skill.name) {
                 return skill;
             }
             skill.last_checked_at = "刚刚检查".into();
@@ -4147,6 +4156,8 @@ fn merge_refreshed_skill_states_with_latest_state(
             if current_skill.local_path == refresh_started_skill.local_path
                 && current_skill.commit_label == refresh_started_skill.commit_label
                 && current_skill.local_updated_at == refresh_started_skill.local_updated_at
+                && current_skill.collab_status == refresh_started_skill.collab_status
+                && current_skill.status_text == refresh_started_skill.status_text
             {
                 refreshed_skill
             } else {
@@ -5999,14 +6010,55 @@ pub fn get_agent_skills_cli_status() -> crate::agent_skills_cli::AgentSkillsCliS
     crate::agent_skills_cli::global_status()
 }
 
+fn app_settings_require_skill_refresh(
+    previous_settings: &AppSettings,
+    saved_settings: &AppSettings,
+) -> bool {
+    previous_settings.agent_skills_compatibility_enabled
+        != saved_settings.agent_skills_compatibility_enabled
+        || previous_settings.skill_library_provider != saved_settings.skill_library_provider
+        || previous_settings.skill_library_path != saved_settings.skill_library_path
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SkillLibraryRefreshedEvent {
+    installed_skills: Vec<SkillSummary>,
+    local_candidates: Vec<LocalSkillCandidate>,
+    tool_skill_entries: Vec<ToolSkillEntry>,
+}
+
+fn refresh_skill_library_in_background(app_handle: tauri::AppHandle) {
+    use tauri::Emitter;
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let installed_skills = resolve_startup_installed_skills();
+        let tool_configs = build_tool_configs();
+        let payload = SkillLibraryRefreshedEvent {
+            local_candidates: build_local_candidates(&installed_skills),
+            tool_skill_entries: build_tool_skill_entries(&tool_configs, &installed_skills),
+            installed_skills,
+        };
+
+        if let Err(error) = crate::skill_watcher::start_skill_library_watcher(app_handle.clone()) {
+            log::warn!("Failed to refresh the Skill library watcher: {error}");
+        }
+        if let Err(error) = app_handle.emit(SKILL_LIBRARY_REFRESHED_EVENT, payload) {
+            log::warn!("Failed to emit the Skill library refresh event: {error}");
+        }
+    });
+}
+
 #[tauri::command]
 pub fn update_app_settings(
     app_handle: tauri::AppHandle,
     settings: AppSettings,
 ) -> Result<AppSettings, String> {
+    let previous_settings = load_app_settings();
     let saved_settings = save_app_settings(settings)?;
-    let _ = resolve_startup_installed_skills();
-    crate::skill_watcher::start_skill_library_watcher(app_handle)?;
+    if app_settings_require_skill_refresh(&previous_settings, &saved_settings) {
+        refresh_skill_library_in_background(app_handle);
+    }
     Ok(saved_settings)
 }
 
@@ -7533,22 +7585,24 @@ fn update_skill_blocking(
     let skill = &installed_skills[skill_index];
     if skill.instance.update_driver == "agent-skills-cli" {
         crate::agent_skills_cli::update_global_skill(&skill.name)?;
-    } else if skill.instance.update_driver == "git" || skill.git_linked {
+        clear_skill_update_cache(skill);
+
+        let (mut latest_skills, latest_index) = find_skill_instance(skill_name, skill_path)?;
+        let mut refreshed = latest_skills[latest_index].clone();
+        refreshed.collab_status = SKILL_STATUS_CLEAN.into();
+        refreshed.status_text = "Agent CLI Skill 已更新。".into();
+        refreshed.last_checked_at = "刚刚检查".into();
+        latest_skills[latest_index] = refreshed.clone();
+        save_installed_skills(&latest_skills)?;
+        return Ok(refreshed);
+    }
+    if skill.instance.update_driver == "git" || skill.git_linked {
         update_skill_repo(skill)?;
     } else {
         return Err("此 Skill 没有可用的自动更新方式。".into());
     }
     clear_skill_update_cache(skill);
-    let refreshed = if skill.instance.update_driver == "git" || skill.git_linked {
-        enrich_skill_with_git_state(skill)
-    } else {
-        let mut refreshed = skill.clone();
-        refreshed.collab_status = SKILL_STATUS_CLEAN.into();
-        refreshed.status_text = "Agent CLI Skill 已更新。".into();
-        refreshed.last_checked_at = "刚刚检查".into();
-        refreshed
-    };
-    Ok(refreshed)
+    Ok(enrich_skill_with_git_state(skill))
 }
 
 #[tauri::command]
@@ -7669,7 +7723,15 @@ pub fn save_skill_file_content(
 }
 
 #[tauri::command]
-pub fn delete_skill(skill_name: &str, skill_path: Option<&str>) -> Result<(), String> {
+pub async fn delete_skill(skill_name: String, skill_path: Option<String>) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        delete_skill_blocking(&skill_name, skill_path.as_deref())
+    })
+    .await
+    .map_err(|error| format!("后台删除 Skill 失败: {error}"))?
+}
+
+fn delete_skill_blocking(skill_name: &str, skill_path: Option<&str>) -> Result<(), String> {
     let (installed_skills, skill_index) = find_skill_instance(skill_name, skill_path)?;
     let skill = installed_skills[skill_index].clone();
 
@@ -7684,31 +7746,122 @@ pub fn delete_skill(skill_name: &str, skill_path: Option<&str>) -> Result<(), St
             }
             fs::remove_file(&entry_path)
                 .map_err(|error| format!("删除 Agent Skill 入口失败: {error}"))?;
+            remove_matching_skill_links_from_all_tools(&skill)?;
         }
         _ => {
+            let link_snapshots = collect_matching_skill_links(&skill);
+            let removed_links = remove_skill_link_snapshots(&link_snapshots)?;
             let local_path = PathBuf::from(&skill.local_path);
             let delete_target = managed_delete_target(&local_path)?;
-            if delete_target.exists() && should_remove_local_directory(&delete_target)? {
-                let metadata = fs::symlink_metadata(&delete_target)
-                    .map_err(|error| format!("读取 skill 目录失败: {error}"))?;
-                if metadata.file_type().is_symlink() {
-                    fs::remove_file(&delete_target)
-                        .map_err(|error| format!("删除 skill 链接失败: {error}"))?;
-                } else {
-                    fs::remove_dir_all(&delete_target)
-                        .map_err(|error| format!("删除 skill 目录失败: {error}"))?;
+            let delete_result = (|| {
+                if delete_target.exists() && should_remove_local_directory(&delete_target)? {
+                    let metadata = fs::symlink_metadata(&delete_target)
+                        .map_err(|error| format!("读取 skill 目录失败: {error}"))?;
+                    if metadata.file_type().is_symlink() {
+                        fs::remove_file(&delete_target)
+                            .map_err(|error| format!("删除 skill 链接失败: {error}"))?;
+                    } else {
+                        fs::remove_dir_all(&delete_target)
+                            .map_err(|error| format!("删除 skill 目录失败: {error}"))?;
+                    }
                 }
+                Ok(())
+            })();
+            if let Err(error) = delete_result {
+                restore_skill_link_snapshots(&removed_links);
+                return Err(error);
             }
         }
     }
-
-    remove_matching_skill_links_from_all_tools(&skill)?;
 
     let mut next_installed_skills = installed_skills;
     next_installed_skills.remove(skill_index);
     save_installed_skills(&next_installed_skills)?;
 
     Ok(())
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct SkillLinkSnapshot {
+    path: PathBuf,
+    raw_target: PathBuf,
+}
+
+fn collect_matching_skill_links(skill: &SkillSummary) -> Vec<SkillLinkSnapshot> {
+    let expected_path = PathBuf::from(if skill.instance.canonical_path.trim().is_empty() {
+        &skill.local_path
+    } else {
+        &skill.instance.canonical_path
+    });
+    let expected_path = expected_path.canonicalize().unwrap_or(expected_path);
+    build_tool_configs()
+        .into_iter()
+        .filter_map(|tool| {
+            if tool.skills_path.trim().is_empty() {
+                return None;
+            }
+            let link_path = PathBuf::from(tool.skills_path).join(&skill.name);
+            let metadata = fs::symlink_metadata(&link_path).ok()?;
+            if !metadata.file_type().is_symlink()
+                || link_path.canonicalize().ok().as_ref() != Some(&expected_path)
+            {
+                return None;
+            }
+            let raw_target = fs::read_link(&link_path).ok()?;
+            Some(SkillLinkSnapshot {
+                path: link_path,
+                raw_target,
+            })
+        })
+        .collect()
+}
+
+fn remove_skill_link_snapshots(
+    snapshots: &[SkillLinkSnapshot],
+) -> Result<Vec<SkillLinkSnapshot>, String> {
+    let mut removed = Vec::new();
+    for snapshot in snapshots {
+        let is_unchanged_link = fs::symlink_metadata(&snapshot.path)
+            .ok()
+            .is_some_and(|metadata| metadata.file_type().is_symlink())
+            && fs::read_link(&snapshot.path).ok().as_ref() == Some(&snapshot.raw_target);
+        if !is_unchanged_link {
+            continue;
+        }
+        if let Err(error) = fs::remove_file(&snapshot.path) {
+            restore_skill_link_snapshots(&removed);
+            return Err(format!("删除工具 Skill 链接失败: {error}"));
+        }
+        removed.push(snapshot.clone());
+    }
+    Ok(removed)
+}
+
+fn restore_skill_link_snapshots(snapshots: &[SkillLinkSnapshot]) {
+    for snapshot in snapshots {
+        if fs::symlink_metadata(&snapshot.path).is_ok() {
+            continue;
+        }
+        let Some(parent) = snapshot.path.parent() else {
+            continue;
+        };
+        let resolved_target = if snapshot.raw_target.is_absolute() {
+            snapshot.raw_target.clone()
+        } else {
+            parent.join(&snapshot.raw_target)
+        };
+        if !resolved_target.is_dir() || !resolved_target.join("SKILL.md").is_file() {
+            continue;
+        }
+        let Some(skill_name) = snapshot.path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        let _ = create_skill_symlink(
+            resolved_target.to_string_lossy().as_ref(),
+            skill_name,
+            parent.to_string_lossy().as_ref(),
+        );
+    }
 }
 
 fn remove_matching_skill_links_from_all_tools(skill: &SkillSummary) -> Result<(), String> {
@@ -7982,32 +8135,36 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        apply_agent_cli_update_statuses, apply_skill_install_activation, build_local_candidates,
-        build_repo_skill_source_url, build_tool_skill_entries,
-        cleanup_local_skill_install_on_error, collect_local_skill_dirs,
+        app_settings_require_skill_refresh, apply_agent_cli_update_statuses,
+        apply_skill_install_activation, build_local_candidates, build_repo_skill_source_url,
+        build_tool_skill_entries, cleanup_local_skill_install_on_error, collect_local_skill_dirs,
         collect_skills_manager_cached_items, collect_skillsmp_items, copy_local_skill_dir,
-        detect_preferred_app_language_from_system, ensure_intellij_git_project_files,
-        import_local_skill, insert_trusted_project_path, inspect_skill_tool_status,
-        install_selected_local_skill_dirs, intellij_trusted_locations_for_project,
-        load_marketplace_cache_page, map_in_parallel_preserving_order,
-        map_skillsmp_items_to_marketplace, merge_refreshed_skill_states_with_latest_state,
-        normalize_installed_skill_source_url, normalize_skill_tools, open_target_path_for_skill,
-        parse_apple_languages_output, parse_repo_install_spec, parse_skills_sh_homepage_items,
-        recover_missing_managed_skills, refresh_installed_skill_git_state,
-        remove_trusted_project_paths, repo_clone_candidates, resolve_skill_install_name,
-        resolve_startup_installed_skills, run_git_command, save_marketplace_cache,
-        scan_local_install_skill_candidates, scan_repo_skill_candidates, selected_repo_path_hint,
-        should_use_skills_sh_homepage_page, tool_name_to_id, update_skill_repo,
-        REFRESH_GIT_STATES_CONCURRENCY,
+        delete_skill_blocking, detect_preferred_app_language_from_system,
+        ensure_intellij_git_project_files, import_local_skill, insert_trusted_project_path,
+        inspect_skill_tool_status, install_selected_local_skill_dirs,
+        intellij_trusted_locations_for_project, load_marketplace_cache_page,
+        map_in_parallel_preserving_order, map_skillsmp_items_to_marketplace,
+        merge_refreshed_skill_states_with_latest_state, normalize_installed_skill_source_url,
+        normalize_skill_tools, open_target_path_for_skill, parse_apple_languages_output,
+        parse_repo_install_spec, parse_skills_sh_homepage_items, recover_missing_managed_skills,
+        refresh_installed_skill_git_state, remove_trusted_project_paths, repo_clone_candidates,
+        resolve_skill_install_name, resolve_startup_installed_skills, run_git_command,
+        save_marketplace_cache, scan_local_install_skill_candidates, scan_repo_skill_candidates,
+        selected_repo_path_hint, should_use_skills_sh_homepage_page, tool_name_to_id,
+        update_skill_blocking, update_skill_repo, REFRESH_GIT_STATES_CONCURRENCY,
     };
     use crate::agent_skills_cli::AgentSkillUpdateCheck;
     use crate::models::{
-        MarketplaceSkill, SkillFileEntry, SkillSummary, ToolConfig, WorkspacePersistence,
+        AppSettings, MarketplaceSkill, SkillFileEntry, SkillSummary, ToolConfig,
+        WorkspacePersistence,
     };
+    use crate::state::{load_installed_skills, save_installed_skills};
     use crate::workspace::TEST_ENV_LOCK;
     use std::collections::BTreeSet;
     use std::env;
     use std::fs;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
     use std::path::{Path, PathBuf};
     use std::process::Command;
     use std::sync::{
@@ -8015,6 +8172,65 @@ mod tests {
         Arc, Barrier,
     };
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn app_settings_fixture() -> AppSettings {
+        AppSettings {
+            storage_path: "/tmp/settings.json".into(),
+            skill_library_path: "/tmp/.skilldock/skills".into(),
+            skill_library_provider: "skilldock".into(),
+            agent_skills_compatibility_enabled: false,
+            default_open_tool_id: "cursor".into(),
+            skill_install_activation: "apply-all-tools".into(),
+            mcp_install_activation: "apply-all-tools".into(),
+            skill_source_view_style: "select".into(),
+            language: "zh-CN".into(),
+            language_source: "manual".into(),
+            theme: "system".into(),
+        }
+    }
+
+    #[test]
+    fn ordinary_app_setting_changes_do_not_require_skill_refresh() {
+        let previous = app_settings_fixture();
+        let saved = AppSettings {
+            default_open_tool_id: "vscode".into(),
+            skill_source_view_style: "grid".into(),
+            language: "en".into(),
+            theme: "dark".into(),
+            ..previous.clone()
+        };
+
+        assert!(!app_settings_require_skill_refresh(&previous, &saved));
+    }
+
+    #[test]
+    fn managed_skill_setting_changes_require_skill_refresh() {
+        let previous = app_settings_fixture();
+
+        let compatibility_changed = AppSettings {
+            agent_skills_compatibility_enabled: true,
+            ..previous.clone()
+        };
+        assert!(app_settings_require_skill_refresh(
+            &previous,
+            &compatibility_changed
+        ));
+
+        let provider_changed = AppSettings {
+            skill_library_provider: "agent-skills".into(),
+            ..previous.clone()
+        };
+        assert!(app_settings_require_skill_refresh(
+            &previous,
+            &provider_changed
+        ));
+
+        let path_changed = AppSettings {
+            skill_library_path: "/tmp/.agents/skills".into(),
+            ..previous.clone()
+        };
+        assert!(app_settings_require_skill_refresh(&previous, &path_changed));
+    }
 
     fn temp_test_dir(label: &str) -> PathBuf {
         let timestamp = SystemTime::now()
@@ -8562,6 +8778,153 @@ mod tests {
     }
 
     #[test]
+    fn clears_legacy_well_known_update_status_without_checking_it() {
+        let mut well_known = installed_skill_fixture(
+            "lark-okr",
+            "https://open.feishu.cn/.well-known/skills/lark-okr/SKILL.md",
+            "/tmp/lark-okr",
+        );
+        well_known.source_type = "well-known".into();
+        well_known.git_linked = false;
+        well_known.instance.update_driver = "agent-skills-cli".into();
+        well_known.collab_status = "update-available".into();
+        well_known.status_text = "Agent Skills CLI 检测到可更新版本。".into();
+
+        let refreshed =
+            apply_agent_cli_update_statuses(vec![well_known], &AgentSkillUpdateCheck::default());
+
+        assert_eq!(refreshed[0].collab_status, "clean");
+        assert!(refreshed[0].status_text.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn persists_clean_status_after_agent_cli_update() {
+        let _guard = TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let temp_home = temp_test_dir("persist-agent-cli-update");
+        let skill_dir = temp_home.join(".skilldock/skills/demo");
+        let fake_bin_dir = temp_home.join("bin");
+        fs::create_dir_all(&skill_dir).expect("create managed skill path");
+        fs::create_dir_all(temp_home.join(".agents")).expect("create Agent CLI state path");
+        fs::create_dir_all(&fake_bin_dir).expect("create fake executable path");
+        fs::write(skill_dir.join("SKILL.md"), "# before update\n").expect("write managed skill");
+        fs::write(
+            temp_home.join(".agents/.skill-lock.json"),
+            r#"{"version":3,"skills":{"demo":{"sourceType":"github","sourceUrl":"https://github.com/example/demo.git","skillPath":"skills/demo/SKILL.md","skillFolderHash":"before"}}}"#,
+        )
+        .expect("write Agent CLI lock");
+        let fake_skills = fake_bin_dir.join("skills");
+        fs::write(&fake_skills, "#!/bin/sh\nexit 0\n").expect("write fake skills executable");
+        fs::set_permissions(&fake_skills, fs::Permissions::from_mode(0o755))
+            .expect("make fake skills executable");
+
+        let original_home = env::var_os("HOME");
+        let original_path = env::var_os("PATH");
+        let next_path = original_path
+            .as_ref()
+            .map(|path| {
+                let mut paths = env::split_paths(path).collect::<Vec<_>>();
+                paths.insert(0, fake_bin_dir);
+                env::join_paths(paths).expect("join fake executable path")
+            })
+            .unwrap_or_else(|| temp_home.join("bin").into_os_string());
+        unsafe {
+            env::set_var("HOME", &temp_home);
+            env::set_var("PATH", next_path);
+        }
+
+        let mut skill = installed_skill_fixture(
+            "demo",
+            "https://github.com/example/demo.git",
+            skill_dir.to_string_lossy().as_ref(),
+        );
+        skill.instance.entry_path = skill.local_path.clone();
+        skill.instance.canonical_path = skill.local_path.clone();
+        skill.instance.management_owner = "skilldock".into();
+        skill.instance.update_driver = "agent-skills-cli".into();
+        skill.collab_status = "update-available".into();
+        skill.status_text = "Agent Skills CLI 检测到可更新版本。".into();
+        save_installed_skills(&[skill]).expect("save update-available skill");
+
+        let update_result =
+            update_skill_blocking("demo", Some(skill_dir.to_string_lossy().as_ref()));
+        let persisted = load_installed_skills(&[])
+            .into_iter()
+            .find(|skill| skill.name == "demo")
+            .expect("load updated skill");
+
+        restore_env_var("HOME", original_home);
+        restore_env_var("PATH", original_path);
+        let _ = fs::remove_dir_all(temp_home);
+
+        assert_eq!(
+            update_result.expect("update Agent CLI skill").collab_status,
+            "clean"
+        );
+        assert_eq!(persisted.collab_status, "clean");
+        assert_eq!(persisted.status_text, "Agent CLI Skill 已更新。");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn skilldock_delete_removes_only_matching_tool_links() {
+        let _guard = TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let temp_home = temp_test_dir("skilldock-delete-links");
+        let skill_dir = temp_home.join(".skilldock/skills/demo");
+        let other_skill_dir = temp_home.join("other/demo");
+        let cursor_link = temp_home.join(".cursor/skills/demo");
+        let claude_link = temp_home.join(".claude/skills/demo");
+        for path in [
+            &skill_dir,
+            &other_skill_dir,
+            cursor_link.parent().expect("cursor skills path"),
+            claude_link.parent().expect("Claude skills path"),
+        ] {
+            fs::create_dir_all(path).expect("create delete test path");
+        }
+        fs::write(skill_dir.join("SKILL.md"), "# demo\n").expect("write managed skill");
+        fs::write(other_skill_dir.join("SKILL.md"), "# other demo\n").expect("write other skill");
+        std::os::unix::fs::symlink(&skill_dir, &cursor_link).expect("link managed skill to Cursor");
+        std::os::unix::fs::symlink(&other_skill_dir, &claude_link)
+            .expect("link other skill to Claude Code");
+
+        let original_home = env::var_os("HOME");
+        unsafe {
+            env::set_var("HOME", &temp_home);
+        }
+        let mut skill = installed_skill_fixture(
+            "demo",
+            "https://github.com/example/demo.git",
+            skill_dir.to_string_lossy().as_ref(),
+        );
+        skill.instance.entry_path = skill.local_path.clone();
+        skill.instance.canonical_path = skill.local_path.clone();
+        skill.instance.management_owner = "skilldock".into();
+        skill.instance.update_driver = "git".into();
+        save_installed_skills(&[skill]).expect("save managed skill");
+
+        let delete_result =
+            delete_skill_blocking("demo", Some(skill_dir.to_string_lossy().as_ref()));
+        let persisted_skills = load_installed_skills(&[]);
+
+        restore_env_var("HOME", original_home);
+        let cursor_link_exists = fs::symlink_metadata(&cursor_link).is_ok();
+        let claude_target = fs::read_link(&claude_link).ok();
+        let skill_exists = fs::symlink_metadata(&skill_dir).is_ok();
+        let _ = fs::remove_dir_all(&temp_home);
+
+        delete_result.expect("delete SkillDock skill");
+        assert!(!cursor_link_exists);
+        assert_eq!(claude_target.as_deref(), Some(other_skill_dir.as_path()));
+        assert!(!skill_exists);
+        assert!(persisted_skills.iter().all(|skill| skill.name != "demo"));
+    }
+
+    #[test]
     fn tool_skill_entries_scan_every_valid_skill_in_the_real_tool_directory() {
         let _guard = TEST_ENV_LOCK
             .lock()
@@ -8918,6 +9281,28 @@ mod tests {
         assert_eq!(result[0].commit_label, latest.commit_label);
         assert_eq!(result[0].local_updated_at, latest.local_updated_at);
         assert_eq!(result[0].collab_status, "clean");
+    }
+
+    #[test]
+    fn keeps_agent_cli_update_status_when_an_older_refresh_finishes() {
+        let mut started = installed_skill_fixture("demo", "", "/skills/demo");
+        started.instance.update_driver = "agent-skills-cli".into();
+        started.collab_status = "update-available".into();
+        started.status_text = "Agent Skills CLI 检测到可更新版本。".into();
+        let refreshed = started.clone();
+        let mut latest = started.clone();
+        latest.collab_status = "clean".into();
+        latest.status_text = "Agent CLI Skill 已更新。".into();
+
+        let result = merge_refreshed_skill_states_with_latest_state(
+            vec![refreshed],
+            std::slice::from_ref(&started),
+            vec![latest.clone()],
+        );
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].collab_status, "clean");
+        assert_eq!(result[0].status_text, latest.status_text);
     }
 
     #[test]

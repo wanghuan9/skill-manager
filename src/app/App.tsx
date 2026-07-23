@@ -672,6 +672,7 @@ function AppContent() {
     setFocusedManagedSkillName(skillName);
     setSkillQuery("");
     setSkillStatusFilter("all");
+    setSkillOwnerFilter("all");
     setSkillManagementFilter("all");
   }
 

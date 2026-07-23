@@ -197,6 +197,7 @@ test("renders go-install as the last toolbar action", () => {
 test("notifies status filter changes", async () => {
   const user = userEvent.setup();
   const onStatusFilterChange = vi.fn();
+  const onOwnerFilterChange = vi.fn();
 
   mockedUseSkillWorkspace.mockReturnValue({
     language: "zh-CN",
@@ -211,16 +212,19 @@ test("notifies status filter changes", async () => {
       <SkillListToolbar
         query=""
         statusFilter="all"
+        ownerFilter="agent-skills-cli"
         onQueryChange={vi.fn()}
         onStatusFilterChange={onStatusFilterChange}
+        onOwnerFilterChange={onOwnerFilterChange}
         viewMode="grouped"
         onViewModeChange={vi.fn()}
       />
     </NotificationProvider>,
   );
 
-  await user.click(screen.getByLabelText("按状态筛选技能"));
+  await user.click(screen.getByRole("combobox", { name: "筛选 Skill" }));
 
+  expect(screen.getByRole("option", { name: "状态" })).toBeDisabled();
   expect(screen.getByRole("option", { name: "全部 (6)" })).toBeInTheDocument();
   expect(screen.getByRole("option", { name: "可更新 (1)" })).toBeInTheDocument();
   expect(screen.getByRole("option", { name: "待提交 (1)" })).toBeInTheDocument();
@@ -229,11 +233,13 @@ test("notifies status filter changes", async () => {
   expect(screen.queryByRole("option", { name: "已同步 (1)" })).not.toBeInTheDocument();
 
   await user.click(screen.getByRole("option", { name: "待提交 (1)" }));
+  expect(onOwnerFilterChange).toHaveBeenCalledWith("all");
   expect(onStatusFilterChange).toHaveBeenCalledWith("pending-commit");
 });
 
 test("filters managed skills by management owner", async () => {
   const user = userEvent.setup();
+  const onStatusFilterChange = vi.fn();
   const onOwnerFilterChange = vi.fn();
   const agentCliSkillFixture: SkillSummary = {
     ...installedSkillFixtures[0],
@@ -257,7 +263,7 @@ test("filters managed skills by management owner", async () => {
         statusFilter="all"
         ownerFilter="all"
         onQueryChange={vi.fn()}
-        onStatusFilterChange={vi.fn()}
+        onStatusFilterChange={onStatusFilterChange}
         onOwnerFilterChange={onOwnerFilterChange}
         viewMode="grouped"
         onViewModeChange={vi.fn()}
@@ -265,16 +271,15 @@ test("filters managed skills by management owner", async () => {
     </NotificationProvider>,
   );
 
-  const statusFilter = screen.getByLabelText("按状态筛选技能");
-  const ownerFilter = screen.getByLabelText("按托管方筛选 Skill");
-  expect(statusFilter.compareDocumentPosition(ownerFilter)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
-  expect(ownerFilter).toHaveTextContent("托管方");
+  expect(screen.getAllByRole("combobox", { name: "筛选 Skill" })).toHaveLength(1);
+  expect(screen.queryByLabelText("按状态筛选技能")).not.toBeInTheDocument();
+  expect(screen.queryByLabelText("按托管方筛选 Skill")).not.toBeInTheDocument();
 
-  await user.click(screen.getByLabelText("按托管方筛选 Skill"));
+  await user.click(screen.getByRole("combobox", { name: "筛选 Skill" }));
 
-  expect(screen.getByRole("listbox", { name: "按托管方筛选 Skill" })).toHaveStyle({ width: "92px" });
-  expect(screen.getByRole("option", { name: "全部" })).toBeInTheDocument();
-  expect(screen.getByRole("option", { name: "SkillDock" })).toBeInTheDocument();
-  await user.click(screen.getByRole("option", { name: "Agent CLI" }));
+  expect(screen.getByRole("option", { name: "托管方" })).toBeDisabled();
+  expect(screen.getByRole("option", { name: "SkillDock (4)" })).toBeInTheDocument();
+  await user.click(screen.getByRole("option", { name: "Agent CLI (1)" }));
+  expect(onStatusFilterChange).toHaveBeenCalledWith("all");
   expect(onOwnerFilterChange).toHaveBeenCalledWith("agent-skills-cli");
 });

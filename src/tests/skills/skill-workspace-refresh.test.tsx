@@ -42,10 +42,12 @@ const AUTO_GIT_STATE_REFRESH_COOLDOWN_MS = 60 * 1000;
 
 function createDeferred<T>() {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((res) => {
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
     resolve = res;
+    reject = rej;
   });
-  return { promise, resolve };
+  return { promise, reject, resolve };
 }
 
 function RefreshProbe() {
@@ -119,6 +121,35 @@ function SingleUpdateProbe() {
       </button>
       <span data-testid="workspace-refreshing">{isWorkspaceRefreshing ? "refreshing" : "idle"}</span>
       <span data-testid="skill-status">{installedSkills[0]?.collabStatus ?? "none"}</span>
+    </div>
+  );
+}
+
+function DeleteProbe() {
+  const { deleteSkill, installedSkills } = useSkillWorkspace();
+  const [deleteError, setDeleteError] = useState("");
+  const target = installedSkills.find((skill) => skill.managementOwner === "skilldock");
+
+  async function handleDelete() {
+    if (!target) {
+      return;
+    }
+    try {
+      await deleteSkill(target.name, target.canonicalPath ?? target.localPath);
+    } catch (error) {
+      setDeleteError(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  return (
+    <div>
+      <button type="button" onClick={() => void handleDelete()}>
+        删除 Skill
+      </button>
+      <span data-testid="delete-skill-paths">
+        {installedSkills.map((skill) => skill.canonicalPath ?? skill.localPath).join(",")}
+      </span>
+      <span data-testid="delete-error">{deleteError}</span>
     </div>
   );
 }
@@ -242,6 +273,139 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+});
+
+test("removes only the selected Skill instance before background deletion finishes", async () => {
+  const skilldockSkill: SkillSummary = {
+    ...installedSkillFixtures[0],
+    name: "demo",
+    localPath: "/Users/demo/.skilldock/skills/demo",
+    canonicalPath: "/Users/demo/.skilldock/skills/demo",
+    managementOwner: "skilldock",
+  };
+  const agentSkill: SkillSummary = {
+    ...skilldockSkill,
+    localPath: "/Users/demo/.agents/skills/demo",
+    canonicalPath: "/Users/demo/.agents/skills/demo",
+    managementOwner: "agent-skills-cli",
+  };
+  const pendingDelete = createDeferred<void>();
+
+  mockedInvoke.mockImplementation(async (command, args) => {
+    switch (command) {
+      case "list_startup_installed_skills":
+      case "refresh_git_states":
+        return [skilldockSkill, agentSkill];
+      case "list_local_skill_candidates":
+        return localSkillFixtures;
+      case "list_tool_configs":
+        return toolConfigFixtures;
+      case "list_tool_skill_entries":
+        return [];
+      case "get_git_account_summary":
+        return gitAccountFixture;
+      case "get_app_settings":
+        return appSettingsFixture;
+      case "update_app_settings":
+        return (args as { settings: AppSettings }).settings;
+      case "delete_skill":
+        return pendingDelete.promise;
+      default:
+        throw new Error(`Unexpected command: ${command}`);
+    }
+  });
+
+  render(
+    <SkillWorkspaceProvider>
+      <DeleteProbe />
+    </SkillWorkspaceProvider>,
+  );
+
+  await waitFor(() => {
+    expect(screen.getByTestId("delete-skill-paths")).toHaveTextContent(skilldockSkill.localPath);
+  });
+  fireEvent.click(screen.getByRole("button", { name: "删除 Skill" }));
+
+  await waitFor(() => {
+    expect(screen.getByTestId("delete-skill-paths")).not.toHaveTextContent(skilldockSkill.localPath);
+    expect(screen.getByTestId("delete-skill-paths")).toHaveTextContent(agentSkill.localPath);
+  });
+
+  await act(async () => {
+    pendingDelete.resolve();
+    await pendingDelete.promise;
+  });
+});
+
+test("restores an optimistically deleted Skill at its original position after failure", async () => {
+  const firstSkill: SkillSummary = {
+    ...installedSkillFixtures[0],
+    name: "first",
+    localPath: "/Users/demo/.skilldock/skills/first",
+    canonicalPath: "/Users/demo/.skilldock/skills/first",
+    managementOwner: "skilldock",
+  };
+  const secondSkill: SkillSummary = {
+    ...installedSkillFixtures[1],
+    name: "second",
+    localPath: "/Users/demo/.skilldock/skills/second",
+    canonicalPath: "/Users/demo/.skilldock/skills/second",
+    managementOwner: "agent-skills-cli",
+  };
+  const pendingDelete = createDeferred<void>();
+
+  mockedInvoke.mockImplementation(async (command, args) => {
+    switch (command) {
+      case "list_startup_installed_skills":
+      case "refresh_git_states":
+        return [firstSkill, secondSkill];
+      case "list_local_skill_candidates":
+        return localSkillFixtures;
+      case "list_tool_configs":
+        return toolConfigFixtures;
+      case "list_tool_skill_entries":
+        return [];
+      case "get_git_account_summary":
+        return gitAccountFixture;
+      case "get_app_settings":
+        return appSettingsFixture;
+      case "update_app_settings":
+        return (args as { settings: AppSettings }).settings;
+      case "delete_skill":
+        return pendingDelete.promise;
+      default:
+        throw new Error(`Unexpected command: ${command}`);
+    }
+  });
+
+  render(
+    <SkillWorkspaceProvider>
+      <DeleteProbe />
+    </SkillWorkspaceProvider>,
+  );
+
+  await waitFor(() => {
+    expect(screen.getByTestId("delete-skill-paths").textContent).toBe(
+      `${firstSkill.localPath},${secondSkill.localPath}`,
+    );
+  });
+  fireEvent.click(screen.getByRole("button", { name: "删除 Skill" }));
+
+  await waitFor(() => {
+    expect(screen.getByTestId("delete-skill-paths").textContent).toBe(secondSkill.localPath);
+  });
+
+  await act(async () => {
+    pendingDelete.reject(new Error("Agent CLI 删除失败"));
+    await Promise.resolve();
+  });
+
+  await waitFor(() => {
+    expect(screen.getByTestId("delete-skill-paths").textContent).toBe(
+      `${firstSkill.localPath},${secondSkill.localPath}`,
+    );
+    expect(screen.getByTestId("delete-error")).toHaveTextContent("Agent CLI 删除失败");
+  });
 });
 
 test("uses the stored source layout before native settings finish loading", async () => {

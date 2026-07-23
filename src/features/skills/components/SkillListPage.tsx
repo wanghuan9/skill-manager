@@ -3,7 +3,12 @@ import { SearchFieldIcon } from "@/app/components/SearchFieldIcon";
 import { useTranslate } from "@/app/i18n";
 import { useFailureReporter } from "@/app/failure-feedback";
 import { openExternalLink } from "@/features/skills/api/skill-client";
-import { filterSkills, hasEnabledTool } from "@/features/skills/state/skill-selectors";
+import {
+  compareSkillsByEnablement,
+  filterSkills,
+  hasEnabledTool,
+  resolveSkillManagementOwner,
+} from "@/features/skills/state/skill-selectors";
 import { SkillCard } from "@/features/skills/components/SkillCard";
 import { SkillSourceView } from "@/features/skills/components/SkillSourceView";
 import { useSkillWorkspace } from "@/features/skills/state/skill-workspace";
@@ -97,6 +102,15 @@ function FilterIcon() {
     </svg>
   );
 }
+
+const MANAGED_FILTER_STATUS_SECTION = "status-section";
+const MANAGED_FILTER_OWNER_SECTION = "owner-section";
+
+type ManagedSkillCombinedFilter =
+  | SkillStatusFilter
+  | Exclude<ManagedSkillOwnerFilter, "all">
+  | typeof MANAGED_FILTER_STATUS_SECTION
+  | typeof MANAGED_FILTER_OWNER_SECTION;
 
 function resolveSkillGroupTone(sourceType?: SkillSummary["sourceType"]) {
   if (sourceType === "local") {
@@ -195,6 +209,15 @@ export function SkillListToolbar(props: SkillToolbarProps) {
     }),
     [installedSkills],
   );
+  const ownerFilterCounts = useMemo(
+    () => ({
+      skilldock: installedSkills.filter((skill) => resolveSkillManagementOwner(skill) === "skilldock").length,
+      "agent-skills-cli": installedSkills.filter((skill) => (
+        resolveSkillManagementOwner(skill) === "agent-skills-cli"
+      )).length,
+    }),
+    [installedSkills],
+  );
   const updatableSkillCount = useMemo(
     () => installedSkills.filter((skill) => skill.collabStatus === "update-available").length,
     [installedSkills],
@@ -208,8 +231,24 @@ export function SkillListToolbar(props: SkillToolbarProps) {
   ];
   const ownerFilterOptions: Array<{ value: ManagedSkillOwnerFilter; label: string }> = [
     { value: "all", label: t("skills.ownerFilter.all") },
-    { value: "skilldock", label: t("skill.card.owner.skilldock") },
-    { value: "agent-skills-cli", label: t("skill.card.owner.agentSkillsCli") },
+    { value: "skilldock", label: `${t("skill.card.owner.skilldock")} (${ownerFilterCounts.skilldock})` },
+    {
+      value: "agent-skills-cli",
+      label: `${t("skill.card.owner.agentSkillsCli")} (${ownerFilterCounts["agent-skills-cli"]})`,
+    },
+  ];
+  const managedFilterOptions: Array<{
+    value: ManagedSkillCombinedFilter;
+    label: string;
+    disabled?: boolean;
+  }> = [
+    { value: MANAGED_FILTER_STATUS_SECTION, label: t("skills.filter.statusGroup"), disabled: true },
+    ...skillStatusFilterOptions.map((option) => ({
+      value: option.value,
+      label: `${option.label} (${statusFilterCounts[option.value]})`,
+    })),
+    { value: MANAGED_FILTER_OWNER_SECTION, label: t("skills.filter.ownerGroup"), disabled: true },
+    ...ownerFilterOptions.filter((option) => option.value !== "all"),
   ];
   const managementFilterOptions: Array<{ value: ToolSkillManagementFilter; label: string }> = [
     { value: "all", label: t("skills.source.filter.all") },
@@ -218,6 +257,7 @@ export function SkillListToolbar(props: SkillToolbarProps) {
     { value: "mismatch", label: t("skills.source.filter.mismatch") },
   ];
   const isManagedSource = activeSourceId === MANAGED_SKILL_SOURCE_ID;
+  const managedFilterValue = ownerFilter === "all" ? statusFilter : ownerFilter;
   const updateAllButtonLabel = updatableSkillCount > 0
     ? t("skills.updateAllWithCount", { count: updatableSkillCount })
     : t("skills.updateAll");
@@ -250,6 +290,19 @@ export function SkillListToolbar(props: SkillToolbarProps) {
         fallbackMessage: t("skills.error.updateAll"),
       });
     }
+  }
+
+  function handleManagedFilterChange(value: ManagedSkillCombinedFilter) {
+    if (value === MANAGED_FILTER_STATUS_SECTION || value === MANAGED_FILTER_OWNER_SECTION) {
+      return;
+    }
+    if (value === "skilldock" || value === "agent-skills-cli") {
+      onStatusFilterChange("all");
+      onOwnerFilterChange(value);
+      return;
+    }
+    onOwnerFilterChange("all");
+    onStatusFilterChange(value);
   }
 
   return (
@@ -311,16 +364,13 @@ export function SkillListToolbar(props: SkillToolbarProps) {
         </span>
         {isManagedSource ? (
           <AppSelect
-            value={statusFilter}
-            options={skillStatusFilterOptions.map((option) => ({
-              value: option.value,
-              label: `${option.label} (${statusFilterCounts[option.value]})`,
-            }))}
-            onChange={onStatusFilterChange}
+            value={managedFilterValue}
+            options={managedFilterOptions}
+            onChange={handleManagedFilterChange}
             ariaLabel={t("skills.filter.aria")}
             className="skill-status-filter__select"
-            menuClassName="skill-status-filter__popover"
-            minMenuWidth={96}
+            menuClassName="skill-status-filter__popover skill-status-filter__popover--grouped"
+            minMenuWidth={112}
           />
         ) : (
           <AppSelect
@@ -337,24 +387,6 @@ export function SkillListToolbar(props: SkillToolbarProps) {
           />
         )}
       </div>
-      {isManagedSource ? (
-        <div className="skill-status-filter">
-          <span className="sr-only">{t("skills.ownerFilter.aria")}</span>
-          <span className="skill-status-filter__icon" aria-hidden="true">
-            <FilterIcon />
-          </span>
-          <AppSelect
-            value={ownerFilter}
-            options={ownerFilterOptions}
-            onChange={onOwnerFilterChange}
-            selectedLabel={ownerFilter === "all" ? t("skills.ownerFilter.placeholder") : undefined}
-            ariaLabel={t("skills.ownerFilter.aria")}
-            className="skill-status-filter__select"
-            menuClassName="skill-status-filter__popover"
-            minMenuWidth={92}
-          />
-        </div>
-      ) : null}
       <button
         className={`secondary-button secondary-button--compact skills-toolbar-button skills-toolbar-button--refresh${isWorkspaceRefreshing ? " is-loading" : ""}`}
         type="button"
@@ -429,7 +461,7 @@ export function SkillListPage(props: SkillListPageProps) {
   const wasWorkspaceRefreshingRef = useRef(isWorkspaceRefreshing);
   const statusSortedSkills = useMemo(
     () => [...filterSkills(installedSkills, { query: "", status: "all" })]
-      .sort((left, right) => Number(hasEnabledTool(right)) - Number(hasEnabledTool(left))),
+      .sort(compareSkillsByEnablement),
     [installedSkills],
   );
   const orderedInstalledSkills = useStableListOrder(

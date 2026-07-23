@@ -21,8 +21,29 @@ const statusPriority: Record<SkillSummary["collabStatus"], number> = {
   clean: 4,
 };
 
+const enablementPriority = {
+  fullyEnabled: 0,
+  partiallyEnabled: 1,
+  disabled: 2,
+} as const;
+
 export function hasEnabledTool(skill: SkillSummary) {
   return skill.tools.some((tool) => isToolEnabledStatus(tool.statusLabel));
+}
+
+function resolveSkillEnablementPriority(skill: SkillSummary) {
+  const enabledToolCount = skill.tools.filter((tool) => isToolEnabledStatus(tool.statusLabel)).length;
+  if (skill.tools.length > 0 && enabledToolCount === skill.tools.length) {
+    return enablementPriority.fullyEnabled;
+  }
+  if (enabledToolCount > 0) {
+    return enablementPriority.partiallyEnabled;
+  }
+  return enablementPriority.disabled;
+}
+
+export function compareSkillsByEnablement(left: SkillSummary, right: SkillSummary) {
+  return resolveSkillEnablementPriority(left) - resolveSkillEnablementPriority(right);
 }
 
 export function resolveSkillManagementOwner(skill: SkillSummary): SkillManagementOwner {

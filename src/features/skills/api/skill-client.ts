@@ -269,6 +269,12 @@ type SkillLibraryChangeEvent = {
   skillName: string;
 };
 
+type SkillLibraryRefreshedEvent = {
+  installedSkills: LegacySkillSummary[];
+  localCandidates: LocalSkillCandidate[];
+  toolSkillEntries: ToolSkillEntry[];
+};
+
 type LegacySkillSummary = Partial<SkillSummary> & {
   lastSyncedAt?: string;
 };
@@ -1090,6 +1096,25 @@ export async function subscribeSkillLibraryChanges(
 
   return listen<SkillLibraryChangeEvent>("skill-library-changed", (event) => {
     handler(event.payload);
+  });
+}
+
+export async function subscribeSkillLibraryRefreshes(
+  handler: (payload: {
+    installedSkills: SkillSummary[];
+    localCandidates: LocalSkillCandidate[];
+    toolSkillEntries: ToolSkillEntry[];
+  }) => void,
+): Promise<UnlistenFn> {
+  if (shouldUseFixtureData()) {
+    return () => undefined;
+  }
+
+  return listen<SkillLibraryRefreshedEvent>("skill-library-refreshed", (event) => {
+    handler({
+      ...event.payload,
+      installedSkills: normalizeSkillSummaryList(event.payload.installedSkills),
+    });
   });
 }
 

@@ -38,12 +38,16 @@ SkillDock 可以识别 Agent Skills CLI 的全局 Skill，同时继续保留自�
 SkillDock 会根据实例的真实目录和来源执行操作：
 
 - SkillDock 托管的 Git Skill：使用 Git 更新、删除和推送能力。
-- Agent CLI 托管的 Skill：保留 Agent CLI 的目录和锁文件；SkillDock 可以直接打开、启用、关闭、检查更新、更新和删除。
+- Agent CLI 托管的 Skill：保留 Agent CLI 的目录和锁文件；SkillDock 可以直接打开、启用、关闭和删除。更新检测范围与 Agent Skills CLI 保持一致。
 - 外部目录 Skill：只作为工具目录中的未托管项展示，可导入到 SkillDock；导入前不纳入已托管操作。
 
 卡片底部会用 `Git · SkillDock`、`Git · Agent CLI` 或 `本地 · SkillDock` 这样的摘要标识来源和托管方；GitHub、GitLab、Gitee 等 Git 服务统一显示为 `Git`。
 
-Agent CLI Skill 会复用 SkillDock 原有的更新检查链路：启动后检查、每 10 分钟定时检查、窗口重新聚焦检查，以及手动刷新。检查过程不会修改真实的 `~/.agents/skills` 或 `~/.agents/.skill-lock.json`；只有确认存在新版本时，列表右侧才显示“可更新”状态和更新按钮，“全部更新”也只处理这些 Skill。
+Agent CLI Skill 会复用 SkillDock 原有的更新检查链路：启动后检查、每 10 分钟定时检查、窗口重新聚焦检查，以及手动刷新。检查过程不会修改真实的 `~/.agents/skills` 或 `~/.agents/.skill-lock.json`。
+
+更新检测与 Agent Skills CLI 保持一致：lock 中包含有效 `skillPath` 和 `skillFolderHash` 的 Git/hash 来源可以检测；Agent Skills CLI 原生无法自动检测的 `well-known` 来源，SkillDock 也不检测、不请求远端文件、不显示“可更新”，不提供额外的重新同步逻辑。只有 CLI 确认存在新版本时，列表右侧才显示“可更新”状态和更新按钮，“全部更新”也只处理这些 Skill。
+
+删除确认后，Skill 会立即从列表中移除，实际删除在后台执行；失败时恢复原实例并显示错误。Agent CLI 托管的 Skill 完全交给 `skills remove` 清理其注册的软件路径、全局实体和 lock，SkillDock 不重复删除。SkillDock 托管的 Skill 则先清理各软件中确实指向该实例的软链接，再删除 `~/.skilldock/skills` 中的实体；同名但指向其他目录的链接不受影响。
 
 ## 兼容模式开关
 

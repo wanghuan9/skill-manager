@@ -46,6 +46,7 @@ import {
   setToolSkillStatuses,
   shouldUseFixtureData,
   subscribeSkillLibraryChanges,
+  subscribeSkillLibraryRefreshes,
   toggleSkillTool,
   updateAppSettings,
   updateSkill,
@@ -304,17 +305,48 @@ function patchAllSkillToolStatuses(skill: SkillSummary, nextStatusLabel: string)
   };
 }
 
+function skillInstanceKey(skill: SkillSummary) {
+  return `${skill.name}\0${skill.canonicalPath ?? skill.localPath}`;
+}
+
+function releaseEventListener(unlisten: (() => void) | null) {
+  if (!unlisten) {
+    return;
+  }
+
+  try {
+    void Promise.resolve(unlisten()).catch((error) => {
+      console.warn("Failed to release event listener:", error);
+    });
+  } catch (error) {
+    console.warn("Failed to release event listener:", error);
+  }
+}
+
 function mergeUpdatedSkillsPreservingOrder(
   currentSkills: SkillSummary[],
   updatedSkills: SkillSummary[],
 ) {
-  const instanceKey = (skill: SkillSummary) => `${skill.name}\0${skill.canonicalPath ?? skill.localPath}`;
-  const updatedByInstance = new Map(updatedSkills.map((skill) => [instanceKey(skill), skill]));
-  const mergedSkills = currentSkills.map((skill) => updatedByInstance.get(instanceKey(skill)) ?? skill);
-  const currentInstances = new Set(currentSkills.map(instanceKey));
-  const newSkills = updatedSkills.filter((skill) => !currentInstances.has(instanceKey(skill)));
+  const updatedByInstance = new Map(updatedSkills.map((skill) => [skillInstanceKey(skill), skill]));
+  const mergedSkills = currentSkills.map((skill) => updatedByInstance.get(skillInstanceKey(skill)) ?? skill);
+  const currentInstances = new Set(currentSkills.map(skillInstanceKey));
+  const newSkills = updatedSkills.filter((skill) => !currentInstances.has(skillInstanceKey(skill)));
 
   return [...newSkills, ...mergedSkills];
+}
+
+function restoreDeletedSkill(
+  currentSkills: SkillSummary[],
+  deletedSkill: SkillSummary,
+  originalIndex: number,
+) {
+  const deletedInstanceKey = skillInstanceKey(deletedSkill);
+  if (currentSkills.some((skill) => skillInstanceKey(skill) === deletedInstanceKey)) {
+    return currentSkills;
+  }
+  const restoredSkills = [...currentSkills];
+  restoredSkills.splice(Math.min(originalIndex, restoredSkills.length), 0, deletedSkill);
+  return restoredSkills;
 }
 
 function getMarketplaceSearchFailedMessage(language: AppLanguage) {
@@ -646,12 +678,19 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
   }
 
   async function handleSetSkillLibraryProvider(provider: SkillLibraryProvider) {
-    await persistAppSettings({
+    const previousSettings = appSettings;
+    const nextSettings = {
       ...appSettings,
       skillLibraryProvider: provider,
       agentSkillsCompatibilityEnabled: provider === "agent-skills",
-    });
-    await loadWorkspaceSnapshot({ showRefreshing: true });
+    };
+    setAppSettings(nextSettings);
+    try {
+      await persistAppSettings(nextSettings);
+    } catch (error) {
+      setAppSettings(previousSettings);
+      throw error;
+    }
   }
 
   useLayoutEffect(() => {
@@ -1053,7 +1092,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       localGitRefreshDebounceTimersRef.current.set(skillName, timer);
     }).then((cleanup) => {
       if (!active) {
-        cleanup();
+        releaseEventListener(cleanup);
         return;
       }
       unlisten = cleanup;
@@ -1063,13 +1102,47 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
 
     return () => {
       active = false;
-      if (unlisten) {
-        unlisten();
-      }
+      releaseEventListener(unlisten);
       for (const timer of localGitRefreshDebounceTimersRef.current.values()) {
         window.clearTimeout(timer);
       }
       localGitRefreshDebounceTimersRef.current.clear();
+    };
+  }, [usesFixtureData]);
+
+  useEffect(() => {
+    if (usesFixtureData) {
+      return;
+    }
+
+    let active = true;
+    let unlisten: (() => void) | null = null;
+
+    void subscribeSkillLibraryRefreshes((snapshot) => {
+      if (!active) {
+        return;
+      }
+
+      lastLocalWorkspaceAlignAtRef.current = Date.now();
+      startupWatchedSkillNamesRef.current = new Set(
+        snapshot.installedSkills.map((skill) => skill.name),
+      );
+      setInstalledSkills(snapshot.installedSkills);
+      setLocalCandidates(snapshot.localCandidates);
+      setToolSkillEntries(snapshot.toolSkillEntries);
+    }).then((cleanup) => {
+      if (!active) {
+        releaseEventListener(cleanup);
+        return;
+      }
+      unlisten = cleanup;
+    }).catch((error) => {
+      console.error("Failed to subscribe to Skill library refreshes:", error);
+    });
+
+    return () => {
+      active = false;
+      releaseEventListener(unlisten);
     };
   }, [usesFixtureData]);
 
@@ -1335,10 +1408,29 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
   }
 
   async function handleDeleteSkill(skillName: string, skillPath?: string) {
-    await deleteSkill(skillName, skillPath);
-    setInstalledSkills((current) => current.filter((skill) => (
-      skill.name !== skillName || (skill.canonicalPath ?? skill.localPath) !== skillPath
-    )));
+    const deletedIndex = installedSkills.findIndex((skill) => (
+      skill.name === skillName
+      && (!skillPath || (skill.canonicalPath ?? skill.localPath) === skillPath)
+    ));
+    const deletedSkill = deletedIndex >= 0 ? installedSkills[deletedIndex] : null;
+    if (deletedSkill) {
+      const deletedInstanceKey = skillInstanceKey(deletedSkill);
+      setInstalledSkills((current) => current.filter(
+        (skill) => skillInstanceKey(skill) !== deletedInstanceKey,
+      ));
+    }
+
+    workspaceMutationVersionRef.current += 1;
+    try {
+      await deleteSkill(skillName, skillPath);
+    } catch (error) {
+      if (deletedSkill) {
+        setInstalledSkills((current) => restoreDeletedSkill(current, deletedSkill, deletedIndex));
+      }
+      throw error;
+    } finally {
+      workspaceMutationVersionRef.current += 1;
+    }
   }
 
   async function handleDeleteToolSkill(input: { toolId: string; skillName: string }) {

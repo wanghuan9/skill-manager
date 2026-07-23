@@ -39,8 +39,8 @@ test("shows same-name Skill instances with their directory owners", async () => 
   expect(screen.getByText(/Agent CLI/)).toBeInTheDocument();
   expect(screen.queryByText("外部目录")).not.toBeInTheDocument();
 
-  await user.click(screen.getByLabelText("按托管方筛选 Skill"));
-  await user.click(screen.getByRole("option", { name: "Agent CLI" }));
+  await user.click(screen.getByRole("combobox", { name: "筛选 Skill" }));
+  await user.click(screen.getByRole("option", { name: "Agent CLI (1)" }));
 
   expect(screen.getAllByRole("article", { name: "duplicate-skill" })).toHaveLength(1);
 });

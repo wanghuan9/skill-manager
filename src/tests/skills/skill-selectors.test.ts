@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SkillSummary } from "@/features/skills/state/skill-store";
-import { filterSkills } from "@/features/skills/state/skill-selectors";
+import { compareSkillsByEnablement, filterSkills } from "@/features/skills/state/skill-selectors";
 
 function createSkill(overrides: Partial<SkillSummary>): SkillSummary {
   return {
@@ -158,5 +158,35 @@ describe("filterSkills", () => {
     );
 
     expect(skills.map((skill) => skill.name)).toEqual(["disabled-skill", "empty-tool-skill"]);
+  });
+});
+
+describe("compareSkillsByEnablement", () => {
+  it("orders fully enabled, partially enabled, then disabled skills", () => {
+    const fullyEnabled = createSkill({
+      name: "fully-enabled",
+      tools: [
+        { name: "Codex", statusLabel: "已同步" },
+        { name: "Cursor", statusLabel: "已启用" },
+      ],
+    });
+    const partiallyEnabled = createSkill({
+      name: "partially-enabled",
+      tools: [
+        { name: "Codex", statusLabel: "已同步" },
+        { name: "Cursor", statusLabel: "未启用" },
+      ],
+    });
+    const disabled = createSkill({
+      name: "disabled",
+      tools: [
+        { name: "Codex", statusLabel: "未启用" },
+        { name: "Cursor", statusLabel: "未启用" },
+      ],
+    });
+
+    const sorted = [partiallyEnabled, disabled, fullyEnabled].sort(compareSkillsByEnablement);
+
+    expect(sorted.map((skill) => skill.name)).toEqual(["fully-enabled", "partially-enabled", "disabled"]);
   });
 });
