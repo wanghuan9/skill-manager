@@ -23,13 +23,13 @@ use crate::library::{
     clone_repo_skill, clone_shared_install_batch_repo, configure_git_network_command,
     configure_hidden_subprocess, create_skill_symlink, ensure_repo_skill_from_local_batch_source,
     ensure_repo_skill_with_resolved_ref_and_sparse_paths, get_tool_skills_path, git_command,
-    install_market_skill_from_source, is_ssh_git_url, parse_market_source_url,
+    install_market_skill_from_source, is_skill_link_entry, is_ssh_git_url, parse_market_source_url,
     reconcile_tool_skill_symlinks, remote_clone_candidates, remove_reserved_workspace_entries,
-    remove_reserved_workspace_symlinks_from_all_tools, remove_skill_symlink,
-    remove_tool_skill_entry, repo_cache_directory_root, resolve_clone_url_http_first,
-    resolve_git_clone_url_with_instead_of, sanitize_storage_name, skill_directory,
-    summarize_git_error, tree_relative_path_for_branch, with_temporary_discovery_repo_resolved,
-    CloneProgressCallback, RemoteCloneCandidate,
+    remove_reserved_workspace_symlinks_from_all_tools, remove_skill_link_entry,
+    remove_skill_symlink, remove_tool_skill_entry, repo_cache_directory_root,
+    resolve_clone_url_http_first, resolve_git_clone_url_with_instead_of, sanitize_storage_name,
+    skill_directory, summarize_git_error, tree_relative_path_for_branch,
+    with_temporary_discovery_repo_resolved, CloneProgressCallback, RemoteCloneCandidate,
 };
 use crate::models::{
     AppSettings, GitAccountSummary, GitBranchOption, GitChangeFile, LocalInstallSkillCandidate,
@@ -7739,12 +7739,12 @@ fn delete_skill_blocking(skill_name: &str, skill_path: Option<&str>) -> Result<(
         "agent-skills-cli" => crate::agent_skills_cli::remove_global_skill(&skill.name)?,
         "external" => {
             let entry_path = PathBuf::from(&skill.instance.entry_path);
-            let metadata = fs::symlink_metadata(&entry_path)
+            fs::symlink_metadata(&entry_path)
                 .map_err(|error| format!("读取 Agent Skill 入口失败: {error}"))?;
-            if !metadata.file_type().is_symlink() {
+            if !is_skill_link_entry(&entry_path) {
                 return Err("该 Skill 是外部真实目录，SkillDock 不会直接删除其内容。".into());
             }
-            fs::remove_file(&entry_path)
+            remove_skill_link_entry(&entry_path)
                 .map_err(|error| format!("删除 Agent Skill 入口失败: {error}"))?;
             remove_matching_skill_links_from_all_tools(&skill)?;
         }
@@ -7754,11 +7754,11 @@ fn delete_skill_blocking(skill_name: &str, skill_path: Option<&str>) -> Result<(
             let local_path = PathBuf::from(&skill.local_path);
             let delete_target = managed_delete_target(&local_path)?;
             let delete_result = (|| {
-                if delete_target.exists() && should_remove_local_directory(&delete_target)? {
-                    let metadata = fs::symlink_metadata(&delete_target)
-                        .map_err(|error| format!("读取 skill 目录失败: {error}"))?;
-                    if metadata.file_type().is_symlink() {
-                        fs::remove_file(&delete_target)
+                if fs::symlink_metadata(&delete_target).is_ok()
+                    && should_remove_local_directory(&delete_target)?
+                {
+                    if is_skill_link_entry(&delete_target) {
+                        remove_skill_link_entry(&delete_target)
                             .map_err(|error| format!("删除 skill 链接失败: {error}"))?;
                     } else {
                         fs::remove_dir_all(&delete_target)
@@ -7784,7 +7784,7 @@ fn delete_skill_blocking(skill_name: &str, skill_path: Option<&str>) -> Result<(
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct SkillLinkSnapshot {
     path: PathBuf,
-    raw_target: PathBuf,
+    target: PathBuf,
 }
 
 fn collect_matching_skill_links(skill: &SkillSummary) -> Vec<SkillLinkSnapshot> {
@@ -7801,16 +7801,15 @@ fn collect_matching_skill_links(skill: &SkillSummary) -> Vec<SkillLinkSnapshot> 
                 return None;
             }
             let link_path = PathBuf::from(tool.skills_path).join(&skill.name);
-            let metadata = fs::symlink_metadata(&link_path).ok()?;
-            if !metadata.file_type().is_symlink()
+            fs::symlink_metadata(&link_path).ok()?;
+            if !is_skill_link_entry(&link_path)
                 || link_path.canonicalize().ok().as_ref() != Some(&expected_path)
             {
                 return None;
             }
-            let raw_target = fs::read_link(&link_path).ok()?;
             Some(SkillLinkSnapshot {
                 path: link_path,
-                raw_target,
+                target: expected_path.clone(),
             })
         })
         .collect()
@@ -7821,14 +7820,12 @@ fn remove_skill_link_snapshots(
 ) -> Result<Vec<SkillLinkSnapshot>, String> {
     let mut removed = Vec::new();
     for snapshot in snapshots {
-        let is_unchanged_link = fs::symlink_metadata(&snapshot.path)
-            .ok()
-            .is_some_and(|metadata| metadata.file_type().is_symlink())
-            && fs::read_link(&snapshot.path).ok().as_ref() == Some(&snapshot.raw_target);
+        let is_unchanged_link = is_skill_link_entry(&snapshot.path)
+            && snapshot.path.canonicalize().ok().as_ref() == Some(&snapshot.target);
         if !is_unchanged_link {
             continue;
         }
-        if let Err(error) = fs::remove_file(&snapshot.path) {
+        if let Err(error) = remove_skill_link_entry(&snapshot.path) {
             restore_skill_link_snapshots(&removed);
             return Err(format!("删除工具 Skill 链接失败: {error}"));
         }
@@ -7845,11 +7842,7 @@ fn restore_skill_link_snapshots(snapshots: &[SkillLinkSnapshot]) {
         let Some(parent) = snapshot.path.parent() else {
             continue;
         };
-        let resolved_target = if snapshot.raw_target.is_absolute() {
-            snapshot.raw_target.clone()
-        } else {
-            parent.join(&snapshot.raw_target)
-        };
+        let resolved_target = &snapshot.target;
         if !resolved_target.is_dir() || !resolved_target.join("SKILL.md").is_file() {
             continue;
         }
@@ -7876,13 +7869,13 @@ fn remove_matching_skill_links_from_all_tools(skill: &SkillSummary) -> Result<()
             continue;
         }
         let link_path = PathBuf::from(&tool.skills_path).join(&skill.name);
-        let Ok(metadata) = fs::symlink_metadata(&link_path) else {
+        if fs::symlink_metadata(&link_path).is_err() {
             continue;
-        };
-        if metadata.file_type().is_symlink()
+        }
+        if is_skill_link_entry(&link_path)
             && link_path.canonicalize().ok().as_ref() == Some(&expected_path)
         {
-            fs::remove_file(&link_path)
+            remove_skill_link_entry(&link_path)
                 .map_err(|error| format!("删除工具 Skill 链接失败: {error}"))?;
         }
     }
@@ -7891,10 +7884,10 @@ fn remove_matching_skill_links_from_all_tools(skill: &SkillSummary) -> Result<()
 
 fn remove_matching_skill_link(tool_skills_path: &str, skill: &SkillSummary) -> Result<(), String> {
     let link_path = PathBuf::from(tool_skills_path).join(&skill.name);
-    let Ok(metadata) = fs::symlink_metadata(&link_path) else {
+    if fs::symlink_metadata(&link_path).is_err() {
         return Ok(());
-    };
-    if !metadata.file_type().is_symlink() {
+    }
+    if !is_skill_link_entry(&link_path) {
         return Ok(());
     }
 
@@ -7905,7 +7898,8 @@ fn remove_matching_skill_link(tool_skills_path: &str, skill: &SkillSummary) -> R
     });
     let expected_path = expected_path.canonicalize().unwrap_or(expected_path);
     if link_path.canonicalize().ok().as_ref() == Some(&expected_path) {
-        fs::remove_file(&link_path).map_err(|error| format!("删除工具 Skill 链接失败: {error}"))?;
+        remove_skill_link_entry(&link_path)
+            .map_err(|error| format!("删除工具 Skill 链接失败: {error}"))?;
     }
     Ok(())
 }
@@ -8154,6 +8148,8 @@ mod tests {
         update_skill_blocking, update_skill_repo, REFRESH_GIT_STATES_CONCURRENCY,
     };
     use crate::agent_skills_cli::AgentSkillUpdateCheck;
+    #[cfg(windows)]
+    use crate::library::create_windows_directory_junction;
     use crate::models::{
         AppSettings, MarketplaceSkill, SkillFileEntry, SkillSummary, ToolConfig,
         WorkspacePersistence,
@@ -8922,6 +8918,62 @@ mod tests {
         assert_eq!(claude_target.as_deref(), Some(other_skill_dir.as_path()));
         assert!(!skill_exists);
         assert!(persisted_skills.iter().all(|skill| skill.name != "demo"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn skilldock_delete_removes_matching_windows_junctions_without_deleting_targets() {
+        let _guard = TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let temp_home = temp_test_dir("skilldock-delete-junctions");
+        let skill_dir = temp_home.join(".skilldock/skills/demo");
+        let other_skill_dir = temp_home.join("other/demo");
+        let cursor_link = temp_home.join(".cursor/skills/demo");
+        let claude_link = temp_home.join(".claude/skills/demo");
+        for path in [
+            &skill_dir,
+            &other_skill_dir,
+            cursor_link.parent().expect("cursor skills path"),
+            claude_link.parent().expect("Claude skills path"),
+        ] {
+            fs::create_dir_all(path).expect("create delete test path");
+        }
+        fs::write(skill_dir.join("SKILL.md"), "# demo\n").expect("write managed skill");
+        fs::write(other_skill_dir.join("SKILL.md"), "# other demo\n").expect("write other skill");
+        create_windows_directory_junction(&skill_dir, &cursor_link)
+            .expect("link managed skill to Cursor");
+        create_windows_directory_junction(&other_skill_dir, &claude_link)
+            .expect("link other skill to Claude Code");
+
+        let original_home = env::var_os("HOME");
+        unsafe {
+            env::set_var("HOME", &temp_home);
+        }
+        let mut skill = installed_skill_fixture(
+            "demo",
+            "https://github.com/example/demo.git",
+            skill_dir.to_string_lossy().as_ref(),
+        );
+        skill.instance.entry_path = skill.local_path.clone();
+        skill.instance.canonical_path = skill.local_path.clone();
+        skill.instance.management_owner = "skilldock".into();
+        skill.instance.update_driver = "git".into();
+        save_installed_skills(&[skill]).expect("save managed skill");
+
+        let delete_result =
+            delete_skill_blocking("demo", Some(skill_dir.to_string_lossy().as_ref()));
+        let cursor_link_exists = fs::symlink_metadata(&cursor_link).is_ok();
+        let claude_target = claude_link.canonicalize().ok();
+        let skill_exists = fs::symlink_metadata(&skill_dir).is_ok();
+
+        restore_env_var("HOME", original_home);
+        let _ = fs::remove_dir_all(&temp_home);
+
+        delete_result.expect("delete SkillDock skill");
+        assert!(!cursor_link_exists);
+        assert_eq!(claude_target.as_deref(), Some(other_skill_dir.as_path()));
+        assert!(!skill_exists);
     }
 
     #[test]

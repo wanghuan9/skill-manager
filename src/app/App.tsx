@@ -21,12 +21,13 @@ import { SettingsRoute } from "@/app/routes/settings";
 import { AboutRoute } from "@/app/routes/about";
 import { PluginsRoute } from "@/app/routes/plugins";
 import { AppI18nProvider, tx, useTranslate } from "@/app/i18n";
-import { NotificationProvider } from "@/app/notifications";
+import { NotificationProvider, useNotifications } from "@/app/notifications";
 import { useFailureReporter } from "@/app/failure-feedback";
 import { FailureTracker } from "@/app/failure-tracker";
 import { waitForNextPaint } from "@/app/utils/wait-for-next-paint";
 import { AppUpdateAutoPrompt } from "@/features/app-update/AppUpdateAutoPrompt";
 import { AppTooltip } from "@/app/components/AppTooltip";
+import { fetchAgentSkillsCliStatus } from "@/features/skills/api/skill-client";
 import {
   SkillWorkspaceProvider,
   useSkillWorkspace,
@@ -79,6 +80,8 @@ type RouteErrorBoundaryState = {
 };
 
 const ROUTE_LOCAL_ALIGN_COOLDOWN_MS = 10_000;
+const AGENT_SKILLS_COMPATIBILITY_PROMPT_COUNT_KEY = "skilldock.agentSkillsCompatibilityPromptCount";
+const AGENT_SKILLS_COMPATIBILITY_PROMPT_MAX_COUNT = 3;
 
 class RouteErrorBoundary extends Component<
   RouteErrorBoundaryProps,
@@ -559,6 +562,7 @@ function AppContent() {
     toolConfigs,
   } = useSkillWorkspace();
   const { t } = useTranslate();
+  const { notify } = useNotifications();
   const reportFailure = useFailureReporter();
   const initialSkillViewMode = readSkillViewModePreference();
   const isMacOS = isMacOSWindow();
@@ -598,6 +602,49 @@ function AppContent() {
   );
   const routeLocalAlignInFlightRef = useRef(false);
   const lastRouteLocalAlignRef = useRef<{ key: string; timestamp: number } | null>(null);
+  const compatibilityPromptCheckStartedRef = useRef(false);
+
+  useEffect(() => {
+    if (
+      appSettings.agentSkillsCompatibilityEnabled
+      || appSettings.storagePath.trim().length === 0
+      || compatibilityPromptCheckStartedRef.current
+    ) {
+      return;
+    }
+
+    const promptCount = Number.parseInt(
+      window.localStorage.getItem(AGENT_SKILLS_COMPATIBILITY_PROMPT_COUNT_KEY) ?? "0",
+      10,
+    );
+    if (promptCount >= AGENT_SKILLS_COMPATIBILITY_PROMPT_MAX_COUNT) {
+      return;
+    }
+
+    compatibilityPromptCheckStartedRef.current = true;
+    void fetchAgentSkillsCliStatus()
+      .then((status) => {
+        if (!status.available) {
+          return;
+        }
+
+        const nextPromptCount = promptCount + 1;
+        window.localStorage.setItem(
+          AGENT_SKILLS_COMPATIBILITY_PROMPT_COUNT_KEY,
+          String(nextPromptCount),
+        );
+        notify({
+          message: t("settings.skillLibrary.startupPrompt"),
+          tone: "info",
+          actionLabel: t("settings.skillLibrary.openSettings"),
+          onAction: () => setActiveRoute("settings"),
+        });
+      })
+      .catch((error) => {
+        console.warn("Failed to detect Agent Skills CLI for startup prompt", error);
+      });
+  }, [appSettings.agentSkillsCompatibilityEnabled, appSettings.storagePath, notify, t]);
+
   const activeDefinition =
     routes.find((route) => route.key === activeRoute) ?? routes[0];
   const updatableSkillCount = installedSkills.filter((skill) => (

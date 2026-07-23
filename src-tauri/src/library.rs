@@ -2515,7 +2515,7 @@ fn is_windows_directory_reparse_point(metadata: &fs::Metadata) -> bool {
     attributes & FILE_ATTRIBUTE_DIRECTORY != 0 && attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0
 }
 
-fn is_skill_link_entry(path: &Path) -> bool {
+pub(crate) fn is_skill_link_entry(path: &Path) -> bool {
     let Ok(metadata) = fs::symlink_metadata(path) else {
         return false;
     };
@@ -2532,7 +2532,7 @@ fn is_skill_link_entry(path: &Path) -> bool {
     false
 }
 
-fn remove_skill_link_entry(path: &Path) -> Result<(), std::io::Error> {
+pub(crate) fn remove_skill_link_entry(path: &Path) -> Result<(), std::io::Error> {
     #[cfg(windows)]
     {
         let metadata = fs::symlink_metadata(path)?;

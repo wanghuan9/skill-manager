@@ -110,6 +110,8 @@ pub fn managed_workspace_root() -> Result<PathBuf, String> {
 
 pub fn ensure_workspace_initialized() -> Result<PathBuf, String> {
     let workspace_root = managed_workspace_root()?;
+    // Existing workspaces predate this setting, so keep their visible Skill list unchanged.
+    let is_new_workspace = !workspace_root.exists();
     fs::create_dir_all(workspace_root.join("skills"))
         .map_err(|error| format!("创建 skills 目录失败: {error}"))?;
     fs::create_dir_all(workspace_root.join("cache"))
@@ -125,9 +127,13 @@ pub fn ensure_workspace_initialized() -> Result<PathBuf, String> {
         &workspace_root.join("state.json"),
         "{\n  \"installedSkills\": []\n}\n",
     )?;
+    let agent_skills_compatibility_enabled = is_new_workspace;
+    let default_settings = format!(
+        "{{\n  \"defaultOpenToolId\": \"\",\n  \"skillInstallActivation\": \"apply-all-tools\",\n  \"mcpInstallActivation\": \"apply-all-tools\",\n  \"skillSourceViewStyle\": \"select\",\n  \"skillLibraryProvider\": \"skilldock\",\n  \"agentSkillsCompatibilityEnabled\": {agent_skills_compatibility_enabled}\n}}\n"
+    );
     ensure_workspace_file_with_default_content(
         &workspace_root.join("settings.json"),
-        "{\n  \"defaultOpenToolId\": \"\",\n  \"skillInstallActivation\": \"apply-all-tools\",\n  \"mcpInstallActivation\": \"apply-all-tools\",\n  \"skillSourceViewStyle\": \"select\",\n  \"skillLibraryProvider\": \"skilldock\"\n}\n",
+        &default_settings,
     )?;
     ensure_workspace_file_with_default_content(
         &workspace_root.join("mcp-servers.json"),
@@ -749,6 +755,23 @@ mod tests {
             assert!(settings_content.contains("\"mcpInstallActivation\": \"apply-all-tools\""));
             assert!(settings_content.contains("\"skillSourceViewStyle\": \"select\""));
             assert!(settings_content.contains("\"skillLibraryProvider\": \"skilldock\""));
+            assert!(settings_content.contains("\"agentSkillsCompatibilityEnabled\": true"));
+            assert!(compatibility_enabled_for_home(&temp_home));
+        });
+    }
+
+    #[test]
+    fn keeps_agent_skills_compatibility_disabled_when_existing_workspace_has_no_settings() {
+        run_with_temp_home("bootstrap-existing-workspace", |temp_home| {
+            let workspace_root = temp_home.join(WORKSPACE_DIR_NAME);
+            fs::create_dir_all(workspace_root.join("skills")).expect("create existing workspace");
+
+            ensure_workspace_initialized().expect("workspace should initialize");
+
+            let settings_content =
+                fs::read_to_string(workspace_root.join("settings.json")).expect("read settings");
+            assert!(settings_content.contains("\"agentSkillsCompatibilityEnabled\": false"));
+            assert!(!compatibility_enabled_for_home(&temp_home));
         });
     }
 
@@ -867,6 +890,7 @@ mod tests {
                 fs::read_to_string(workspace_root.join("settings.json")).expect("read settings"),
                 "{\n  \"defaultOpenToolId\": \"cursor\"\n}\n"
             );
+            assert!(!compatibility_enabled_for_home(&temp_home));
             assert_eq!(
                 fs::read_to_string(workspace_root.join("mcp-servers.json")).expect("read mcp"),
                 "{\n  \"servers\": [{\"id\": \"kept\"}]\n}\n"

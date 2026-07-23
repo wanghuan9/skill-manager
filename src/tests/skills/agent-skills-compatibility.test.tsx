@@ -1,7 +1,42 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { afterEach, vi } from "vitest";
 import { App } from "@/app/App";
-import { workspaceSnapshotFixture } from "@/features/skills/state/skill-fixtures";
+import * as skillClient from "@/features/skills/api/skill-client";
+import {
+  appSettingsFixture,
+  workspaceSnapshotFixture,
+} from "@/features/skills/state/skill-fixtures";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+test("prompts existing users up to three times when Agent Skills CLI is detected", async () => {
+  const user = userEvent.setup();
+  appSettingsFixture.agentSkillsCompatibilityEnabled = false;
+  window.localStorage.setItem("skilldock.agentSkillsCompatibilityPromptCount", "2");
+  const statusSpy = vi.spyOn(skillClient, "fetchAgentSkillsCliStatus").mockResolvedValue({
+    available: true,
+    globalPath: "/Users/demo/.agents/skills",
+    entries: [],
+    error: "",
+  });
+
+  const firstRender = render(<App />);
+
+  expect(await screen.findByText("检测到 Agent Skills CLI，可在设置中开启兼容识别")).toBeInTheDocument();
+  expect(window.localStorage.getItem("skilldock.agentSkillsCompatibilityPromptCount")).toBe("3");
+
+  await user.click(screen.getByRole("button", { name: "前往设置" }));
+  expect(screen.getByRole("heading", { name: "设置" })).toBeInTheDocument();
+
+  firstRender.unmount();
+  render(<App />);
+
+  expect(screen.queryByText("检测到 Agent Skills CLI，可在设置中开启兼容识别")).not.toBeInTheDocument();
+  expect(statusSpy).toHaveBeenCalledTimes(1);
+});
 
 test("shows same-name Skill instances with their directory owners", async () => {
   const user = userEvent.setup();

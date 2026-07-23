@@ -6,6 +6,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
+#[cfg(windows)]
+use crate::library::{command_for_executable, resolve_command_in_path};
 use crate::workspace::home_dir;
 
 const CLI_COMMAND: &str = "skills";
@@ -316,7 +318,7 @@ fn find_cli_program_for_operation() -> Option<CliProgram> {
 }
 
 fn run_with_program(program: &CliProgram, args: &[&str]) -> Result<Output, String> {
-    let mut command = Command::new(&program.program);
+    let mut command = cli_command(&program.program)?;
     command.args(&program.prefix_args).args(args);
     command
         .output()
@@ -328,12 +330,26 @@ fn run_with_program_in_home(
     args: &[&str],
     task_home: &Path,
 ) -> Result<Output, String> {
-    let mut command = Command::new(&program.program);
+    let mut command = cli_command(&program.program)?;
     command.args(&program.prefix_args).args(args);
     command.env("HOME", task_home).env("USERPROFILE", task_home);
     command
         .output()
         .map_err(|error| format!("执行 skills 命令失败: {error}"))
+}
+
+fn cli_command(program: &str) -> Result<Command, String> {
+    #[cfg(windows)]
+    {
+        let executable = resolve_command_in_path(program)
+            .ok_or_else(|| format!("未找到 Agent Skills CLI 命令: {program}"))?;
+        return Ok(command_for_executable(&executable));
+    }
+
+    #[cfg(not(windows))]
+    {
+        Ok(Command::new(program))
+    }
 }
 
 fn command_error(output: &Output) -> String {

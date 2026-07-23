@@ -25,6 +25,7 @@ import {
 } from "@/features/skills/state/skill-fixtures";
 import type {
   AppLanguage,
+  AgentSkillsCliStatus,
   AppSettings,
   CliToolSummary,
   FailureFeedbackInput,
@@ -1259,6 +1260,19 @@ export async function fetchAppSettings(): Promise<AppSettings> {
     agentSkillsCompatibilityEnabled:
       settings.agentSkillsCompatibilityEnabled ?? settings.skillLibraryProvider === "agent-skills",
   };
+}
+
+export async function fetchAgentSkillsCliStatus(): Promise<AgentSkillsCliStatus> {
+  return invokeOrFallback<AgentSkillsCliStatus>(
+    "get_agent_skills_cli_status",
+    {},
+    {
+      available: false,
+      globalPath: "",
+      entries: [],
+      error: "",
+    },
+  );
 }
 
 export async function updateAppSettings(input: UpdateAppSettingsInput): Promise<AppSettings> {

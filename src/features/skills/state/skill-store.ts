@@ -344,6 +344,18 @@ export type AppSettings = {
   theme: AppTheme;
 };
 
+export type AgentSkillsCliStatus = {
+  available: boolean;
+  globalPath: string;
+  entries: Array<{
+    name: string;
+    path: string;
+    scope: string;
+    agents: string[];
+  }>;
+  error: string;
+};
+
 export type WorkspaceSnapshot = {
   installedSkills: SkillSummary[];
   marketplaceSkills: MarketplaceSkill[];

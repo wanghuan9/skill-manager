@@ -1090,6 +1090,7 @@ mod tests {
                 settings.skill_library_path,
                 temp_home.join(".skilldock/skills").to_string_lossy()
             );
+            assert!(!settings.agent_skills_compatibility_enabled);
         });
     }
 
