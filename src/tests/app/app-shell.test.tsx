@@ -62,6 +62,22 @@ test("renders primary navigation entries with plugins before tools and cli hidde
   ]);
 });
 
+test("notifies about startup Skill updates and opens the update filter", async () => {
+  render(<App />);
+
+  expect(await screen.findByText("1 个 Skill 有可用更新")).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "查看" }));
+
+  const statusFilter = screen.getByRole("combobox", { name: "按状态筛选技能" });
+  expect(statusFilter).toHaveTextContent("可更新 (1)");
+
+  await userEvent.click(statusFilter);
+  expect(screen.getByRole("option", { name: "可更新 (1)" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+});
+
 test("marks empty macOS page header surfaces as window drag regions", () => {
   const originalPlatform = window.navigator.platform;
   Object.defineProperty(window.navigator, "platform", {

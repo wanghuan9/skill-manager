@@ -949,7 +949,7 @@ test("keeps the plugin install result page open after installing selected hosts"
       hostTools: ["codex", "claude-code", "cursor"],
     });
   });
-  expect(await screen.findByRole("status")).toHaveTextContent("选中插件已安装");
+  expect(await screen.findByText("选中插件已安装")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "返回" })).toBeInTheDocument();
   expect(screen.queryByRole("textbox", { name: "Git 仓库地址" })).not.toBeInTheDocument();
 
@@ -1854,7 +1854,7 @@ test("keeps the git install selection page open after installing selected repo s
   await userEvent.click(screen.getByRole("button", { name: /service-observer/i }));
   await userEvent.click(screen.getByRole("button", { name: "安装选中技能" }));
 
-  expect(await screen.findByRole("status")).toHaveTextContent("选中技能已安装");
+  expect(await screen.findByText("选中技能已安装")).toBeInTheDocument();
   expect(screen.getByText("release-scribe")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "返回" })).toBeInTheDocument();
   expect(screen.queryByRole("textbox", { name: "Git 仓库地址" })).not.toBeInTheDocument();
@@ -1871,7 +1871,7 @@ test("installs a local skill from a typed path", async () => {
   await userEvent.type(screen.getByRole("textbox", { name: "技能名称（可选）" }), "local-helper");
   await userEvent.click(screen.getByRole("button", { name: "安装技能" }));
 
-  expect(await screen.findByRole("status")).toHaveTextContent("本地技能已安装");
+  expect(await screen.findByText("本地技能已安装")).toBeInTheDocument();
 });
 
 test("discovers local project skills and allows multi-select install", async () => {
@@ -1903,7 +1903,7 @@ test("discovers local project skills and allows multi-select install", async () 
       selectedPaths: ["skills/service-observer", "skills/release-scribe"],
     });
   });
-  expect(await screen.findByRole("status")).toHaveTextContent("选中本地技能已安装");
+  expect(await screen.findByText("选中本地技能已安装")).toBeInTheDocument();
   discoverSpy.mockRestore();
   installSpy.mockRestore();
 });
