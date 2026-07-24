@@ -10060,6 +10060,10 @@ button.settings-form-item:disabled {
   color: #15803d;
 }
 
+.plugins-page__toggle-icon-button:active:not(:disabled) {
+  transform: none;
+}
+
 .plugins-page__toggle-icon-button.is-disabled {
   border-color: rgba(100, 116, 139, 0.18);
   background: rgba(148, 163, 184, 0.1);
@@ -10067,9 +10071,9 @@ button.settings-form-item:disabled {
 }
 
 .plugins-page__toggle-icon-button.is-disabled:hover:not(:disabled) {
-  border-color: rgba(21, 128, 61, 0.3);
-  background: rgba(34, 197, 94, 0.12);
-  color: #15803d;
+  border-color: rgba(100, 116, 139, 0.3);
+  background: rgba(148, 163, 184, 0.16);
+  color: #475569;
 }
 
 .plugins-page__toggle-icon-button.is-enabled {
@@ -10103,7 +10107,7 @@ button.settings-form-item:disabled {
 }
 
 .skill-card__power-icon.is-spinning {
-  animation: spin 0.8s linear infinite;
+  animation: none;
 }
 
 .plugins-page__detail-panel {
@@ -13738,9 +13742,9 @@ button.settings-form-item:disabled {
 }
 
 :root[data-theme="dark"] .plugins-page__toggle-icon-button.is-disabled:hover:not(:disabled) {
-  border-color: rgba(82, 216, 137, 0.4);
-  background: rgba(82, 216, 137, 0.11);
-  color: #8ee3b1;
+  border-color: #5a5a5a;
+  background: #363636;
+  color: #c2c2c2;
 }
 
 :root[data-theme="dark"] .plugins-page__toggle-icon-button.is-enabled {
