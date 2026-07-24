@@ -1616,9 +1616,11 @@ export function McpRoute(props: McpRouteProps = {}) {
                       <DeleteIcon />
                     </button>
                   )}
-                  <span className="skill-card__chevron mcp-server-card__chevron" aria-hidden="true">
-                    {isExpanded ? "⌄" : "›"}
-                  </span>
+                  {viewMode === "grid" ? null : (
+                    <span className="skill-card__chevron mcp-server-card__chevron" aria-hidden="true">
+                      {isExpanded ? "⌄" : "›"}
+                    </span>
+                  )}
                 </div>
               </div>
               {isExpanded ? (

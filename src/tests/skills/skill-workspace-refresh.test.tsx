@@ -212,6 +212,21 @@ function ImportCandidateProbe() {
   );
 }
 
+function ToolSkillRefreshProbe() {
+  const { refreshToolSkillEntries, toolSkillEntries } = useSkillWorkspace();
+
+  return (
+    <div>
+      <button type="button" onClick={() => void refreshToolSkillEntries("codex")}>
+        刷新 Codex 目录
+      </button>
+      <span data-testid="tool-skill-entries">
+        {toolSkillEntries.map((entry) => `${entry.toolId}:${entry.name}`).join(",")}
+      </span>
+    </div>
+  );
+}
+
 function MarketplaceProbe() {
   const { loadInitialMarketplaceSkills, marketplaceSkills } = useSkillWorkspace();
   const [loadState, setLoadState] = useState("idle");
@@ -510,6 +525,84 @@ test("rescans tool entries after importing without changing an external real pat
       "unmanaged:/Users/demo/shared-skills/external-skill",
     );
   });
+});
+
+test("refreshes and replaces only the selected tool Skill entries", async () => {
+  const initialEntries: ToolSkillEntry[] = [
+    {
+      toolId: "codex",
+      toolName: "Codex",
+      name: "old-codex-skill",
+      description: "old",
+      localPath: "/tmp/codex/old-codex-skill",
+      resolvedPath: "/tmp/codex/old-codex-skill",
+      managementStatus: "unmanaged",
+      managedRoot: "",
+      entryKind: "directory",
+    },
+    {
+      toolId: "claude-code",
+      toolName: "Claude Code",
+      name: "claude-skill",
+      description: "claude",
+      localPath: "/tmp/claude/claude-skill",
+      resolvedPath: "/tmp/claude/claude-skill",
+      managementStatus: "unmanaged",
+      managedRoot: "",
+      entryKind: "directory",
+    },
+  ];
+  const refreshedCodexEntries: ToolSkillEntry[] = [{
+    ...initialEntries[0],
+    name: "new-codex-skill",
+    localPath: "/tmp/codex/new-codex-skill",
+    resolvedPath: "/tmp/codex/new-codex-skill",
+  }];
+
+  mockedInvoke.mockImplementation(async (command, args) => {
+    switch (command) {
+      case "list_startup_installed_skills":
+      case "refresh_git_states":
+        return installedSkillFixtures;
+      case "list_local_skill_candidates":
+        return localSkillFixtures;
+      case "list_tool_configs":
+        return toolConfigFixtures;
+      case "list_tool_skill_entries":
+        return (args as { toolId?: string }).toolId === "codex"
+          ? refreshedCodexEntries
+          : initialEntries;
+      case "get_git_account_summary":
+        return gitAccountFixture;
+      case "get_app_settings":
+        return appSettingsFixture;
+      case "update_app_settings":
+        return (args as { settings: AppSettings }).settings;
+      default:
+        throw new Error(`Unexpected command: ${command}`);
+    }
+  });
+
+  render(
+    <SkillWorkspaceProvider>
+      <ToolSkillRefreshProbe />
+    </SkillWorkspaceProvider>,
+  );
+
+  await waitFor(() => {
+    expect(screen.getByTestId("tool-skill-entries")).toHaveTextContent(
+      "codex:old-codex-skill,claude-code:claude-skill",
+    );
+  });
+
+  fireEvent.click(screen.getByRole("button", { name: "刷新 Codex 目录" }));
+
+  await waitFor(() => {
+    expect(screen.getByTestId("tool-skill-entries")).toHaveTextContent(
+      "claude-code:claude-skill,codex:new-codex-skill",
+    );
+  });
+  expect(mockedInvoke).toHaveBeenCalledWith("list_tool_skill_entries", { toolId: "codex" });
 });
 
 test("refresh resolves after git state refresh during local alignment cooldown", async () => {

@@ -555,6 +555,8 @@ function AppContent() {
     alignLocalWorkspaceState,
     appSettings,
     installedSkills,
+    isStartupGitStateRefreshComplete,
+    didStartupGitStateRefreshSucceed,
     isWorkspaceRefreshing,
     language,
     toolSkillEntries,
@@ -645,6 +647,7 @@ function AppContent() {
       });
   }, [appSettings.agentSkillsCompatibilityEnabled, appSettings.storagePath, notify, t]);
 
+  const hasShownSkillUpdateNotificationRef = useRef(false);
   const activeDefinition =
     routes.find((route) => route.key === activeRoute) ?? routes[0];
   const updatableSkillCount = installedSkills.filter((skill) => (
@@ -723,6 +726,16 @@ function AppContent() {
     setSkillManagementFilter("all");
   }
 
+  function handleShowUpdatableSkills() {
+    setActiveRoute("skills");
+    setActiveSkillsSection("skills");
+    setActiveSkillSourceId(MANAGED_SKILL_SOURCE_ID);
+    setSkillStatusFilter("update-available");
+    setSkillQuery("");
+    setSkillManagementFilter("all");
+    setFocusedManagedSkillName("");
+  }
+
   useEffect(
     () =>
       subscribeMcpWorkspaceChange((snapshot) => {
@@ -730,6 +743,33 @@ function AppContent() {
       }),
     [],
   );
+
+  useEffect(() => {
+    if (
+      !isStartupGitStateRefreshComplete
+      || !didStartupGitStateRefreshSucceed
+      || hasShownSkillUpdateNotificationRef.current
+    ) {
+      return;
+    }
+
+    hasShownSkillUpdateNotificationRef.current = true;
+    if (updatableSkillCount === 0) {
+      return;
+    }
+
+    notify({
+      message: t("notifications.skillsUpdateAvailable", { count: updatableSkillCount }),
+      actionLabel: t("notifications.viewUpdates"),
+      onAction: handleShowUpdatableSkills,
+    });
+  }, [
+    isStartupGitStateRefreshComplete,
+    didStartupGitStateRefreshSucceed,
+    notify,
+    t,
+    updatableSkillCount,
+  ]);
 
   useEffect(() => {
     if (hasSavedSkillViewPreference) {

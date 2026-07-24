@@ -3789,12 +3789,16 @@ fn working_tree_diffs(skill_path: &str, status: &str, path: &str) -> (String, St
     (staged_diff, unstaged_diff)
 }
 
-fn git_head_file_content(repository_path: &str, repository_relative_path: &str) -> Option<String> {
+fn git_ref_file_content(
+    repository_path: &str,
+    git_ref: &str,
+    repository_relative_path: &str,
+) -> Option<String> {
     if !is_supported_text_file(Path::new(repository_relative_path)) {
         return None;
     }
 
-    let object_spec = format!("HEAD:{repository_relative_path}");
+    let object_spec = format!("{git_ref}:{repository_relative_path}");
     let output = git_command()
         .args(["-C", repository_path, "show", &object_spec])
         .output()
@@ -3817,26 +3821,73 @@ fn working_tree_file_content(skill_path: &str, relative_path: &str) -> Option<St
     }
 }
 
-fn collect_name_status_changes(
+fn collect_ref_changes(
     skill_path: &str,
-    name_status_args: &[&str],
-    diff_args: &[&str],
+    original_ref: &str,
+    current_ref: &str,
 ) -> Result<Vec<GitChangeFile>, String> {
-    let name_status = run_git_command(skill_path, name_status_args)?;
+    let repository_path = repository_root_path(skill_path)?;
+    let canonical_skill_path =
+        fs::canonicalize(skill_path).map_err(|error| format!("解析 Skill 目录失败: {error}"))?;
+    let canonical_repository_path =
+        fs::canonicalize(&repository_path).map_err(|error| format!("解析仓库目录失败: {error}"))?;
+    let skill_relative_path = canonical_skill_path
+        .strip_prefix(&canonical_repository_path)
+        .map_err(|error| format!("解析 Skill 相对路径失败: {error}"))?
+        .to_string_lossy()
+        .replace('\\', "/")
+        .trim_matches('/')
+        .to_string();
+    let pathspec = if skill_relative_path.is_empty() {
+        "."
+    } else {
+        skill_relative_path.as_str()
+    };
+    let name_status = run_git_command(
+        &repository_path,
+        &[
+            "diff",
+            "--name-status",
+            "--no-renames",
+            original_ref,
+            current_ref,
+            "--",
+            pathspec,
+        ],
+    )?;
     let changes = name_status
         .lines()
-        .filter_map(parse_name_status_line)
-        .map(|(status, path)| {
-            let diff = git_diff_for_path(skill_path, diff_args, &path);
-            GitChangeFile {
+        .filter_map(|line| {
+            let (status, repository_relative_path) = parse_name_status_line(line)?;
+            let path = if skill_relative_path.is_empty() {
+                repository_relative_path.clone()
+            } else {
+                repository_relative_path
+                    .strip_prefix(&format!("{skill_relative_path}/"))?
+                    .to_string()
+            };
+            let diff = git_diff_for_path(
+                &repository_path,
+                &["diff", "--no-renames", original_ref, current_ref],
+                &repository_relative_path,
+            );
+            Some(GitChangeFile {
                 path,
                 status,
                 diff,
                 staged_diff: String::new(),
                 unstaged_diff: String::new(),
-                original_content: None,
-                current_content: None,
-            }
+                original_content: git_ref_file_content(
+                    &repository_path,
+                    original_ref,
+                    &repository_relative_path,
+                ),
+                current_content: git_ref_file_content(
+                    &repository_path,
+                    current_ref,
+                    &repository_relative_path,
+                ),
+            })
         })
         .collect();
     Ok(changes)
@@ -3878,7 +3929,7 @@ fn collect_working_tree_changes(skill_path: &str) -> Result<Vec<GitChangeFile>, 
             let (raw_status, repository_relative_path) = parse_porcelain_v2_status_record(record)?;
             let status = raw_status.trim().to_string();
             let original_content =
-                git_head_file_content(&repository_path, &repository_relative_path);
+                git_ref_file_content(&repository_path, "HEAD", &repository_relative_path);
             let path = if skill_relative_path.is_empty() {
                 repository_relative_path.clone()
             } else {
@@ -5977,9 +6028,17 @@ pub fn list_local_skill_candidates() -> Vec<LocalSkillCandidate> {
 }
 
 #[tauri::command]
-pub fn list_tool_skill_entries() -> Vec<ToolSkillEntry> {
+pub fn list_tool_skill_entries(tool_id: Option<String>) -> Vec<ToolSkillEntry> {
     let installed_skills = load_installed_skills(&default_installed_skills());
-    build_tool_skill_entries(&build_tool_configs(), &installed_skills)
+    let tool_configs = build_tool_configs()
+        .into_iter()
+        .filter(|tool| {
+            tool_id
+                .as_ref()
+                .map_or(true, |selected_id| tool.id == *selected_id)
+        })
+        .collect::<Vec<_>>();
+    build_tool_skill_entries(&tool_configs, &installed_skills)
 }
 
 #[tauri::command]
@@ -7419,26 +7478,17 @@ pub fn push_skill_to_current_branch(
     refresh_and_persist_skill(skill_name, skill_path)
 }
 
-#[tauri::command]
-pub fn get_update_preview_snapshot(
+fn get_update_preview_snapshot_blocking(
     skill_name: &str,
     skill_path: Option<&str>,
 ) -> Result<UpdatePreviewSnapshot, String> {
     let (installed_skills, skill_index) = find_skill_instance(skill_name, skill_path)?;
     let skill = &installed_skills[skill_index];
     let current_branch = current_branch_name(&skill.local_path)?;
-    run_git_command(
-        &skill.local_path,
-        &["fetch", ORIGIN_REMOTE, "--quiet", "--no-tags"],
-    )?;
     let remote_branch = resolve_remote_branch_name(&skill.local_path, &current_branch)?;
     let (commits_to_pull, _) = branch_divergence_counts(&skill.local_path, &remote_branch)?;
     let uncommitted_files = collect_working_tree_changes(&skill.local_path)?;
-    let changed_files = collect_name_status_changes(
-        &skill.local_path,
-        &["diff", "--name-status", "HEAD", &remote_branch, "--", "."],
-        &["diff", "HEAD", &remote_branch],
-    )?;
+    let changed_files = collect_ref_changes(&skill.local_path, "HEAD", &remote_branch)?;
 
     Ok(UpdatePreviewSnapshot {
         current_branch,
@@ -7447,6 +7497,19 @@ pub fn get_update_preview_snapshot(
         changed_files,
         has_local_changes: !uncommitted_files.is_empty(),
     })
+}
+
+#[tauri::command]
+pub async fn get_update_preview_snapshot(
+    skill_name: String,
+    local_path: String,
+) -> Result<UpdatePreviewSnapshot, String> {
+    let skill_path = (!local_path.trim().is_empty()).then_some(local_path);
+    tauri::async_runtime::spawn_blocking(move || {
+        get_update_preview_snapshot_blocking(&skill_name, skill_path.as_deref())
+    })
+    .await
+    .map_err(|error| format!("后台加载 Skill 更新内容失败: {error}"))?
 }
 
 #[tauri::command]
@@ -8622,6 +8685,39 @@ mod tests {
     }
 
     #[test]
+    fn reads_original_and_remote_contents_for_update_preview() {
+        let temp_dir = temp_test_dir("update-preview-contents");
+        initialize_git_test_repo(&temp_dir);
+        let skill_dir = temp_dir.join("skills/demo-skill");
+        fs::create_dir_all(&skill_dir).expect("create skill directory");
+        fs::write(skill_dir.join("SKILL.md"), "# demo\nlocal description\n")
+            .expect("write original skill");
+        run_git_test(&temp_dir, &["add", "."]);
+        run_git_test(&temp_dir, &["commit", "-m", "initial"]);
+
+        fs::write(skill_dir.join("SKILL.md"), "# demo\nremote description\n")
+            .expect("write remote skill");
+        run_git_test(&temp_dir, &["add", "."]);
+        run_git_test(&temp_dir, &["commit", "-m", "remote update"]);
+
+        let changes =
+            super::collect_ref_changes(skill_dir.to_string_lossy().as_ref(), "HEAD~1", "HEAD")
+                .expect("collect update preview");
+
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].path, "SKILL.md");
+        assert_eq!(
+            changes[0].original_content.as_deref(),
+            Some("# demo\nlocal description\n")
+        );
+        assert_eq!(
+            changes[0].current_content.as_deref(),
+            Some("# demo\nremote description\n")
+        );
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
     fn lists_untracked_directory_contents_as_individual_change_files() {
         let temp_dir = temp_test_dir("untracked-files");
         run_git_test(&temp_dir, &["init"]);
@@ -9355,6 +9451,37 @@ mod tests {
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].collab_status, "clean");
         assert_eq!(result[0].status_text, latest.status_text);
+    }
+
+    #[test]
+    fn keeps_refresh_states_separate_for_same_named_skills() {
+        let git_started = installed_skill_fixture(
+            "lark-calendar",
+            "https://github.com/example/lark-skills",
+            "/skills/github/lark-calendar",
+        );
+        let mut cli_started = installed_skill_fixture(
+            "lark-calendar",
+            "agent-skills-cli",
+            "/skills/agent-cli/lark-calendar",
+        );
+        cli_started.source_type = "agent-cli".into();
+        cli_started.git_linked = false;
+
+        let mut git_refreshed = git_started.clone();
+        git_refreshed.collab_status = "update-available".into();
+        let cli_refreshed = cli_started.clone();
+        let result = merge_refreshed_skill_states_with_latest_state(
+            vec![git_refreshed, cli_refreshed],
+            &[git_started.clone(), cli_started.clone()],
+            vec![git_started, cli_started],
+        );
+
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].local_path, "/skills/github/lark-calendar");
+        assert_eq!(result[0].collab_status, "update-available");
+        assert_eq!(result[1].local_path, "/skills/agent-cli/lark-calendar");
+        assert_eq!(result[1].collab_status, "clean");
     }
 
     #[test]

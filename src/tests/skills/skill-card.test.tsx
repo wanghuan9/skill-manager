@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 import { AppI18nProvider } from "@/app/i18n";
@@ -164,7 +164,7 @@ test("shows the official source link for a well-known Agent CLI skill", async ()
   renderSkillCardWithProviders(agentSkill, "grid");
 
   expect(screen.getByText("远程 · Agent CLI")).toBeInTheDocument();
-  await userEvent.click(screen.getByRole("button", { name: /展开 lark-okr/ }));
+  fireEvent.click(document.querySelector(".skill-card__summary-button") as HTMLElement);
 
   const detailDialog = screen.getByRole("dialog", { name: "lark-okr 详情" });
   expect(within(detailDialog).getByText("来源方式").parentElement).toHaveTextContent("远程");
@@ -173,6 +173,55 @@ test("shows the official source link for a well-known Agent CLI skill", async ()
   expect(within(detailDialog).getByRole("link", {
     name: "https://open.feishu.cn/.well-known/skills/lark-okr/SKILL.md",
   })).toBeInTheDocument();
+});
+
+test("opens update contents from the preview entry for an updateable git skill", async () => {
+  const updateSkill = installedSkillFixtures.find((skill) => skill.name === "excalidraw-diagram");
+  if (!updateSkill) {
+    throw new Error("missing excalidraw-diagram fixture");
+  }
+
+  renderSkillCardWithProviders(updateSkill);
+
+  const previewButton = screen.getByRole("button", { name: "查看 excalidraw-diagram 更新预览" });
+  expect(previewButton.querySelector(".skill-card__update-preview-detail-icon")).not.toBeInTheDocument();
+  await userEvent.click(previewButton);
+
+  expect(await screen.findByRole("dialog", { name: "excalidraw-diagram" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "待更新内容 0" })).toHaveAttribute("aria-pressed", "true");
+});
+
+test("uses the detail-only update preview icon after expanding an updateable skill", async () => {
+  const updateSkill = installedSkillFixtures.find((skill) => skill.name === "excalidraw-diagram");
+  if (!updateSkill) {
+    throw new Error("missing excalidraw-diagram fixture");
+  }
+
+  const { container } = renderSkillCardWithProviders(updateSkill);
+  const listPreviewButton = screen.getByRole("button", { name: "查看 excalidraw-diagram 更新预览" });
+  expect(listPreviewButton.querySelector(".skill-card__update-preview-detail-icon")).not.toBeInTheDocument();
+
+  await userEvent.click(screen.getByRole("button", { name: /展开 excalidraw-diagram/ }));
+
+  const details = container.querySelector<HTMLElement>(".skill-card__details");
+  if (!details) {
+    throw new Error("missing expanded list details");
+  }
+  const detailPreviewButton = within(details).getByRole("button", { name: "查看 excalidraw-diagram 更新预览" });
+  expect(detailPreviewButton.querySelector(".skill-card__update-preview-detail-icon")).toBeInTheDocument();
+});
+
+test("does not expose update contents for an updateable skill without a git repository", async () => {
+  const updateSkill = installedSkillFixtures.find((skill) => skill.name === "excalidraw-diagram");
+  if (!updateSkill) {
+    throw new Error("missing excalidraw-diagram fixture");
+  }
+
+  renderSkillCardWithProviders({ ...updateSkill, gitLinked: false });
+
+  expect(screen.queryByRole("button", { name: "查看 excalidraw-diagram 更新预览" })).not.toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "查看 excalidraw-diagram 文件" }));
+  expect(screen.queryByRole("button", { name: /待更新内容/ })).not.toBeInTheDocument();
 });
 
 test("shows description in the list summary and keeps update metadata in details", async () => {
@@ -237,8 +286,11 @@ test("keeps the file entry expanded in the grid detail header", async () => {
     throw new Error("missing skill-publisher fixture");
   }
 
-  renderSkillCardWithProviders(skill, "grid");
-  await userEvent.click(screen.getByRole("button", { name: /展开 skill-publisher/ }));
+  const { container } = renderSkillCardWithProviders(skill, "grid");
+  const summary = container.querySelector<HTMLElement>(".skill-card__summary-button");
+  expect(summary).toBeInTheDocument();
+  expect(container.querySelector(".skill-card__chevron-button")).not.toBeInTheDocument();
+  await userEvent.click(summary as HTMLElement);
 
   const detailDialog = screen.getByRole("dialog", { name: "skill-publisher 详情" });
   const filesButton = within(detailDialog).getByRole("button", {

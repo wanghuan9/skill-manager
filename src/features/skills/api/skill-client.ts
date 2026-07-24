@@ -63,6 +63,7 @@ import type {
   SkillSummary,
   ToolConfig,
   ToolSkillEntry,
+  UpdatePreviewSnapshot,
   WorkspaceSnapshot,
 } from "@/features/skills/state/skill-store";
 import {
@@ -1239,8 +1240,12 @@ export async function fetchLocalSkillCandidates(): Promise<LocalSkillCandidate[]
   return invokeOrFallback("list_local_skill_candidates", {}, localSkillFixtures);
 }
 
-export async function fetchToolSkillEntries(): Promise<ToolSkillEntry[]> {
-  return invokeOrFallback("list_tool_skill_entries", {}, toolSkillEntryFixtures);
+export async function fetchToolSkillEntries(toolId?: string): Promise<ToolSkillEntry[]> {
+  const args = toolId ? { toolId } : {};
+  const fallback = toolId
+    ? toolSkillEntryFixtures.filter((entry) => entry.toolId === toolId)
+    : toolSkillEntryFixtures;
+  return invokeOrFallback("list_tool_skill_entries", args, fallback);
 }
 
 export async function fetchToolConfigs(): Promise<ToolConfig[]> {
@@ -1529,6 +1534,17 @@ export async function fetchPushPreviewSnapshot(input: PushPreviewInput): Promise
 
 export async function fetchSkillLocalChanges(skillName: string, skillPath?: string): Promise<GitChangeFile[]> {
   return invokeOrFallback("get_skill_local_changes", { skillName, skillPath }, []);
+}
+
+export async function fetchSkillUpdatePreview(skillName: string, localPath = ""): Promise<UpdatePreviewSnapshot> {
+  const fallback: UpdatePreviewSnapshot = {
+    currentBranch: "main",
+    remoteBranch: "origin/main",
+    commitsToPull: 0,
+    changedFiles: [],
+    hasLocalChanges: false,
+  };
+  return invokeOrFallback("get_update_preview_snapshot", { skillName, localPath }, fallback);
 }
 
 export async function revertSkillChange(input: {

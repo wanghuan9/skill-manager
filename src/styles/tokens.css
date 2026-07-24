@@ -108,6 +108,14 @@ select {
   font: inherit;
 }
 
+button,
+button *,
+[role="tab"],
+[role="tab"] * {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
 .app-select {
   position: relative;
   display: inline-flex;
@@ -1075,6 +1083,31 @@ code {
   margin: 0;
 }
 
+.brand-title,
+.brand-icon,
+.brand-icon svg,
+.nav-item,
+.nav-icon,
+.nav-icon svg,
+.page-header h1,
+.page-header p,
+.management-page-header__identity {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.brand-icon,
+.brand-icon svg,
+.nav-icon,
+.nav-icon svg {
+  -webkit-user-drag: none;
+}
+
+.brand-icon svg,
+.nav-icon svg {
+  pointer-events: none;
+}
+
 .brand-title {
   font-size: 0.9375rem;
   font-weight: 600;
@@ -1344,6 +1377,16 @@ code {
   grid-template-rows: auto auto auto minmax(0, 1fr);
 }
 
+.app-shell.is-macos-window .main-panel {
+  padding-bottom: 16px;
+}
+
+.app-shell.is-macos-window .window-topbar--main {
+  height: 14px;
+  flex-basis: 14px;
+  margin-bottom: 2px;
+}
+
 .app-shell.is-macos-window .brand-block,
 .app-shell.is-windows-window .brand-block {
   padding-top: 6px;
@@ -1373,6 +1416,11 @@ code {
   align-items: center;
   justify-content: space-between;
   gap: 24px;
+}
+
+.page-header__row > .mcp-header-toolbar-slot {
+  min-width: 0;
+  flex: 1 1 auto;
 }
 
 .page-header__row--install {
@@ -1708,10 +1756,6 @@ code {
   margin-left: 0;
 }
 
-.management-page-header--compact .plugins-page__toolbar-actions--right {
-  margin-left: auto;
-}
-
 .management-page-header--compact .skills-toolbar-button--refresh {
   margin-left: auto;
 }
@@ -1727,10 +1771,10 @@ code {
   align-items: center;
   justify-content: center;
   gap: 5px;
-  height: 34px;
-  min-height: 34px;
+  height: 33px;
+  min-height: 33px;
   padding: 0 10px;
-  border-radius: 10px;
+  border-radius: 9px;
   font-size: 0.78rem;
   font-weight: 500;
   line-height: 1;
@@ -1793,10 +1837,10 @@ code {
 }
 
 .ghost-button.tools-refresh-button {
-  height: 34px;
-  min-height: 34px;
+  height: 33px;
+  min-height: 33px;
   padding: 0 10px;
-  border-radius: 10px;
+  border-radius: 9px;
   transition:
     background-color 120ms ease,
     border-color 120ms ease,
@@ -1809,10 +1853,10 @@ code {
   display: inline-flex;
   align-items: center;
   gap: 2px;
-  height: 34px;
-  padding: 3px;
+  height: 33px;
+  padding: 2px;
   border: 1px solid var(--line);
-  border-radius: 11px;
+  border-radius: 9px;
   background: var(--surface-strong);
   box-sizing: border-box;
 }
@@ -1825,7 +1869,7 @@ code {
   height: 27px;
   padding: 0;
   border: 0;
-  border-radius: 8px;
+  border-radius: 7px;
   background: transparent;
   color: var(--muted);
   cursor: pointer;
@@ -1899,13 +1943,13 @@ code {
   flex: 0 1 230px;
   display: flex;
   align-items: center;
-  height: 34px;
-  min-height: 34px;
+  height: 33px;
+  min-height: 33px;
   min-width: 180px;
   gap: 8px;
   border: 1px solid var(--line);
-  border-radius: 11px;
-  padding: 0 11px;
+  border-radius: 9px;
+  padding: 0 10px;
   background: var(--surface);
   overflow: hidden;
   box-sizing: border-box;
@@ -1956,10 +2000,10 @@ code {
   display: flex;
   align-items: center;
   flex: 0 0 92px;
-  height: 36px;
-  min-height: 36px;
+  height: 33px;
+  min-height: 33px;
   border: 1px solid var(--line);
-  border-radius: 9px;
+  border-radius: 8px;
   background: var(--surface-strong);
   color: #374151;
   overflow: hidden;
@@ -1967,7 +2011,7 @@ code {
 
 .skill-status-filter__icon {
   position: absolute;
-  left: 8px;
+  left: 7px;
   top: 50%;
   display: inline-flex;
   width: 14px;
@@ -1993,7 +2037,7 @@ code {
   gap: 3px;
   border: 0;
   border-radius: 0;
-  padding: 0 7px 0 26px;
+  padding: 0 6px 0 24px;
   background: transparent;
   color: inherit;
   font-size: 0.76rem;
@@ -2057,11 +2101,12 @@ code {
 }
 
 .plugins-page__toolbar-filter {
-  flex-basis: 104px;
+  flex-basis: 96px;
+  width: 96px;
 }
 
 .plugins-page__toolbar-filter .app-select__trigger {
-  padding-right: 8px;
+  padding-right: 6px;
 }
 
 .toolbar {
@@ -2993,6 +3038,9 @@ code {
 }
 
 .secondary-button--compact.skills-toolbar-button {
+  min-height: 33px;
+  padding: 0 10px;
+  border-radius: 9px;
   font-weight: 500;
 }
 
@@ -3414,7 +3462,8 @@ code {
   width: 100%;
   min-width: 0;
   margin: 0;
-  padding: 8px 0 0;
+  gap: 4px;
+  padding: 6px 0 0;
   border-top: 1px solid var(--line);
   flex-wrap: wrap;
   overflow: visible;
@@ -3429,15 +3478,14 @@ code {
 }
 
 .skill-card--grid .skill-card__list-actions > button {
-  flex: 0 0 28px;
+  flex: 0 0 24px;
 }
 
-.skill-card--grid .skill-card__icon-button,
-.skill-card--grid .skill-card__chevron-button {
-  width: 28px;
-  height: 28px;
+.skill-card--grid .skill-card__icon-button {
+  width: 24px;
+  height: 24px;
   border: 1px solid rgba(15, 23, 42, 0.08);
-  border-radius: 8px;
+  border-radius: 7px;
   background: rgba(246, 249, 253, 0.9);
 }
 
@@ -7053,6 +7101,7 @@ code {
 }
 
 .skill-diff__editor .cm-scroller {
+  container-type: inline-size;
   overflow: auto;
   font-family: inherit;
   line-height: 1.65;
@@ -7112,6 +7161,27 @@ code {
   padding: 0 5px;
 }
 
+.skill-diff__editor .cm-lineNumbers .cm-gutterElement.skill-diff__added-line-number {
+  background: rgba(39, 179, 106, 0.11);
+  color: #27a866;
+}
+
+.skill-diff__editor .cm-lineNumbers .cm-gutterElement.skill-diff__deleted-line-number-block {
+  background: rgba(225, 61, 75, 0.095);
+  color: #d23d4c;
+}
+
+.skill-diff__editor .skill-diff__deleted-line-number-block > span {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+}
+
+.skill-diff__editor .skill-diff__deleted-line-number {
+  height: 1.65em;
+  line-height: 1.65;
+}
+
 .skill-diff__editor .cm-content {
   padding: 9px 0;
   caret-color: var(--accent);
@@ -7154,8 +7224,11 @@ code {
 }
 
 .skill-diff__editor .cm-editor .cm-collapsedLines {
+  position: sticky;
+  left: 78px;
   display: flex;
   align-items: center;
+  width: calc(100cqw - 78px);
   min-height: 22px;
   padding: 0;
   border: 0;
@@ -9292,22 +9365,14 @@ button.settings-form-item:disabled {
   padding: 4px 0 2px;
 }
 
-.plugins-page__toolbar-primary,
-.plugins-page__toolbar-actions {
+.plugins-page__toolbar-primary {
   display: flex;
   align-items: center;
   gap: 8px;
   min-width: 0;
-}
-
-.plugins-page__toolbar-primary {
   justify-content: flex-end;
-  gap: 8px;
+  flex-wrap: wrap;
   padding-right: 12px;
-}
-
-.plugins-page__toolbar-actions {
-  flex: 0 0 auto;
 }
 
 .plugins-page__search {
@@ -9686,10 +9751,18 @@ button.settings-form-item:disabled {
   width: 100%;
   min-width: 0;
   margin: 0;
-  padding: 10px 0 0;
+  gap: 4px;
+  padding: 6px 0 0;
   border-top: 1px solid var(--line);
   flex-wrap: wrap;
   overflow: hidden;
+}
+
+.skill-source-card--grid .skill-card__list-actions > .skill-card__icon-button {
+  flex: 0 0 24px;
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
 }
 
 .skill-source-card--grid .skill-source-card__entry-kind {
@@ -11813,8 +11886,9 @@ button.settings-form-item:disabled {
 
 .tool-list-row--grid .tool-list-row__actions {
   align-self: end;
-  min-height: 37px;
-  padding-top: 8px;
+  min-height: 31px;
+  gap: 4px;
+  padding-top: 6px;
   border-top: 1px solid var(--line);
   justify-content: flex-end;
   width: 100%;
@@ -11849,10 +11923,10 @@ button.settings-form-item:disabled {
 }
 
 .tool-list-row--grid .tool-list-row__actions .skill-card__icon-button {
-  flex: 0 0 28px;
-  width: 28px;
-  height: 28px;
-  border-radius: 8px;
+  flex: 0 0 24px;
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
 }
 
 .tool-list-row--grid .tool-list-row__actions .skill-card__icon-button:not(.plugins-page__toggle-icon-button) {
@@ -11967,7 +12041,8 @@ button.settings-form-item:disabled {
   width: 100%;
   min-width: 0;
   margin: 0;
-  padding: 8px 0 0;
+  gap: 4px;
+  padding: 6px 0 0;
   border-top: 1px solid var(--line);
   justify-content: flex-end;
   overflow: visible;
@@ -12027,9 +12102,9 @@ button.settings-form-item:disabled {
 }
 
 .mcp-server-card--grid .mcp-server-card__actions .skill-card__icon-button {
-  width: 28px;
-  height: 28px;
-  border-radius: 8px;
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
 }
 
 .mcp-server-card--grid .mcp-server-card__actions .skill-card__icon-button:not(.plugins-page__toggle-icon-button) {
@@ -12900,6 +12975,16 @@ button.settings-form-item:disabled {
 }
 
 :root[data-theme="dark"] .skill-diff__editor .cm-gutterElement.cm-deletedLineGutter::before {
+  color: #f07883;
+}
+
+:root[data-theme="dark"] .skill-diff__editor .cm-lineNumbers .cm-gutterElement.skill-diff__added-line-number {
+  background: rgba(52, 168, 103, 0.17);
+  color: #63d598;
+}
+
+:root[data-theme="dark"] .skill-diff__editor .cm-lineNumbers .cm-gutterElement.skill-diff__deleted-line-number-block {
+  background: rgba(214, 70, 82, 0.16);
   color: #f07883;
 }
 

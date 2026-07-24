@@ -6,6 +6,7 @@ import { openExternalLink } from "@/features/skills/api/skill-client";
 import {
   compareSkillsByEnablement,
   filterSkills,
+  getSkillIdentity,
   hasEnabledTool,
   resolveSkillManagementOwner,
 } from "@/features/skills/state/skill-selectors";
@@ -126,10 +127,6 @@ function resolveSkillGroupTone(sourceType?: SkillSummary["sourceType"]) {
   return "default";
 }
 
-function skillInstanceKey(skill: SkillSummary) {
-  return `${skill.name}\0${skill.canonicalPath ?? skill.localPath}`;
-}
-
 function formatGroupSourceUrl(sourceUrl: string) {
   try {
     const parsedUrl = new URL(sourceUrl);
@@ -193,9 +190,11 @@ export function SkillListToolbar(props: SkillToolbarProps) {
     isLoading,
     isWorkspaceRefreshing,
     isUpdatingAllSkills,
+    refreshToolSkillEntries,
     refreshWorkspace,
     updateAllSkills,
   } = useSkillWorkspace();
+  const [isToolSourceRefreshing, setIsToolSourceRefreshing] = useState(false);
   const reportFailure = useFailureReporter();
   const statusFilterCounts = useMemo(
     () => ({
@@ -258,22 +257,31 @@ export function SkillListToolbar(props: SkillToolbarProps) {
   ];
   const isManagedSource = activeSourceId === MANAGED_SKILL_SOURCE_ID;
   const managedFilterValue = ownerFilter === "all" ? statusFilter : ownerFilter;
+  const isRefreshLoading = isManagedSource ? isWorkspaceRefreshing : isToolSourceRefreshing;
   const updateAllButtonLabel = updatableSkillCount > 0
     ? t("skills.updateAllWithCount", { count: updatableSkillCount })
     : t("skills.updateAll");
 
   async function handleRefreshWorkspace() {
-    if (isWorkspaceRefreshing) {
+    if (isRefreshLoading) {
       return;
     }
 
     try {
-      await refreshWorkspace({ showRefreshing: true });
+      if (isManagedSource) {
+        await refreshWorkspace({ showRefreshing: true });
+        return;
+      }
+
+      setIsToolSourceRefreshing(true);
+      await refreshToolSkillEntries(activeSourceId);
     } catch (error) {
       reportFailure(error, {
-        operation: "refresh_workspace",
+        operation: isManagedSource ? "refresh_workspace" : "refresh_tool_skill_entries",
         fallbackMessage: t("skills.error.refresh"),
       });
+    } finally {
+      setIsToolSourceRefreshing(false);
     }
   }
 
@@ -388,13 +396,13 @@ export function SkillListToolbar(props: SkillToolbarProps) {
         )}
       </div>
       <button
-        className={`secondary-button secondary-button--compact skills-toolbar-button skills-toolbar-button--refresh${isWorkspaceRefreshing ? " is-loading" : ""}`}
+        className={`secondary-button secondary-button--compact skills-toolbar-button skills-toolbar-button--refresh${isRefreshLoading ? " is-loading" : ""}`}
         type="button"
         onClick={() => void handleRefreshWorkspace()}
-        disabled={isWorkspaceRefreshing}
+        disabled={isRefreshLoading}
       >
         <span aria-hidden="true" className="skills-toolbar-button__icon">
-          <RefreshIcon isSpinning={isWorkspaceRefreshing} />
+          <RefreshIcon isSpinning={isRefreshLoading} />
         </span>
         <span>{t("skills.refresh")}</span>
       </button>
@@ -434,7 +442,7 @@ type SkillListPageProps = {
 const SKILL_GRID_COLUMN_COUNT = 3;
 
 function getSkillOrderKey(skill: SkillSummary) {
-  return skillInstanceKey(skill);
+  return getSkillIdentity(skill);
 }
 
 export function SkillListPage(props: SkillListPageProps) {
@@ -456,8 +464,9 @@ export function SkillListPage(props: SkillListPageProps) {
   const { installedSkills, isLoading, isWorkspaceRefreshing } = useSkillWorkspace();
   const deferredQuery = useDeferredValue(query);
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>(readSkillGroupCollapsedState);
-  const [expandedSkillName, setExpandedSkillName] = useState("");
+  const [expandedSkillIdentity, setExpandedSkillIdentity] = useState("");
   const [skillOrderRevision, setSkillOrderRevision] = useState(0);
+  const handledFocusedSkillRef = useRef("");
   const wasWorkspaceRefreshingRef = useRef(isWorkspaceRefreshing);
   const statusSortedSkills = useMemo(
     () => [...filterSkills(installedSkills, { query: "", status: "all" })]
@@ -470,11 +479,11 @@ export function SkillListPage(props: SkillListPageProps) {
     skillOrderRevision,
   );
   const skills = useMemo(() => {
-    const visibleSkillKeys = new Set(
+    const visibleSkillIdentities = new Set(
       filterSkills(installedSkills, { query: deferredQuery, status: statusFilter, owner: ownerFilter })
-        .map(skillInstanceKey),
+        .map(getSkillIdentity),
     );
-    return orderedInstalledSkills.filter((skill) => visibleSkillKeys.has(skillInstanceKey(skill)));
+    return orderedInstalledSkills.filter((skill) => visibleSkillIdentities.has(getSkillIdentity(skill)));
   }, [deferredQuery, installedSkills, orderedInstalledSkills, ownerFilter, statusFilter]);
   const groupedSkills = useMemo(
     () => groupSkillsBySource(skills, { localLabel: t("skills.source.local") }),
@@ -501,14 +510,19 @@ export function SkillListPage(props: SkillListPageProps) {
 
   useEffect(() => {
     if (activeSourceId !== MANAGED_SKILL_SOURCE_ID || !focusedManagedSkillName) {
+      handledFocusedSkillRef.current = "";
+      return;
+    }
+
+    const focusRequest = `${activeSourceId}:${focusedManagedSkillName}`;
+    if (handledFocusedSkillRef.current === focusRequest) {
       return;
     }
 
     const focusedSkill = orderedInstalledSkills.find((skill) => skill.name === focusedManagedSkillName);
-    if (focusedSkill) {
-      setExpandedSkillName(skillInstanceKey(focusedSkill));
-    }
-  }, [activeSourceId, focusedManagedSkillName]);
+    handledFocusedSkillRef.current = focusRequest;
+    setExpandedSkillIdentity(focusedSkill ? getSkillIdentity(focusedSkill) : "");
+  }, [activeSourceId, focusedManagedSkillName, orderedInstalledSkills]);
 
   useEffect(() => {
     if (activeSourceId !== MANAGED_SKILL_SOURCE_ID || !focusedManagedSkillName || viewMode !== "grouped") {
@@ -547,8 +561,8 @@ export function SkillListPage(props: SkillListPageProps) {
     });
   }
 
-  function handleSkillExpandedChange(skillName: string, expanded: boolean) {
-    setExpandedSkillName(expanded ? skillName : "");
+  function handleSkillExpandedChange(skillIdentity: string, expanded: boolean) {
+    setExpandedSkillIdentity(expanded ? skillIdentity : "");
   }
 
   return (
@@ -651,11 +665,11 @@ export function SkillListPage(props: SkillListPageProps) {
                   <div className="skill-group-section__list">
                     {group.skills.map((skill) => (
                       <SkillCard
-                        key={skillInstanceKey(skill)}
+                        key={getSkillIdentity(skill)}
                         skill={skill}
-                        expanded={expandedSkillName === skillInstanceKey(skill)}
+                        expanded={expandedSkillIdentity === getSkillIdentity(skill)}
                         autoAlignWhenExpanded={focusedManagedSkillName === skill.name}
-                        onExpandedChange={(expanded) => handleSkillExpandedChange(skillInstanceKey(skill), expanded)}
+                        onExpandedChange={(expanded) => handleSkillExpandedChange(getSkillIdentity(skill), expanded)}
                       />
                     ))}
                   </div>
@@ -667,15 +681,15 @@ export function SkillListPage(props: SkillListPageProps) {
             viewMode === "grid" ? (
               skillGridRows.map((row) => {
                 return (
-                  <div key={skillInstanceKey(row[0])} className="skill-card-grid__row">
+                  <div key={getSkillIdentity(row[0])} className="skill-card-grid__row">
                     {row.map((skill) => (
                       <SkillCard
-                        key={skillInstanceKey(skill)}
+                        key={getSkillIdentity(skill)}
                         skill={skill}
                         layout="grid"
-                        expanded={expandedSkillName === skillInstanceKey(skill)}
+                        expanded={expandedSkillIdentity === getSkillIdentity(skill)}
                         autoAlignWhenExpanded={focusedManagedSkillName === skill.name}
-                        onExpandedChange={(expanded) => handleSkillExpandedChange(skillInstanceKey(skill), expanded)}
+                        onExpandedChange={(expanded) => handleSkillExpandedChange(getSkillIdentity(skill), expanded)}
                       />
                     ))}
                   </div>
@@ -684,11 +698,11 @@ export function SkillListPage(props: SkillListPageProps) {
             ) : (
               skills.map((skill) => (
                 <SkillCard
-                  key={skillInstanceKey(skill)}
+                  key={getSkillIdentity(skill)}
                   skill={skill}
-                  expanded={expandedSkillName === skillInstanceKey(skill)}
+                  expanded={expandedSkillIdentity === getSkillIdentity(skill)}
                   autoAlignWhenExpanded={focusedManagedSkillName === skill.name}
-                  onExpandedChange={(expanded) => handleSkillExpandedChange(skillInstanceKey(skill), expanded)}
+                  onExpandedChange={(expanded) => handleSkillExpandedChange(getSkillIdentity(skill), expanded)}
                 />
               ))
             )

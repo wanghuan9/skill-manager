@@ -27,6 +27,7 @@ import {
   fetchPushPreviewSnapshot,
   fetchPushTargetSnapshot,
   fetchSkillLocalChanges,
+  fetchSkillUpdatePreview,
   fetchToolConfigs,
   fetchToolSkillEntries,
   fetchStartupInstalledSkills,
@@ -79,7 +80,9 @@ import type {
   SkillSourceViewStyle,
   ToolConfig,
   ToolSkillEntry,
+  UpdatePreviewSnapshot,
 } from "@/features/skills/state/skill-store";
+import { getSkillIdentity } from "@/features/skills/state/skill-selectors";
 import { buildOpenToolOptions, resolveDefaultOpenToolId } from "@/features/skills/utils/open-tools";
 import {
   localizeGitAccountSummary,
@@ -117,6 +120,8 @@ type SkillWorkspaceContextValue = {
   toolSkillEntries: ToolSkillEntry[];
   gitAccount: GitAccountSummary | null;
   isLoading: boolean;
+  isStartupGitStateRefreshComplete: boolean;
+  didStartupGitStateRefreshSucceed: boolean;
   isWorkspaceRefreshing: boolean;
   isUpdatingAllSkills: boolean;
   isMarketplaceLoadingBySource: Record<MarketplaceSourceSite, boolean>;
@@ -136,6 +141,7 @@ type SkillWorkspaceContextValue = {
   refreshLocalCandidates: () => Promise<void>;
   alignLocalWorkspaceState: () => Promise<void>;
   refreshWorkspace: (options?: RefreshWorkspaceOptions) => Promise<void>;
+  refreshToolSkillEntries: (toolId: string) => Promise<void>;
   updateSkill: (skillName: string, skillPath?: string) => Promise<void>;
   updateAllSkills: () => Promise<void>;
   deleteSkill: (skillName: string, skillPath?: string) => Promise<void>;
@@ -188,6 +194,7 @@ type SkillWorkspaceContextValue = {
     createBranchName?: string;
   }) => Promise<PushPreviewSnapshot>;
   loadSkillLocalChanges: (skillName: string, skillPath?: string) => Promise<GitChangeFile[]>;
+  loadSkillUpdatePreview: (skillName: string, localPath?: string) => Promise<UpdatePreviewSnapshot>;
   revertSkillChange: (input: {
     skillName: string;
     skillPath?: string;
@@ -327,10 +334,10 @@ function mergeUpdatedSkillsPreservingOrder(
   currentSkills: SkillSummary[],
   updatedSkills: SkillSummary[],
 ) {
-  const updatedByInstance = new Map(updatedSkills.map((skill) => [skillInstanceKey(skill), skill]));
-  const mergedSkills = currentSkills.map((skill) => updatedByInstance.get(skillInstanceKey(skill)) ?? skill);
-  const currentInstances = new Set(currentSkills.map(skillInstanceKey));
-  const newSkills = updatedSkills.filter((skill) => !currentInstances.has(skillInstanceKey(skill)));
+  const updatedByIdentity = new Map(updatedSkills.map((skill) => [getSkillIdentity(skill), skill]));
+  const mergedSkills = currentSkills.map((skill) => updatedByIdentity.get(getSkillIdentity(skill)) ?? skill);
+  const currentSkillIdentities = new Set(currentSkills.map(getSkillIdentity));
+  const newSkills = updatedSkills.filter((skill) => !currentSkillIdentities.has(getSkillIdentity(skill)));
 
   return [...newSkills, ...mergedSkills];
 }
@@ -553,6 +560,10 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
         },
   );
   const [isLoading, setIsLoading] = useState(!usesFixtureData && startupCache === null);
+  const [isStartupGitStateRefreshComplete, setIsStartupGitStateRefreshComplete] =
+    useState(usesFixtureData);
+  const [didStartupGitStateRefreshSucceed, setDidStartupGitStateRefreshSucceed] =
+    useState(usesFixtureData);
   const [isMarketplaceLoadingBySource, setIsMarketplaceLoadingBySource] = useState<
     Record<MarketplaceSourceSite, boolean>
   >({
@@ -583,6 +594,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
     skillsmp: true,
   });
   const gitStateRefreshInFlightRef = useRef<Promise<void> | null>(null);
+  const startupGitStateRefreshCompletedRef = useRef(usesFixtureData);
   const workspaceMutationVersionRef = useRef(0);
   const lastGitStateRefreshAtRef = useRef(0);
   const lastLocalWorkspaceAlignAtRef = useRef(0);
@@ -800,6 +812,14 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
     };
   }
 
+  const refreshToolSkillEntries = useCallback(async (toolId: string) => {
+    const refreshedEntries = await fetchToolSkillEntries(toolId);
+    setToolSkillEntries((currentEntries) => [
+      ...currentEntries.filter((entry) => entry.toolId !== toolId),
+      ...refreshedEntries,
+    ]);
+  }, []);
+
   async function alignLocalWorkspaceState(
     shouldApply: () => boolean = () => true,
   ) {
@@ -929,9 +949,16 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
           return;
         }
         setInstalledSkills(skillsWithGitState);
+        if (!startupGitStateRefreshCompletedRef.current) {
+          setDidStartupGitStateRefreshSucceed(true);
+        }
       } catch (error) {
         console.error("Failed to refresh git states:", error);
       } finally {
+        if (!startupGitStateRefreshCompletedRef.current) {
+          startupGitStateRefreshCompletedRef.current = true;
+          setIsStartupGitStateRefreshComplete(true);
+        }
         lastGitStateRefreshAtRef.current = Date.now();
         if (gitStateRefreshInFlightRef.current === nextRefreshPromise) {
           gitStateRefreshInFlightRef.current = null;
@@ -1604,6 +1631,8 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       toolSkillEntries,
       gitAccount,
       isLoading,
+      isStartupGitStateRefreshComplete,
+      didStartupGitStateRefreshSucceed,
       isWorkspaceRefreshing,
       isUpdatingAllSkills,
       isMarketplaceLoadingBySource,
@@ -1623,6 +1652,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       refreshLocalCandidates: handleRefreshLocalCandidates,
       alignLocalWorkspaceState: handleAlignLocalWorkspaceState,
       refreshWorkspace: loadWorkspaceSnapshot,
+      refreshToolSkillEntries,
       updateSkill: handleUpdateSkill,
       updateAllSkills: handleUpdateAllSkills,
       deleteSkill: handleDeleteSkill,
@@ -1639,6 +1669,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       setSkillAllToolStatuses: handleSetSkillAllToolStatuses,
       loadPushPreview: fetchPushPreviewSnapshot,
       loadSkillLocalChanges: fetchSkillLocalChanges,
+      loadSkillUpdatePreview: fetchSkillUpdatePreview,
       revertSkillChange: handleRevertSkillChange,
       loadPushTargets: fetchPushTargetSnapshot,
       openSkillRepository,
@@ -1673,6 +1704,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       localCandidates,
       marketplacePageBySource,
       marketplaceSkills,
+      refreshToolSkillEntries,
       toolConfigs,
       toolSkillEntries,
       handleSetSkillAllToolStatuses,

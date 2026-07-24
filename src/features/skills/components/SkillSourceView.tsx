@@ -403,21 +403,23 @@ function SkillSourceRow(props: {
               <DeleteIcon />
             </button>
           )}
-          <button
-            className="skill-card__chevron-button"
-            type="button"
-            onClick={() => onExpandedChange(!isExpanded)}
-            aria-expanded={isExpanded}
-            aria-controls={detailsId}
-            aria-label={t("skills.source.details.toggle", {
-              state: isExpanded ? t("skill.card.collapse") : t("skill.card.expand"),
-              name: item.name,
-            })}
-          >
-            <span className="skill-card__chevron" aria-hidden="true">
-              {isExpanded ? "⌄" : "›"}
-            </span>
-          </button>
+          {!isGridLayout ? (
+            <button
+              className="skill-card__chevron-button"
+              type="button"
+              onClick={() => onExpandedChange(!isExpanded)}
+              aria-expanded={isExpanded}
+              aria-controls={detailsId}
+              aria-label={t("skills.source.details.toggle", {
+                state: isExpanded ? t("skill.card.collapse") : t("skill.card.expand"),
+                name: item.name,
+              })}
+            >
+              <span className="skill-card__chevron" aria-hidden="true">
+                {isExpanded ? "⌄" : "›"}
+              </span>
+            </button>
+          ) : null}
         </div>
         {isExpanded && !isGridLayout ? (
           <div id={detailsId} className="skill-card__details skill-source-card__details">

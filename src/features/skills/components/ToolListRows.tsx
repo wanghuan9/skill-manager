@@ -168,11 +168,6 @@ export function ToolListRow(props: ToolListRowProps) {
               <span className="tool-list-row__grid-footer">{gridFooter}</span>
             ) : null}
             {actionButtons(false)}
-            {isGridLayout ? (
-              <span className="tool-list-row__chevron" aria-hidden="true">
-                {expanded ? "⌄" : "›"}
-              </span>
-            ) : null}
           </div>
         ) : null}
         {!isGridLayout ? (

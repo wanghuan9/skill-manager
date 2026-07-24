@@ -42,6 +42,7 @@ test("switches MCP servers to cards, opens details in a dialog, and restores the
   await userEvent.click(screen.getByRole("button", { name: "MCP" }));
   await screen.findByText("context7");
   const context7ListRow = screen.getByRole("button", { name: "展开 context7" }).closest(".mcp-server-card");
+  expect(context7ListRow?.querySelector(".mcp-server-card__chevron")).toBeInTheDocument();
   expect(within(context7ListRow as HTMLElement).getByRole("button", {
     name: "已启用 2/11，点击全部启用",
   })).toHaveClass("plugins-page__toggle-icon-button", "is-partial");
@@ -58,6 +59,7 @@ test("switches MCP servers to cards, opens details in a dialog, and restores the
   expect(within(context7Card as HTMLElement).getByRole("button", {
     name: "已启用 2/11，点击全部启用",
   })).toHaveClass("plugins-page__toggle-icon-button", "is-partial");
+  expect(context7Card?.querySelector(".mcp-server-card__chevron")).not.toBeInTheDocument();
 
   await userEvent.click(screen.getByRole("button", { name: "展开 context7" }));
   const detailDialog = screen.getByRole("dialog", { name: "基本信息 context7" });

@@ -1,8 +1,24 @@
 import { useEffect, useRef } from "react";
 import { minimalSetup } from "codemirror";
-import { Annotation, EditorState, Prec, RangeSet, RangeSetBuilder, Transaction } from "@codemirror/state";
-import { EditorView, GutterMarker, gutter, lineNumbers } from "@codemirror/view";
-import { getChunks, rejectChunk, unifiedMergeView } from "@codemirror/merge";
+import {
+  Annotation,
+  EditorState,
+  Prec,
+  RangeSet,
+  RangeSetBuilder,
+  StateField,
+  Transaction,
+} from "@codemirror/state";
+import {
+  EditorView,
+  GutterMarker,
+  gutter,
+  gutterLineClass,
+  lineNumbers,
+  lineNumberWidgetMarker,
+  type BlockInfo,
+} from "@codemirror/view";
+import { getChunks, getOriginalDoc, rejectChunk, unifiedMergeView } from "@codemirror/merge";
 import { useTranslate } from "@/app/i18n";
 import type { GitChangeFile } from "@/features/skills/state/skill-store";
 
@@ -37,6 +53,8 @@ type SkillDiffViewProps = {
   onDisplayModeChange: (mode: SkillDiffDisplayMode) => void;
   onSave: () => void;
   onRevertFile: () => void;
+  readOnly?: boolean;
+  emptyLabel?: string;
 };
 
 const externalContentSync = Annotation.define<boolean>();
@@ -191,6 +209,95 @@ class RevertChunkGutterMarker extends GutterMarker {
   }
 }
 
+class AddedLineNumberMarker extends GutterMarker {
+  elementClass = "skill-diff__added-line-number";
+}
+
+class DeletedLineNumberMarker extends GutterMarker {
+  elementClass = "skill-diff__deleted-line-number-block";
+
+  constructor(
+    private readonly firstLineNumber: number,
+    private readonly lineCount: number,
+  ) {
+    super();
+  }
+
+  eq(other: GutterMarker) {
+    return other instanceof DeletedLineNumberMarker
+      && other.firstLineNumber === this.firstLineNumber
+      && other.lineCount === this.lineCount;
+  }
+
+  toDOM() {
+    const container = document.createElement("span");
+    for (let offset = 0; offset < this.lineCount; offset += 1) {
+      const lineNumber = document.createElement("span");
+      lineNumber.className = "skill-diff__deleted-line-number";
+      lineNumber.textContent = String(this.firstLineNumber + offset);
+      container.append(lineNumber);
+    }
+    return container;
+  }
+}
+
+const addedLineNumberMarker = new AddedLineNumberMarker();
+
+function buildAddedLineNumberMarkers(state: EditorState) {
+  const chunkInfo = getChunks(state);
+  if (!chunkInfo) {
+    return RangeSet.empty;
+  }
+
+  const builder = new RangeSetBuilder<GutterMarker>();
+  for (const chunk of chunkInfo.chunks) {
+    if (chunk.fromB >= chunk.toB) {
+      continue;
+    }
+
+    const firstPosition = Math.min(chunk.fromB, state.doc.length);
+    const lastPosition = Math.max(firstPosition, Math.min(chunk.toB, state.doc.length) - 1);
+    const firstLineNumber = state.doc.lineAt(firstPosition).number;
+    const lastLineNumber = state.doc.lineAt(lastPosition).number;
+    for (let lineNumber = firstLineNumber; lineNumber <= lastLineNumber; lineNumber += 1) {
+      const line = state.doc.line(lineNumber);
+      builder.add(line.from, line.from, addedLineNumberMarker);
+    }
+  }
+  return builder.finish();
+}
+
+const addedLineNumberMarkers = StateField.define<RangeSet<GutterMarker>>({
+  create: buildAddedLineNumberMarkers,
+  update(markers, transaction) {
+    return transaction.docChanged ? buildAddedLineNumberMarkers(transaction.state) : markers;
+  },
+  provide: (field) => gutterLineClass.from(field),
+});
+
+function buildDeletedLineNumberMarker(view: EditorView, block: BlockInfo) {
+  const chunk = getChunks(view.state)?.chunks.find((item) => (
+    item.fromB === block.from && item.fromA < item.toA
+  ));
+  if (!chunk) {
+    return null;
+  }
+
+  const originalDoc = getOriginalDoc(view.state);
+  const firstPosition = Math.min(chunk.fromA, originalDoc.length);
+  const lastPosition = Math.max(firstPosition, Math.min(chunk.toA, originalDoc.length) - 1);
+  const firstLineNumber = originalDoc.lineAt(firstPosition).number;
+  const lastLineNumber = originalDoc.lineAt(lastPosition).number;
+  return new DeletedLineNumberMarker(firstLineNumber, lastLineNumber - firstLineNumber + 1);
+}
+
+function buildDiffLineNumberExtensions() {
+  return [
+    addedLineNumberMarkers,
+    lineNumberWidgetMarker.of((view, _widget, block) => buildDeletedLineNumberMarker(view, block)),
+  ];
+}
+
 function buildRevertChunkGutter(label: string) {
   return gutter({
     class: "skill-diff__revert-gutter-column",
@@ -215,11 +322,13 @@ function SkillDiffEditor({
   content,
   displayMode,
   onContentChange,
+  readOnly,
 }: {
   change: GitChangeFile;
   content: string;
   displayMode: SkillDiffDisplayMode;
   onContentChange: (content: string) => void;
+  readOnly: boolean;
 }) {
   const { t } = useTranslate();
   const editorHostRef = useRef<HTMLDivElement | null>(null);
@@ -241,13 +350,15 @@ function SkillDiffEditor({
       doc: content,
       extensions: [
         minimalSetup,
-        Prec.highest(buildRevertChunkGutter(t("skill.changes.revertHunk"))),
+        readOnly ? [] : Prec.highest(buildRevertChunkGutter(t("skill.changes.revertHunk"))),
         lineNumbers(),
+        EditorState.readOnly.of(readOnly),
+        EditorView.editable.of(!readOnly),
         EditorState.phrases.of({
           "$ unchanged lines": t("skill.changes.unchangedLines"),
         }),
         EditorView.contentAttributes.of({
-          "aria-label": t("skill.changes.editor"),
+          "aria-label": t(readOnly ? "skill.updates.editor" : "skill.changes.editor"),
         }),
         unifiedMergeView({
           original: change.originalContent,
@@ -257,7 +368,8 @@ function SkillDiffEditor({
           gutter: true,
           mergeControls: () => renderMergeControl(),
         }),
-        EditorView.updateListener.of((update) => {
+        buildDiffLineNumberExtensions(),
+        readOnly ? [] : EditorView.updateListener.of((update) => {
           const isExternalSync = update.transactions.some(
             (transaction) => transaction.annotation(externalContentSync),
           );
@@ -279,7 +391,7 @@ function SkillDiffEditor({
       }
       editorView.destroy();
     };
-  }, [change.currentContent, change.originalContent, change.path, displayMode, t]);
+  }, [change.currentContent, change.originalContent, change.path, displayMode, readOnly, t]);
 
   useEffect(() => {
     const editorView = editorViewRef.current;
@@ -309,14 +421,17 @@ export function SkillDiffView({
   onDisplayModeChange,
   onSave,
   onRevertFile,
+  readOnly = false,
+  emptyLabel,
 }: SkillDiffViewProps) {
   const { t } = useTranslate();
 
   if (!change) {
-    return <div className="skill-file-dialog__empty">{t("skill.changes.empty")}</div>;
+    return <div className="skill-file-dialog__empty">{emptyLabel ?? t("skill.changes.empty")}</div>;
   }
 
-  const canEdit = change.originalContent != null && change.currentContent != null;
+  const canDisplayDiff = change.originalContent != null && change.currentContent != null;
+  const canEdit = canDisplayDiff && !readOnly;
 
   return (
     <>
@@ -328,7 +443,7 @@ export function SkillDiffView({
           </span>
         </div>
         <div className="skill-diff__actions">
-          {canEdit ? (
+          {canDisplayDiff ? (
             <div
               className="skill-diff__display-toggle"
               role="group"
@@ -365,22 +480,25 @@ export function SkillDiffView({
               {isSaving ? t("skill.files.saving") : t("skill.files.save")}
             </button>
           ) : null}
-          <button
-            className="secondary-button secondary-button--compact skill-diff__revert-file"
-            type="button"
-            onClick={onRevertFile}
-            disabled={isLoading || isReverting}
-          >
-            {t("skill.changes.revertFile")}
-          </button>
+          {!readOnly ? (
+            <button
+              className="secondary-button secondary-button--compact skill-diff__revert-file"
+              type="button"
+              onClick={onRevertFile}
+              disabled={isLoading || isReverting}
+            >
+              {t("skill.changes.revertFile")}
+            </button>
+          ) : null}
         </div>
       </div>
-      {canEdit ? (
+      {canDisplayDiff ? (
         <SkillDiffEditor
           change={change}
           content={content}
           displayMode={displayMode}
           onContentChange={onContentChange}
+          readOnly={readOnly}
         />
       ) : (
         <div className="skill-diff skill-file-dialog__empty">

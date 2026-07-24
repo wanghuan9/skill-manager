@@ -48,22 +48,33 @@ function ActiveSkillMarker({ skillName }: { skillName: string }) {
 
 function renderSkillFileDialog(
   skillName = "drawio-diagram",
-  initialMode: "changes" | "files" = "files",
+  initialMode: "changes" | "files" | "updates" = "files",
 ) {
   const skill = installedSkillFixtures.find((item) => item.name === skillName);
   if (!skill) {
     throw new Error(`missing ${skillName} fixture`);
   }
 
-  return render(
+  return renderSkillFileDialogForSkill(skill, initialMode);
+}
+
+function renderSkillFileDialogForSkill(
+  skill: (typeof installedSkillFixtures)[number],
+  initialMode: "changes" | "files" | "updates" = "files",
+) {
+  const onClose = vi.fn();
+
+  const renderResult = render(
     <SkillWorkspaceProvider>
       <AppI18nProvider>
         <NotificationProvider>
-          <SkillFileDialog skill={skill} isOpen initialMode={initialMode} onClose={vi.fn()} />
+          <SkillFileDialog skill={skill} isOpen initialMode={initialMode} onClose={onClose} />
         </NotificationProvider>
       </AppI18nProvider>
     </SkillWorkspaceProvider>,
   );
+
+  return { ...renderResult, onClose };
 }
 
 beforeEach(() => {
@@ -153,16 +164,18 @@ beforeEach(() => {
           "new file mode 100644",
           "--- /dev/null",
           "+++ b/scripts/new.ts",
-          "@@ -0,0 +1 @@",
+          "@@ -0,0 +1,2 @@",
           "+new file content",
+          "+second added line",
         ].join("\n");
         const deletedDiff = [
           "diff --git a/references/old.md b/references/old.md",
           "deleted file mode 100644",
           "--- a/references/old.md",
           "+++ /dev/null",
-          "@@ -1 +0,0 @@",
+          "@@ -1,2 +0,0 @@",
           "-deleted file content",
+          "-second deleted line",
         ].join("\n");
         return [
           {
@@ -203,7 +216,7 @@ beforeEach(() => {
             stagedDiff: "",
             unstagedDiff: addedDiff,
             originalContent: "",
-            currentContent: "new file content",
+            currentContent: "new file content\nsecond added line",
           },
           {
             path: "references/old.md",
@@ -211,10 +224,37 @@ beforeEach(() => {
             diff: deletedDiff,
             stagedDiff: "",
             unstagedDiff: deletedDiff,
-            originalContent: "deleted file content",
+            originalContent: "deleted file content\nsecond deleted line",
             currentContent: "",
           },
         ];
+      }
+      case "get_update_preview_snapshot": {
+        const diff = [
+          "diff --git a/SKILL.md b/SKILL.md",
+          "index 1111111..3333333 100644",
+          "--- a/SKILL.md",
+          "+++ b/SKILL.md",
+          "@@ -1,2 +1,2 @@",
+          " # excalidraw-diagram",
+          "-local description",
+          "+remote description",
+        ].join("\n");
+        return {
+          currentBranch: "main",
+          remoteBranch: "origin/main",
+          commitsToPull: 1,
+          changedFiles: [{
+            path: "SKILL.md",
+            status: "M",
+            diff,
+            stagedDiff: "",
+            unstagedDiff: "",
+            originalContent: "# excalidraw-diagram\nlocal description",
+            currentContent: "# excalidraw-diagram\nremote description",
+          }],
+          hasLocalChanges: false,
+        };
       }
       case "revert_skill_change":
         return installedSkillFixtures.find((item) => item.name === "drawio-diagram");
@@ -282,12 +322,20 @@ test("edits local changes and switches between changed and full file views", asy
   await waitFor(() => {
     expect(screen.getByRole("textbox", { name: "可编辑的文件变更" })).toHaveTextContent("new file content");
   });
+  expect(Array.from(
+    document.querySelectorAll(".cm-lineNumbers .skill-diff__added-line-number"),
+    (element) => element.textContent,
+  )).toEqual(["1", "2"]);
   expect(await screen.findByRole("button", { name: "回退此变更块" })).toBeInTheDocument();
   expect(document.querySelector(".cm-changedLineGutter")).toBeInTheDocument();
   await userEvent.click(screen.getByRole("button", { name: "old.md references" }));
   await waitFor(() => {
     expect(document.querySelector(".cm-deletedChunk")).toHaveTextContent("deleted file content");
   });
+  expect(Array.from(
+    document.querySelectorAll(".skill-diff__deleted-line-number"),
+    (element) => element.textContent,
+  )).toEqual(["1", "2"]);
   expect(await screen.findByRole("button", { name: "回退此变更块" })).toBeInTheDocument();
   expect(document.querySelector(".cm-deletedLineGutter")).toBeInTheDocument();
   await userEvent.click(screen.getByRole("button", { name: "SKILL.md" }));
@@ -300,6 +348,9 @@ test("edits local changes and switches between changed and full file views", asy
   expect(document.querySelector(".cm-changedLineGutter")).toBeInTheDocument();
   expect(document.querySelector(".cm-deletedLineGutter")).toBeInTheDocument();
   expect(document.querySelectorAll(".cm-lineNumbers")).toHaveLength(1);
+  expect(document.querySelector(".skill-diff__deleted-line-number-block")).toHaveTextContent("2");
+  expect(document.querySelector(".skill-diff__deleted-line-number")).toHaveTextContent("2");
+  expect(document.querySelector(".cm-lineNumbers .skill-diff__added-line-number")).toHaveTextContent("2");
   const gutterClasses = Array.from(document.querySelector(".cm-gutters")?.children ?? [])
     .map((element) => element.className);
   expect(gutterClasses).toEqual([
@@ -318,6 +369,8 @@ test("edits local changes and switches between changed and full file views", asy
   await waitFor(() => {
     expect(screen.getByRole("textbox", { name: "可编辑的文件变更" })).toHaveTextContent("old description");
   });
+  expect(document.querySelector(".skill-diff__deleted-line-number-block")).not.toBeInTheDocument();
+  expect(document.querySelector(".cm-lineNumbers .skill-diff__added-line-number")).not.toBeInTheDocument();
   expect(screen.getByText("未保存")).toBeInTheDocument();
 
   const editor = screen.getByRole("textbox", { name: "可编辑的文件变更" });
@@ -336,7 +389,12 @@ test("edits local changes and switches between changed and full file views", asy
 });
 
 test("opens local changes directly with the changed file content", async () => {
-  renderSkillFileDialog("drawio-diagram", "changes");
+  const skill = installedSkillFixtures.find((item) => item.name === "drawio-diagram");
+  if (!skill) {
+    throw new Error("missing drawio-diagram fixture");
+  }
+
+  renderSkillFileDialogForSkill({ ...skill, localChangeCount: 0 }, "changes");
 
   const editor = await screen.findByRole("textbox", { name: "可编辑的文件变更" });
   await waitFor(() => {
@@ -344,6 +402,49 @@ test("opens local changes directly with the changed file content", async () => {
   });
   expect(editor).not.toHaveTextContent("用于根据项目上下文生成 Draw.io 图表");
   expect(document.querySelector(".cm-deletedChunk")).toHaveTextContent("old description");
+});
+
+test("loads update contents on demand and keeps the remote diff read-only", async () => {
+  const defaultInvoke = mockedInvoke.getMockImplementation();
+  if (!defaultInvoke) {
+    throw new Error("missing default invoke mock");
+  }
+  const updatePreview = await defaultInvoke("get_update_preview_snapshot", {
+    skillName: "excalidraw-diagram",
+  });
+  let resolveUpdatePreview: (value: unknown) => void = () => undefined;
+  const pendingUpdatePreview = new Promise((resolve) => {
+    resolveUpdatePreview = resolve;
+  });
+  mockedInvoke.mockImplementation((command, args) => {
+    if (command === "get_update_preview_snapshot") {
+      return pendingUpdatePreview;
+    }
+    return defaultInvoke(command, args);
+  });
+
+  renderSkillFileDialog("excalidraw-diagram", "updates");
+
+  expect(await screen.findByRole("button", { name: "待更新内容 0" })).toHaveAttribute("aria-pressed", "true");
+  expect(screen.getAllByText("正在加载更新预览...").length).toBeGreaterThan(0);
+  expect(mockedInvoke).not.toHaveBeenCalledWith("get_skill_file_browser", expect.anything());
+  expect(mockedInvoke).not.toHaveBeenCalledWith("get_skill_local_changes", expect.anything());
+  expect(mockedInvoke).toHaveBeenCalledWith("get_update_preview_snapshot", {
+    skillName: "excalidraw-diagram",
+    localPath: "/Users/demo/.skilldock/skills/excalidraw-diagram",
+  });
+  await act(async () => {
+    resolveUpdatePreview(updatePreview);
+  });
+
+  expect(await screen.findByRole("button", { name: "待更新内容 1" })).toHaveAttribute("aria-pressed", "true");
+  expect(screen.getByText("变更文件 1")).toBeInTheDocument();
+  await waitFor(() => {
+    expect(screen.getByLabelText("只读的待更新内容")).toHaveTextContent("remote description");
+  });
+  expect(screen.queryByRole("button", { name: "保存" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "回退文件" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "回退此变更块" })).not.toBeInTheDocument();
 });
 
 test("cancels a requested local change revert without calling the backend", async () => {
@@ -360,6 +461,22 @@ test("cancels a requested local change revert without calling the backend", asyn
 
   expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
   expect(mockedInvoke).not.toHaveBeenCalledWith("revert_skill_change", expect.anything());
+});
+
+test("closes the revert confirmation before the preview with Escape", async () => {
+  const user = userEvent.setup();
+  const { onClose } = renderSkillFileDialog();
+
+  await user.click(await screen.findByRole("button", { name: "本地变更 3" }));
+  await screen.findByRole("textbox", { name: "可编辑的文件变更" });
+  await user.click(screen.getByRole("button", { name: "回退文件" }));
+  await screen.findByRole("alertdialog");
+
+  await user.keyboard("{Escape}");
+
+  expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+  expect(screen.getByRole("dialog", { name: "drawio-diagram" })).toBeInTheDocument();
+  expect(onClose).not.toHaveBeenCalled();
 });
 
 test("confirms a file-level local change revert", async () => {
@@ -435,6 +552,39 @@ test("shows a close button instead of a back button in the header", async () => 
   expect(await screen.findByRole("dialog", { name: "drawio-diagram" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "关闭" })).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "返回" })).not.toBeInTheDocument();
+});
+
+test("hides the local changes tab when the skill has no local changes", async () => {
+  const skill = installedSkillFixtures.find((item) => item.name === "drawio-diagram");
+  if (!skill) {
+    throw new Error("missing drawio-diagram fixture");
+  }
+
+  renderSkillFileDialogForSkill({ ...skill, localChangeCount: 0 });
+
+  expect(await screen.findByRole("dialog", { name: "drawio-diagram" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "本地变更 0" })).not.toBeInTheDocument();
+  expect(mockedInvoke).not.toHaveBeenCalledWith("get_skill_local_changes", expect.anything());
+});
+
+test("closes the file preview with Escape", async () => {
+  const user = userEvent.setup();
+  const { onClose } = renderSkillFileDialog();
+
+  await screen.findByRole("dialog", { name: "drawio-diagram" });
+  await user.keyboard("{Escape}");
+
+  expect(onClose).toHaveBeenCalledTimes(1);
+});
+
+test("closes the update preview with Escape", async () => {
+  const user = userEvent.setup();
+  const { onClose } = renderSkillFileDialog("excalidraw-diagram", "updates");
+
+  await screen.findByRole("dialog", { name: "excalidraw-diagram" });
+  await user.keyboard("{Escape}");
+
+  expect(onClose).toHaveBeenCalledTimes(1);
 });
 
 test("keeps edit mode after workspace activity rerenders the dialog", async () => {

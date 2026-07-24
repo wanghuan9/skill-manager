@@ -2237,51 +2237,47 @@ export function PluginsRoute(props: PluginsRouteProps = {}) {
         />
       </label>
       <ListGridViewToggle value={viewMode} onChange={handleViewModeChange} />
-      <div className="plugins-page__toolbar-actions">
-        <div className="skill-status-filter plugins-page__toolbar-filter">
-          <span className="sr-only">{t("plugins.toolbar.filterLabel")}</span>
-          <span className="skill-status-filter__icon" aria-hidden="true">
-            <FilterIcon />
-          </span>
-          <AppSelect
-            ariaLabel={t("plugins.toolbar.filterLabel")}
-            value={filter}
-            options={pluginFilterOptions.map((option) => ({
-              value: option.value,
-              label: `${option.label} (${filterCounts[option.value]})`,
-            }))}
-            onChange={setFilter}
-            className="skill-status-filter__select"
-            menuClassName="skill-status-filter__popover"
-            minMenuWidth={96}
-          />
-        </div>
+      <div className="skill-status-filter plugins-page__toolbar-filter">
+        <span className="sr-only">{t("plugins.toolbar.filterLabel")}</span>
+        <span className="skill-status-filter__icon" aria-hidden="true">
+          <FilterIcon />
+        </span>
+        <AppSelect
+          ariaLabel={t("plugins.toolbar.filterLabel")}
+          value={filter}
+          options={pluginFilterOptions.map((option) => ({
+            value: option.value,
+            label: `${option.label} (${filterCounts[option.value]})`,
+          }))}
+          onChange={setFilter}
+          className="skill-status-filter__select"
+          menuClassName="skill-status-filter__popover"
+          minMenuWidth={96}
+        />
       </div>
-      <div className="plugins-page__toolbar-actions plugins-page__toolbar-actions--right">
-        <button
-          className={`secondary-button secondary-button--compact skills-toolbar-button skills-toolbar-button--refresh${isReloading ? " is-loading" : ""}`}
-          type="button"
-          onClick={() => void reloadPlugins()}
-          disabled={isReloading}
-        >
-          <span aria-hidden="true" className="skills-toolbar-button__icon">
-            <RefreshIcon isSpinning={isReloading} />
-          </span>
-          <span>{t("plugins.toolbar.refresh")}</span>
-        </button>
-        <button
-          className={`secondary-button secondary-button--compact skills-toolbar-button skills-toolbar-button--refresh${isRefreshing ? " is-loading" : ""}`}
-          type="button"
-          onClick={() => void loadPlugins({ silent: true })}
-          disabled={isRefreshing}
-        >
-          <span aria-hidden="true" className="skills-toolbar-button__icon">
-            <ImportIcon isSpinning={isRefreshing} />
-          </span>
-          <span>{isRefreshing ? t("plugins.toolbar.scanning") : t("plugins.toolbar.scanImport")}</span>
-        </button>
-        {props.onGoInstall ? <ToolbarGoInstallButton onClick={props.onGoInstall} /> : null}
-      </div>
+      <button
+        className={`secondary-button secondary-button--compact skills-toolbar-button skills-toolbar-button--refresh${isReloading ? " is-loading" : ""}`}
+        type="button"
+        onClick={() => void reloadPlugins()}
+        disabled={isReloading}
+      >
+        <span aria-hidden="true" className="skills-toolbar-button__icon">
+          <RefreshIcon isSpinning={isReloading} />
+        </span>
+        <span>{t("plugins.toolbar.refresh")}</span>
+      </button>
+      <button
+        className={`secondary-button secondary-button--compact skills-toolbar-button${isRefreshing ? " is-loading" : ""}`}
+        type="button"
+        onClick={() => void loadPlugins({ silent: true })}
+        disabled={isRefreshing}
+      >
+        <span aria-hidden="true" className="skills-toolbar-button__icon">
+          <ImportIcon isSpinning={isRefreshing} />
+        </span>
+        <span>{isRefreshing ? t("plugins.toolbar.scanning") : t("plugins.toolbar.scanImport")}</span>
+      </button>
+      {props.onGoInstall ? <ToolbarGoInstallButton onClick={props.onGoInstall} /> : null}
     </section>
   );
   const sourceHeader = isCompactHeader ? (

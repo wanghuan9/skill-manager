@@ -50,6 +50,11 @@ export function resolveSkillManagementOwner(skill: SkillSummary): SkillManagemen
   return skill.managementOwner ?? "skilldock";
 }
 
+export function getSkillIdentity(skill: SkillSummary) {
+  const localPath = skill.localPath.trim();
+  return localPath || `${skill.sourceType}:${skill.sourceUrl}:${skill.name}`;
+}
+
 function matchesStatusFilter(skill: SkillSummary, status: SkillStatusFilter) {
   if (status === "all") {
     return true;

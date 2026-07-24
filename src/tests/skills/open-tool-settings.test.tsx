@@ -162,11 +162,11 @@ test("switches Skills, MCP, and Plugins between current and compact header layou
   expect(pluginSourceTrigger).toBeInTheDocument();
   expect(pluginSourceTrigger.querySelector("svg")).toBeInTheDocument();
   expect(pluginSourceTrigger).not.toHaveTextContent(/^P/);
-  const pluginRightActions = compactPluginsHeader?.querySelector(".plugins-page__toolbar-actions--right");
-  expect(pluginRightActions).toBeInTheDocument();
-  expect(pluginRightActions).toContainElement(screen.getByRole("button", { name: "刷新" }));
-  expect(pluginRightActions).toContainElement(screen.getByRole("button", { name: "扫描导入" }));
-  expect(pluginRightActions).toContainElement(screen.getByRole("button", { name: "去安装" }));
+  const pluginToolbar = compactPluginsHeader?.querySelector(".plugins-page__toolbar-primary");
+  expect(pluginToolbar).toBeInTheDocument();
+  expect(pluginToolbar).toContainElement(screen.getByRole("button", { name: "刷新" }));
+  expect(pluginToolbar).toContainElement(screen.getByRole("button", { name: "扫描导入" }));
+  expect(pluginToolbar).toContainElement(screen.getByRole("button", { name: "去安装" }));
   expect(container.querySelector(".page-header-divider")).toHaveClass("page-header-divider--skills");
 });
 
