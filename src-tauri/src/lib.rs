@@ -27,6 +27,7 @@ pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
             workspace::ensure_workspace_initialized()?;
+            agent_skills_cli::cleanup_update_preview_cache();
             if cfg!(debug_assertions) {
                 app.handle().plugin(
                     tauri_plugin_log::Builder::default()

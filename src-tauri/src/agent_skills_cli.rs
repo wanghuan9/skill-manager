@@ -1,18 +1,32 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{hash_map::DefaultHasher, BTreeMap, BTreeSet, HashMap};
 use std::fs;
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
 #[cfg(windows)]
 use crate::library::{command_for_executable, resolve_command_in_path};
 use crate::workspace::home_dir;
+use crate::{
+    library::git_command,
+    models::{GitChangeFile, UpdatePreviewSnapshot},
+    workspace::managed_workspace_root,
+};
 
 const CLI_COMMAND: &str = "skills";
 const NPX_COMMAND: &str = "npx";
 const WELL_KNOWN_SOURCE_TYPE: &str = "well-known";
+const UPDATE_PREVIEW_CACHE_DIR: &str = "agent-cli-update-preview";
+const UPDATE_PREVIEW_CACHE_PREFIX: &str = "preview-";
+const UPDATE_PREVIEW_CACHE_MAX_AGE_SECS: u64 = 24 * 60 * 60;
+const UPDATE_PREVIEW_RESULT_CACHE_TTL: Duration = Duration::from_secs(300);
+
+static UPDATE_PREVIEW_RESULT_CACHE: OnceLock<Mutex<HashMap<PreviewCacheKey, PreviewCacheValue>>> =
+    OnceLock::new();
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -58,6 +72,39 @@ pub struct AgentSkillsCliStatus {
     pub entries: Vec<CliSkillEntry>,
     pub error: String,
 }
+
+struct UpdatePreviewWorkspace {
+    root: PathBuf,
+}
+
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+struct PreviewCacheKey {
+    skill_name: String,
+    source_path: PathBuf,
+    source_url: String,
+    skill_folder_hash: String,
+    local_signature: u64,
+}
+
+#[derive(Clone)]
+struct PreviewCacheValue {
+    snapshot: UpdatePreviewSnapshot,
+    created_at: Instant,
+}
+
+impl Drop for UpdatePreviewWorkspace {
+    fn drop(&mut self) {
+        if let Err(error) = fs::remove_dir_all(&self.root) {
+            log::warn!(
+                "清理 Agent CLI 更新预览临时目录失败: path={}, error={error}",
+                self.root.to_string_lossy()
+            );
+        }
+    }
+}
+
+type PreviewFiles = BTreeMap<String, Vec<u8>>;
+type PreviewChange<'a> = (String, &'a str, Option<&'a Vec<u8>>, Option<&'a Vec<u8>>);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SkillEntryPath {
@@ -114,6 +161,591 @@ pub fn changed_global_skill_names(
             (before_entry.skill_folder_hash != after_entry.skill_folder_hash).then(|| name.clone())
         })
         .collect()
+}
+
+pub fn cleanup_update_preview_cache() {
+    let Ok(cache_root) = update_preview_cache_root() else {
+        return;
+    };
+    let Ok(entries) = fs::read_dir(cache_root) else {
+        return;
+    };
+    let now = SystemTime::now();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let is_preview_dir = path.is_dir()
+            && path
+                .file_name()
+                .and_then(|value| value.to_str())
+                .is_some_and(|name| name.starts_with(UPDATE_PREVIEW_CACHE_PREFIX));
+        if !is_preview_dir {
+            continue;
+        }
+        let should_remove = fs::metadata(&path)
+            .and_then(|metadata| metadata.modified())
+            .ok()
+            .and_then(|modified| now.duration_since(modified).ok())
+            .is_some_and(|age| age.as_secs() > UPDATE_PREVIEW_CACHE_MAX_AGE_SECS);
+        if should_remove {
+            let _ = fs::remove_dir_all(path);
+        }
+    }
+}
+
+pub fn preview_global_skill_update(
+    skill_name: &str,
+    skill_path: &Path,
+) -> Result<UpdatePreviewSnapshot, String> {
+    validate_skill_name(skill_name)?;
+    let lock_contents = read_global_skill_lock_contents()?;
+    let lock = parse_global_skill_lock(&lock_contents)?;
+    let lock_entry = lock
+        .skills
+        .get(skill_name)
+        .ok_or_else(|| format!("Agent Skills CLI 锁文件中没有 {skill_name} 的记录"))?;
+    let source_path = skill_path
+        .canonicalize()
+        .map_err(|error| format!("解析 Agent CLI Skill 目录失败: {error}"))?;
+    if !source_path.is_dir() {
+        return Err("Agent CLI Skill 本地路径不是目录，无法生成更新预览。".into());
+    }
+
+    let cache_key = build_preview_cache_key(skill_name, &source_path, lock_entry)?;
+    if let Some(snapshot) = read_preview_result_cache(&cache_key) {
+        return Ok(snapshot);
+    }
+
+    let workspace = create_update_preview_workspace()?;
+    let preview_home = workspace.root.join("home");
+    let before_root = workspace.root.join("before");
+    let before_files = prepare_preview_home(
+        &preview_home,
+        &source_path,
+        skill_name,
+        &lock_contents,
+        &before_root,
+    )?;
+    run_preview_update(&preview_home, skill_name, lock_entry)?;
+    let updated_skill_path = preview_home.join(".agents/skills").join(skill_name);
+    let after_skill_path = updated_skill_path
+        .canonicalize()
+        .map_err(|error| format!("解析 Agent CLI 更新后 Skill 目录失败: {error}"))?;
+    let preview_agents_root = preview_home
+        .join(".agents")
+        .canonicalize()
+        .map_err(|error| format!("解析 Agent CLI 预览目录失败: {error}"))?;
+    if !after_skill_path.starts_with(preview_agents_root) {
+        return Err("Agent CLI 更新后的 Skill 路径超出临时目录范围。".into());
+    }
+    let after_files = collect_preview_files(&after_skill_path)?;
+    let changed_files = build_preview_changes(
+        &workspace.root,
+        &before_files,
+        &after_files,
+        &before_root,
+        &after_skill_path,
+    )?;
+    let snapshot = UpdatePreviewSnapshot {
+        current_branch: "agent-skills-cli".into(),
+        remote_branch: lock_entry.source_url.clone(),
+        commits_to_pull: 0,
+        changed_files,
+        has_local_changes: false,
+    };
+    write_preview_result_cache(cache_key, snapshot.clone());
+
+    Ok(snapshot)
+}
+
+fn validate_skill_name(skill_name: &str) -> Result<(), String> {
+    let path = Path::new(skill_name);
+    let valid = !skill_name.trim().is_empty()
+        && path.components().count() == 1
+        && path
+            .components()
+            .all(|component| matches!(component, std::path::Component::Normal(_)));
+    if valid {
+        Ok(())
+    } else {
+        Err("Agent CLI Skill 名称无效".into())
+    }
+}
+
+fn read_global_skill_lock_contents() -> Result<String, String> {
+    let lock_path = home_dir()?.join(".agents/.skill-lock.json");
+    fs::read_to_string(lock_path)
+        .map_err(|error| format!("读取 Agent Skills CLI 锁文件失败: {error}"))
+}
+
+fn build_preview_cache_key(
+    skill_name: &str,
+    source_path: &Path,
+    lock_entry: &GlobalSkillLockEntry,
+) -> Result<PreviewCacheKey, String> {
+    Ok(PreviewCacheKey {
+        skill_name: skill_name.to_string(),
+        source_path: source_path.to_path_buf(),
+        source_url: lock_entry.source_url.clone(),
+        skill_folder_hash: lock_entry.skill_folder_hash.clone(),
+        local_signature: preview_file_signature(source_path)?,
+    })
+}
+
+fn read_preview_result_cache(cache_key: &PreviewCacheKey) -> Option<UpdatePreviewSnapshot> {
+    let cache = UPDATE_PREVIEW_RESULT_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut cache = cache.lock().ok()?;
+    let now = Instant::now();
+    cache.retain(|_, value| now.duration_since(value.created_at) < UPDATE_PREVIEW_RESULT_CACHE_TTL);
+    cache.get(cache_key).map(|value| value.snapshot.clone())
+}
+
+fn write_preview_result_cache(cache_key: PreviewCacheKey, snapshot: UpdatePreviewSnapshot) {
+    let cache = UPDATE_PREVIEW_RESULT_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let Ok(mut cache) = cache.lock() else {
+        return;
+    };
+    let now = Instant::now();
+    cache.retain(|_, value| now.duration_since(value.created_at) < UPDATE_PREVIEW_RESULT_CACHE_TTL);
+    cache.insert(
+        cache_key,
+        PreviewCacheValue {
+            snapshot,
+            created_at: now,
+        },
+    );
+}
+
+fn preview_file_signature(root: &Path) -> Result<u64, String> {
+    let mut hasher = DefaultHasher::new();
+    hash_preview_tree(root, root, &mut hasher)?;
+    Ok(hasher.finish())
+}
+
+fn hash_preview_tree(
+    root: &Path,
+    current: &Path,
+    hasher: &mut DefaultHasher,
+) -> Result<(), String> {
+    let mut entries = fs::read_dir(current)
+        .map_err(|error| format!("读取 Agent CLI Skill 缓存签名失败: {error}"))?
+        .flatten()
+        .collect::<Vec<_>>();
+    entries.sort_by_key(|entry| entry.file_name());
+    for entry in entries {
+        if entry.file_name() == ".git" {
+            continue;
+        }
+        let path = entry.path();
+        let metadata = fs::symlink_metadata(&path)
+            .map_err(|error| format!("读取 Agent CLI Skill 缓存签名元数据失败: {error}"))?;
+        if metadata.file_type().is_symlink() {
+            continue;
+        }
+        if metadata.is_dir() {
+            hash_preview_tree(root, &path, hasher)?;
+            continue;
+        }
+        let relative_path = path
+            .strip_prefix(root)
+            .map_err(|error| format!("解析 Agent CLI Skill 缓存签名路径失败: {error}"))?;
+        relative_path.hash(hasher);
+        metadata.len().hash(hasher);
+        metadata
+            .modified()
+            .ok()
+            .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+            .map(|modified| (modified.as_secs(), modified.subsec_nanos()))
+            .hash(hasher);
+    }
+    Ok(())
+}
+
+fn update_preview_cache_root() -> Result<PathBuf, String> {
+    Ok(managed_workspace_root()?
+        .join("cache")
+        .join(UPDATE_PREVIEW_CACHE_DIR))
+}
+
+fn create_update_preview_workspace() -> Result<UpdatePreviewWorkspace, String> {
+    let cache_root = update_preview_cache_root()?;
+    fs::create_dir_all(&cache_root)
+        .map_err(|error| format!("创建 Agent CLI 更新预览缓存目录失败: {error}"))?;
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| format!("生成 Agent CLI 更新预览目录失败: {error}"))?
+        .as_nanos();
+    let root = cache_root.join(format!(
+        "{UPDATE_PREVIEW_CACHE_PREFIX}{}-{timestamp}",
+        std::process::id()
+    ));
+    fs::create_dir(&root)
+        .map_err(|error| format!("创建 Agent CLI 更新预览临时目录失败: {error}"))?;
+    Ok(UpdatePreviewWorkspace { root })
+}
+
+fn prepare_preview_home(
+    preview_home: &Path,
+    source_path: &Path,
+    skill_name: &str,
+    lock_contents: &str,
+    before_root: &Path,
+) -> Result<PreviewFiles, String> {
+    let preview_agents = preview_home.join(".agents");
+    let preview_skill_path = preview_agents.join("skills").join(skill_name);
+    fs::create_dir_all(&preview_skill_path)
+        .map_err(|error| format!("创建 Agent CLI 更新预览 Skill 目录失败: {error}"))?;
+    fs::create_dir_all(before_root)
+        .map_err(|error| format!("创建 Agent CLI 更新前快照目录失败: {error}"))?;
+    fs::write(preview_agents.join(".skill-lock.json"), lock_contents)
+        .map_err(|error| format!("写入 Agent CLI 更新预览锁文件失败: {error}"))?;
+    let mut before_files = BTreeMap::new();
+    copy_preview_tree(
+        source_path,
+        &preview_skill_path,
+        source_path,
+        Some(before_root),
+        &preview_skill_path,
+        &mut before_files,
+    )?;
+    Ok(before_files)
+}
+
+fn copy_preview_tree(
+    source: &Path,
+    target: &Path,
+    source_root: &Path,
+    before_target: Option<&Path>,
+    preview_skill_root: &Path,
+    before_files: &mut PreviewFiles,
+) -> Result<(), String> {
+    for entry in
+        fs::read_dir(source).map_err(|error| format!("读取 Agent CLI Skill 失败: {error}"))?
+    {
+        let entry = entry.map_err(|error| format!("读取 Agent CLI Skill 条目失败: {error}"))?;
+        let source_path = entry.path();
+        if entry.file_name() == ".git" {
+            continue;
+        }
+        let target_path = target.join(entry.file_name());
+        let before_path = before_target.map(|path| path.join(entry.file_name()));
+        let metadata = fs::symlink_metadata(&source_path)
+            .map_err(|error| format!("读取 Agent CLI Skill 元数据失败: {error}"))?;
+        if metadata.file_type().is_symlink() {
+            let resolved_path = source_path
+                .canonicalize()
+                .map_err(|error| format!("解析 Agent CLI Skill 链接失败: {error}"))?;
+            if !resolved_path.starts_with(source_root) {
+                return Err(format!(
+                    "Agent CLI Skill 包含指向目录外的符号链接: {}",
+                    source_path.to_string_lossy()
+                ));
+            }
+            if resolved_path.is_dir() {
+                fs::create_dir_all(&target_path)
+                    .map_err(|error| format!("创建 Agent CLI Skill 子目录失败: {error}"))?;
+                if let Some(before_path) = before_path.as_deref() {
+                    fs::create_dir_all(before_path)
+                        .map_err(|error| format!("创建 Agent CLI 更新前快照子目录失败: {error}"))?;
+                }
+                copy_preview_tree(
+                    &resolved_path,
+                    &target_path,
+                    source_root,
+                    before_path.as_deref(),
+                    preview_skill_root,
+                    before_files,
+                )?;
+            } else {
+                copy_preview_file(
+                    &resolved_path,
+                    &target_path,
+                    before_path.as_deref(),
+                    preview_skill_root,
+                    before_files,
+                )?;
+            }
+        } else if metadata.is_dir() {
+            fs::create_dir_all(&target_path)
+                .map_err(|error| format!("创建 Agent CLI Skill 子目录失败: {error}"))?;
+            if let Some(before_path) = before_path.as_deref() {
+                fs::create_dir_all(before_path)
+                    .map_err(|error| format!("创建 Agent CLI 更新前快照子目录失败: {error}"))?;
+            }
+            copy_preview_tree(
+                &source_path,
+                &target_path,
+                source_root,
+                before_path.as_deref(),
+                preview_skill_root,
+                before_files,
+            )?;
+        } else {
+            copy_preview_file(
+                &source_path,
+                &target_path,
+                before_path.as_deref(),
+                preview_skill_root,
+                before_files,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn copy_preview_file(
+    source: &Path,
+    target: &Path,
+    before_target: Option<&Path>,
+    preview_skill_root: &Path,
+    before_files: &mut PreviewFiles,
+) -> Result<(), String> {
+    fs::copy(source, target).map_err(|error| format!("复制 Agent CLI Skill 文件失败: {error}"))?;
+    if let Some(before_target) = before_target {
+        fs::copy(source, before_target)
+            .map_err(|error| format!("复制 Agent CLI 更新前快照文件失败: {error}"))?;
+    }
+    let relative_path = target
+        .strip_prefix(preview_skill_root)
+        .map_err(|error| format!("解析 Agent CLI 更新前快照路径失败: {error}"))?
+        .to_string_lossy()
+        .replace('\\', "/");
+    let content =
+        fs::read(source).map_err(|error| format!("读取 Agent CLI Skill 文件失败: {error}"))?;
+    before_files.insert(relative_path, content);
+    Ok(())
+}
+
+fn run_preview_update(
+    preview_home: &Path,
+    skill_name: &str,
+    lock_entry: &GlobalSkillLockEntry,
+) -> Result<(), String> {
+    let program = find_cli_program_for_operation()
+        .ok_or_else(|| "未检测到 skills 命令，无法预览 Agent CLI Skill 更新。".to_string())?;
+    let args = if lock_entry.source_type == WELL_KNOWN_SOURCE_TYPE {
+        if lock_entry.source_url.trim().is_empty() {
+            return Err("Agent CLI Skill 缺少 sourceUrl，无法预览更新。".into());
+        }
+        vec![
+            "add".to_string(),
+            lock_entry.source_url.clone(),
+            "-g".into(),
+            "-y".into(),
+        ]
+    } else {
+        vec![
+            "update".to_string(),
+            skill_name.to_string(),
+            "-g".into(),
+            "-y".into(),
+        ]
+    };
+    let arg_refs = args.iter().map(String::as_str).collect::<Vec<_>>();
+    let output = run_with_program_in_home(&program, &arg_refs, preview_home)?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(command_error(&output))
+    }
+}
+
+fn collect_preview_files(root: &Path) -> Result<PreviewFiles, String> {
+    if !root.is_dir() {
+        return Err(format!(
+            "Agent CLI Skill 目录不存在: {}",
+            root.to_string_lossy()
+        ));
+    }
+    let mut files = BTreeMap::new();
+    collect_preview_files_into(root, root, &mut files)?;
+    Ok(files)
+}
+
+fn collect_preview_files_into(
+    root: &Path,
+    current: &Path,
+    files: &mut PreviewFiles,
+) -> Result<(), String> {
+    let mut entries = fs::read_dir(current)
+        .map_err(|error| format!("读取 Agent CLI Skill 快照失败: {error}"))?
+        .flatten()
+        .collect::<Vec<_>>();
+    entries.sort_by_key(|entry| entry.file_name());
+    for entry in entries {
+        if entry.file_name() == ".git" {
+            continue;
+        }
+        let path = entry.path();
+        let metadata = fs::symlink_metadata(&path)
+            .map_err(|error| format!("读取 Agent CLI Skill 快照元数据失败: {error}"))?;
+        if metadata.file_type().is_symlink() {
+            continue;
+        }
+        if metadata.is_dir() {
+            collect_preview_files_into(root, &path, files)?;
+            continue;
+        }
+        let relative_path = path
+            .strip_prefix(root)
+            .map_err(|error| format!("解析 Agent CLI Skill 快照路径失败: {error}"))?
+            .to_string_lossy()
+            .replace('\\', "/");
+        let content =
+            fs::read(&path).map_err(|error| format!("读取 Agent CLI Skill 文件失败: {error}"))?;
+        files.insert(relative_path, content);
+    }
+    Ok(())
+}
+
+fn build_preview_changes(
+    workspace_root: &Path,
+    before_files: &PreviewFiles,
+    after_files: &PreviewFiles,
+    before_root: &Path,
+    after_root: &Path,
+) -> Result<Vec<GitChangeFile>, String> {
+    let paths = before_files
+        .keys()
+        .chain(after_files.keys())
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let changed_paths = paths
+        .into_iter()
+        .filter_map(|path| {
+            let before = before_files.get(&path);
+            let after = after_files.get(&path);
+            (before != after).then_some((path, before, after))
+        })
+        .map(|(path, before, after)| {
+            let status = match (before, after) {
+                (None, Some(_)) => "A",
+                (Some(_), None) => "D",
+                (Some(_), Some(_)) => "M",
+                (None, None) => return Err("生成 Agent CLI 更新预览变更失败".into()),
+            };
+            Ok((path, status, before, after))
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    let diffs = preview_directory_diffs(workspace_root, before_root, after_root, &changed_paths)?;
+
+    changed_paths
+        .into_iter()
+        .map(|(path, status, before, after)| {
+            let diff = diffs
+                .get(&path)
+                .cloned()
+                .ok_or_else(|| format!("缺少 Agent CLI Skill 文件 diff: {path}"))?;
+            Ok(GitChangeFile {
+                path,
+                status: status.into(),
+                diff,
+                staged_diff: String::new(),
+                unstaged_diff: String::new(),
+                original_content: preview_text_content(before),
+                current_content: preview_text_content(after),
+            })
+        })
+        .collect()
+}
+
+fn preview_text_content(content: Option<&Vec<u8>>) -> Option<String> {
+    content.and_then(|value| String::from_utf8(value.clone()).ok())
+}
+
+fn preview_directory_diffs(
+    workspace_root: &Path,
+    before_root: &Path,
+    after_root: &Path,
+    changed_paths: &[PreviewChange<'_>],
+) -> Result<BTreeMap<String, String>, String> {
+    if changed_paths.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+    let workspace_root = workspace_root
+        .canonicalize()
+        .unwrap_or_else(|_| workspace_root.to_path_buf());
+    let before_root = before_root
+        .canonicalize()
+        .map_err(|error| format!("解析 Agent CLI 更新前快照目录失败: {error}"))?;
+    let after_root = after_root
+        .canonicalize()
+        .map_err(|error| format!("解析 Agent CLI 更新后 Skill 目录失败: {error}"))?;
+    let mut command = git_command();
+    let output = command
+        .args(["diff", "--no-index", "--no-ext-diff", "--no-textconv", "--"])
+        .arg(&before_root)
+        .arg(&after_root)
+        .output()
+        .map_err(|error| format!("生成 Agent CLI Skill 目录 diff 失败: {error}"))?;
+    if !output.status.success() && output.status.code() != Some(1) {
+        return Err(command_error(&output));
+    }
+    let diff = String::from_utf8_lossy(&output.stdout).to_string();
+    let chunks = split_preview_diff_chunks(&diff);
+    changed_paths
+        .iter()
+        .map(|(path, status, _, _)| {
+            let before_path = before_root.join(path).to_string_lossy().into_owned();
+            let after_path = after_root.join(path).to_string_lossy().into_owned();
+            let chunk = chunks
+                .iter()
+                .find(|chunk| chunk.contains(&before_path) || chunk.contains(&after_path))
+                .ok_or_else(|| format!("未找到 Agent CLI Skill 文件 diff: {path}"))?;
+            Ok((
+                path.clone(),
+                normalize_preview_diff(chunk, &workspace_root, path, status),
+            ))
+        })
+        .collect()
+}
+
+fn split_preview_diff_chunks(diff: &str) -> Vec<&str> {
+    let starts = diff
+        .match_indices("diff --git ")
+        .map(|(start, _)| start)
+        .collect::<Vec<_>>();
+    starts
+        .iter()
+        .enumerate()
+        .map(|(index, start)| {
+            let end = starts.get(index + 1).copied().unwrap_or(diff.len());
+            &diff[*start..end]
+        })
+        .collect()
+}
+
+fn normalize_preview_diff(
+    diff: &str,
+    workspace_root: &Path,
+    relative_path: &str,
+    status: &str,
+) -> String {
+    let old_label = if status == "A" {
+        "/dev/null".to_string()
+    } else {
+        format!("a/{relative_path}")
+    };
+    let new_label = if status == "D" {
+        "/dev/null".to_string()
+    } else {
+        format!("b/{relative_path}")
+    };
+    let workspace_text = workspace_root.to_string_lossy();
+    diff.lines()
+        .map(|line| {
+            if line.starts_with("diff --git ") {
+                format!("diff --git {old_label} {new_label}")
+            } else if line.starts_with("--- ") {
+                format!("--- {old_label}")
+            } else if line.starts_with("+++ ") {
+                format!("+++ {new_label}")
+            } else {
+                line.replace(workspace_text.as_ref(), "")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        + if diff.ends_with('\n') { "\n" } else { "" }
 }
 
 pub fn detect_global_updates(
@@ -417,6 +1049,7 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::mpsc;
     use std::thread;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn parses_global_skill_list_json() {
@@ -671,6 +1304,139 @@ exit 1
             Some(value) => unsafe { env::set_var("HOME", value) },
             None => unsafe { env::remove_var("HOME") },
         }
+        let _ = fs::remove_dir_all(temp_home);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn previews_agent_cli_update_without_mutating_real_skill() {
+        let _guard = crate::workspace::TEST_ENV_LOCK.lock().expect("env lock");
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("read test time")
+            .as_nanos();
+        let temp_home = env::temp_dir().join(format!(
+            "skilldock-agent-preview-test-{}-{timestamp}",
+            std::process::id()
+        ));
+        let fake_bin = temp_home.join("bin");
+        let skill_dir = temp_home.join(".agents/skills/demo");
+        let fake_skills = fake_bin.join("skills");
+        fs::create_dir_all(&fake_bin).expect("create fake executable path");
+        fs::create_dir_all(&skill_dir).expect("create real Agent CLI skill");
+        fs::write(skill_dir.join("SKILL.md"), "before\n").expect("write real skill");
+        fs::write(skill_dir.join("remove.md"), "remove\n").expect("write removable file");
+        fs::write(
+            temp_home.join(".agents/.skill-lock.json"),
+            r#"{"version":3,"skills":{"demo":{"sourceType":"github","sourceUrl":"https://github.com/example/demo","skillPath":"skills/demo/SKILL.md","skillFolderHash":"before"}}}"#,
+        )
+        .expect("write real lock");
+        fs::write(
+            &fake_skills,
+            r#"#!/bin/sh
+if [ "$1" = "--version" ]; then
+  exit 0
+fi
+if [ "$1" = "update" ]; then
+  printf 'x' >> "$SKILL_TEST_COUNTER"
+  printf 'after\n' > "$HOME/.agents/skills/demo/SKILL.md"
+  printf 'added\n' > "$HOME/.agents/skills/demo/add.md"
+  rm "$HOME/.agents/skills/demo/remove.md"
+  exit 0
+fi
+exit 1
+"#,
+        )
+        .expect("write fake skills executable");
+        fs::set_permissions(&fake_skills, fs::Permissions::from_mode(0o755))
+            .expect("make fake skills executable");
+
+        let original_home = env::var_os("HOME");
+        let original_path = env::var_os("PATH");
+        let original_counter = env::var_os("SKILL_TEST_COUNTER");
+        let counter_path = temp_home.join("update-invocations");
+        let next_path = original_path
+            .as_ref()
+            .map(|path| {
+                let mut paths = env::split_paths(path).collect::<Vec<_>>();
+                paths.insert(0, fake_bin.clone());
+                env::join_paths(paths).expect("join fake executable path")
+            })
+            .unwrap_or_else(|| fake_bin.clone().into_os_string());
+        unsafe {
+            env::set_var("HOME", &temp_home);
+            env::set_var("PATH", next_path);
+            env::set_var("SKILL_TEST_COUNTER", &counter_path);
+        }
+
+        let preview = super::preview_global_skill_update("demo", &skill_dir);
+        let cached_preview = super::preview_global_skill_update("demo", &skill_dir);
+        fs::write(skill_dir.join("local-change.md"), "changed\n")
+            .expect("write local cache invalidation file");
+        let invalidated_preview = super::preview_global_skill_update("demo", &skill_dir);
+
+        match original_home {
+            Some(value) => unsafe { env::set_var("HOME", value) },
+            None => unsafe { env::remove_var("HOME") },
+        }
+        match original_path {
+            Some(value) => unsafe { env::set_var("PATH", value) },
+            None => unsafe { env::remove_var("PATH") },
+        }
+        match original_counter {
+            Some(value) => unsafe { env::set_var("SKILL_TEST_COUNTER", value) },
+            None => unsafe { env::remove_var("SKILL_TEST_COUNTER") },
+        }
+
+        let preview = preview.expect("preview Agent CLI update");
+        let cached_preview = cached_preview.expect("load cached Agent CLI update preview");
+        invalidated_preview.expect("refresh invalidated Agent CLI update preview");
+        assert_eq!(
+            preview
+                .changed_files
+                .iter()
+                .map(|change| (change.path.as_str(), change.status.as_str()))
+                .collect::<Vec<_>>(),
+            vec![("SKILL.md", "M"), ("add.md", "A"), ("remove.md", "D")]
+        );
+        let skill_change = preview
+            .changed_files
+            .iter()
+            .find(|change| change.path == "SKILL.md")
+            .expect("find changed skill file");
+        assert!(
+            skill_change.diff.contains("-before"),
+            "diff={:?}",
+            skill_change.diff
+        );
+        assert!(skill_change.diff.contains("+after"));
+        assert!(!skill_change.diff.contains("agent-cli-update-preview"));
+        assert_eq!(
+            cached_preview
+                .changed_files
+                .iter()
+                .map(|change| (&change.path, &change.status, &change.diff))
+                .collect::<Vec<_>>(),
+            preview
+                .changed_files
+                .iter()
+                .map(|change| (&change.path, &change.status, &change.diff))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            fs::read_to_string(temp_home.join("update-invocations"))
+                .expect("read update invocation count"),
+            "xx"
+        );
+        assert_eq!(
+            fs::read_to_string(skill_dir.join("SKILL.md")).expect("read real skill"),
+            "before\n"
+        );
+        assert!(!temp_home
+            .join(".skilldock/cache/agent-cli-update-preview")
+            .read_dir()
+            .map(|mut entries| entries.next().is_some())
+            .unwrap_or(false));
         let _ = fs::remove_dir_all(temp_home);
     }
 }

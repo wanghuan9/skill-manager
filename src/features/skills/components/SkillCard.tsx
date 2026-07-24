@@ -321,7 +321,8 @@ export function SkillCard({
   const managedPath = skill.canonicalPath ?? skill.localPath;
   const gridSourceSummary = `${sourceMethodLabel} · ${managementOwnerLabel}`;
   const showDetailAction = skill.collabStatus === "update-available";
-  const canPreviewUpdates = showDetailAction && skill.gitLinked;
+  const canPreviewUpdates = showDetailAction
+    && (skill.gitLinked || skill.updateDriver === "agent-skills-cli");
   const previewMode: SkillFilePanelMode = (skill.localChangeCount ?? 0) > 0
     ? "changes"
     : canPreviewUpdates

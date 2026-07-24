@@ -7484,6 +7484,12 @@ fn get_update_preview_snapshot_blocking(
 ) -> Result<UpdatePreviewSnapshot, String> {
     let (installed_skills, skill_index) = find_skill_instance(skill_name, skill_path)?;
     let skill = &installed_skills[skill_index];
+    if skill.instance.update_driver == "agent-skills-cli" && !skill.git_linked {
+        return crate::agent_skills_cli::preview_global_skill_update(
+            &skill.name,
+            Path::new(&skill.local_path),
+        );
+    }
     let current_branch = current_branch_name(&skill.local_path)?;
     let remote_branch = resolve_remote_branch_name(&skill.local_path, &current_branch)?;
     let (commits_to_pull, _) = branch_divergence_counts(&skill.local_path, &remote_branch)?;

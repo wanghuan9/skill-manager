@@ -21,7 +21,12 @@ import {
 type SkillFileDialogProps = {
   skill: Pick<SkillSummary, "name"> & Partial<Pick<
     SkillSummary,
-    "canonicalPath" | "gitLinked" | "collabStatus" | "localPath" | "localChangeCount"
+    "canonicalPath"
+    | "gitLinked"
+    | "collabStatus"
+    | "localPath"
+    | "localChangeCount"
+    | "updateDriver"
   >>;
   isOpen: boolean;
   onClose: () => void;
@@ -667,10 +672,13 @@ export function SkillFileDialog({
   const [browserRefreshVersion, setBrowserRefreshVersion] = useState(0);
   const [pendingRevert, setPendingRevert] = useState<PendingSkillRevert | null>(null);
   const canUseChanges = Boolean(skill.gitLinked) && !toolId && !readOnly;
+  const canUseUpdatePreview = (Boolean(skill.gitLinked) || skill.updateDriver === "agent-skills-cli")
+    && !toolId
+    && !readOnly;
   const hasLocalChanges = skill.localChangeCount == null || skill.localChangeCount > 0;
   const showChangesTab = canUseChanges
     && (hasLocalChanges || initialMode === "changes");
-  const canShowUpdates = canUseChanges
+  const canShowUpdates = canUseUpdatePreview
     && (skill.collabStatus === "update-available" || initialMode === "updates");
   const activeChangeFiles = panelMode === "updates" ? updateFiles : changeFiles;
   const skillPath = skill.canonicalPath ?? skill.localPath ?? "";

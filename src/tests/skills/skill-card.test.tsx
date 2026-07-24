@@ -191,6 +191,30 @@ test("opens update contents from the preview entry for an updateable git skill",
   expect(screen.getByRole("button", { name: "待更新内容 0" })).toHaveAttribute("aria-pressed", "true");
 });
 
+test("opens update contents for an Agent CLI-managed skill", async () => {
+  const baseSkill = installedSkillFixtures.find((skill) => skill.name === "excalidraw-diagram");
+  if (!baseSkill) {
+    throw new Error("missing excalidraw-diagram fixture");
+  }
+  const agentSkill = {
+    ...baseSkill,
+    name: "agent-update-skill",
+    localPath: "/Users/demo/.agents/skills/agent-update-skill",
+    canonicalPath: "/Users/demo/.agents/skills/agent-update-skill",
+    gitLinked: false,
+    managementOwner: "agent-skills-cli" as const,
+    updateDriver: "agent-skills-cli" as const,
+  };
+
+  renderSkillCardWithProviders(agentSkill);
+
+  const previewButton = screen.getByRole("button", { name: "查看 agent-update-skill 更新预览" });
+  await userEvent.click(previewButton);
+
+  expect(await screen.findByRole("dialog", { name: "agent-update-skill" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "待更新内容 0" })).toHaveAttribute("aria-pressed", "true");
+});
+
 test("uses the detail-only update preview icon after expanding an updateable skill", async () => {
   const updateSkill = installedSkillFixtures.find((skill) => skill.name === "excalidraw-diagram");
   if (!updateSkill) {
