@@ -47,40 +47,9 @@ The core workflow is team collaboration without intermediate handoff directories
 
 Skills already stored in a tool's local directory can first be imported into SkillDock for management, then centrally managed and distributed to other tools.
 
-```mermaid
-flowchart TB
-    subgraph SOURCE["1. Skill sources"]
-        SD_INSTALL["Install with SkillDock<br/>Marketplace · Git · Local folder"]
-        TOOL_SKILL["Existing Skill in a tool<br/>Cursor · Claude Code · Codex"]
-        CLI_INSTALL["Install with Agent Skills CLI<br/>npx skills add ... -g"]
-    end
-
-    subgraph MANAGED["2. Managed library"]
-        SD_MANAGED["Managed by SkillDock<br/>~/.skilldock/skills"]
-        CLI_MANAGED["Managed by Agent CLI<br/>~/.agents/skills"]
-    end
-
-    subgraph DISTRIBUTE["3. Enable and distribute"]
-        ENABLE["Enable through symlinks<br/>One Skill, multiple tools"]
-    end
-
-    subgraph TOOLS["4. Coding tools"]
-        CURSOR["Cursor"]
-        CLAUDE["Claude Code"]
-        CODEX["Codex"]
-        OTHER["Other tools"]
-    end
-
-    SD_INSTALL --> SD_MANAGED
-    TOOL_SKILL -->|"Import: copy into the managed library"| SD_MANAGED
-    CLI_INSTALL --> CLI_MANAGED
-    SD_MANAGED --> ENABLE
-    CLI_MANAGED --> ENABLE
-    ENABLE --> CURSOR
-    ENABLE --> CLAUDE
-    ENABLE --> CODEX
-    ENABLE --> OTHER
-```
+<p align="center">
+  <img src="docs/images/skill-workflow-en.png" width="1200" alt="SkillDock Skill management workflow" />
+</p>
 
 | How it enters SkillDock | Managed location | Available after management |
 | --- | --- | --- |
