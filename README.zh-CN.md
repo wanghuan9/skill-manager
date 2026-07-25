@@ -18,6 +18,10 @@
   <img alt="Preview" src="https://img.shields.io/badge/source-closed%20preview-lightgrey" />
 </p>
 
+<p align="center">
+  <img src="docs/images/overview.png" width="1200" alt="SkillDock Skills 主界面" />
+</p>
+
 ## 它能做什么
 
 SkillDock 是一款 AI Skill 管理工具和桌面管理台，面向 Claude Code、Cursor、Codex、Windsurf、Gemini CLI、GitHub Copilot 等 AI Coding Agent。它集中展示、编辑和同步本地 Skills、MCP 配置和插件包，并直接扫描各工具真实 Skill 目录，识别已托管、未托管和冲突状态。对于 Git 来源的 Skills 和插件，它会检测远端更新、本地修改和待推送状态，并支持带 Diff 预览的一键更新。
@@ -43,40 +47,9 @@ SkillDock 是一款 AI Skill 管理工具和桌面管理台，面向 Claude Code
 
 已存在于各软件本地目录中的 Skill，可先导入 SkillDock 托管，再统一分发到其他工具并集中管理。
 
-```mermaid
-flowchart TB
-    subgraph SOURCE["1. Skill 来源"]
-        SD_INSTALL["SkillDock 安装<br/>市场 · Git · 本地目录"]
-        TOOL_SKILL["工具目录中的已有 Skill<br/>Cursor · Claude Code · Codex"]
-        CLI_INSTALL["Agent Skills CLI 安装<br/>npx skills add ... -g"]
-    end
-
-    subgraph MANAGED["2. 统一托管"]
-        SD_MANAGED["SkillDock 托管<br/>~/.skilldock/skills"]
-        CLI_MANAGED["Agent CLI 托管<br/>~/.agents/skills"]
-    end
-
-    subgraph DISTRIBUTE["3. 启用与分发"]
-        ENABLE["通过软链接启用<br/>一份 Skill，可启用到多个工具"]
-    end
-
-    subgraph TOOLS["4. 使用工具"]
-        CURSOR["Cursor"]
-        CLAUDE["Claude Code"]
-        CODEX["Codex"]
-        OTHER["其他工具"]
-    end
-
-    SD_INSTALL --> SD_MANAGED
-    TOOL_SKILL -->|"导入：复制到托管目录"| SD_MANAGED
-    CLI_INSTALL --> CLI_MANAGED
-    SD_MANAGED --> ENABLE
-    CLI_MANAGED --> ENABLE
-    ENABLE --> CURSOR
-    ENABLE --> CLAUDE
-    ENABLE --> CODEX
-    ENABLE --> OTHER
-```
+<p align="center">
+  <img src="docs/images/skill-workflow-zh-CN.png" width="1200" alt="SkillDock Skill 托管与工作流程" />
+</p>
 
 | 进入方式 | 托管目录 | 托管后支持 |
 | --- | --- | --- |
