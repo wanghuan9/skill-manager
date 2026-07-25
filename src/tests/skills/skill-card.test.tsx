@@ -168,8 +168,7 @@ test("shows the official source link for a well-known Agent CLI skill", async ()
 
   const detailDialog = screen.getByRole("dialog", { name: "lark-okr 详情" });
   expect(within(detailDialog).getByText("来源方式").parentElement).toHaveTextContent("远程");
-  expect(within(detailDialog).getByText("来源链接")).toBeInTheDocument();
-  expect(within(detailDialog).queryByText("Git 仓库")).not.toBeInTheDocument();
+  expect(within(detailDialog).getByText("来源地址")).toBeInTheDocument();
   expect(within(detailDialog).getByRole("link", {
     name: "https://open.feishu.cn/.well-known/skills/lark-okr/SKILL.md",
   })).toBeInTheDocument();
@@ -268,10 +267,10 @@ test("shows description in the list summary and keeps update metadata in details
   expect(screen.getByText(/本地更新时间/)).toBeInTheDocument();
   expect(screen.getByText(/更新人/)).toBeInTheDocument();
   const sourceMethod = screen.getByText("来源方式").parentElement;
-  const gitRepository = screen.getByText("Git 仓库").parentElement;
+  const sourceAddress = screen.getByText("来源地址").parentElement;
   const owner = screen.getByText("托管方").parentElement;
   const managedFolder = screen.getByText("托管目录").parentElement;
-  expect(sourceMethod?.compareDocumentPosition(gitRepository as Node)).toBe(
+  expect(sourceMethod?.compareDocumentPosition(sourceAddress as Node)).toBe(
     Node.DOCUMENT_POSITION_FOLLOWING,
   );
   expect(owner?.compareDocumentPosition(managedFolder as Node)).toBe(
