@@ -10161,7 +10161,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn local_install_preserves_existing_external_symlink_on_activation_conflict() {
+    fn local_install_replaces_existing_external_symlink_on_default_activation() {
         let _guard = TEST_ENV_LOCK
             .lock()
             .unwrap_or_else(|error| error.into_inner());
@@ -10214,19 +10214,20 @@ mod tests {
         assert!(managed_skill_dir.join("SKILL.md").is_file());
         assert_eq!(
             fs::read_link(&codex_skill_link).expect("read codex symlink"),
-            legacy_skill_dir
+            managed_skill_dir
         );
+        assert!(legacy_skill_dir.join("SKILL.md").is_file());
         assert!(installed[0]
             .tools
             .iter()
-            .any(|tool| { tool.name == "Codex" && tool.status_label == "未启用" }));
+            .any(|tool| { tool.name == "Codex" && tool.status_label == "已启用" }));
 
         let _ = fs::remove_dir_all(temp_dir);
     }
 
     #[cfg(unix)]
     #[test]
-    fn local_import_copies_external_skill_without_overwriting_source_link() {
+    fn local_import_replaces_source_link_without_deleting_source_target() {
         let _guard = TEST_ENV_LOCK
             .lock()
             .unwrap_or_else(|error| error.into_inner());
@@ -10266,12 +10267,13 @@ mod tests {
         assert!(managed_skill_dir.join("SKILL.md").is_file());
         assert_eq!(
             fs::read_link(&codex_skill_link).expect("read codex symlink"),
-            legacy_skill_dir
+            managed_skill_dir
         );
+        assert!(legacy_skill_dir.join("SKILL.md").is_file());
         assert!(imported
             .tools
             .iter()
-            .any(|tool| { tool.name == "Codex" && tool.status_label == "未启用" }));
+            .any(|tool| { tool.name == "Codex" && tool.status_label == "已启用" }));
 
         let _ = fs::remove_dir_all(temp_dir);
     }

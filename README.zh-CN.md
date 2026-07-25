@@ -27,9 +27,8 @@ SkillDock 是一款 AI Skill 管理工具和桌面管理台，面向 Claude Code
 - **Skills 管理** — 安装、更新、删除、编辑、查看和同步本地 skills。
 - **MCP 管理** — 浏览、导入、编辑、启用、停用、同步和查看 MCP server 配置。
 - **插件管理** — 安装、启用、停用、查看、一键更新和删除插件包，并为 Git 来源插件检测本地修改和待推送状态。
-- **Skill 来源分组** — 按仓库或本地来源对已安装 skills 分组，团队维护的 skill 集合更容易浏览。
-- **真实工具目录** — 查看 Claude Code、Cursor、Codex、Windsurf、Gemini CLI 等工具真实目录中的 Skill，并识别托管、未托管、冲突、真实文件夹和符号链接。
-- **Skill Diff 与协作** — 编辑本地修改，查看已暂存/未暂存差异，按文件或变更块回退，并在推送前预览变更。
+- **各软件 Skill 目录管理** — 直接查看并管理 Claude Code、Cursor、Codex 等软件实际使用的 Skill，识别已托管、未托管和冲突状态；支持将未托管 Skill 导入 SkillDock，或从当前软件中移除。
+- **Skill Diff 与协作** — 查看已暂存/未暂存 Diff 和远端更新内容，并支持按文件或变更块回退。
 - **卡片布局与深色主题** — Skills、MCP 和 Plugins 支持列表/卡片切换，并支持浅色、深色和跟随系统。
 - **MCP tools 探测** — 探测 MCP server 暴露的 tools，追踪配置是否可用，并支持 tools 级别的启用和停用控制。
 - **Skill 安装** — 支持从 `skills.sh`、`skillsmp` 市场一键安装，也支持 Git 仓库安装、本地导入及安装。
@@ -37,6 +36,61 @@ SkillDock 是一款 AI Skill 管理工具和桌面管理台，面向 Claude Code
 - **Plugin 安装** — 支持从 Git 仓库一键安装 plugins，并启用其中包含的 skills、commands、agents 和集成能力。
 - **完整 Git 工作流** — Git 来源的 skills 和插件会保留为真实仓库，支持远端更新检测、本地修改检测、待推送状态，以及更新和推送前预览。
 - **多工具一键同步** — 将 skills、MCP servers 和插件启用到 Claude Code、Codex、Cursor、Windsurf、Gemini CLI、OpenCode 等常用 Coding 工具，避免手动复制和修改复杂配置文件。
+
+## Skill 托管与工作流程
+
+“托管”表示 Skill 的真实目录及其更新、删除由谁管理；“启用”表示将已托管 Skill 通过软链接接入 Cursor、Claude Code、Codex 等工具。只有已托管的 Skill 才能统一分发；每个已托管 Skill 都以托管目录中的一份真实内容作为分发源，可通过软链接同时启用到多个工具。
+
+已存在于各软件本地目录中的 Skill，可先导入 SkillDock 托管，再统一分发到其他工具并集中管理。
+
+```mermaid
+flowchart TB
+    subgraph SOURCE["1. Skill 来源"]
+        SD_INSTALL["SkillDock 安装<br/>市场 · Git · 本地目录"]
+        TOOL_SKILL["工具目录中的已有 Skill<br/>Cursor · Claude Code · Codex"]
+        CLI_INSTALL["Agent Skills CLI 安装<br/>npx skills add ... -g"]
+    end
+
+    subgraph MANAGED["2. 统一托管"]
+        SD_MANAGED["SkillDock 托管<br/>~/.skilldock/skills"]
+        CLI_MANAGED["Agent CLI 托管<br/>~/.agents/skills"]
+    end
+
+    subgraph DISTRIBUTE["3. 启用与分发"]
+        ENABLE["通过软链接启用<br/>一份 Skill，可启用到多个工具"]
+    end
+
+    subgraph TOOLS["4. 使用工具"]
+        CURSOR["Cursor"]
+        CLAUDE["Claude Code"]
+        CODEX["Codex"]
+        OTHER["其他工具"]
+    end
+
+    SD_INSTALL --> SD_MANAGED
+    TOOL_SKILL -->|"导入：复制到托管目录"| SD_MANAGED
+    CLI_INSTALL --> CLI_MANAGED
+    SD_MANAGED --> ENABLE
+    CLI_MANAGED --> ENABLE
+    ENABLE --> CURSOR
+    ENABLE --> CLAUDE
+    ENABLE --> CODEX
+    ENABLE --> OTHER
+```
+
+| 进入方式 | 托管目录 | 托管后支持 |
+| --- | --- | --- |
+| 通过 SkillDock 市场、Git 或本地目录安装 | `~/.skilldock/skills` | 查看、编辑、删除和多工具分发；Git 来源还支持更新检测、Diff 预览及推送 |
+| 通过 Agent Skills CLI 全局安装，例如 `npx skills add ... -g` | `~/.agents/skills` | 开启兼容模式后自动识别；支持查看和多工具分发，并在 Agent Skills CLI 支持范围内预览、更新和删除 |
+| 已存在于 Cursor、Claude Code、Codex 等工具目录 | 导入后复制到 `~/.skilldock/skills` | 导入前显示为未托管；导入后由 SkillDock 托管，可统一管理并启用到其他工具 |
+
+### 兼容 Agent Skills CLI
+
+在 **设置 → 兼容 Agent Skills CLI** 中开启兼容模式后，SkillDock 会额外扫描 `~/.agents/skills`，自动识别通过 `npx skills add ... -g` 全局安装的 Skill。它们仍由 Agent Skills CLI 托管，不会迁移或复制到 `~/.skilldock/skills`；你可以在 SkillDock 中统一查看并分发到其他工具，并在 Agent Skills CLI 支持范围内预览、更新和删除。
+
+SkillDock 自己安装的 Skill 仍保存在 `~/.skilldock/skills`。关闭兼容模式只会停止扫描，不会修改或删除 `~/.agents/skills` 中的内容。
+
+对于习惯命令行的用户，可以将 Agent Skills CLI 作为 Skill 的命令行入口，将 SkillDock 作为桌面管理端：通过 CLI 安装和维护 `~/.agents/skills`，再通过 SkillDock 可视化查看、预览更新并统一分发到多个工具，无需改变原有 CLI 工作流。
 
 ## Skills
 
@@ -125,8 +179,6 @@ SkillDock 会检测受支持的 Coding 工具，展示每个工具的 Skills 路
 Claude Code · Codex · Cursor · Windsurf · IntelliJ IDEA · OpenCode · Gemini · Antigravity · Continue · GitHub Copilot · Qwen Code · Trae · Trae CN · Cline · Roo Code · Kilo Code · Kiro · Goose · Junie · Augment · CodeBuddy · Droid · OpenClaw · CommandCode · Crush · Qoder · Zencoder · Hermes · iFlow
 
 ## 工作机制
-
-SkillDock 会把安装的 skills 统一放在本地托管库中，再通过软链接启用到各个工具自己的 skills 目录。这样既保留一个统一管理源，也让每个工具仍然从自己期望的位置读取 skills。
 
 插件会作为更高层级的包来管理。一个插件可以暴露 skills、agents、commands、MCP 集成和宿主专属能力；SkillDock
 会统一安装插件包、追踪来源，并允许你为兼容的宿主工具启用或停用。

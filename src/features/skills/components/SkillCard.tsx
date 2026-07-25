@@ -315,9 +315,6 @@ export function SkillCard({
     : skill.gitLinked || skill.sourceType !== "local"
       ? t("skill.card.sourceMethod.git")
       : t("skill.card.sourceMethod.local");
-  const sourceAddressLabel = skill.sourceType === "well-known"
-    ? t("skill.card.sourceLink")
-    : t("skill.card.source");
   const managedPath = skill.canonicalPath ?? skill.localPath;
   const gridSourceSummary = `${sourceMethodLabel} · ${managementOwnerLabel}`;
   const showDetailAction = skill.collabStatus === "update-available";
@@ -595,7 +592,7 @@ export function SkillCard({
           </div>
           {skill.sourceUrl ? (
             <div>
-              <dt>{sourceAddressLabel}</dt>
+              <dt>{t("skill.card.sourceAddress")}</dt>
               <dd className="detail-grid__source-value">
                 {isHttpUrl(skill.sourceUrl) ? (
                   <a
