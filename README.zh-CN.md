@@ -82,8 +82,6 @@ flowchart TB
 | 通过 Agent Skills CLI 全局安装，例如 `npx skills add ... -g` | `~/.agents/skills` | 开启兼容模式后自动识别；支持查看和多工具分发，并在 Agent Skills CLI 支持范围内预览、更新和删除 |
 | 已存在于 Cursor、Claude Code、Codex 等工具目录 | 导入后复制到 `~/.skilldock/skills` | 导入前显示为未托管；导入后由 SkillDock 托管，可统一管理并启用到其他工具 |
 
-导入不会删除原始真实目录。向工具分发时，如果同名位置是软链接，SkillDock 会将链接更新为当前托管 Skill；如果同名位置是真实目录或普通文件，则保留原内容并提示冲突。
-
 ### 兼容 Agent Skills CLI
 
 在 **设置 → 兼容 Agent Skills CLI** 中开启兼容模式后，SkillDock 会额外扫描 `~/.agents/skills`，自动识别通过 `npx skills add ... -g` 全局安装的 Skill。它们仍由 Agent Skills CLI 托管，不会迁移或复制到 `~/.skilldock/skills`；你可以在 SkillDock 中统一查看并分发到其他工具，并在 Agent Skills CLI 支持范围内预览、更新和删除。

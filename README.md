@@ -82,8 +82,6 @@ flowchart TB
 | Installed globally with Agent Skills CLI, such as `npx skills add ... -g` | `~/.agents/skills` | Automatically detected after compatibility is enabled; inspect and distribute it, with preview, update, and removal where Agent Skills CLI supports them |
 | Already present in Cursor, Claude Code, Codex, or another tool | Copied to `~/.skilldock/skills` after import | Shown as unmanaged before import; after import SkillDock manages it and can enable it in other tools |
 
-Importing never deletes the original real directory. During distribution, SkillDock updates an existing same-name symlink to the selected managed Skill. If the same-name path is a real directory or regular file, SkillDock preserves it and reports a conflict.
-
 ### Agent Skills CLI Compatibility
 
 Turn on **Settings → Agent Skills CLI Compatibility** to scan `~/.agents/skills` and automatically recognize Skills installed globally with `npx skills add ... -g`. They remain managed by Agent Skills CLI and are not moved or copied into `~/.skilldock/skills`; SkillDock can inspect and distribute them, with preview, update, and removal where Agent Skills CLI supports those operations.
