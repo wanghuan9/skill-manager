@@ -836,7 +836,7 @@ pub fn global_status() -> AgentSkillsCliStatus {
     let global_path = global_skill_root()
         .map(|path| path.to_string_lossy().to_string())
         .unwrap_or_default();
-    let Some(program) = find_local_cli_program() else {
+    let Some(program) = find_cli_program_for_operation() else {
         return AgentSkillsCliStatus {
             available: false,
             global_path,
@@ -1068,7 +1068,7 @@ pub fn is_global_skill_path(path: &Path) -> bool {
 mod tests {
     use super::{
         changed_global_skill_names, confirms_global_agent_installation, detect_global_updates,
-        is_global_skill_path, parse_global_skill_list_json, parse_global_skill_lock,
+        global_status, is_global_skill_path, parse_global_skill_list_json, parse_global_skill_lock,
         remove_global_skill, resolve_skill_entry_path, AgentSkillsCliStatus, CliSkillEntry,
     };
     use std::collections::BTreeMap;
@@ -1158,6 +1158,75 @@ mod tests {
     #[test]
     fn rejects_malformed_global_skill_list_json() {
         assert!(parse_global_skill_list_json("not-json").is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn global_status_uses_operation_fallback_when_direct_cli_is_missing() {
+        let _guard = crate::workspace::TEST_ENV_LOCK.lock().expect("env lock");
+        let original_home = env::var_os("HOME");
+        let original_path = env::var_os("PATH");
+        let temp_home = env::temp_dir().join(format!(
+            "skilldock-agent-status-fallback-test-{}",
+            std::process::id()
+        ));
+        let fake_bin = temp_home.join("bin");
+        let fake_skills = fake_bin.join("skills");
+        let fake_npx = fake_bin.join("npx");
+        fs::create_dir_all(&fake_bin).expect("create fake executable path");
+        fs::write(&fake_skills, "#!/bin/sh\nexit 1\n").expect("write unavailable skills command");
+        fs::set_permissions(&fake_skills, fs::Permissions::from_mode(0o755))
+            .expect("make fake skills executable");
+        fs::write(
+            &fake_npx,
+            r#"#!/bin/sh
+if [ "$1" != "--yes" ] || [ "$2" != "skills" ]; then
+  exit 1
+fi
+if [ "$3" = "--version" ]; then
+  exit 0
+fi
+if [ "$3" = "ls" ]; then
+  printf '%s' '[{"name":"demo","path":"/tmp/.agents/skills/demo","scope":"global","agents":["Claude Code"]}]'
+  exit 0
+fi
+exit 1
+"#,
+        )
+        .expect("write fake npx executable");
+        fs::set_permissions(&fake_npx, fs::Permissions::from_mode(0o755))
+            .expect("make fake npx executable");
+
+        let next_path = original_path
+            .as_ref()
+            .map(|path| {
+                let mut paths = env::split_paths(path).collect::<Vec<_>>();
+                paths.insert(0, fake_bin.clone());
+                env::join_paths(paths).expect("join fake executable path")
+            })
+            .unwrap_or_else(|| fake_bin.clone().into_os_string());
+
+        unsafe {
+            env::set_var("HOME", &temp_home);
+            env::set_var("PATH", next_path);
+        }
+
+        let status = global_status();
+
+        match original_home {
+            Some(value) => unsafe { env::set_var("HOME", value) },
+            None => unsafe { env::remove_var("HOME") },
+        }
+        match original_path {
+            Some(value) => unsafe { env::set_var("PATH", value) },
+            None => unsafe { env::remove_var("PATH") },
+        }
+        let _ = fs::remove_dir_all(temp_home);
+
+        assert!(status.available);
+        assert!(status.error.is_empty());
+        assert_eq!(status.entries.len(), 1);
+        assert_eq!(status.entries[0].name, "demo");
     }
 
     #[test]
