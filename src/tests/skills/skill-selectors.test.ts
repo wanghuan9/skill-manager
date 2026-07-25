@@ -44,7 +44,7 @@ describe("filterSkills", () => {
     expect(skills.map((skill) => skill.name)).toEqual(["newer-skill", "older-skill"]);
   });
 
-  it("keeps enabled-tool and status priority when local updated time is the same", () => {
+  it("keeps enablement and status priority when local updated time is the same", () => {
     const skills = filterSkills(
       [
         createSkill({
@@ -79,11 +79,11 @@ describe("filterSkills", () => {
     );
 
     expect(skills.map((skill) => skill.name)).toEqual([
+      "enabled-clean-skill",
       "pending-commit-skill",
       "pending-push-skill",
       "update-skill",
       "disabled-clean-skill",
-      "enabled-clean-skill",
     ]);
   });
 
