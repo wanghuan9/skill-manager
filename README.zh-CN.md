@@ -27,7 +27,7 @@ SkillDock 是一款 AI Skill 管理工具和桌面管理台，面向 Claude Code
 - **Skills 管理** — 安装、更新、删除、编辑、查看和同步本地 skills。
 - **MCP 管理** — 浏览、导入、编辑、启用、停用、同步和查看 MCP server 配置。
 - **插件管理** — 安装、启用、停用、查看、一键更新和删除插件包，并为 Git 来源插件检测本地修改和待推送状态。
-- **真实工具目录** — 查看 Claude Code、Cursor、Codex、Windsurf、Gemini CLI 等工具真实目录中的 Skill，并识别托管、未托管、冲突、真实文件夹和符号链接。
+- **各软件 Skill 目录管理** — 直接查看并管理 Claude Code、Cursor、Codex 等软件实际使用的 Skill，识别已托管、未托管和冲突状态；支持将未托管 Skill 导入 SkillDock，或从当前软件中移除。
 - **Skill Diff 与协作** — Git 来源的 skills 和插件会保留为真实仓库，支持远端更新、本地修改和待推送状态检测；可查看已暂存/未暂存 Diff、预览远端更新内容、按文件或变更块回退，并在推送前预览变更。
 - **卡片布局与深色主题** — Skills、MCP 和 Plugins 支持列表/卡片切换，并支持浅色、深色和跟随系统。
 - **MCP tools 探测** — 探测 MCP server 暴露的 tools，追踪配置是否可用，并支持 tools 级别的启用和停用控制。
