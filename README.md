@@ -41,6 +41,8 @@ The core workflow is team collaboration without intermediate handoff directories
 
 “Managed” identifies where a Skill's real files live and who owns its update and removal lifecycle. “Enabled” means linking a managed Skill into Cursor, Claude Code, Codex, or another tool. Only managed Skills can be distributed centrally: the copy in the managed library is the single distribution source and can be enabled in multiple tools through symlinks.
 
+Skills already stored in a tool's local directory can first be imported into SkillDock for management, then centrally managed and distributed to other tools.
+
 ```mermaid
 flowchart TB
     subgraph SOURCE["1. Skill sources"]

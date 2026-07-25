@@ -41,6 +41,8 @@ SkillDock 是一款 AI Skill 管理工具和桌面管理台，面向 Claude Code
 
 “托管”表示 Skill 的真实目录及其更新、删除由谁管理；“启用”表示将已托管 Skill 通过软链接接入 Cursor、Claude Code、Codex 等工具。只有已托管的 Skill 才能统一分发；每个已托管 Skill 都以托管目录中的一份真实内容作为分发源，可通过软链接同时启用到多个工具。
 
+已存在于各软件本地目录中的 Skill，可先导入 SkillDock 托管，再统一分发到其他工具并集中管理。
+
 ```mermaid
 flowchart TB
     subgraph SOURCE["1. Skill 来源"]
