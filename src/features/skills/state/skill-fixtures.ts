@@ -8,6 +8,7 @@ import type {
   McpMarketplaceServer,
   PluginProbeResult,
   PluginSummary,
+  ProjectWorkspaceSnapshot,
   PushPreviewSnapshot,
   PushTargetSnapshot,
   RepoSkillCandidate,
@@ -809,6 +810,113 @@ export const mcpWorkspaceFixture: McpWorkspaceSnapshot = {
   ],
 };
 
+export const projectWorkspaceFixture: ProjectWorkspaceSnapshot = {
+  storagePath: "/Users/demo/.skilldock/projects.json",
+  projects: [
+    {
+      id: "project-demo-workspace",
+      name: "demo-workspace",
+      rootPath: "/Users/demo/Projects/demo-workspace",
+      canonicalRootPath: "/Users/demo/Projects/demo-workspace",
+      availability: "available",
+      errors: [],
+      skills: [
+        {
+          toolId: "claude-code",
+          toolName: "Claude Code",
+          name: "skill-publisher",
+          description: "用于维护技能发布说明、变更记录和发布前检查脚本。",
+          relativePath: ".claude/skills/skill-publisher",
+          localPath: "/Users/demo/Projects/demo-workspace/.claude/skills/skill-publisher",
+          entryKind: "directory",
+          managedSkillPath: "/Users/demo/.skilldock/skills/skill-publisher",
+          projectCapability: "bidirectional",
+          contentHash: "fixture-skill-publisher",
+          syncStatus: "in-sync",
+          error: "",
+        },
+        {
+          toolId: "codex",
+          toolName: "Codex",
+          name: "brainstorming",
+          description: "在开始创作或实现前梳理需求和方案。",
+          relativePath: ".codex/skills/brainstorming",
+          localPath: "/Users/demo/Projects/demo-workspace/.codex/skills/brainstorming",
+          entryKind: "directory",
+          managedSkillPath: "/Users/demo/.agents/skills/brainstorming",
+          projectCapability: "export-only",
+          contentHash: "fixture-brainstorming-project",
+          syncStatus: "managed-changed",
+          error: "",
+        },
+        {
+          toolId: "cursor",
+          toolName: "Cursor",
+          name: "project-helper",
+          description: "项目内现有、尚未上传托管的 Skill。",
+          relativePath: ".cursor/skills/project-helper",
+          localPath: "/Users/demo/Projects/demo-workspace/.cursor/skills/project-helper",
+          entryKind: "directory",
+          managedSkillPath: "",
+          projectCapability: "",
+          contentHash: "fixture-project-helper",
+          syncStatus: "project-only",
+          error: "",
+        },
+      ],
+      mcpServers: [
+        {
+          toolId: "claude-code",
+          toolName: "Claude Code",
+          serverName: "context7",
+          configRelativePath: ".mcp.json",
+          managedMcpId: "context7",
+          normalizedHash: "fixture-context7",
+          serverJson: "{\n  \"command\": \"npx\"\n}",
+          syncStatus: "in-sync",
+          secretRisk: "none",
+          error: "",
+        },
+        {
+          toolId: "cursor",
+          toolName: "Cursor",
+          serverName: "project-notes",
+          configRelativePath: ".cursor/mcp.json",
+          managedMcpId: "",
+          normalizedHash: "fixture-project-notes",
+          serverJson: "{\n  \"command\": \"project-notes\"\n}",
+          syncStatus: "project-only",
+          secretRisk: "none",
+          error: "",
+        },
+      ],
+    },
+  ],
+  managedSkills: [
+    {
+      name: "skill-publisher",
+      description: "用于维护技能发布说明、变更记录和发布前检查脚本。",
+      localPath: "/Users/demo/.skilldock/skills/skill-publisher",
+      managementOwner: "skilldock",
+      projectCapability: "bidirectional",
+    },
+    {
+      name: "brainstorming",
+      description: "在开始创作或实现前梳理需求和方案。",
+      localPath: "/Users/demo/.agents/skills/brainstorming",
+      managementOwner: "agent-skills-cli",
+      projectCapability: "export-only",
+    },
+  ],
+  managedMcpServers: [
+    {
+      id: "context7",
+      name: "context7",
+      serverJson: "{\n  \"command\": \"npx\",\n  \"args\": [\"-y\", \"@upstash/context7-mcp\"]\n}",
+    },
+  ],
+};
+
 export const gitAccountFixture: GitAccountSummary = {
   provider: "GitHub",
   accountName: "wanghuan",
@@ -960,6 +1068,7 @@ const initialFixtureState = structuredClone({
   pluginProbeFixture,
   cliToolFixtures,
   mcpWorkspaceFixture,
+  projectWorkspaceFixture,
   gitAccountFixture,
   appSettingsFixture,
   pushTargetFixtures,
@@ -1006,6 +1115,7 @@ export function resetSkillFixtureState() {
   resetObjectFixture(pluginProbeFixture, initialFixtureState.pluginProbeFixture);
   resetArrayFixture(cliToolFixtures, initialFixtureState.cliToolFixtures);
   resetObjectFixture(mcpWorkspaceFixture, initialFixtureState.mcpWorkspaceFixture);
+  resetObjectFixture(projectWorkspaceFixture, initialFixtureState.projectWorkspaceFixture);
   resetObjectFixture(gitAccountFixture, initialFixtureState.gitAccountFixture);
   resetObjectFixture(appSettingsFixture, initialFixtureState.appSettingsFixture);
   resetRecordFixture(pushTargetFixtures, initialFixtureState.pushTargetFixtures);

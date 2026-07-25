@@ -13904,3 +13904,399 @@ button.settings-form-item:disabled {
   box-shadow: none;
   opacity: 0.72;
 }
+
+/* Project-level Skills and MCP */
+.projects-page {
+  display: flex;
+  min-height: 100%;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.projects-page__toolbar,
+.projects-page__project-header,
+.projects-page__resource-toolbar,
+.projects-page__resource-card,
+.projects-page__resource-title,
+.projects-page__resource-actions,
+.projects-page__header-actions,
+.projects-page__tabs,
+.projects-page__tool-filters,
+.projects-page__dialog footer,
+.projects-page__diff-entry > div:first-child,
+.projects-page__mcp-field > div:first-child {
+  display: flex;
+  align-items: center;
+}
+
+.projects-page__toolbar,
+.projects-page__header-actions,
+.projects-page__resource-actions,
+.projects-page__tool-filters,
+.projects-page__tabs {
+  gap: 8px;
+}
+
+.projects-page__storage {
+  min-width: 0;
+  margin-left: auto;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.projects-page__error {
+  margin: 0;
+}
+
+.projects-page__layout {
+  display: grid;
+  min-height: 520px;
+  flex: 1;
+  grid-template-columns: minmax(190px, 240px) minmax(0, 1fr);
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--surface);
+}
+
+.projects-page__sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px;
+  border-right: 1px solid var(--line);
+  background: var(--surface-muted);
+}
+
+.projects-page__project {
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+}
+
+.projects-page__project:hover,
+.projects-page__project.is-active {
+  border-color: var(--line);
+  background: var(--surface-strong);
+}
+
+.projects-page__project.is-active {
+  color: var(--accent);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.projects-page__project span {
+  font-weight: 650;
+}
+
+.projects-page__project small {
+  overflow: hidden;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.projects-page__detail {
+  min-width: 0;
+  padding: 20px;
+}
+
+.projects-page__project-header,
+.projects-page__resource-card,
+.projects-page__resource-toolbar {
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.projects-page__project-header {
+  padding-bottom: 16px;
+}
+
+.projects-page__project-header h2,
+.projects-page__project-header p,
+.projects-page__resource-copy h3,
+.projects-page__resource-copy p,
+.projects-page__dialog h3,
+.projects-page__dialog p {
+  margin: 0;
+}
+
+.projects-page__project-header p,
+.projects-page__resource-copy p,
+.projects-page__resource-copy small,
+.projects-page__dialog p {
+  color: var(--muted);
+}
+
+.projects-page__tabs {
+  border-bottom: 1px solid var(--line);
+}
+
+.projects-page__tabs button,
+.projects-page__tool-filters button {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+}
+
+.projects-page__tabs button {
+  padding: 10px 4px;
+  border-bottom: 2px solid transparent;
+  font-weight: 650;
+}
+
+.projects-page__tabs button.is-active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.projects-page__tabs span {
+  margin-left: 4px;
+  font-size: 12px;
+}
+
+.projects-page__resource-toolbar {
+  padding: 14px 0;
+}
+
+.projects-page__tool-filters {
+  flex-wrap: wrap;
+}
+
+.projects-page__tool-filters button {
+  padding: 5px 9px;
+  border-radius: 7px;
+}
+
+.projects-page__tool-filters button.is-active {
+  background: var(--surface-strong);
+  color: var(--heading);
+}
+
+.projects-page__resources {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.projects-page__resource-card {
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-muted);
+}
+
+.projects-page__resource-copy {
+  min-width: 0;
+}
+
+.projects-page__resource-title {
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 5px;
+}
+
+.projects-page__resource-copy p,
+.projects-page__resource-copy small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.projects-page__resource-copy p {
+  margin-bottom: 4px;
+}
+
+.projects-page__status,
+.projects-page__owner,
+.projects-page__secret,
+.projects-page__diff-status {
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: var(--surface-strong);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.projects-page__status.is-in-sync,
+.projects-page__diff-status.is-added {
+  background: var(--success-soft);
+  color: var(--success);
+}
+
+.projects-page__status.is-diverged,
+.projects-page__secret,
+.projects-page__diff-status.is-deleted {
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+  color: var(--danger);
+}
+
+.projects-page__status.is-project-changed,
+.projects-page__status.is-managed-changed,
+.projects-page__status.is-project-missing,
+.projects-page__status.is-managed-missing,
+.projects-page__diff-status.is-modified {
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+
+.projects-page__resource-actions {
+  flex-shrink: 0;
+  justify-content: flex-end;
+}
+
+.projects-page__resource-warning {
+  margin-top: 7px;
+  color: var(--warning);
+  font-size: 12px;
+}
+
+.projects-page__resource-empty {
+  padding: 36px 18px;
+  border: 1px dashed var(--line);
+  border-radius: 12px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.projects-page__dialog {
+  width: min(520px, calc(100vw - 40px));
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--surface);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.24);
+}
+
+.projects-page__dialog header,
+.projects-page__dialog footer {
+  padding: 16px 18px;
+}
+
+.projects-page__dialog header {
+  border-bottom: 1px solid var(--line);
+}
+
+.projects-page__dialog footer {
+  justify-content: flex-end;
+  gap: 10px;
+  border-top: 1px solid var(--line);
+}
+
+.projects-page__dialog-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 18px;
+}
+
+.projects-page__dialog-body label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.projects-page__dialog-body select,
+.projects-page__dialog-body input {
+  width: 100%;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-strong);
+  color: inherit;
+}
+
+.projects-page__diff-dialog {
+  width: min(860px, calc(100vw - 40px));
+}
+
+.projects-page__diff-body {
+  max-height: min(64vh, 620px);
+  overflow: auto;
+}
+
+.projects-page__diff-entry,
+.projects-page__mcp-field {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.projects-page__diff-entry > div:first-child,
+.projects-page__mcp-field > div:first-child {
+  gap: 8px;
+  padding: 9px 11px;
+  background: var(--surface-strong);
+}
+
+.projects-page__diff-entry small,
+.projects-page__mcp-field small {
+  margin-left: auto;
+  color: var(--muted);
+}
+
+.projects-page__diff-columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.projects-page__diff-columns pre {
+  min-height: 70px;
+  margin: 0;
+  padding: 11px;
+  overflow: auto;
+  border-right: 1px solid var(--line);
+  white-space: pre-wrap;
+}
+
+.projects-page__diff-columns pre:last-child {
+  border-right: 0;
+}
+
+.projects-page__mcp-field code {
+  display: block;
+  padding: 11px;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 820px) {
+  .projects-page__layout {
+    grid-template-columns: 1fr;
+  }
+
+  .projects-page__sidebar {
+    flex-direction: row;
+    overflow-x: auto;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .projects-page__project {
+    min-width: 170px;
+  }
+
+  .projects-page__resource-card,
+  .projects-page__project-header,
+  .projects-page__resource-toolbar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .projects-page__diff-columns {
+    grid-template-columns: 1fr;
+  }
+}

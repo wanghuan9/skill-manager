@@ -14,6 +14,7 @@ import {
   mcpWorkspaceFixture,
   pluginFixtures,
   pluginProbeFixture,
+  projectWorkspaceFixture,
   pushPreviewFixtures,
   pushTargetFixtures,
   repoSkillCandidateFixtures,
@@ -54,6 +55,10 @@ import type {
   PluginStatus,
   PluginUpdateMode,
   PluginUpdateStrategy,
+  ProjectMcpDiffSnapshot,
+  ProjectSkillDiffSnapshot,
+  ProjectSyncDirection,
+  ProjectWorkspaceSnapshot,
   PushPreviewSnapshot,
   PushTargetSnapshot,
   RepoSkillCandidate,
@@ -257,6 +262,31 @@ type InstallMcpMarketplaceServerInput = {
 
 type FetchMcpMarketplaceServerConfigInput = {
   server: McpMarketplaceServer;
+};
+
+export type ProjectSkillResourceInput = {
+  projectId: string;
+  toolId: string;
+  projectRelativePath: string;
+};
+
+export type ProjectMcpResourceInput = {
+  projectId: string;
+  toolId: string;
+  serverName: string;
+};
+
+export type ProjectSkillSyncInput = ProjectSkillResourceInput & {
+  direction: ProjectSyncDirection;
+};
+
+export type ProjectMcpSyncInput = ProjectMcpResourceInput & {
+  direction: ProjectSyncDirection;
+};
+
+type ProjectSyncHashes = {
+  sourceHash: string;
+  targetHash: string;
 };
 
 type UpdateAppSettingsInput = {
@@ -501,6 +531,22 @@ function normalizeMcpWorkspaceSnapshot(workspace: McpWorkspaceSnapshot): McpWork
         statusLabel: localizeToolStatusLabel(app.statusLabel, language),
       })),
     })),
+  };
+}
+
+function normalizeProjectWorkspaceSnapshot(
+  workspace: ProjectWorkspaceSnapshot,
+): ProjectWorkspaceSnapshot {
+  return {
+    storagePath: workspace.storagePath ?? "",
+    projects: (workspace.projects ?? []).map((project) => ({
+      ...project,
+      skills: project.skills ?? [],
+      mcpServers: project.mcpServers ?? [],
+      errors: project.errors ?? [],
+    })),
+    managedSkills: workspace.managedSkills ?? [],
+    managedMcpServers: workspace.managedMcpServers ?? [],
   };
 }
 
@@ -2124,6 +2170,267 @@ function omitDefaultStdioType(server: Record<string, unknown>) {
 
   const { type: _type, ...serverWithoutDefaultType } = server;
   return serverWithoutDefaultType;
+}
+
+function rememberProjectFixture(snapshot: ProjectWorkspaceSnapshot) {
+  if (shouldUseFixtureData()) {
+    Object.assign(projectWorkspaceFixture, structuredClone(snapshot));
+  }
+  return normalizeProjectWorkspaceSnapshot(snapshot);
+}
+
+export async function fetchProjectWorkspaces(): Promise<ProjectWorkspaceSnapshot> {
+  const workspace = await invokeOrFallback(
+    "list_project_workspaces",
+    {},
+    structuredClone(projectWorkspaceFixture),
+  );
+  return normalizeProjectWorkspaceSnapshot(workspace);
+}
+
+export async function addManagedProject(rootPath: string): Promise<ProjectWorkspaceSnapshot> {
+  const normalizedPath = rootPath.replace(/\/$/, "");
+  const fallback = structuredClone(projectWorkspaceFixture);
+  if (!fallback.projects.some((project) => project.canonicalRootPath === normalizedPath)) {
+    fallback.projects.push({
+      id: `project-${Date.now()}`,
+      name: normalizedPath.split("/").filter(Boolean).at(-1) ?? "project",
+      rootPath: normalizedPath,
+      canonicalRootPath: normalizedPath,
+      availability: "available",
+      skills: [],
+      mcpServers: [],
+      errors: [],
+    });
+  }
+  const workspace = await invokeOrFallback("add_managed_project", { rootPath }, fallback);
+  return rememberProjectFixture(workspace);
+}
+
+export async function removeManagedProject(projectId: string): Promise<ProjectWorkspaceSnapshot> {
+  const fallback = {
+    ...structuredClone(projectWorkspaceFixture),
+    projects: projectWorkspaceFixture.projects.filter((project) => project.id !== projectId),
+  };
+  const workspace = await invokeOrFallback("remove_managed_project", { projectId }, fallback);
+  return rememberProjectFixture(workspace);
+}
+
+export async function distributeSkillToProject(input: {
+  projectId: string;
+  toolId: string;
+  managedSkillPath: string;
+  targetName: string;
+}): Promise<ProjectWorkspaceSnapshot> {
+  const managedSkill = projectWorkspaceFixture.managedSkills.find(
+    (skill) => skill.localPath === input.managedSkillPath,
+  );
+  const tool = {
+    "claude-code": ["Claude Code", ".claude/skills"],
+    codex: ["Codex", ".codex/skills"],
+    cursor: ["Cursor", ".cursor/skills"],
+  }[input.toolId] ?? [input.toolId, `.unknown/skills`];
+  const fallback = structuredClone(projectWorkspaceFixture);
+  fallback.projects = fallback.projects.map((project) => project.id === input.projectId
+    ? {
+        ...project,
+        skills: [...project.skills, {
+          toolId: input.toolId,
+          toolName: tool[0],
+          name: input.targetName,
+          description: managedSkill?.description ?? "",
+          relativePath: `${tool[1]}/${input.targetName}`,
+          localPath: `${project.canonicalRootPath}/${tool[1]}/${input.targetName}`,
+          entryKind: "directory",
+          managedSkillPath: input.managedSkillPath,
+          projectCapability: managedSkill?.projectCapability ?? "bidirectional",
+          contentHash: `fixture-${input.targetName}`,
+          syncStatus: "in-sync",
+          error: "",
+        }],
+      }
+    : project);
+  const workspace = await invokeOrFallback("distribute_skill_to_project", input, fallback);
+  return rememberProjectFixture(workspace);
+}
+
+export async function importProjectSkill(
+  input: ProjectSkillResourceInput,
+): Promise<ProjectWorkspaceSnapshot> {
+  const fallback = structuredClone(projectWorkspaceFixture);
+  fallback.projects = fallback.projects.map((project) => project.id === input.projectId
+    ? {
+        ...project,
+        skills: project.skills.map((skill) =>
+          skill.toolId === input.toolId && skill.relativePath === input.projectRelativePath
+            ? {
+                ...skill,
+                managedSkillPath: `/Users/demo/.skilldock/skills/${skill.name}`,
+                projectCapability: "bidirectional",
+                syncStatus: "in-sync",
+              }
+            : skill),
+      }
+    : project);
+  const workspace = await invokeOrFallback("import_project_skill", input, fallback);
+  return rememberProjectFixture(workspace);
+}
+
+export async function previewProjectSkillSync(
+  input: ProjectSkillSyncInput,
+): Promise<ProjectSkillDiffSnapshot> {
+  return invokeOrFallback("preview_project_skill_sync", input, {
+    direction: input.direction,
+    sourceHash: "fixture-source-hash",
+    targetHash: "fixture-target-hash",
+    files: [{
+      path: "SKILL.md",
+      status: "modified",
+      isBinary: false,
+      originalContent: "# Before\n",
+      currentContent: "# After\n",
+    }],
+  });
+}
+
+export async function syncProjectSkill(
+  input: ProjectSkillSyncInput & ProjectSyncHashes,
+): Promise<ProjectWorkspaceSnapshot> {
+  const fallback = structuredClone(projectWorkspaceFixture);
+  fallback.projects = fallback.projects.map((project) => project.id === input.projectId
+    ? {
+        ...project,
+        skills: project.skills.map((skill) =>
+          skill.toolId === input.toolId && skill.relativePath === input.projectRelativePath
+            ? { ...skill, syncStatus: "in-sync", error: "" }
+            : skill),
+      }
+    : project);
+  const workspace = await invokeOrFallback("sync_project_skill", input, fallback);
+  return rememberProjectFixture(workspace);
+}
+
+export async function distributeMcpToProject(input: {
+  projectId: string;
+  toolId: string;
+  managedMcpId: string;
+  serverName: string;
+}): Promise<ProjectWorkspaceSnapshot> {
+  const managedServer = projectWorkspaceFixture.managedMcpServers.find(
+    (server) => server.id === input.managedMcpId,
+  );
+  const toolName = input.toolId === "claude-code" ? "Claude Code" : "Cursor";
+  const configRelativePath = input.toolId === "claude-code" ? ".mcp.json" : ".cursor/mcp.json";
+  const fallback = structuredClone(projectWorkspaceFixture);
+  fallback.projects = fallback.projects.map((project) => project.id === input.projectId
+    ? {
+        ...project,
+        mcpServers: [...project.mcpServers, {
+          toolId: input.toolId,
+          toolName,
+          serverName: input.serverName,
+          configRelativePath,
+          managedMcpId: input.managedMcpId,
+          normalizedHash: `fixture-${input.serverName}`,
+          serverJson: managedServer?.serverJson ?? "{}",
+          syncStatus: "in-sync",
+          secretRisk: "none",
+          error: "",
+        }],
+      }
+    : project);
+  const workspace = await invokeOrFallback("distribute_mcp_to_project", input, fallback);
+  return rememberProjectFixture(workspace);
+}
+
+export async function importProjectMcp(
+  input: ProjectMcpResourceInput,
+): Promise<ProjectWorkspaceSnapshot> {
+  const fallback = structuredClone(projectWorkspaceFixture);
+  fallback.projects = fallback.projects.map((project) => project.id === input.projectId
+    ? {
+        ...project,
+        mcpServers: project.mcpServers.map((server) =>
+          server.toolId === input.toolId && server.serverName === input.serverName
+            ? { ...server, managedMcpId: server.serverName, syncStatus: "in-sync" }
+            : server),
+      }
+    : project);
+  const workspace = await invokeOrFallback("import_project_mcp", input, fallback);
+  return rememberProjectFixture(workspace);
+}
+
+export async function previewProjectMcpSync(
+  input: ProjectMcpSyncInput,
+): Promise<ProjectMcpDiffSnapshot> {
+  return invokeOrFallback("preview_project_mcp_sync", input, {
+    direction: input.direction,
+    sourceHash: "fixture-source-hash",
+    targetHash: "fixture-target-hash",
+    operation: "update",
+    fields: [{
+      path: "command",
+      status: "modified",
+      before: "npx",
+      after: "uvx",
+      sensitive: false,
+    }],
+    warnings: [],
+  });
+}
+
+export async function syncProjectMcp(
+  input: ProjectMcpSyncInput & ProjectSyncHashes,
+): Promise<ProjectWorkspaceSnapshot> {
+  const fallback = structuredClone(projectWorkspaceFixture);
+  fallback.projects = fallback.projects.map((project) => project.id === input.projectId
+    ? {
+        ...project,
+        mcpServers: project.mcpServers.map((server) =>
+          server.toolId === input.toolId && server.serverName === input.serverName
+            ? { ...server, syncStatus: "in-sync", error: "" }
+            : server),
+      }
+    : project);
+  const workspace = await invokeOrFallback("sync_project_mcp", input, fallback);
+  return rememberProjectFixture(workspace);
+}
+
+export async function unlinkProjectResource(input: {
+  projectId: string;
+  resourceType: "skill" | "mcp";
+  toolId: string;
+  resourceKey: string;
+}): Promise<ProjectWorkspaceSnapshot> {
+  const fallback = structuredClone(projectWorkspaceFixture);
+  fallback.projects = fallback.projects.map((project) => {
+    if (project.id !== input.projectId) {
+      return project;
+    }
+    if (input.resourceType === "skill") {
+      return {
+        ...project,
+        skills: project.skills.map((skill) =>
+          skill.toolId === input.toolId && skill.relativePath === input.resourceKey
+            ? {
+                ...skill,
+                managedSkillPath: "",
+                projectCapability: "",
+                syncStatus: "project-only",
+              }
+            : skill),
+      };
+    }
+    return {
+      ...project,
+      mcpServers: project.mcpServers.map((server) =>
+        server.toolId === input.toolId && server.serverName === input.resourceKey
+          ? { ...server, managedMcpId: "", syncStatus: "project-only" }
+          : server),
+    };
+  });
+  const workspace = await invokeOrFallback("unlink_project_resource", input, fallback);
+  return rememberProjectFixture(workspace);
 }
 
 export async function getRepoCacheSize(): Promise<number> {

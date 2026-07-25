@@ -436,6 +436,110 @@ export type McpWorkspaceSnapshot = {
   servers: McpServerSummary[];
 };
 
+export type ProjectSyncStatus =
+  | "project-only"
+  | "project-missing"
+  | "managed-missing"
+  | "in-sync"
+  | "project-changed"
+  | "managed-changed"
+  | "diverged"
+  | "unavailable";
+
+export type ProjectManagedSkill = {
+  name: string;
+  description: string;
+  localPath: string;
+  managementOwner: SkillManagementOwner;
+  projectCapability: "bidirectional" | "export-only";
+};
+
+export type ProjectManagedMcp = {
+  id: string;
+  name: string;
+  serverJson: string;
+};
+
+export type ProjectSkillInstance = {
+  toolId: string;
+  toolName: string;
+  name: string;
+  description: string;
+  relativePath: string;
+  localPath: string;
+  entryKind: "directory" | "symlink" | "missing";
+  managedSkillPath: string;
+  projectCapability: "bidirectional" | "export-only" | "";
+  contentHash: string;
+  syncStatus: ProjectSyncStatus;
+  error: string;
+};
+
+export type ProjectMcpInstance = {
+  toolId: string;
+  toolName: string;
+  serverName: string;
+  configRelativePath: string;
+  managedMcpId: string;
+  normalizedHash: string;
+  serverJson: string;
+  syncStatus: ProjectSyncStatus;
+  secretRisk: "none" | "literal-secret-suspected";
+  error: string;
+};
+
+export type ProjectDetail = {
+  id: string;
+  name: string;
+  rootPath: string;
+  canonicalRootPath: string;
+  availability: "available" | "missing";
+  skills: ProjectSkillInstance[];
+  mcpServers: ProjectMcpInstance[];
+  errors: string[];
+};
+
+export type ProjectWorkspaceSnapshot = {
+  storagePath: string;
+  projects: ProjectDetail[];
+  managedSkills: ProjectManagedSkill[];
+  managedMcpServers: ProjectManagedMcp[];
+};
+
+export type ProjectDiffFile = {
+  path: string;
+  status: "added" | "modified" | "deleted";
+  isBinary: boolean;
+  originalContent: string | null;
+  currentContent: string | null;
+};
+
+export type ProjectSkillDiffSnapshot = {
+  direction: ProjectSyncDirection;
+  sourceHash: string;
+  targetHash: string;
+  files: ProjectDiffFile[];
+};
+
+export type ProjectMcpDiffField = {
+  path: string;
+  status: "added" | "modified" | "deleted";
+  before: unknown;
+  after: unknown;
+  sensitive: boolean;
+};
+
+export type ProjectMcpDiffSnapshot = {
+  direction: ProjectSyncDirection;
+  sourceHash: string;
+  targetHash: string;
+  operation: "add" | "update" | "remove";
+  fields: ProjectMcpDiffField[];
+  warnings: string[];
+};
+
+export type ProjectSyncDirection = "managed-to-project" | "project-to-managed";
+
 export type McpImportProgress = {
   appId: string;
   appName: string;

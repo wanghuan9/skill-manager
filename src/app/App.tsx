@@ -20,6 +20,7 @@ import {
 import { SettingsRoute } from "@/app/routes/settings";
 import { AboutRoute } from "@/app/routes/about";
 import { PluginsRoute } from "@/app/routes/plugins";
+import { ProjectsRoute } from "@/app/routes/projects";
 import { AppI18nProvider, tx, useTranslate } from "@/app/i18n";
 import { NotificationProvider, useNotifications } from "@/app/notifications";
 import { useFailureReporter } from "@/app/failure-feedback";
@@ -58,6 +59,7 @@ import {
 type RouteKey =
   | "skills"
   | "plugins"
+  | "projects"
   | "tools"
   | "install"
   | "settings"
@@ -140,6 +142,11 @@ const routes: RouteDefinition[] = [
     key: "plugins",
     labelKey: "app.nav.plugins.label",
     descriptionKey: "app.nav.plugins.description",
+  },
+  {
+    key: "projects",
+    labelKey: "app.nav.projects.label",
+    descriptionKey: "app.nav.projects.description",
   },
   {
     key: "tools",
@@ -247,6 +254,21 @@ function NavRouteIcon(props: { route: RouteKey }) {
     );
   }
 
+  if (route === "projects") {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path
+          d="M3.5 6.5h6l1.8 2h9.2v9a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2v-11Z"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.8"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+    );
+  }
+
   if (route === "about") {
     return (
       <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -328,6 +350,9 @@ function renderRoute(
         onActiveHostChange={onPluginHostChange}
       />
     );
+  }
+  if (route === "projects") {
+    return <ProjectsRoute />;
   }
   if (route === "settings") {
     return <SettingsRoute />;
