@@ -2394,23 +2394,16 @@ pub fn create_skill_symlink(
 
     let symlink_path = tool_path.join(normalized_skill_name);
 
-    // Preserve an existing entry that points to another real Skill instance.
     if fs::symlink_metadata(&symlink_path).is_ok() {
-        let expected_path = skill_path
-            .canonicalize()
-            .map_err(|error| format!("解析 Skill 真实目录失败: {error}"))?;
-        if symlink_path.canonicalize().ok().as_ref() == Some(&expected_path) {
-            return Ok(());
-        }
-        let metadata = fs::symlink_metadata(&symlink_path)
-            .map_err(|error| format!("读取现有技能条目失败: {error}"))?;
-        if metadata.file_type().is_symlink() || metadata.is_dir() {
+        if is_skill_link_entry(&symlink_path) {
+            remove_skill_link_entry(&symlink_path)
+                .map_err(|error| format!("替换现有 Skill 链接失败: {error}"))?;
+        } else {
             return Err(format!(
-                "{} 已存在同名 Skill，并指向另一个真实目录，请先确认后手动解除冲突。",
+                "{} 已存在同名真实目录或普通文件，不能自动覆盖。",
                 symlink_path.to_string_lossy()
             ));
         }
-        remove_existing_skill_entry(&symlink_path, &metadata)?;
     }
 
     create_skill_directory_link(&skill_path, &symlink_path)
@@ -2542,19 +2535,6 @@ pub(crate) fn remove_skill_link_entry(path: &Path) -> Result<(), std::io::Error>
     }
 
     fs::remove_file(path)
-}
-
-fn remove_existing_skill_entry(path: &Path, metadata: &fs::Metadata) -> Result<(), String> {
-    #[cfg(windows)]
-    if is_windows_directory_reparse_point(metadata) {
-        return fs::remove_dir(path).map_err(|error| format!("删除现有技能链接失败: {error}"));
-    }
-
-    if metadata.file_type().is_dir() && !metadata.file_type().is_symlink() {
-        fs::remove_dir_all(path).map_err(|error| format!("删除现有技能目录失败: {error}"))
-    } else {
-        fs::remove_file(path).map_err(|error| format!("删除现有符号链接失败: {error}"))
-    }
 }
 
 fn is_reserved_workspace_dir(path: &Path) -> bool {
@@ -3583,6 +3563,105 @@ url.git@git.example.com:example-org/.insteadof https://git.example.com/example-o
                 std::env::remove_var("HOME");
             }
         }
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn create_skill_symlink_replaces_existing_links_without_deleting_targets() {
+        let temp_dir = temp_test_dir("replace-existing-links");
+        let current_skill_dir = temp_dir.join("current-skill");
+        let old_skill_dir = temp_dir.join("old-skill");
+        let missing_skill_dir = temp_dir.join("missing-skill");
+        let tool_skills_dir = temp_dir.join("tool-skills");
+        fs::create_dir_all(&current_skill_dir).expect("create current skill dir");
+        fs::create_dir_all(&old_skill_dir).expect("create old skill dir");
+        fs::create_dir_all(&tool_skills_dir).expect("create tool skills dir");
+        fs::write(current_skill_dir.join("SKILL.md"), "# current").expect("write current skill");
+        fs::write(old_skill_dir.join("SKILL.md"), "# old").expect("write old skill");
+
+        let tool_entry = tool_skills_dir.join("demo");
+        std::os::unix::fs::symlink(&old_skill_dir, &tool_entry).expect("create valid old link");
+        create_skill_symlink(
+            current_skill_dir.to_string_lossy().as_ref(),
+            "demo",
+            tool_skills_dir.to_string_lossy().as_ref(),
+        )
+        .expect("replace valid old link");
+
+        assert_eq!(
+            tool_entry
+                .canonicalize()
+                .expect("resolve replaced valid link"),
+            current_skill_dir
+                .canonicalize()
+                .expect("resolve current skill")
+        );
+        assert!(old_skill_dir.join("SKILL.md").is_file());
+
+        fs::remove_file(&tool_entry).expect("remove current tool link");
+        std::os::unix::fs::symlink(&missing_skill_dir, &tool_entry)
+            .expect("create broken old link");
+        create_skill_symlink(
+            current_skill_dir.to_string_lossy().as_ref(),
+            "demo",
+            tool_skills_dir.to_string_lossy().as_ref(),
+        )
+        .expect("replace broken old link");
+
+        assert_eq!(
+            tool_entry
+                .canonicalize()
+                .expect("resolve replaced broken link"),
+            current_skill_dir
+                .canonicalize()
+                .expect("resolve current skill")
+        );
+        assert!(!missing_skill_dir.exists());
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn create_skill_symlink_preserves_existing_real_entries() {
+        let temp_dir = temp_test_dir("preserve-real-entries");
+        let current_skill_dir = temp_dir.join("current-skill");
+        let tool_skills_dir = temp_dir.join("tool-skills");
+        fs::create_dir_all(&current_skill_dir).expect("create current skill dir");
+        fs::create_dir_all(&tool_skills_dir).expect("create tool skills dir");
+        fs::write(current_skill_dir.join("SKILL.md"), "# current").expect("write current skill");
+
+        let tool_entry = tool_skills_dir.join("demo");
+        fs::create_dir_all(&tool_entry).expect("create real directory entry");
+        fs::write(tool_entry.join("marker.txt"), "keep directory").expect("write directory marker");
+        let directory_error = create_skill_symlink(
+            current_skill_dir.to_string_lossy().as_ref(),
+            "demo",
+            tool_skills_dir.to_string_lossy().as_ref(),
+        )
+        .expect_err("real directory should be preserved");
+
+        assert!(directory_error.contains("真实目录或普通文件"));
+        assert_eq!(
+            fs::read_to_string(tool_entry.join("marker.txt")).expect("read directory marker"),
+            "keep directory"
+        );
+
+        fs::remove_dir_all(&tool_entry).expect("remove real directory entry");
+        fs::write(&tool_entry, "keep file").expect("create real file entry");
+        let file_error = create_skill_symlink(
+            current_skill_dir.to_string_lossy().as_ref(),
+            "demo",
+            tool_skills_dir.to_string_lossy().as_ref(),
+        )
+        .expect_err("real file should be preserved");
+
+        assert!(file_error.contains("真实目录或普通文件"));
+        assert_eq!(
+            fs::read_to_string(&tool_entry).expect("read real file"),
+            "keep file"
+        );
+
         let _ = fs::remove_dir_all(temp_dir);
     }
 
