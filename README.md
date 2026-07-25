@@ -18,6 +18,10 @@
   <img alt="Preview" src="https://img.shields.io/badge/source-closed%20preview-lightgrey" />
 </p>
 
+<p align="center">
+  <img src="docs/images/overview.png" width="1200" alt="SkillDock Skills overview" />
+</p>
+
 ## What It Does
 
 SkillDock is an AI coding skills manager and desktop control center for Claude Code, Cursor, Codex, Windsurf, Gemini CLI, GitHub Copilot, and other AI coding agents. It keeps local Skills, MCP configurations, and plugin bundles visible, editable, and synced. It scans each tool's real Skill directory, shows managed and unmanaged Skills, and lets users preview local changes before updating or pushing.

@@ -18,6 +18,10 @@
   <img alt="Preview" src="https://img.shields.io/badge/source-closed%20preview-lightgrey" />
 </p>
 
+<p align="center">
+  <img src="docs/images/overview.png" width="1200" alt="SkillDock Skills 主界面" />
+</p>
+
 ## 它能做什么
 
 SkillDock 是一款 AI Skill 管理工具和桌面管理台，面向 Claude Code、Cursor、Codex、Windsurf、Gemini CLI、GitHub Copilot 等 AI Coding Agent。它集中展示、编辑和同步本地 Skills、MCP 配置和插件包，并直接扫描各工具真实 Skill 目录，识别已托管、未托管和冲突状态。对于 Git 来源的 Skills 和插件，它会检测远端更新、本地修改和待推送状态，并支持带 Diff 预览的一键更新。
