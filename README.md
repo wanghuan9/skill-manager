@@ -27,7 +27,6 @@ The core workflow is team collaboration without intermediate handoff directories
 - **Skills library** — Install, update, delete, edit, inspect, and sync local skills.
 - **MCP management** — Browse, import, edit, enable, disable, sync, and inspect MCP server configs.
 - **Plugin management** — Install, enable, disable, inspect, one-click update, and remove plugin packages, with local change and pending-push detection for Git-backed plugins.
-- **Skill source grouping** — Group installed skills by repository or local source so team-maintained skill sets stay easy to scan.
 - **Real tool directory view** — Inspect Skills in the actual Claude Code, Cursor, Codex, Windsurf, Gemini CLI, and other supported tool directories, including managed, unmanaged, conflicting, folder, and symlink states.
 - **Skill diff and collaboration** — Edit local changes, review staged and unstaged diffs, revert a file or hunk, and preview pending pushes before sharing updates.
 - **Cards and dark mode** — Switch Skills, MCP, and Plugins between list and card layouts, with light, dark, and system themes.
