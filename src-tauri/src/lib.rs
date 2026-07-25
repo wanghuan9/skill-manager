@@ -7,6 +7,7 @@ mod mcp_manager;
 mod models;
 mod plugin_manager;
 mod plugin_watcher;
+mod project_manager;
 mod skill_watcher;
 mod state;
 mod workspace;
@@ -130,6 +131,18 @@ pub fn run() {
             mcp_manager::toggle_mcp_server_app,
             mcp_manager::toggle_mcp_server_tool,
             mcp_manager::refresh_mcp_server_tools,
+            project_manager::list_project_workspaces,
+            project_manager::add_managed_project,
+            project_manager::remove_managed_project,
+            project_manager::distribute_skill_to_project,
+            project_manager::import_project_skill,
+            project_manager::preview_project_skill_sync,
+            project_manager::sync_project_skill,
+            project_manager::distribute_mcp_to_project,
+            project_manager::import_project_mcp,
+            project_manager::preview_project_mcp_sync,
+            project_manager::sync_project_mcp,
+            project_manager::unlink_project_resource,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

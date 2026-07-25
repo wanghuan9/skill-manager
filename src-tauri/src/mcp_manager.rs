@@ -4255,6 +4255,51 @@ fn load_mcp_records() -> Result<Vec<McpServerRecord>, String> {
         .collect()
 }
 
+pub(crate) fn load_project_mcp_records() -> Result<Vec<McpServerRecord>, String> {
+    load_mcp_records()
+}
+
+pub(crate) fn upsert_project_mcp_record(
+    id: &str,
+    name: &str,
+    server: Value,
+) -> Result<McpServerRecord, String> {
+    validate_mcp_server(id, &server)?;
+    let mut records = load_mcp_records()?;
+    let updated_at = now_label();
+
+    let record = if let Some(existing) = records.iter_mut().find(|record| record.id == id) {
+        existing.name = name.trim().to_string();
+        existing.server = server;
+        existing.updated_at = updated_at;
+        existing.clone()
+    } else {
+        let record = McpServerRecord {
+            id: id.trim().to_string(),
+            name: name.trim().to_string(),
+            server,
+            description: String::new(),
+            source_url: String::new(),
+            enabled_app_ids: Vec::new(),
+            imported_from_app_ids: Vec::new(),
+            tools: Vec::new(),
+            tools_discovered_at: String::new(),
+            tools_discovery_error: String::new(),
+            installed_at: updated_at.clone(),
+            updated_at,
+            lifecycle_source: String::new(),
+            owner_plugin_id: String::new(),
+            owner_plugin_name: String::new(),
+        };
+        records.push(record.clone());
+        record
+    };
+
+    sort_records(&mut records);
+    save_mcp_records(&records)?;
+    Ok(record)
+}
+
 fn load_mcp_state_content() -> Option<String> {
     workspace_file_candidates(MCP_STATE_FILE_NAME)
         .into_iter()
