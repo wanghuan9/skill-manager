@@ -339,7 +339,7 @@ test("keeps same-named skills separate when filtering for updates", async () => 
   startupSkillsSpy.mockRestore();
 });
 
-test("places disabled skills after enabled skills in list and card views", async () => {
+test("places newer skills before older skills in list and card views", async () => {
   const user = userEvent.setup();
   const disabledSkill = {
     ...installedSkillFixtures[0],
@@ -362,15 +362,15 @@ test("places disabled skills after enabled skills in list and card views", async
   render(<App />);
 
   expect(screen.getAllByRole("article").map((article) => article.getAttribute("aria-label"))).toEqual([
-    "enabled-older-skill",
     "disabled-newer-skill",
+    "enabled-older-skill",
   ]);
 
   await user.click(screen.getByRole("button", { name: "卡片" }));
 
   expect(screen.getAllByRole("article").map((article) => article.getAttribute("aria-label"))).toEqual([
-    "enabled-older-skill",
     "disabled-newer-skill",
+    "enabled-older-skill",
   ]);
   startupSkillsSpy.mockRestore();
 });
@@ -401,12 +401,12 @@ test("keeps the current skill order after toggling its enabled state", async () 
 
   const getSkillOrder = () => screen.getAllByRole("article")
     .map((article) => article.getAttribute("aria-label"));
-  expect(getSkillOrder()).toEqual(["enabled-older-skill", "disabled-newer-skill"]);
+  expect(getSkillOrder()).toEqual(["disabled-newer-skill", "enabled-older-skill"]);
 
   await userEvent.click(screen.getByRole("button", { name: "启用 disabled-newer-skill 到全部工具" }));
 
   await waitFor(() => {
-    expect(getSkillOrder()).toEqual(["enabled-older-skill", "disabled-newer-skill"]);
+    expect(getSkillOrder()).toEqual(["disabled-newer-skill", "enabled-older-skill"]);
   });
   startupSkillsSpy.mockRestore();
   toggleSkillSpy.mockRestore();

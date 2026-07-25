@@ -4,7 +4,6 @@ import { useTranslate } from "@/app/i18n";
 import { useFailureReporter } from "@/app/failure-feedback";
 import { openExternalLink } from "@/features/skills/api/skill-client";
 import {
-  compareSkillsByEnablement,
   filterSkills,
   getSkillIdentity,
   hasEnabledTool,
@@ -468,13 +467,12 @@ export function SkillListPage(props: SkillListPageProps) {
   const [skillOrderRevision, setSkillOrderRevision] = useState(0);
   const handledFocusedSkillRef = useRef("");
   const wasWorkspaceRefreshingRef = useRef(isWorkspaceRefreshing);
-  const statusSortedSkills = useMemo(
-    () => [...filterSkills(installedSkills, { query: "", status: "all" })]
-      .sort(compareSkillsByEnablement),
+  const sortedSkills = useMemo(
+    () => filterSkills(installedSkills, { query: "", status: "all" }),
     [installedSkills],
   );
   const orderedInstalledSkills = useStableListOrder(
-    statusSortedSkills,
+    sortedSkills,
     getSkillOrderKey,
     skillOrderRevision,
   );

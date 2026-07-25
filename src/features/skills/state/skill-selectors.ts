@@ -90,9 +90,9 @@ export function filterSkills(skills: SkillSummary[], options: FilterOptions) {
       return localUpdatedDiff;
     }
 
-    const enabledToolDiff = Number(hasEnabledTool(left)) - Number(hasEnabledTool(right));
-    if (enabledToolDiff !== 0) {
-      return enabledToolDiff;
+    const enablementDiff = compareSkillsByEnablement(left, right);
+    if (enablementDiff !== 0) {
+      return enablementDiff;
     }
 
     const priorityDiff = statusPriority[left.collabStatus] - statusPriority[right.collabStatus];
