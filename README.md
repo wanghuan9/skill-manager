@@ -88,6 +88,8 @@ flowchart TB
 
 Turn on **Settings → Agent Skills CLI Compatibility** to scan `~/.agents/skills` and automatically recognize Skills installed globally with `npx skills add ... -g`. They remain managed by Agent Skills CLI and are not moved or copied into `~/.skilldock/skills`; SkillDock can inspect and distribute them, with preview, update, and removal where Agent Skills CLI supports those operations.
 
+If you prefer the command line, use Agent Skills CLI as the CLI entry point for Skills and SkillDock as the desktop management app: install and maintain `~/.agents/skills` through the CLI, then use SkillDock to inspect them visually, preview updates, and distribute them across tools without changing your existing CLI workflow.
+
 Skills installed by SkillDock still live in `~/.skilldock/skills`. Turning compatibility off only stops the extra scan—it does not modify or delete anything in `~/.agents/skills`.
 
 ## Skills

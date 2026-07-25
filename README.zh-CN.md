@@ -88,6 +88,8 @@ flowchart TB
 
 在 **设置 → 兼容 Agent Skills CLI** 中开启兼容模式后，SkillDock 会额外扫描 `~/.agents/skills`，自动识别通过 `npx skills add ... -g` 全局安装的 Skill。它们仍由 Agent Skills CLI 托管，不会迁移或复制到 `~/.skilldock/skills`；你可以在 SkillDock 中统一查看并分发到其他工具，并在 Agent Skills CLI 支持范围内预览、更新和删除。
 
+对于习惯命令行的用户，可以将 Agent Skills CLI 作为 Skill 的命令行入口，将 SkillDock 作为桌面管理端：通过 CLI 安装和维护 `~/.agents/skills`，再通过 SkillDock 可视化查看、预览更新并统一分发到多个工具，无需改变原有 CLI 工作流。
+
 SkillDock 自己安装的 Skill 仍保存在 `~/.skilldock/skills`。关闭兼容模式只会停止扫描，不会修改或删除 `~/.agents/skills` 中的内容。
 
 ## Skills
