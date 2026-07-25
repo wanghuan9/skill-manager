@@ -28,12 +28,13 @@ The core workflow is team collaboration without intermediate handoff directories
 - **MCP management** — Browse, import, edit, enable, disable, sync, and inspect MCP server configs.
 - **Plugin management** — Install, enable, disable, inspect, one-click update, and remove plugin packages, with local change and pending-push detection for Git-backed plugins.
 - **Per-tool Skill management** — Inspect and manage the Skills actually used by Claude Code, Cursor, Codex, and other tools; identify managed, unmanaged, and conflicting entries; import unmanaged Skills into SkillDock or remove them from the current tool.
-- **Skill diff and collaboration** — Keep Git-based skills and plugins as real repositories, detect upstream updates, local edits, and pending pushes, review staged and unstaged diffs, preview incoming updates, revert a file or hunk, and preview changes before pushing.
+- **Skill diff and collaboration** — Review staged and unstaged diffs and incoming updates, and revert individual files or hunks.
 - **Cards and dark mode** — Switch Skills, MCP, and Plugins between list and card layouts, with light, dark, and system themes.
 - **MCP tools discovery** — Detect exposed MCP tools, track whether each server config is usable, and control tool-level enablement.
 - **Skill install** — Install skills with one click from `skills.sh` and `skillsmp`, or add them from Git repositories and local folders.
 - **MCP install** — Install MCP servers with one click from `MCP.Directory`, then manage their shared configuration lifecycle.
 - **Plugin install** — Install plugin packages with one click from Git repositories and enable their bundled skills, commands, agents, and integrations.
+- **Complete Git workflow** — Keep Git-based skills and plugins as real repositories, detect upstream updates, local edits, and pending pushes, and preview changes before updating or pushing.
 - **One-click multi-tool sync** — Enable skills, MCP servers, and plugins across Claude Code, Codex, Cursor, Windsurf, Gemini CLI, OpenCode, and other coding tools to avoid hand-copying files and editing complex config files.
 
 ## Skill Management and Workflow
