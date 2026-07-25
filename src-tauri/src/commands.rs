@@ -1870,9 +1870,10 @@ fn build_local_candidates(installed_skills: &[SkillSummary]) -> Vec<LocalSkillCa
 
 fn build_tool_skill_entries(
     tool_configs: &[ToolConfig],
-    _installed_skills: &[SkillSummary],
+    installed_skills: &[SkillSummary],
 ) -> Vec<ToolSkillEntry> {
     let mut entries = Vec::new();
+    let agent_cli_status = agent_cli_status_for_skills(installed_skills);
 
     for tool in tool_configs {
         let skills_root = PathBuf::from(tool.skills_path.trim());
@@ -1902,7 +1903,17 @@ fn build_tool_skill_entries(
             let resolved_path = local_path
                 .canonicalize()
                 .unwrap_or_else(|_| local_path.clone());
-            let managed_root = managed_root_for_path(&resolved_path);
+            let mut managed_root = managed_root_for_path(&resolved_path);
+            if managed_root.is_empty()
+                && !is_skill_link_entry(&local_path)
+                && installed_skills.iter().any(|skill| {
+                    skill.name == name
+                        && agent_cli_reports_tool_installation(&agent_cli_status, skill, &tool.name)
+                            .unwrap_or(false)
+                })
+            {
+                managed_root = "agent-skills-cli".into();
+            }
             let management_status = if managed_root.is_empty() {
                 "unmanaged"
             } else {
@@ -2609,6 +2620,57 @@ fn canonical_tool_display_name(tool_name: &str) -> String {
     }
 }
 
+fn agent_cli_names_for_tool(tool_name: &str) -> Vec<&str> {
+    match tool_name.trim() {
+        "Devin" | "Windsurf" => vec!["Devin", "Windsurf"],
+        value => vec![value],
+    }
+}
+
+fn agent_cli_skill_source_path(skill: &SkillSummary) -> PathBuf {
+    PathBuf::from(if skill.instance.canonical_path.trim().is_empty() {
+        &skill.local_path
+    } else {
+        &skill.instance.canonical_path
+    })
+}
+
+fn is_agent_cli_managed_skill(skill: &SkillSummary) -> bool {
+    skill.instance.management_owner == "agent-skills-cli"
+        || skill.instance.update_driver == "agent-skills-cli"
+}
+
+fn agent_cli_status_for_skills(
+    skills: &[SkillSummary],
+) -> crate::agent_skills_cli::AgentSkillsCliStatus {
+    if skills.iter().any(is_agent_cli_managed_skill) {
+        return crate::agent_skills_cli::global_status();
+    }
+    crate::agent_skills_cli::AgentSkillsCliStatus {
+        available: false,
+        global_path: String::new(),
+        entries: Vec::new(),
+        error: "没有需要确认的 Agent CLI Skill。".into(),
+    }
+}
+
+fn agent_cli_reports_tool_installation(
+    status: &crate::agent_skills_cli::AgentSkillsCliStatus,
+    skill: &SkillSummary,
+    tool_name: &str,
+) -> Result<bool, String> {
+    if !is_agent_cli_managed_skill(skill) {
+        return Ok(false);
+    }
+    let agent_names = agent_cli_names_for_tool(tool_name);
+    crate::agent_skills_cli::confirms_global_agent_installation(
+        status,
+        &skill.name,
+        &agent_cli_skill_source_path(skill),
+        &agent_names,
+    )
+}
+
 fn supports_skill_sync_for_tool(tool_id: &str) -> bool {
     !matches!(tool_id, "intellij" | "vscode")
 }
@@ -2624,7 +2686,11 @@ fn installed_tool_sync_entries_from_configs(tool_configs: &[ToolConfig]) -> Vec<
         .collect()
 }
 
-fn inspect_skill_tool_status(skill: &SkillSummary, tool_name: &str) -> String {
+fn inspect_skill_tool_status(
+    skill: &SkillSummary,
+    tool_name: &str,
+    agent_cli_status: &crate::agent_skills_cli::AgentSkillsCliStatus,
+) -> String {
     let Ok(tool_id) = tool_name_to_id(tool_name) else {
         return "未启用".into();
     };
@@ -2637,6 +2703,12 @@ fn inspect_skill_tool_status(skill: &SkillSummary, tool_name: &str) -> String {
         return "未启用".into();
     };
     if !metadata.file_type().is_symlink() {
+        if metadata.is_dir()
+            && agent_cli_reports_tool_installation(agent_cli_status, skill, tool_name)
+                .unwrap_or(false)
+        {
+            return "已启用".into();
+        }
         return "需要重同步".into();
     }
 
@@ -2656,13 +2728,14 @@ fn inspect_skill_tool_status(skill: &SkillSummary, tool_name: &str) -> String {
 fn installed_tool_sync_entries_for_skill(
     skill: &SkillSummary,
     tool_configs: &[ToolConfig],
+    agent_cli_status: &crate::agent_skills_cli::AgentSkillsCliStatus,
 ) -> Vec<ToolSyncStatus> {
     tool_configs
         .iter()
         .filter(|tool| tool.status_label == "已安装" && supports_skill_sync_for_tool(&tool.id))
         .map(|tool| ToolSyncStatus {
             name: canonical_tool_display_name(&tool.name),
-            status_label: inspect_skill_tool_status(skill, &tool.name),
+            status_label: inspect_skill_tool_status(skill, &tool.name, agent_cli_status),
         })
         .collect()
 }
@@ -2731,10 +2804,19 @@ fn normalize_skill_tools(skill: &SkillSummary) -> SkillSummary {
     normalize_skill_tools_with_entries(skill, &installed_tool_entries)
 }
 
-fn normalize_skill_tools_from_local_state(skill: &SkillSummary) -> SkillSummary {
+fn normalize_skill_tools_from_local_state_with_agent_status(
+    skill: &SkillSummary,
+    agent_cli_status: &crate::agent_skills_cli::AgentSkillsCliStatus,
+) -> SkillSummary {
     let tool_configs = build_tool_configs();
-    let installed_tool_entries = installed_tool_sync_entries_for_skill(skill, &tool_configs);
+    let installed_tool_entries =
+        installed_tool_sync_entries_for_skill(skill, &tool_configs, agent_cli_status);
     reconcile_skill_tools_with_entries(skill, &installed_tool_entries)
+}
+
+fn normalize_skill_tools_from_local_state(skill: &SkillSummary) -> SkillSummary {
+    let agent_cli_status = agent_cli_status_for_skills(std::slice::from_ref(skill));
+    normalize_skill_tools_from_local_state_with_agent_status(skill, &agent_cli_status)
 }
 
 fn normalize_git_remote_repository_url(remote_url: &str) -> Option<String> {
@@ -2945,6 +3027,7 @@ fn enable_skill_for_all_installed_tools(
 fn recover_missing_managed_skills(
     mut installed_skills: Vec<SkillSummary>,
     tool_configs: &[ToolConfig],
+    agent_cli_status: &crate::agent_skills_cli::AgentSkillsCliStatus,
 ) -> Vec<SkillSummary> {
     let Ok(managed_root) = workspace::managed_skill_library_root() else {
         return installed_skills;
@@ -3047,7 +3130,8 @@ fn recover_missing_managed_skills(
             instance: Default::default(),
             tools: Vec::new(),
         };
-        let tool_entries = installed_tool_sync_entries_for_skill(&recovered, tool_configs);
+        let tool_entries =
+            installed_tool_sync_entries_for_skill(&recovered, tool_configs, agent_cli_status);
         installed_skills.push(reconcile_skill_tools_with_entries(
             &recovered,
             &tool_entries,
@@ -3063,10 +3147,10 @@ fn recover_missing_managed_skills(
 
 fn resolve_startup_installed_skills() -> Vec<SkillSummary> {
     let tool_configs = build_tool_configs();
-    let installed_skills = recover_missing_managed_skills(
-        load_installed_skills(&default_installed_skills()),
-        &tool_configs,
-    );
+    let installed_skills = load_installed_skills(&default_installed_skills());
+    let agent_cli_status = agent_cli_status_for_skills(&installed_skills);
+    let installed_skills =
+        recover_missing_managed_skills(installed_skills, &tool_configs, &agent_cli_status);
     let normalized_skills = installed_skills
         .iter()
         .map(normalize_installed_skill_source_url)
@@ -3088,7 +3172,7 @@ fn resolve_startup_installed_skills() -> Vec<SkillSummary> {
         LOCAL_SKILL_TOOL_STATE_CONCURRENCY,
         |skill| {
             let installed_tool_entries =
-                installed_tool_sync_entries_for_skill(skill, &tool_configs);
+                installed_tool_sync_entries_for_skill(skill, &tool_configs, &agent_cli_status);
             reconcile_skill_tools_with_entries(skill, &installed_tool_entries)
         },
     )
@@ -3104,9 +3188,18 @@ fn resolve_installed_skills() -> Vec<SkillSummary> {
 }
 
 fn load_interactive_installed_skills() -> Vec<SkillSummary> {
-    load_installed_skills(&default_installed_skills())
+    let installed_skills = load_installed_skills(&default_installed_skills());
+    let agent_cli_status = crate::agent_skills_cli::AgentSkillsCliStatus {
+        available: false,
+        global_path: String::new(),
+        entries: Vec::new(),
+        error: String::new(),
+    };
+    installed_skills
         .iter()
-        .map(normalize_skill_tools_from_local_state)
+        .map(|skill| {
+            normalize_skill_tools_from_local_state_with_agent_status(skill, &agent_cli_status)
+        })
         .collect()
 }
 
@@ -4098,9 +4191,21 @@ fn refresh_and_persist_local_git_skill(
     Ok(refreshed_skill)
 }
 
+#[cfg(test)]
 fn refresh_installed_skill_git_state(skill: &SkillSummary) -> SkillSummary {
+    let agent_cli_status = agent_cli_status_for_skills(std::slice::from_ref(skill));
+    refresh_installed_skill_git_state_with_agent_status(skill, &agent_cli_status)
+}
+
+fn refresh_installed_skill_git_state_with_agent_status(
+    skill: &SkillSummary,
+    agent_cli_status: &crate::agent_skills_cli::AgentSkillsCliStatus,
+) -> SkillSummary {
     let normalized_skill = normalize_installed_skill_source_url(skill);
-    let normalized_skill = normalize_skill_tools_from_local_state(&normalized_skill);
+    let normalized_skill = normalize_skill_tools_from_local_state_with_agent_status(
+        &normalized_skill,
+        agent_cli_status,
+    );
     if normalized_skill.instance.update_driver == "agent-skills-cli" && !normalized_skill.git_linked
     {
         return normalized_skill;
@@ -4140,11 +4245,10 @@ where
 }
 
 fn refresh_installed_skill_git_states(skills: &[SkillSummary]) -> Vec<SkillSummary> {
-    map_in_parallel_preserving_order(
-        skills,
-        REFRESH_GIT_STATES_CONCURRENCY,
-        refresh_installed_skill_git_state,
-    )
+    let agent_cli_status = agent_cli_status_for_skills(skills);
+    map_in_parallel_preserving_order(skills, REFRESH_GIT_STATES_CONCURRENCY, |skill| {
+        refresh_installed_skill_git_state_with_agent_status(skill, &agent_cli_status)
+    })
 }
 
 fn apply_agent_cli_update_statuses(
@@ -7657,7 +7761,11 @@ fn update_skill_blocking(
         clear_skill_update_cache(skill);
 
         let (mut latest_skills, latest_index) = find_skill_instance(skill_name, skill_path)?;
-        let mut refreshed = latest_skills[latest_index].clone();
+        let agent_cli_status = agent_cli_status_for_skills(&latest_skills);
+        let mut refreshed = normalize_skill_tools_from_local_state_with_agent_status(
+            &latest_skills[latest_index],
+            &agent_cli_status,
+        );
         refreshed.collab_status = SKILL_STATUS_CLEAN.into();
         refreshed.status_text = "Agent CLI Skill 已更新。".into();
         refreshed.last_checked_at = "刚刚检查".into();
@@ -7973,6 +8081,56 @@ fn remove_matching_skill_link(tool_skills_path: &str, skill: &SkillSummary) -> R
     Ok(())
 }
 
+fn remove_matching_skill_distribution(
+    tool_skills_path: &str,
+    skill: &SkillSummary,
+) -> Result<(), String> {
+    let skill_name_path = Path::new(&skill.name);
+    if skill.name.trim().is_empty()
+        || !matches!(
+            skill_name_path.components().next(),
+            Some(std::path::Component::Normal(_))
+        )
+        || skill_name_path.components().count() != 1
+    {
+        return Err("Skill 名称无效，不能删除工具目录。".into());
+    }
+
+    let tool_root = PathBuf::from(tool_skills_path);
+    let entry_path = tool_root.join(&skill.name);
+    let Ok(metadata) = fs::symlink_metadata(&entry_path) else {
+        return Ok(());
+    };
+    if is_skill_link_entry(&entry_path) {
+        return remove_matching_skill_link(tool_skills_path, skill);
+    }
+    if !is_agent_cli_managed_skill(skill) {
+        return Ok(());
+    }
+    if !metadata.is_dir() || !entry_path.join("SKILL.md").is_file() {
+        return Err(format!(
+            "{} 不是可确认的 Agent CLI Skill 副本，已保留。",
+            entry_path.to_string_lossy()
+        ));
+    }
+    if entry_path.parent() != Some(tool_root.as_path()) {
+        return Err("工具 Skill 路径越过了配置根目录，已拒绝删除。".into());
+    }
+
+    let global_root = crate::agent_skills_cli::global_skill_root()?;
+    let resolved_tool_root = tool_root
+        .canonicalize()
+        .unwrap_or_else(|_| tool_root.clone());
+    let resolved_global_root = global_root
+        .canonicalize()
+        .unwrap_or_else(|_| global_root.clone());
+    if resolved_tool_root == resolved_global_root {
+        return Err("不能通过关闭工具删除 ~/.agents/skills 中的 Agent CLI 全局 Skill。".into());
+    }
+
+    remove_tool_skill_entry(tool_skills_path, &skill.name)
+}
+
 #[tauri::command]
 pub async fn toggle_skill_tool_status(
     skill_name: String,
@@ -8017,7 +8175,6 @@ fn toggle_skill_tool_status_blocking(
         .iter()
         .find(|tool| tool.name == tool_name)
         .is_none_or(|tool| !tool_status_is_enabled(&tool.status_label));
-
     let updated_skill = set_skill_tool_enabled_status_at_index(
         &mut installed_skills,
         skill_index,
@@ -8027,7 +8184,7 @@ fn toggle_skill_tool_status_blocking(
     if is_enabling {
         create_skill_symlink(&updated_skill.local_path, skill_name, &tool_skills_path)?;
     } else {
-        remove_matching_skill_link(&tool_skills_path, &updated_skill)?;
+        remove_matching_skill_distribution(&tool_skills_path, &updated_skill)?;
     }
 
     save_installed_skills(&installed_skills)?;
@@ -8081,9 +8238,9 @@ fn set_tool_skill_statuses_blocking(
     for skill_name in &target_skill_names {
         let updated =
             set_skill_tool_enabled_status(&mut installed_skills, skill_name, tool_name, enabled)?;
-        updated_skill_names.insert(updated.name);
+        updated_skill_names.insert(updated.name.clone());
         if !enabled {
-            remove_skill_symlink(&tool_skills_path, skill_name)?;
+            remove_matching_skill_distribution(&tool_skills_path, &updated)?;
             let skill_path = PathBuf::from(&updated.local_path);
             if let Some(legacy_skill_dir_name) =
                 skill_path.file_name().and_then(|name| name.to_str())
@@ -8095,7 +8252,15 @@ fn set_tool_skill_statuses_blocking(
         }
     }
 
-    let enabled_skills = enabled_skills_for_tool(&installed_skills, tool_name);
+    let enabled_skills = enabled_skills_for_tool(&installed_skills, tool_name)
+        .into_iter()
+        .filter(|skill| {
+            let entry_path = PathBuf::from(&tool_skills_path).join(&skill.name);
+            is_skill_link_entry(&entry_path)
+                || !entry_path.is_dir()
+                || !is_agent_cli_managed_skill(skill)
+        })
+        .collect::<Vec<_>>();
     reconcile_tool_skill_symlinks(&tool_skills_path, &enabled_skills)?;
     save_installed_skills(&installed_skills)?;
 
@@ -8173,7 +8338,7 @@ fn set_skill_all_tool_statuses_blocking(
         if enabled {
             create_skill_symlink(&updated_skill.local_path, skill_name, &tool_skills_path)?;
         } else {
-            remove_matching_skill_link(&tool_skills_path, &updated_skill)?;
+            remove_matching_skill_distribution(&tool_skills_path, &updated_skill)?;
         }
     }
 
@@ -8210,17 +8375,19 @@ mod tests {
         merge_refreshed_skill_states_with_latest_state, normalize_installed_skill_source_url,
         normalize_skill_tools, open_target_path_for_skill, parse_apple_languages_output,
         parse_repo_install_spec, parse_skills_sh_homepage_items, recover_missing_managed_skills,
-        refresh_installed_skill_git_state, remove_trusted_project_paths, repo_clone_candidates,
-        resolve_skill_install_name, resolve_startup_installed_skills, run_git_command,
-        save_marketplace_cache, scan_local_install_skill_candidates, scan_repo_skill_candidates,
-        selected_repo_path_hint, should_use_skills_sh_homepage_page, tool_name_to_id,
-        update_skill_blocking, update_skill_repo, REFRESH_GIT_STATES_CONCURRENCY,
+        refresh_installed_skill_git_state, remove_matching_skill_distribution,
+        remove_trusted_project_paths, repo_clone_candidates, resolve_skill_install_name,
+        resolve_startup_installed_skills, run_git_command, save_marketplace_cache,
+        scan_local_install_skill_candidates, scan_repo_skill_candidates, selected_repo_path_hint,
+        set_skill_all_tool_statuses_blocking, set_tool_skill_statuses_blocking,
+        should_use_skills_sh_homepage_page, tool_name_to_id, update_skill_blocking,
+        update_skill_repo, REFRESH_GIT_STATES_CONCURRENCY,
     };
-    use crate::agent_skills_cli::AgentSkillUpdateCheck;
+    use crate::agent_skills_cli::{AgentSkillUpdateCheck, AgentSkillsCliStatus, CliSkillEntry};
     #[cfg(windows)]
     use crate::library::create_windows_directory_junction;
     use crate::models::{
-        AppSettings, MarketplaceSkill, SkillFileEntry, SkillSummary, ToolConfig,
+        AppSettings, MarketplaceSkill, SkillFileEntry, SkillSummary, ToolConfig, ToolSyncStatus,
         WorkspacePersistence,
     };
     use crate::state::{load_installed_skills, save_installed_skills};
@@ -8252,6 +8419,70 @@ mod tests {
             language_source: "manual".into(),
             theme: "system".into(),
         }
+    }
+
+    fn unavailable_agent_cli_status() -> AgentSkillsCliStatus {
+        AgentSkillsCliStatus {
+            available: false,
+            global_path: String::new(),
+            entries: Vec::new(),
+            error: "skills unavailable".into(),
+        }
+    }
+
+    fn agent_cli_status_for(
+        skill_name: &str,
+        skill_path: &Path,
+        agents: &[&str],
+    ) -> AgentSkillsCliStatus {
+        AgentSkillsCliStatus {
+            available: true,
+            global_path: skill_path
+                .parent()
+                .unwrap_or(skill_path)
+                .to_string_lossy()
+                .to_string(),
+            entries: vec![CliSkillEntry {
+                name: skill_name.into(),
+                path: skill_path.to_string_lossy().to_string(),
+                scope: "global".into(),
+                agents: agents.iter().map(|agent| (*agent).to_string()).collect(),
+            }],
+            error: String::new(),
+        }
+    }
+
+    #[cfg(unix)]
+    fn prepend_fake_skills_cli(
+        temp_home: &Path,
+        entries: &[CliSkillEntry],
+    ) -> Option<std::ffi::OsString> {
+        let fake_bin_dir = temp_home.join("bin");
+        fs::create_dir_all(&fake_bin_dir).expect("create fake Agent CLI bin directory");
+        let payload = serde_json::to_string(entries).expect("serialize fake Agent CLI entries");
+        let script = format!(
+            "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then exit 0; fi\nif [ \"$1\" = \"ls\" ]; then printf '%s' '{payload}'; exit 0; fi\nexit 1\n"
+        );
+        let fake_skills = fake_bin_dir.join("skills");
+        fs::write(&fake_skills, script).expect("write fake Agent CLI executable");
+        fs::set_permissions(&fake_skills, fs::Permissions::from_mode(0o755))
+            .expect("make fake Agent CLI executable");
+        fs::write(fake_bin_dir.join("claude"), "").expect("write fake Claude executable");
+        fs::write(fake_bin_dir.join("codex"), "").expect("write fake Codex executable");
+
+        let original_path = env::var_os("PATH");
+        let next_path = original_path
+            .as_ref()
+            .map(|path| {
+                let mut paths = env::split_paths(path).collect::<Vec<_>>();
+                paths.insert(0, fake_bin_dir);
+                env::join_paths(paths).expect("join fake Agent CLI PATH")
+            })
+            .unwrap_or_else(|| temp_home.join("bin").into_os_string());
+        unsafe {
+            env::set_var("PATH", next_path);
+        }
+        original_path
     }
 
     #[test]
@@ -8492,7 +8723,8 @@ mod tests {
             env::set_var("HOME", &home_dir);
         }
 
-        let recovered = recover_missing_managed_skills(Vec::new(), &[]);
+        let recovered =
+            recover_missing_managed_skills(Vec::new(), &[], &unavailable_agent_cli_status());
 
         restore_env_var("HOME", previous_home);
         assert_eq!(
@@ -10864,7 +11096,8 @@ mod tests {
             env::set_var("HOME", &temp_home);
         }
 
-        let status = inspect_skill_tool_status(&skill, "Claude Code");
+        let status =
+            inspect_skill_tool_status(&skill, "Claude Code", &unavailable_agent_cli_status());
 
         restore_env_var("HOME", original_home);
 
@@ -10943,6 +11176,354 @@ mod tests {
             .iter()
             .any(|tool| { tool.name == "Claude Code" && tool.status_label == "未启用" }));
 
+        let _ = fs::remove_dir_all(temp_home);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn confirmed_agent_cli_copy_can_be_disabled_and_reenabled_as_link() {
+        let _guard = TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let original_home = env::var_os("HOME");
+        let temp_home = temp_test_dir("agent-cli-copy-toggle-home");
+        let agent_skill_path = temp_home.join(".agents/skills/tdd");
+        let tool_skills_path = temp_home.join(".claude/skills");
+        let copied_skill_path = tool_skills_path.join("tdd");
+        fs::create_dir_all(&agent_skill_path).expect("create Agent CLI skill");
+        fs::create_dir_all(&copied_skill_path).expect("create Agent CLI tool copy");
+        fs::write(agent_skill_path.join("SKILL.md"), "# canonical\n")
+            .expect("write canonical Agent CLI skill");
+        fs::write(copied_skill_path.join("SKILL.md"), "# copied\n")
+            .expect("write copied Agent CLI skill");
+        fs::write(
+            temp_home.join(".agents/.skill-lock.json"),
+            r#"{"version":3,"skills":{"tdd":{"sourceType":"github"}}}"#,
+        )
+        .expect("write Agent CLI lock");
+
+        let mut skill = installed_skill_fixture(
+            "tdd",
+            "https://github.com/example/tdd.git",
+            agent_skill_path.to_string_lossy().as_ref(),
+        );
+        skill.instance.entry_path = agent_skill_path.to_string_lossy().to_string();
+        skill.instance.canonical_path = agent_skill_path.to_string_lossy().to_string();
+        skill.instance.management_owner = "agent-skills-cli".into();
+        skill.instance.update_driver = "agent-skills-cli".into();
+        let status = agent_cli_status_for("tdd", &agent_skill_path, &["Claude Code"]);
+
+        unsafe {
+            env::set_var("HOME", &temp_home);
+        }
+
+        assert_eq!(
+            inspect_skill_tool_status(&skill, "Claude Code", &status),
+            "已启用"
+        );
+        remove_matching_skill_distribution(tool_skills_path.to_string_lossy().as_ref(), &skill)
+            .expect("disable confirmed Agent CLI copy");
+
+        assert!(!copied_skill_path.exists());
+        assert!(agent_skill_path.join("SKILL.md").is_file());
+        assert!(temp_home.join(".agents/.skill-lock.json").is_file());
+
+        crate::library::create_skill_symlink(
+            agent_skill_path.to_string_lossy().as_ref(),
+            "tdd",
+            tool_skills_path.to_string_lossy().as_ref(),
+        )
+        .expect("re-enable Agent CLI skill as link");
+        assert!(copied_skill_path.is_symlink());
+        remove_matching_skill_distribution(tool_skills_path.to_string_lossy().as_ref(), &skill)
+            .expect("disable existing link without CLI confirmation");
+        assert!(fs::symlink_metadata(&copied_skill_path).is_err());
+        assert!(agent_skill_path.exists());
+
+        restore_env_var("HOME", original_home);
+        let _ = fs::remove_dir_all(temp_home);
+    }
+
+    #[test]
+    fn toggle_disables_agent_cli_copy_without_cli_command() {
+        let _guard = TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let original_home = env::var_os("HOME");
+        let original_path = env::var_os("PATH");
+        let temp_home = temp_test_dir("agent-cli-copy-toggle-without-cli-home");
+        let agent_skill_path = temp_home.join(".agents/skills/tdd");
+        let copied_skill_path = temp_home.join(".claude/skills/tdd");
+        fs::create_dir_all(&agent_skill_path).expect("create Agent CLI skill");
+        fs::create_dir_all(&copied_skill_path).expect("create Agent CLI tool copy");
+        fs::create_dir_all(temp_home.join(".skilldock"))
+            .expect("create SkillDock settings directory");
+        fs::create_dir_all(temp_home.join("empty-bin")).expect("create empty PATH directory");
+        fs::write(agent_skill_path.join("SKILL.md"), "# canonical\n")
+            .expect("write canonical Agent CLI skill");
+        fs::write(copied_skill_path.join("SKILL.md"), "# copied\n")
+            .expect("write copied Agent CLI skill");
+        fs::write(
+            temp_home.join(".agents/.skill-lock.json"),
+            r#"{"version":3,"skills":{"tdd":{"sourceType":"github"}}}"#,
+        )
+        .expect("write Agent CLI lock");
+        fs::write(temp_home.join(".claude.json"), "{}").expect("write Claude marker");
+        fs::write(
+            temp_home.join(".skilldock/settings.json"),
+            r#"{"agentSkillsCompatibilityEnabled":true}"#,
+        )
+        .expect("enable Agent CLI compatibility");
+
+        let mut skill = installed_skill_fixture(
+            "tdd",
+            "https://github.com/example/tdd.git",
+            agent_skill_path.to_string_lossy().as_ref(),
+        );
+        skill.instance.entry_path = agent_skill_path.to_string_lossy().to_string();
+        skill.instance.canonical_path = agent_skill_path.to_string_lossy().to_string();
+        skill.instance.management_owner = "agent-skills-cli".into();
+        skill.instance.update_driver = "agent-skills-cli".into();
+        skill.tools = vec![ToolSyncStatus {
+            name: "Claude Code".into(),
+            status_label: "已启用".into(),
+        }];
+
+        unsafe {
+            env::set_var("HOME", &temp_home);
+            env::set_var("PATH", temp_home.join("empty-bin"));
+        }
+        save_installed_skills(&[skill]).expect("save Agent CLI skill");
+
+        let updated = super::toggle_skill_tool_status_blocking(
+            "tdd",
+            Some(agent_skill_path.to_string_lossy().as_ref()),
+            "Claude Code",
+            &["Claude Code".into()],
+        )
+        .expect("disable Agent CLI copy without skills command");
+
+        assert!(updated
+            .tools
+            .iter()
+            .any(|tool| tool.name == "Claude Code" && tool.status_label == "未启用"));
+        assert!(!copied_skill_path.exists());
+        assert!(agent_skill_path.join("SKILL.md").is_file());
+        assert!(temp_home.join(".agents/.skill-lock.json").is_file());
+
+        restore_env_var("HOME", original_home);
+        restore_env_var("PATH", original_path);
+        let _ = fs::remove_dir_all(temp_home);
+    }
+
+    #[test]
+    fn unmanaged_real_directory_and_agent_cli_global_source_are_preserved() {
+        let _guard = TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let original_home = env::var_os("HOME");
+        let temp_home = temp_test_dir("agent-cli-copy-refusal-home");
+        let agent_skill_path = temp_home.join(".agents/skills/tdd");
+        let tool_skills_path = temp_home.join(".claude/skills");
+        let copied_skill_path = tool_skills_path.join("tdd");
+        fs::create_dir_all(&agent_skill_path).expect("create Agent CLI skill");
+        fs::create_dir_all(&copied_skill_path).expect("create unconfirmed tool copy");
+        fs::write(agent_skill_path.join("SKILL.md"), "# canonical\n")
+            .expect("write canonical Agent CLI skill");
+        fs::write(copied_skill_path.join("SKILL.md"), "# copied\n")
+            .expect("write copied Agent CLI skill");
+
+        let mut skill = installed_skill_fixture(
+            "tdd",
+            "https://github.com/example/tdd.git",
+            agent_skill_path.to_string_lossy().as_ref(),
+        );
+        skill.instance.canonical_path = agent_skill_path.to_string_lossy().to_string();
+
+        unsafe {
+            env::set_var("HOME", &temp_home);
+        }
+
+        remove_matching_skill_distribution(tool_skills_path.to_string_lossy().as_ref(), &skill)
+            .expect("preserve unmanaged real directory");
+        assert!(copied_skill_path.is_dir());
+
+        skill.instance.management_owner = "agent-skills-cli".into();
+        skill.instance.update_driver = "agent-skills-cli".into();
+        assert!(remove_matching_skill_distribution(
+            temp_home.join(".agents/skills").to_string_lossy().as_ref(),
+            &skill,
+        )
+        .is_err());
+        assert!(agent_skill_path.join("SKILL.md").is_file());
+
+        restore_env_var("HOME", original_home);
+        let _ = fs::remove_dir_all(temp_home);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn batch_disable_removes_only_selected_agent_cli_copy() {
+        let _guard = TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let original_home = env::var_os("HOME");
+        let temp_home = temp_test_dir("agent-cli-copy-batch-home");
+        let tool_skills_path = temp_home.join(".claude/skills");
+        let mut skills = Vec::new();
+        let mut cli_entries = Vec::new();
+        for name in ["one", "two"] {
+            let source = temp_home.join(".agents/skills").join(name);
+            let copy = tool_skills_path.join(name);
+            fs::create_dir_all(&source).expect("create Agent CLI source");
+            fs::create_dir_all(&copy).expect("create Agent CLI copy");
+            fs::write(source.join("SKILL.md"), format!("# {name}\n"))
+                .expect("write Agent CLI source");
+            fs::write(copy.join("SKILL.md"), format!("# copied {name}\n"))
+                .expect("write Agent CLI copy");
+
+            let mut skill = installed_skill_fixture(
+                name,
+                &format!("https://github.com/example/{name}.git"),
+                source.to_string_lossy().as_ref(),
+            );
+            skill.instance.entry_path = source.to_string_lossy().to_string();
+            skill.instance.canonical_path = source.to_string_lossy().to_string();
+            skill.instance.management_owner = "agent-skills-cli".into();
+            skill.instance.update_driver = "agent-skills-cli".into();
+            skill.tools = vec![ToolSyncStatus {
+                name: "Claude Code".into(),
+                status_label: "已启用".into(),
+            }];
+            skills.push(skill);
+            cli_entries.push(CliSkillEntry {
+                name: name.into(),
+                path: source.to_string_lossy().to_string(),
+                scope: "global".into(),
+                agents: vec!["Claude Code".into()],
+            });
+        }
+        fs::write(temp_home.join(".claude.json"), "{}").expect("write Claude installation marker");
+        fs::create_dir_all(temp_home.join(".skilldock"))
+            .expect("create SkillDock settings directory");
+        fs::write(
+            temp_home.join(".skilldock/settings.json"),
+            r#"{"agentSkillsCompatibilityEnabled":true}"#,
+        )
+        .expect("enable Agent CLI compatibility");
+
+        unsafe {
+            env::set_var("HOME", &temp_home);
+        }
+        let original_path = prepend_fake_skills_cli(&temp_home, &cli_entries);
+        save_installed_skills(&skills).expect("save Agent CLI skills");
+        let tool_entries = build_tool_skill_entries(
+            &[ToolConfig {
+                id: "claude-code".into(),
+                name: "Claude Code".into(),
+                skills_path: tool_skills_path.to_string_lossy().to_string(),
+                mcp_config_path: String::new(),
+                supports_mcp: true,
+                mcp_config_path_recognized: true,
+                status_label: "已安装".into(),
+                is_enabled: true,
+                primary_type: "agent".into(),
+                surface_types: vec!["agent".into()],
+                supports_direct_open: true,
+            }],
+            &skills,
+        );
+        assert!(tool_entries.iter().all(|entry| {
+            entry.management_status == "managed" && entry.managed_root == "agent-skills-cli"
+        }));
+
+        set_tool_skill_statuses_blocking(
+            "Claude Code",
+            vec!["one".into()],
+            false,
+            &["Claude Code".into()],
+        )
+        .expect("batch disable Agent CLI copy");
+
+        assert!(!tool_skills_path.join("one").exists());
+        assert!(tool_skills_path.join("two/SKILL.md").is_file());
+        assert!(temp_home.join(".agents/skills/one/SKILL.md").is_file());
+        assert!(temp_home.join(".agents/skills/two/SKILL.md").is_file());
+
+        restore_env_var("HOME", original_home);
+        restore_env_var("PATH", original_path);
+        let _ = fs::remove_dir_all(temp_home);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn all_tools_disable_removes_each_confirmed_copy_but_keeps_global_source() {
+        let _guard = TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let original_home = env::var_os("HOME");
+        let temp_home = temp_test_dir("agent-cli-copy-all-tools-home");
+        let source = temp_home.join(".agents/skills/tdd");
+        let claude_copy = temp_home.join(".claude/skills/tdd");
+        let codex_copy = temp_home.join(".codex/skills/tdd");
+        for path in [&source, &claude_copy, &codex_copy] {
+            fs::create_dir_all(path).expect("create Agent CLI Skill directory");
+            fs::write(path.join("SKILL.md"), "# tdd\n").expect("write Agent CLI Skill");
+        }
+        fs::write(temp_home.join(".claude.json"), "{}").expect("write Claude installation marker");
+        fs::create_dir_all(temp_home.join(".skilldock"))
+            .expect("create SkillDock settings directory");
+        fs::write(
+            temp_home.join(".skilldock/settings.json"),
+            r#"{"agentSkillsCompatibilityEnabled":true}"#,
+        )
+        .expect("enable Agent CLI compatibility");
+
+        let mut skill = installed_skill_fixture(
+            "tdd",
+            "https://github.com/example/tdd.git",
+            source.to_string_lossy().as_ref(),
+        );
+        skill.instance.entry_path = source.to_string_lossy().to_string();
+        skill.instance.canonical_path = source.to_string_lossy().to_string();
+        skill.instance.management_owner = "agent-skills-cli".into();
+        skill.instance.update_driver = "agent-skills-cli".into();
+        skill.tools = vec![
+            ToolSyncStatus {
+                name: "Claude Code".into(),
+                status_label: "已启用".into(),
+            },
+            ToolSyncStatus {
+                name: "Codex".into(),
+                status_label: "已启用".into(),
+            },
+        ];
+        let cli_entries = vec![CliSkillEntry {
+            name: "tdd".into(),
+            path: source.to_string_lossy().to_string(),
+            scope: "global".into(),
+            agents: vec!["Claude Code".into(), "Codex".into()],
+        }];
+        unsafe {
+            env::set_var("HOME", &temp_home);
+        }
+        let original_path = prepend_fake_skills_cli(&temp_home, &cli_entries);
+        save_installed_skills(&[skill]).expect("save Agent CLI skill");
+
+        set_skill_all_tool_statuses_blocking(
+            "tdd",
+            Some(source.to_string_lossy().as_ref()),
+            false,
+            &["Claude Code".into(), "Codex".into()],
+        )
+        .expect("disable Agent CLI copies for all tools");
+
+        assert!(!claude_copy.exists());
+        assert!(!codex_copy.exists());
+        assert!(source.join("SKILL.md").is_file());
+
+        restore_env_var("HOME", original_home);
+        restore_env_var("PATH", original_path);
         let _ = fs::remove_dir_all(temp_home);
     }
 

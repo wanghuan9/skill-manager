@@ -2,6 +2,10 @@ import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, vi } from "vitest";
 import { App } from "@/app/App";
+import {
+  appSettingsFixture,
+  installedSkillFixtures,
+} from "@/features/skills/state/skill-fixtures";
 
 let isWindowMaximized = false;
 let windowResizeListener: (() => void) | null = null;
@@ -63,6 +67,18 @@ test("renders primary navigation entries with plugins before tools and cli hidde
 });
 
 test("notifies about startup Skill updates and opens the update filter", async () => {
+  appSettingsFixture.skillLibraryProvider = "agent-skills";
+  appSettingsFixture.agentSkillsCompatibilityEnabled = true;
+  installedSkillFixtures.push({
+    ...installedSkillFixtures[0],
+    name: "local-clean-skill",
+    sourceType: "local",
+    sourceUrl: "",
+    localPath: "/Users/demo/.skilldock/skills/local-clean-skill",
+    collabStatus: "clean",
+    gitLinked: false,
+  });
+
   render(<App />);
 
   expect(await screen.findByText("1 个 Skill 有可用更新")).toBeInTheDocument();
