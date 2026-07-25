@@ -38,6 +38,59 @@ The core workflow is team collaboration without intermediate handoff directories
 - **Git-aware workflow** — Keep Git-based skills and plugins as real repositories, detect upstream updates, local edits, and pending pushes, and preview changes before pulling or pushing.
 - **One-click multi-tool sync** — Enable skills, MCP servers, and plugins across Claude Code, Codex, Cursor, Windsurf, Gemini CLI, OpenCode, and other coding tools to avoid hand-copying files and editing complex config files.
 
+## Skill Management and Workflow
+
+“Managed” identifies where a Skill's real files live and who owns its update and removal lifecycle. “Enabled” means linking a managed Skill into Cursor, Claude Code, Codex, or another tool. Only managed Skills can be distributed centrally: the copy in the managed library is the single distribution source and can be enabled in multiple tools through symlinks.
+
+```mermaid
+flowchart TB
+    subgraph SOURCE["1. Skill sources"]
+        SD_INSTALL["Install with SkillDock<br/>Marketplace · Git · Local folder"]
+        TOOL_SKILL["Existing Skill in a tool<br/>Cursor · Claude Code · Codex"]
+        CLI_INSTALL["Install with Agent Skills CLI<br/>npx skills add ... -g"]
+    end
+
+    subgraph MANAGED["2. Managed library"]
+        SD_MANAGED["Managed by SkillDock<br/>~/.skilldock/skills"]
+        CLI_MANAGED["Managed by Agent CLI<br/>~/.agents/skills"]
+    end
+
+    subgraph DISTRIBUTE["3. Enable and distribute"]
+        ENABLE["Enable through symlinks<br/>One Skill, multiple tools"]
+    end
+
+    subgraph TOOLS["4. Coding tools"]
+        CURSOR["Cursor"]
+        CLAUDE["Claude Code"]
+        CODEX["Codex"]
+        OTHER["Other tools"]
+    end
+
+    SD_INSTALL --> SD_MANAGED
+    TOOL_SKILL -->|"Import: copy into the managed library"| SD_MANAGED
+    CLI_INSTALL --> CLI_MANAGED
+    SD_MANAGED --> ENABLE
+    CLI_MANAGED --> ENABLE
+    ENABLE --> CURSOR
+    ENABLE --> CLAUDE
+    ENABLE --> CODEX
+    ENABLE --> OTHER
+```
+
+| How it enters SkillDock | Managed location | Available after management |
+| --- | --- | --- |
+| Installed from the SkillDock marketplace, Git, or a local folder | `~/.skilldock/skills` | Inspect, edit, remove, and distribute to multiple tools; Git sources also support update checks, Diff previews, and pushes |
+| Installed globally with Agent Skills CLI, such as `npx skills add ... -g` | `~/.agents/skills` | Automatically detected after compatibility is enabled; inspect and distribute it, with preview, update, and removal where Agent Skills CLI supports them |
+| Already present in Cursor, Claude Code, Codex, or another tool | Copied to `~/.skilldock/skills` after import | Shown as unmanaged before import; after import SkillDock manages it and can enable it in other tools |
+
+Importing never deletes the original real directory. During distribution, SkillDock updates an existing same-name symlink to the selected managed Skill. If the same-name path is a real directory or regular file, SkillDock preserves it and reports a conflict.
+
+### Agent Skills CLI Compatibility
+
+Turn on **Settings → Agent Skills CLI Compatibility** to scan `~/.agents/skills` and automatically recognize Skills installed globally with `npx skills add ... -g`. They remain managed by Agent Skills CLI and are not moved or copied into `~/.skilldock/skills`; SkillDock can inspect and distribute them, with preview, update, and removal where Agent Skills CLI supports those operations.
+
+Skills installed by SkillDock still live in `~/.skilldock/skills`. Turning compatibility off only stops the extra scan—it does not modify or delete anything in `~/.agents/skills`.
+
 ## Skills
 
 View every installed skill by source group or by the tool's real directory, filter by management status, inspect source metadata, and see Git collaboration state at a glance.
@@ -125,8 +178,6 @@ Configure the app storage directory, default editor, update checks, default inst
 Claude Code · Codex · Cursor · Windsurf · IntelliJ IDEA · OpenCode · Gemini · Antigravity · Continue · GitHub Copilot · Qwen Code · Trae · Trae CN · Cline · Roo Code · Kilo Code · Kiro · Goose · Junie · Augment · CodeBuddy · Droid · OpenClaw · CommandCode · Crush · Qoder · Zencoder · Hermes · iFlow
 
 ## How It Works
-
-SkillDock keeps installed skills in a managed local library, then enables them for each supported tool by creating links into that tool's own skills directory. This keeps one source of truth while still letting each tool read skills from the location it expects.
 
 Plugins are managed as higher-level packages. A plugin can expose skills, agents, commands, MCP integrations, and host-specific capabilities; SkillDock installs the package once, tracks its source, and lets you enable or disable it for compatible host tools.
 
