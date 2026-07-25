@@ -28,13 +28,12 @@ The core workflow is team collaboration without intermediate handoff directories
 - **MCP management** — Browse, import, edit, enable, disable, sync, and inspect MCP server configs.
 - **Plugin management** — Install, enable, disable, inspect, one-click update, and remove plugin packages, with local change and pending-push detection for Git-backed plugins.
 - **Real tool directory view** — Inspect Skills in the actual Claude Code, Cursor, Codex, Windsurf, Gemini CLI, and other supported tool directories, including managed, unmanaged, conflicting, folder, and symlink states.
-- **Skill diff and collaboration** — Edit local changes, review staged and unstaged diffs, revert a file or hunk, and preview pending pushes before sharing updates.
+- **Git workflow and collaboration** — Keep Git-based skills and plugins as real repositories, detect upstream updates, local edits, and pending pushes, review staged and unstaged diffs, revert a file or hunk, and preview changes before updating or pushing.
 - **Cards and dark mode** — Switch Skills, MCP, and Plugins between list and card layouts, with light, dark, and system themes.
 - **MCP tools discovery** — Detect exposed MCP tools, track whether each server config is usable, and control tool-level enablement.
 - **Skill install** — Install skills with one click from `skills.sh` and `skillsmp`, or add them from Git repositories and local folders.
 - **MCP install** — Install MCP servers with one click from `MCP.Directory`, then manage their shared configuration lifecycle.
 - **Plugin install** — Install plugin packages with one click from Git repositories and enable their bundled skills, commands, agents, and integrations.
-- **Git-aware workflow** — Keep Git-based skills and plugins as real repositories, detect upstream updates, local edits, and pending pushes, and preview changes before pulling or pushing.
 - **One-click multi-tool sync** — Enable skills, MCP servers, and plugins across Claude Code, Codex, Cursor, Windsurf, Gemini CLI, OpenCode, and other coding tools to avoid hand-copying files and editing complex config files.
 
 ## Skill Management and Workflow
