@@ -882,6 +882,38 @@ pub fn parse_global_skill_list_json(output: &str) -> Result<Vec<CliSkillEntry>, 
     serde_json::from_str(output).map_err(|error| format!("解析 skills 列表失败: {error}"))
 }
 
+pub fn confirms_global_agent_installation(
+    status: &AgentSkillsCliStatus,
+    skill_name: &str,
+    skill_path: &Path,
+    agent_names: &[&str],
+) -> Result<bool, String> {
+    if !status.available || !status.error.is_empty() {
+        return Err(if status.error.is_empty() {
+            "未检测到 skills 命令，无法确认 Agent CLI 安装状态。".into()
+        } else {
+            status.error.clone()
+        });
+    }
+
+    let expected_path = skill_path
+        .canonicalize()
+        .unwrap_or_else(|_| skill_path.to_path_buf());
+    Ok(status.entries.iter().any(|entry| {
+        if entry.name != skill_name {
+            return false;
+        }
+        let entry_path = PathBuf::from(&entry.path);
+        let entry_path = entry_path.canonicalize().unwrap_or(entry_path);
+        entry_path == expected_path
+            && entry.agents.iter().any(|agent| {
+                agent_names
+                    .iter()
+                    .any(|expected| agent.trim().eq_ignore_ascii_case(expected.trim()))
+            })
+    }))
+}
+
 pub fn update_global_skill(name: &str) -> Result<(), String> {
     let lock_path = home_dir()?.join(".agents/.skill-lock.json");
     let lock_contents = fs::read_to_string(lock_path)
@@ -1035,9 +1067,9 @@ pub fn is_global_skill_path(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        changed_global_skill_names, detect_global_updates, is_global_skill_path,
-        parse_global_skill_list_json, parse_global_skill_lock, remove_global_skill,
-        resolve_skill_entry_path, CliSkillEntry,
+        changed_global_skill_names, confirms_global_agent_installation, detect_global_updates,
+        is_global_skill_path, parse_global_skill_list_json, parse_global_skill_lock,
+        remove_global_skill, resolve_skill_entry_path, AgentSkillsCliStatus, CliSkillEntry,
     };
     use std::collections::BTreeMap;
     use std::env;
@@ -1066,6 +1098,60 @@ mod tests {
                 scope: "global".into(),
                 agents: vec!["Codex".into()],
             }]
+        );
+    }
+
+    #[test]
+    fn confirms_global_skill_path_and_agent_membership() {
+        let skill_path = PathBuf::from("/tmp/.agents/skills/demo");
+        let status = AgentSkillsCliStatus {
+            available: true,
+            global_path: "/tmp/.agents/skills".into(),
+            entries: vec![CliSkillEntry {
+                name: "demo".into(),
+                path: skill_path.to_string_lossy().to_string(),
+                scope: "global".into(),
+                agents: vec!["Claude Code".into()],
+            }],
+            error: String::new(),
+        };
+
+        assert_eq!(
+            confirms_global_agent_installation(&status, "demo", &skill_path, &["Claude Code"]),
+            Ok(true)
+        );
+        assert_eq!(
+            confirms_global_agent_installation(&status, "demo", &skill_path, &["Cursor"]),
+            Ok(false)
+        );
+        assert_eq!(
+            confirms_global_agent_installation(
+                &status,
+                "demo",
+                PathBuf::from("/tmp/other/demo").as_path(),
+                &["Claude Code"]
+            ),
+            Ok(false)
+        );
+    }
+
+    #[test]
+    fn refuses_to_confirm_installation_when_cli_status_failed() {
+        let status = AgentSkillsCliStatus {
+            available: false,
+            global_path: String::new(),
+            entries: Vec::new(),
+            error: "skills unavailable".into(),
+        };
+
+        assert_eq!(
+            confirms_global_agent_installation(
+                &status,
+                "demo",
+                PathBuf::from("/tmp/.agents/skills/demo").as_path(),
+                &["Claude Code"]
+            ),
+            Err("skills unavailable".into())
         );
     }
 
