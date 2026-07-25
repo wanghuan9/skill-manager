@@ -650,13 +650,9 @@ function AppContent() {
   const hasShownSkillUpdateNotificationRef = useRef(false);
   const activeDefinition =
     routes.find((route) => route.key === activeRoute) ?? routes[0];
-  const updatableSkillCount = installedSkills.filter((skill) => (
-    skill.collabStatus === "update-available"
-    || (appSettings.skillLibraryProvider === "agent-skills"
-      && !skill.gitLinked
-      && skill.sourceUrl.trim().length === 0
-      && skill.localPath.startsWith(appSettings.skillLibraryPath))
-  )).length;
+  const updatableSkillCount = installedSkills.filter(
+    (skill) => skill.collabStatus === "update-available",
+  ).length;
   const pendingSkillCount = installedSkills.filter(
     (skill) => skill.collabStatus === "pending-commit" || skill.collabStatus === "pending-push",
   ).length;
