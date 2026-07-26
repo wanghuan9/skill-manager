@@ -14386,7 +14386,7 @@ button.settings-form-item:disabled {
   align-items: center;
   gap: 7px;
   min-height: 34px;
-  padding: 5px 9px 5px 12px;
+  padding: 5px 9px 5px 20px;
   border-radius: 10px;
 }
 
