@@ -303,12 +303,16 @@ fn install_sparse_market_skill_dir(
                 let fallback_path =
                     resolve_skill_path_from_git_tree(repo_dir, Some(relative_path), &skill.name)
                         .ok_or(original_error)?;
-                let sparse_paths = skill_path_variants(&fallback_path);
-                let sparse_args = sparse_paths
-                    .iter()
-                    .map(|path| path.to_string_lossy().to_string())
-                    .collect::<Vec<_>>();
-                configure_sparse_checkout(repo_dir, &sparse_args, false)?;
+                if fallback_path.as_os_str().is_empty() {
+                    run_git_in_dir(repo_dir, &["sparse-checkout", "disable"])?;
+                } else {
+                    let sparse_paths = skill_path_variants(&fallback_path);
+                    let sparse_args = sparse_paths
+                        .iter()
+                        .map(|path| path.to_string_lossy().to_string())
+                        .collect::<Vec<_>>();
+                    configure_sparse_checkout(repo_dir, &sparse_args, false)?;
+                }
                 run_git_in_dir(repo_dir, &["checkout", "--quiet"])?;
                 resolve_market_skill_source_dir(repo_dir, Some(&fallback_path), &skill.name)?
             }
@@ -352,10 +356,10 @@ fn clone_branch_for_resolved_path<'a>(
     remote_skill_path: Option<&'a ResolvedRemoteSkillPath>,
     source_spec: &'a MarketSourceSpec,
 ) -> Option<&'a str> {
-    match remote_skill_path {
+    explicit_clone_branch(match remote_skill_path {
         Some(resolved) => resolved.branch.as_deref(),
         None => source_spec.branch.as_deref(),
-    }
+    })
 }
 
 fn owner_repo_from_clone_url(clone_url: &str) -> Option<String> {
@@ -690,11 +694,13 @@ fn remote_branch_candidates(preferred_branch: Option<&str>) -> Vec<String> {
 }
 
 fn branch_for_clone(branch: &str) -> Option<String> {
-    if branch == "HEAD" {
-        None
-    } else {
-        Some(branch.to_string())
-    }
+    explicit_clone_branch(Some(branch)).map(ToOwned::to_owned)
+}
+
+fn explicit_clone_branch(branch: Option<&str>) -> Option<&str> {
+    branch
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && !value.eq_ignore_ascii_case("HEAD"))
 }
 
 fn remote_skill_file_exists(owner_repo: &str, branch: &str, skill_dir: &Path) -> bool {
@@ -1651,7 +1657,7 @@ fn clone_repo_with_optional_branch_internal(
     if on_progress.is_some() {
         command.arg("--progress");
     }
-    if let Some(branch_name) = branch.filter(|value| !value.trim().is_empty()) {
+    if let Some(branch_name) = explicit_clone_branch(branch) {
         command.arg("--branch").arg(branch_name);
     }
     command
@@ -1707,7 +1713,7 @@ fn clone_repo_with_sparse_paths_internal(
     if on_progress.is_some() {
         clone_command.arg("--progress");
     }
-    if let Some(branch_name) = branch.filter(|value| !value.trim().is_empty()) {
+    if let Some(branch_name) = explicit_clone_branch(branch) {
         clone_command.arg("--branch").arg(branch_name);
     }
     clone_command
@@ -2005,6 +2011,8 @@ fn resolve_market_skill_source_dir(
     hinted_relative_path: Option<&Path>,
     skill_name: &str,
 ) -> Result<PathBuf, String> {
+    let root_skill_file = repo_root.join("SKILL.md");
+
     // 如果有提示路径，先检查该路径
     if let Some(path) = hinted_relative_path {
         for candidate_path in skill_path_variants(path) {
@@ -2022,6 +2030,9 @@ fn resolve_market_skill_source_dir(
         collect_skill_directories(repo_root, &skills_path, &mut candidates)?;
 
         if candidates.is_empty() {
+            if root_skill_file.is_file() {
+                return Ok(repo_root.to_path_buf());
+            }
             return Err(format!(
                 "安装失败：仓库中未找到任何包含 SKILL.md 的目录。指定的 skill '{}' 不存在",
                 skill_name
@@ -2086,6 +2097,10 @@ fn resolve_market_skill_source_dir(
         ));
     }
 
+    if root_skill_file.is_file() {
+        return Ok(repo_root.to_path_buf());
+    }
+
     Err(format!(
         "安装失败：仓库中未找到 skills 目录。指定的 skill '{}' 不存在",
         skill_name
@@ -2108,6 +2123,7 @@ fn resolve_skill_path_from_git_tree(
     if skill_dirs.is_empty() {
         return None;
     }
+    let has_root_skill = skill_dirs.iter().any(|path| path.as_os_str().is_empty());
 
     let hinted_paths = hinted_relative_path
         .map(skill_path_variants)
@@ -2125,6 +2141,7 @@ fn resolve_skill_path_from_git_tree(
 
     let wanted_slugs = remote_skill_match_slugs(&hinted_paths, skill_name);
     best_local_skill_dir_match(skill_dirs, &wanted_slugs)
+        .or_else(|| has_root_skill.then(PathBuf::new))
 }
 
 fn best_local_skill_dir_match(
@@ -2979,13 +2996,14 @@ mod tests {
         clone_branch_for_resolved_path,
         clone_repo_for_discovery_resolved_with_ref_and_sparse_paths, configure_hidden_subprocess,
         create_skill_symlink, get_tool_skills_path, git_executable, ignore_unnecessary_files,
-        migrate_legacy_skill_symlinks, parse_git_url_instead_of_rules, parse_market_source_url,
-        reconcile_tool_skill_symlinks, remote_clone_candidates, remove_reserved_workspace_entries,
-        remove_skill_symlink, remove_tool_skill_entry, repo_cache_lock,
-        rewrite_git_clone_url_with_instead_of_rules, run_git_in_dir, run_git_output,
-        sanitize_storage_name, skill_dir_match_score, ssh_clone_url_for_repository_url,
-        summarize_git_error, tool_skills_path_for_home, tree_relative_path_for_branch,
-        MarketSourceSpec, RemoteCloneCandidate, ResolvedRemoteSkillPath,
+        install_market_skill_into_repo_dir, migrate_legacy_skill_symlinks,
+        parse_git_url_instead_of_rules, parse_market_source_url, reconcile_tool_skill_symlinks,
+        remote_clone_candidates, remove_reserved_workspace_entries, remove_skill_symlink,
+        remove_tool_skill_entry, repo_cache_lock, rewrite_git_clone_url_with_instead_of_rules,
+        run_git_in_dir, run_git_output, sanitize_storage_name, skill_dir_match_score,
+        ssh_clone_url_for_repository_url, summarize_git_error, tool_skills_path_for_home,
+        tree_relative_path_for_branch, MarketSourceSpec, RemoteCloneCandidate,
+        ResolvedRemoteSkillPath,
     };
     #[cfg(windows)]
     use super::{create_windows_directory_junction, decode_windows_cmd_output, windows_cmd_path};
@@ -3469,6 +3487,67 @@ url.git@git.example.com:example-org/.insteadof https://git.example.com/example-o
             clone_branch_for_resolved_path(Some(&remote_skill_path), &source_spec),
             None
         );
+    }
+
+    #[test]
+    fn marketplace_install_uses_default_branch_for_root_skill() {
+        let temp_dir = temp_test_dir("marketplace-root-skill");
+        let (remote_dir, seed_dir) = seed_remote_repo(&temp_dir, "cangjie-skill");
+        fs::write(seed_dir.join("SKILL.md"), "# cangjie-skill").expect("write root SKILL.md");
+        let example_dir = seed_dir.join("examples/adler-perspective");
+        fs::create_dir_all(&example_dir).expect("create example skill directory");
+        fs::write(example_dir.join("SKILL.md"), "# example").expect("write example SKILL.md");
+        run_git_test(&seed_dir, &["add", "SKILL.md", "examples"]);
+        run_git_test(&seed_dir, &["commit", "-m", "add root skill"]);
+        run_git_test(&seed_dir, &["push", "origin", "main"]);
+
+        let source_spec = MarketSourceSpec {
+            clone_url: remote_dir.to_string_lossy().to_string(),
+            branch: Some("HEAD".into()),
+            relative_path: Some(PathBuf::from("cangjie-skill")),
+            tree_segments: vec!["HEAD".into(), "cangjie-skill".into()],
+        };
+        let skill = SkillSummary {
+            name: "cangjie-skill".into(),
+            source_label: "GitHub".into(),
+            source_type: "github".into(),
+            source_url: "https://github.com/kangarooking/cangjie-skill/tree/HEAD/cangjie-skill"
+                .into(),
+            description: String::new(),
+            local_path: String::new(),
+            branch: String::new(),
+            collab_status: String::new(),
+            status_text: String::new(),
+            remote_updated_at: String::new(),
+            local_updated_at: String::new(),
+            last_synced_at: String::new(),
+            last_checked_at: String::new(),
+            synced_tool_count: 0,
+            last_editor: String::new(),
+            commit_label: String::new(),
+            git_linked: true,
+            local_change_count: 0,
+            lifecycle_source: String::new(),
+            owner_plugin_id: String::new(),
+            owner_plugin_name: String::new(),
+            instance: Default::default(),
+            tools: Vec::new(),
+        };
+        let install_dir = temp_dir.join("installed");
+
+        let installed_path =
+            install_market_skill_into_repo_dir(&skill, None, &source_spec, &install_dir)
+                .expect("install root marketplace skill from the default branch");
+
+        assert_eq!(PathBuf::from(installed_path), install_dir);
+        assert!(install_dir.join("SKILL.md").is_file());
+        assert_eq!(
+            run_git_output(&install_dir, &["rev-parse", "--abbrev-ref", "HEAD"])
+                .expect("read installed branch"),
+            "main"
+        );
+
+        let _ = fs::remove_dir_all(temp_dir);
     }
 
     #[test]
