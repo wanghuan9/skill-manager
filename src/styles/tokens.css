@@ -14305,8 +14305,6 @@ button.settings-form-item:disabled {
 .project-workspace-nav {
   margin: 4px 0;
   padding: 8px 0;
-  border-top: 1px solid var(--line);
-  border-bottom: 1px solid var(--line);
 }
 
 .project-workspace-nav__header,
@@ -14322,7 +14320,7 @@ button.settings-form-item:disabled {
 
 .project-workspace-nav__header {
   display: grid;
-  grid-template-columns: 26px minmax(0, 1fr) 12px;
+  grid-template-columns: 26px max-content 12px minmax(0, 1fr);
   align-items: center;
   gap: 8px;
   padding: 10px;
