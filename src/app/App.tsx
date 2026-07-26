@@ -24,6 +24,7 @@ import { AppI18nProvider, tx, useTranslate } from "@/app/i18n";
 import { NotificationProvider, useNotifications } from "@/app/notifications";
 import { useFailureReporter } from "@/app/failure-feedback";
 import { FailureTracker } from "@/app/failure-tracker";
+import { formatHomePathForDisplay } from "@/app/path-utils";
 import { waitForNextPaint } from "@/app/utils/wait-for-next-paint";
 import { AppUpdateAutoPrompt } from "@/features/app-update/AppUpdateAutoPrompt";
 import { AppTooltip } from "@/app/components/AppTooltip";
@@ -179,10 +180,6 @@ function isMacOSWindow() {
 
 function isWindowsWindow() {
   return /windows|win32|win64/i.test(getWindowPlatformSignature());
-}
-
-function formatSkillDirectoryPath(path: string) {
-  return path.trim().replace(/^\/Users\/[^/]+(?=\/|$)/, "~");
 }
 
 function NavRouteIcon(props: { route: RouteKey }) {
@@ -682,13 +679,13 @@ function AppContent() {
     activeRoute === "skills" && activeSkillsSection === "skills"
       ? activeSkillSourceTool && activeToolSkillCounts
         ? tx(language, "app.header.skills.sourceSummary", {
-            path: formatSkillDirectoryPath(activeSkillSourceTool.skillsPath),
+            path: formatHomePathForDisplay(activeSkillSourceTool.skillsPath),
             managed: activeToolSkillCounts.managed,
             unmanaged: activeToolSkillCounts.unmanaged,
             mismatch: activeToolSkillCounts.mismatch,
           })
         : tx(language, "app.header.skills.summary", {
-            path: formatSkillDirectoryPath(appSettings.skillLibraryPath),
+            path: formatHomePathForDisplay(appSettings.skillLibraryPath),
             installed: enabledManagedSkillCount,
             updatable: updatableSkillCount,
             pending: pendingSkillCount,

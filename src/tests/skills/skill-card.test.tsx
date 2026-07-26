@@ -287,6 +287,34 @@ test("shows description in the list summary and keeps update metadata in details
   openFinderSpy.mockRestore();
 });
 
+test("formats a Windows extended managed path without changing the folder action", async () => {
+  const baseSkill = installedSkillFixtures.find((item) => item.name === "drawio-diagram");
+  if (!baseSkill) {
+    throw new Error("missing drawio-diagram fixture");
+  }
+  const managedPath = String.raw`\\?\C:\Users\xinya.zhang.TRANSSION\.agents\skills\analyze-project`;
+  const skill = {
+    ...baseSkill,
+    name: "analyze-project",
+    localPath: managedPath,
+    canonicalPath: managedPath,
+    managementOwner: "agent-skills-cli" as const,
+  };
+  const openFinderSpy = vi.spyOn(skillClient, "openPathInFinder").mockResolvedValue(undefined);
+
+  renderSkillCardWithProviders(skill, "grid");
+  fireEvent.click(document.querySelector(".skill-card__summary-button") as HTMLElement);
+
+  const detailDialog = screen.getByRole("dialog", { name: "analyze-project 详情" });
+  const displayPath = String.raw`C:\Users\xinya.zhang.TRANSSION\.agents\skills\analyze-project`;
+  expect(within(detailDialog).getByText(displayPath)).toBeInTheDocument();
+  await userEvent.click(within(detailDialog).getByRole("button", {
+    name: `打开目录 ${displayPath}`,
+  }));
+  expect(openFinderSpy).toHaveBeenCalledWith({ path: managedPath });
+  openFinderSpy.mockRestore();
+});
+
 test("opens the shared file dialog in local changes mode from a pending-push file entry", async () => {
   const skill = installedSkillFixtures.find((item) => item.name === "skill-publisher");
   if (!skill) {
