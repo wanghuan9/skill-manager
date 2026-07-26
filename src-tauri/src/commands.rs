@@ -223,7 +223,11 @@ struct SkillsMpSkill {
     github_url: String,
     #[serde(default, deserialize_with = "deserialize_u64_or_string")]
     stars: u64,
-    #[serde(default, alias = "updated_at")]
+    #[serde(
+        default,
+        alias = "updated_at",
+        deserialize_with = "deserialize_string_or_number"
+    )]
     updated_at: String,
 }
 
@@ -302,6 +306,18 @@ where
     }
 
     Ok(0)
+}
+
+fn deserialize_string_or_number<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    match value {
+        serde_json::Value::String(value) => Ok(value),
+        serde_json::Value::Number(value) => Ok(value.to_string()),
+        _ => Ok(String::new()),
+    }
 }
 
 fn source_type_for_url(source_url: &str) -> &'static str {
@@ -10212,7 +10228,7 @@ mod tests {
                     "description": "Use for ClawSweeper work.",
                     "githubUrl": "https://github.com/openclaw/openclaw/tree/main/.agents/skills/clawsweeper",
                     "stars": 370546,
-                    "updatedAt": "1778307787"
+                    "updatedAt": 1778307787
                 }
             ]
         });
@@ -10228,6 +10244,7 @@ mod tests {
         assert_eq!(skills[0].source_site, "skillsmp");
         assert_eq!(skills[0].maintainer, "openclaw");
         assert_eq!(skills[0].popularity_label, "370.5K");
+        assert_eq!(skills[0].updated_at, "1778307787");
         assert_eq!(skills[0].skill_path, ".agents/skills/clawsweeper");
     }
 
@@ -10263,6 +10280,7 @@ mod tests {
         );
         assert_eq!(skills[0].maintainer, "team");
         assert_eq!(skills[0].popularity_label, "1.0K");
+        assert_eq!(skills[0].updated_at, "2026-05-14");
         assert_eq!(skills[0].avatar_url, None);
     }
 
