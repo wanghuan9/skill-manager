@@ -332,6 +332,8 @@ pub struct AppSettings {
     pub skill_library_provider: String,
     #[serde(default)]
     pub agent_skills_compatibility_enabled: bool,
+    #[serde(default)]
+    pub agent_skills_compatibility_configured: bool,
     pub default_open_tool_id: String,
     pub skill_install_activation: String,
     pub mcp_install_activation: String,

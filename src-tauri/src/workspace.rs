@@ -127,13 +127,14 @@ pub fn ensure_workspace_initialized() -> Result<PathBuf, String> {
         &workspace_root.join("state.json"),
         "{\n  \"installedSkills\": []\n}\n",
     )?;
-    let agent_skills_compatibility_enabled = is_new_workspace;
-    let default_settings = format!(
-        "{{\n  \"defaultOpenToolId\": \"\",\n  \"skillInstallActivation\": \"apply-all-tools\",\n  \"mcpInstallActivation\": \"apply-all-tools\",\n  \"skillSourceViewStyle\": \"select\",\n  \"skillLibraryProvider\": \"skilldock\",\n  \"agentSkillsCompatibilityEnabled\": {agent_skills_compatibility_enabled}\n}}\n"
-    );
+    let default_settings = if is_new_workspace {
+        "{\n  \"defaultOpenToolId\": \"\",\n  \"skillInstallActivation\": \"apply-all-tools\",\n  \"mcpInstallActivation\": \"apply-all-tools\",\n  \"skillSourceViewStyle\": \"select\",\n  \"skillLibraryProvider\": \"skilldock\",\n  \"agentSkillsCompatibilityEnabled\": true\n}\n"
+    } else {
+        "{\n  \"defaultOpenToolId\": \"\",\n  \"skillInstallActivation\": \"apply-all-tools\",\n  \"mcpInstallActivation\": \"apply-all-tools\",\n  \"skillSourceViewStyle\": \"select\",\n  \"skillLibraryProvider\": \"skilldock\"\n}\n"
+    };
     ensure_workspace_file_with_default_content(
         &workspace_root.join("settings.json"),
-        &default_settings,
+        default_settings,
     )?;
     ensure_workspace_file_with_default_content(
         &workspace_root.join("mcp-servers.json"),
@@ -770,7 +771,7 @@ mod tests {
 
             let settings_content =
                 fs::read_to_string(workspace_root.join("settings.json")).expect("read settings");
-            assert!(settings_content.contains("\"agentSkillsCompatibilityEnabled\": false"));
+            assert!(!settings_content.contains("agentSkillsCompatibilityEnabled"));
             assert!(!compatibility_enabled_for_home(&temp_home));
         });
     }

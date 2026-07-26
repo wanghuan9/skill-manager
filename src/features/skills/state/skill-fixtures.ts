@@ -820,6 +820,7 @@ export const appSettingsFixture: AppSettings = {
   skillLibraryPath: "/Users/demo/.skilldock/skills",
   skillLibraryProvider: "skilldock",
   agentSkillsCompatibilityEnabled: false,
+  agentSkillsCompatibilityConfigured: true,
   defaultOpenToolId: "",
   skillInstallActivation: "apply-all-tools",
   mcpInstallActivation: "apply-all-tools",

@@ -37,8 +37,8 @@ const APP_THEME_SYSTEM: &str = "system";
 struct SettingsPersistence {
     #[serde(default)]
     skill_library_provider: String,
-    #[serde(default)]
-    agent_skills_compatibility_enabled: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    agent_skills_compatibility_enabled: Option<bool>,
     #[serde(default)]
     default_open_tool_id: String,
     #[serde(default)]
@@ -399,22 +399,29 @@ pub fn load_app_settings() -> AppSettings {
         .and_then(|content| serde_json::from_str::<SettingsPersistence>(&content).ok())
         .unwrap_or_default();
 
+    let legacy_agent_skills_enabled =
+        normalize_skill_library_provider(&persisted.skill_library_provider)
+            == SKILL_LIBRARY_PROVIDER_AGENT_SKILLS;
+    let compatibility_enabled = persisted
+        .agent_skills_compatibility_enabled
+        .unwrap_or(false)
+        || legacy_agent_skills_enabled;
+
     AppSettings {
         storage_path: settings_path,
         skill_library_path: managed_skill_library_root()
             .map(|path| path.to_string_lossy().to_string())
             .unwrap_or_default(),
-        skill_library_provider: if persisted.agent_skills_compatibility_enabled
-            || normalize_skill_library_provider(&persisted.skill_library_provider)
-                == SKILL_LIBRARY_PROVIDER_AGENT_SKILLS
-        {
+        skill_library_provider: if compatibility_enabled {
             SKILL_LIBRARY_PROVIDER_AGENT_SKILLS.to_string()
         } else {
             SKILL_LIBRARY_PROVIDER_SKILLDOCK.to_string()
         },
-        agent_skills_compatibility_enabled: persisted.agent_skills_compatibility_enabled
-            || normalize_skill_library_provider(&persisted.skill_library_provider)
-                == SKILL_LIBRARY_PROVIDER_AGENT_SKILLS,
+        agent_skills_compatibility_enabled: compatibility_enabled,
+        agent_skills_compatibility_configured: persisted
+            .agent_skills_compatibility_enabled
+            .is_some()
+            || legacy_agent_skills_enabled,
         default_open_tool_id: persisted.default_open_tool_id,
         skill_install_activation: normalize_skill_install_activation(
             &persisted.skill_install_activation,
@@ -457,6 +464,7 @@ pub fn save_app_settings(input: AppSettings) -> Result<AppSettings, String> {
         skill_library_path,
         skill_library_provider: skill_library_provider.to_string(),
         agent_skills_compatibility_enabled: compatibility_enabled,
+        agent_skills_compatibility_configured: input.agent_skills_compatibility_configured,
         default_open_tool_id: input.default_open_tool_id.trim().to_string(),
         skill_install_activation: normalize_skill_install_activation(
             &input.skill_install_activation,
@@ -472,7 +480,9 @@ pub fn save_app_settings(input: AppSettings) -> Result<AppSettings, String> {
     };
     let persistence = SettingsPersistence {
         skill_library_provider: normalized.skill_library_provider.clone(),
-        agent_skills_compatibility_enabled: normalized.agent_skills_compatibility_enabled,
+        agent_skills_compatibility_enabled: normalized
+            .agent_skills_compatibility_configured
+            .then_some(normalized.agent_skills_compatibility_enabled),
         default_open_tool_id: normalized.default_open_tool_id.clone(),
         skill_install_activation: normalized.skill_install_activation.clone(),
         mcp_install_activation: normalized.mcp_install_activation.clone(),
@@ -917,7 +927,8 @@ mod tests {
 
     use super::{
         hydrate_skill_description, load_app_settings, load_installed_skills, normalize_app_theme,
-        normalize_skill_source_view_style, save_installed_skills, scan_local_skill_candidates,
+        normalize_skill_source_view_style, save_app_settings, save_installed_skills,
+        scan_local_skill_candidates,
     };
 
     fn with_temp_home<F>(run: F)
@@ -1091,6 +1102,43 @@ mod tests {
                 temp_home.join(".skilldock/skills").to_string_lossy()
             );
             assert!(!settings.agent_skills_compatibility_enabled);
+            assert!(!settings.agent_skills_compatibility_configured);
+        });
+    }
+
+    #[test]
+    fn loads_explicitly_disabled_agent_skills_compatibility_as_configured() {
+        with_temp_home(|temp_home| {
+            let workspace_root = temp_home.join(".skilldock");
+            fs::create_dir_all(&workspace_root).expect("create workspace");
+            fs::write(
+                workspace_root.join("settings.json"),
+                "{\"agentSkillsCompatibilityEnabled\":false}",
+            )
+            .expect("write configured settings");
+
+            let settings = load_app_settings();
+
+            assert!(!settings.agent_skills_compatibility_enabled);
+            assert!(settings.agent_skills_compatibility_configured);
+        });
+    }
+
+    #[test]
+    fn ordinary_setting_save_preserves_missing_compatibility_field() {
+        with_temp_home(|temp_home| {
+            let workspace_root = temp_home.join(".skilldock");
+            fs::create_dir_all(&workspace_root).expect("create workspace");
+            let settings_path = workspace_root.join("settings.json");
+            fs::write(&settings_path, "{\"theme\":\"dark\"}").expect("write legacy settings");
+
+            let mut settings = load_app_settings();
+            settings.theme = "light".into();
+            let saved = save_app_settings(settings).expect("save ordinary setting");
+            let content = fs::read_to_string(settings_path).expect("read saved settings");
+
+            assert!(!saved.agent_skills_compatibility_configured);
+            assert!(!content.contains("agentSkillsCompatibilityEnabled"));
         });
     }
 
