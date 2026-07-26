@@ -14320,7 +14320,7 @@ button.settings-form-item:disabled {
 
 .project-workspace-nav__header {
   display: grid;
-  grid-template-columns: 26px max-content 12px minmax(0, 1fr);
+  grid-template-columns: 26px max-content 14px minmax(0, 1fr);
   align-items: center;
   gap: 8px;
   padding: 10px;
@@ -14345,10 +14345,15 @@ button.settings-form-item:disabled {
 .project-workspace-nav__chevron {
   display: grid;
   place-items: center;
+  width: 14px;
+  height: 14px;
   color: var(--muted);
-  font-size: 0.9rem;
-  line-height: 1;
   transition: transform var(--motion-fast) var(--ease-standard);
+}
+
+.project-workspace-nav__chevron svg {
+  width: 14px;
+  height: 14px;
 }
 
 .project-workspace-nav__chevron.is-collapsed {
@@ -14377,11 +14382,11 @@ button.settings-form-item:disabled {
 
 .project-workspace-nav__project {
   display: grid;
-  grid-template-columns: 24px minmax(0, 1fr) auto;
+  grid-template-columns: 24px minmax(0, 1fr);
   align-items: center;
   gap: 7px;
   min-height: 34px;
-  padding: 5px 9px 5px 26px;
+  padding: 5px 9px 5px 12px;
   border-radius: 10px;
 }
 
@@ -14414,19 +14419,9 @@ button.settings-form-item:disabled {
   min-width: 0;
   overflow: hidden;
   font-size: 0.82rem;
-  font-weight: 550;
+  font-weight: 400;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.project-workspace-nav__project-count {
-  min-width: 22px;
-  padding: 1px 6px;
-  border-radius: 999px;
-  background: rgba(117, 128, 147, 0.1);
-  color: var(--muted);
-  font-size: 0.68rem;
-  text-align: center;
 }
 
 .project-workspace-nav__add {

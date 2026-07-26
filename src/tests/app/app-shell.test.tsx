@@ -40,7 +40,8 @@ beforeEach(() => {
 test("renders primary navigation entries and embeds projects in a workspace menu", async () => {
   render(<App />);
 
-  expect(await screen.findByRole("button", { name: "demo-workspace" })).toBeInTheDocument();
+  const projectButton = await screen.findByRole("button", { name: "demo-workspace" });
+  expect(projectButton).toHaveAttribute("data-tooltip", "demo-workspace");
 
   const navLabels = within(screen.getByRole("navigation", { name: "Primary" }))
     .getAllByRole("button")
@@ -61,8 +62,8 @@ test("renders primary navigation entries and embeds projects in a workspace menu
     "Plugins",
     "工具",
     "安装",
-    "项目⌄",
-    "demo-workspace5",
+    "项目",
+    "demo-workspace",
     "＋添加项目",
     "设置",
     "关于",

@@ -63,14 +63,19 @@ test("collapses project workspaces and supports project card and list views", as
 
   const workspaceToggle = screen.getByRole("button", { name: "项目" });
   expect(workspaceToggle).toHaveAttribute("aria-expanded", "true");
+  expect(workspaceToggle.querySelector(".project-folder-icon")).toHaveClass("is-open");
   expect(await screen.findByRole("button", { name: "demo-workspace" })).toBeInTheDocument();
 
   await userEvent.click(workspaceToggle);
   expect(workspaceToggle).toHaveAttribute("aria-expanded", "false");
+  expect(workspaceToggle.querySelector(".project-folder-icon")).not.toHaveClass("is-open");
   expect(screen.queryByRole("button", { name: "demo-workspace" })).not.toBeInTheDocument();
 
   await userEvent.click(workspaceToggle);
   await openDemoProject();
+  expect(screen.getByRole("button", { name: "demo-workspace" }).querySelector(".project-folder-icon")).toHaveClass(
+    "is-open",
+  );
   await userEvent.click(screen.getByRole("button", { name: "列表视图" }));
   expect(screen.getByText("brainstorming").closest("article")).toHaveClass("skill-card--list");
   await userEvent.click(screen.getByRole("button", { name: "卡片视图" }));

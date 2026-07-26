@@ -430,11 +430,19 @@ function McpNavIcon() {
   );
 }
 
-function ProjectFolderIcon() {
+function ProjectFolderIcon({ isOpen = false }: { isOpen?: boolean }) {
   return (
-    <svg viewBox="0 0 24 24" aria-hidden="true">
+    <svg
+      className={`project-folder-icon${isOpen ? " is-open" : ""}`}
+      viewBox="0 0 24 24"
+      aria-hidden="true"
+    >
       <path
-        d="M3.5 6.5h6l1.8 2h9.2v9a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2v-11Z"
+        d={
+          isOpen
+            ? "m6 14 1.5-2.9A2 2 0 0 1 9.3 10h10.2a2 2 0 0 1 1.94 2.5l-1.54 5.8a2 2 0 0 1-1.94 1.5H5a2 2 0 0 1-2-2V5.5a2 2 0 0 1 2-2h4l2.5 2.5H18a2 2 0 0 1 2 2v2"
+            : "M3.5 6.5h6l1.8 2h9.2v9a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2v-11Z"
+        }
         fill="none"
         stroke="currentColor"
         strokeWidth="1.8"
@@ -1287,7 +1295,7 @@ function AppContent() {
               onClick={() => setIsProjectWorkspaceExpanded((current) => !current)}
             >
               <span className="nav-icon" aria-hidden="true">
-                <ProjectFolderIcon />
+                <ProjectFolderIcon isOpen={isProjectWorkspaceExpanded} />
               </span>
               <span className="nav-label project-workspace-nav__label">
                 {language === "en" ? "Projects" : "项目"}
@@ -1296,7 +1304,16 @@ function AppContent() {
                 className={`project-workspace-nav__chevron${isProjectWorkspaceExpanded ? "" : " is-collapsed"}`}
                 aria-hidden="true"
               >
-                ⌄
+                <svg viewBox="0 0 20 20">
+                  <path
+                    d="m6 8 4 4 4-4"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.8"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
               </span>
             </button>
             {isProjectWorkspaceExpanded ? (
@@ -1308,15 +1325,13 @@ function AppContent() {
                       key={project.id}
                       type="button"
                       aria-label={project.name}
+                      data-tooltip={project.name}
                       onClick={() => handleSelectProject(project.id)}
                     >
                       <span className="project-workspace-nav__project-icon" aria-hidden="true">
-                        <ProjectFolderIcon />
+                        <ProjectFolderIcon isOpen={project.id === activeProjectId} />
                       </span>
                       <span className="project-workspace-nav__project-name">{project.name}</span>
-                      <span className="project-workspace-nav__project-count">
-                        {project.skills.length + project.mcpServers.length}
-                      </span>
                     </button>
                   ))}
                 </div>
