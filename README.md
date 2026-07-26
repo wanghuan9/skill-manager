@@ -166,6 +166,16 @@ Download the latest [SkillDock release](https://github.com/wanghuan9/skilldock/r
 | macOS Apple Silicon | Released |
 | Windows x64 | Released |
 
+### Open the Unnotarized App
+
+SkillDock is not currently notarized by Apple, so macOS may prevent it from opening. After installation, run:
+
+```bash
+sudo xattr -cr /Applications/SkillDock.app
+```
+
+You can then launch SkillDock normally.
+
 ## Getting Started
 
 1. Download and open SkillDock.

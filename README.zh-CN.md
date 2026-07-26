@@ -167,6 +167,16 @@ MCP servers 使用的是另一套机制：SkillDock 会把它们作为统一配�
 | macOS Apple Silicon | 已发布 |
 | Windows x64 | 已发布 |
 
+### 未公证应用放行
+
+SkillDock 目前未经过 Apple 公证，macOS 可能会阻止打开。安装后在终端执行：
+
+```bash
+sudo xattr -cr /Applications/SkillDock.app
+```
+
+之后即可正常启动。
+
 ## 快速开始
 
 1. 下载并打开 SkillDock。
