@@ -15,9 +15,11 @@ test("shows project Skills and keeps Agent CLI resources export-only", async () 
   expect(screen.getByText("project-helper")).toBeInTheDocument();
   const agentCliCard = screen.getByText("brainstorming").closest("article");
   expect(agentCliCard).not.toBeNull();
-  expect(within(agentCliCard!).getByText(/Agent CLI · 仅下发/)).toBeInTheDocument();
-  expect(within(agentCliCard!).getByRole("button", { name: "更新项目" })).toBeInTheDocument();
-  expect(within(agentCliCard!).queryByRole("button", { name: "同步回托管" })).not.toBeInTheDocument();
+  await userEvent.click(within(agentCliCard!).getByRole("button", { name: "展开 brainstorming" }));
+  const dialog = await screen.findByRole("dialog", { name: "brainstorming 详情" });
+  expect(within(dialog).getByText(/Agent CLI · 仅下发/)).toBeInTheDocument();
+  expect(within(dialog).getByRole("button", { name: "更新项目" })).toBeInTheDocument();
+  expect(within(dialog).queryByRole("button", { name: "同步回托管" })).not.toBeInTheDocument();
 });
 
 test("imports an existing project Skill into the managed library", async () => {
@@ -26,10 +28,12 @@ test("imports an existing project Skill into the managed library", async () => {
 
   const projectSkillCard = (await screen.findByText("project-helper")).closest("article");
   expect(projectSkillCard).not.toBeNull();
-  await userEvent.click(within(projectSkillCard!).getByRole("button", { name: "上传托管" }));
+  await userEvent.click(within(projectSkillCard!).getByRole("button", { name: "展开 project-helper" }));
+  const dialog = await screen.findByRole("dialog", { name: "project-helper 详情" });
+  await userEvent.click(within(dialog).getByRole("button", { name: "上传托管" }));
 
   expect(await screen.findByText("项目 Skill 已上传到托管")).toBeInTheDocument();
-  expect(within(projectSkillCard!).queryByRole("button", { name: "上传托管" })).not.toBeInTheDocument();
+  expect(within(dialog).queryByRole("button", { name: "上传托管" })).not.toBeInTheDocument();
 });
 
 test("previews project Skill differences before synchronizing", async () => {
@@ -37,7 +41,9 @@ test("previews project Skill differences before synchronizing", async () => {
   await openDemoProject();
 
   const agentCliCard = (await screen.findByText("brainstorming")).closest("article");
-  await userEvent.click(within(agentCliCard!).getByRole("button", { name: "更新项目" }));
+  await userEvent.click(within(agentCliCard!).getByRole("button", { name: "展开 brainstorming" }));
+  const detailDialog = await screen.findByRole("dialog", { name: "brainstorming 详情" });
+  await userEvent.click(within(detailDialog).getByRole("button", { name: "更新项目" }));
 
   const dialog = await screen.findByRole("dialog", { name: "同步差异预览" });
   expect(within(dialog).getByText("托管 → 项目")).toBeInTheDocument();
@@ -80,6 +86,32 @@ test("collapses project workspaces and supports project card and list views", as
   expect(screen.getByText("brainstorming").closest("article")).toHaveClass("skill-card--list");
   await userEvent.click(screen.getByRole("button", { name: "卡片视图" }));
   expect(screen.getByText("brainstorming").closest("article")).toHaveClass("skill-card--grid");
+});
+
+test("groups the same project Skill across tools and exposes tool toggles in details", async () => {
+  render(<App />);
+  await openDemoProject();
+
+  const skillHeadings = screen.getAllByRole("heading", { name: "skill-publisher", level: 3 });
+  expect(skillHeadings).toHaveLength(1);
+  expect(screen.getByText(/3 个 Skills/)).toBeInTheDocument();
+  expect(screen.getByRole("combobox", { name: "同步状态筛选" })).toHaveTextContent("全部状态 (3)");
+  const skillCard = skillHeadings[0].closest("article");
+  expect(skillCard).not.toBeNull();
+  expect(within(skillCard!).getByText("多版本冲突")).toBeInTheDocument();
+
+  await userEvent.click(within(skillCard!).getByRole("button", { name: "展开 skill-publisher" }));
+
+  const dialog = await screen.findByRole("dialog", { name: "skill-publisher 详情" });
+  expect(within(dialog).getByText("Claude Code")).toBeInTheDocument();
+  expect(within(dialog).getByText("Cursor")).toBeInTheDocument();
+  expect(within(dialog).getByRole("button", { name: "关闭 Claude Code" })).toBeInTheDocument();
+  expect(within(dialog).getByRole("button", { name: "启用 Cursor" })).toBeInTheDocument();
+
+  await userEvent.click(within(dialog).getByRole("button", { name: "关闭 skill-publisher 详情" }));
+  await userEvent.click(within(skillCard!).getByRole("button", { name: "启用 skill-publisher" }));
+  expect(await screen.findByText("skill-publisher 已启用")).toBeInTheDocument();
+  expect(within(skillCard!).getByRole("button", { name: "关闭 skill-publisher" })).toBeInTheDocument();
 });
 
 test("searches project Skills without affecting the managed Skill list", async () => {

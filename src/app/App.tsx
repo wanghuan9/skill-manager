@@ -24,6 +24,8 @@ import { PluginsRoute } from "@/app/routes/plugins";
 import {
   ProjectWorkspaceToolbar,
   ProjectsRoute,
+  groupProjectSkills,
+  groupSyncStatus,
   type ProjectResourceTab,
   type ProjectStatusFilter,
   type ProjectViewMode,
@@ -751,6 +753,7 @@ function AppContent() {
   const activeProject = projectWorkspace?.projects.find(
     (project) => project.id === activeProjectId,
   ) ?? null;
+  const activeProjectSkillGroups = groupProjectSkills(activeProject?.skills ?? []);
   const updatableSkillCount = installedSkills.filter((skill) => (
     skill.collabStatus === "update-available"
     || (appSettings.skillLibraryProvider === "agent-skills"
@@ -786,8 +789,8 @@ function AppContent() {
   const activeDescription =
     activeRoute === "skills" && activeSkillsSection === "skills" && activeProject
       ? language === "en"
-        ? `${formatSkillDirectoryPath(activeProject.canonicalRootPath)} · ${activeProject.skills.length} Skills · ${activeProject.mcpServers.length} MCP servers`
-        : `${formatSkillDirectoryPath(activeProject.canonicalRootPath)} · ${activeProject.skills.length} 个 Skills · ${activeProject.mcpServers.length} 个 MCP`
+        ? `${formatSkillDirectoryPath(activeProject.canonicalRootPath)} · ${activeProjectSkillGroups.length} Skills · ${activeProject.mcpServers.length} MCP servers`
+        : `${formatSkillDirectoryPath(activeProject.canonicalRootPath)} · ${activeProjectSkillGroups.length} 个 Skills · ${activeProject.mcpServers.length} 个 MCP`
       : activeRoute === "skills" && activeSkillsSection === "skills"
       ? activeSkillSourceTool && activeToolSkillCounts
         ? tx(language, "app.header.skills.sourceSummary", {
@@ -814,10 +817,10 @@ function AppContent() {
           : tx(language, activeDefinition.descriptionKey);
 
   const projectStatusCounts = activeProject
-    ? activeProject.skills.reduce<Record<ProjectStatusFilter, number>>(
-        (counts, skill) => {
+    ? activeProjectSkillGroups.reduce<Record<ProjectStatusFilter, number>>(
+        (counts, group) => {
           counts.all += 1;
-          counts[skill.syncStatus] += 1;
+          counts[groupSyncStatus(group)] += 1;
           return counts;
         },
         {

@@ -541,7 +541,10 @@ function normalizeProjectWorkspaceSnapshot(
     storagePath: workspace.storagePath ?? "",
     projects: (workspace.projects ?? []).map((project) => ({
       ...project,
-      skills: project.skills ?? [],
+      skills: (project.skills ?? []).map((skill) => ({
+        ...skill,
+        isEnabled: skill.isEnabled ?? skill.entryKind !== "missing",
+      })),
       mcpServers: project.mcpServers ?? [],
       errors: project.errors ?? [],
     })),
@@ -2242,6 +2245,7 @@ export async function distributeSkillToProject(input: {
           relativePath: `${tool[1]}/${input.targetName}`,
           localPath: `${project.canonicalRootPath}/${tool[1]}/${input.targetName}`,
           entryKind: "directory",
+          isEnabled: true,
           managedSkillPath: input.managedSkillPath,
           projectCapability: managedSkill?.projectCapability ?? "bidirectional",
           contentHash: `fixture-${input.targetName}`,
@@ -2307,6 +2311,23 @@ export async function syncProjectSkill(
       }
     : project);
   const workspace = await invokeOrFallback("sync_project_skill", input, fallback);
+  return rememberProjectFixture(workspace);
+}
+
+export async function toggleProjectSkill(input: ProjectSkillResourceInput & {
+  enabled: boolean;
+}): Promise<ProjectWorkspaceSnapshot> {
+  const fallback = structuredClone(projectWorkspaceFixture);
+  fallback.projects = fallback.projects.map((project) => project.id === input.projectId
+    ? {
+        ...project,
+        skills: project.skills.map((skill) =>
+          skill.toolId === input.toolId && skill.relativePath === input.projectRelativePath
+            ? { ...skill, isEnabled: input.enabled }
+            : skill),
+      }
+    : project);
+  const workspace = await invokeOrFallback("toggle_project_skill", input, fallback);
   return rememberProjectFixture(workspace);
 }
 

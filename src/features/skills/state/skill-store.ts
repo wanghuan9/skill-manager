@@ -468,6 +468,7 @@ export type ProjectSkillInstance = {
   relativePath: string;
   localPath: string;
   entryKind: "directory" | "symlink" | "missing";
+  isEnabled: boolean;
   managedSkillPath: string;
   projectCapability: "bidirectional" | "export-only" | "";
   contentHash: string;

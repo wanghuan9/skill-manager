@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import { SearchFieldIcon } from "@/app/components/SearchFieldIcon";
 import { AppSelect } from "@/app/components/AppSelect";
 import { useNotifications } from "@/app/notifications";
@@ -14,9 +15,13 @@ import {
   removeManagedProject,
   syncProjectMcp,
   syncProjectSkill,
+  toggleProjectSkill,
   unlinkProjectResource,
 } from "@/features/skills/api/skill-client";
+import { PowerToggleIcon } from "@/features/skills/components/PowerToggleIcon";
 import { useSkillWorkspace } from "@/features/skills/state/skill-workspace";
+import { resolveToolLogoUrl } from "@/features/skills/utils/tool-logo";
+import { getMonogramLabel } from "@/features/skills/utils/monogram";
 import type {
   ProjectDetail,
   ProjectMcpDiffSnapshot,
@@ -45,6 +50,13 @@ type McpDiffState = {
   snapshot: ProjectMcpDiffSnapshot;
 };
 type ProjectDiffState = SkillDiffState | McpDiffState;
+export type ProjectSkillGroup = {
+  key: string;
+  name: string;
+  description: string;
+  instances: ProjectSkillInstance[];
+  hasContentConflict: boolean;
+};
 
 const projectToolOptions = [
   { id: "claude-code", name: "Claude Code" },
@@ -70,6 +82,41 @@ function canUpdateProject(status: ProjectSyncStatus) {
 
 function canUpdateManaged(status: ProjectSyncStatus) {
   return ["managed-missing", "project-changed", "diverged"].includes(status);
+}
+
+export function groupProjectSkills(skills: ProjectSkillInstance[]): ProjectSkillGroup[] {
+  const groups = new Map<string, ProjectSkillInstance[]>();
+  for (const skill of skills) {
+    const key = skill.name.trim().toLocaleLowerCase();
+    groups.set(key, [...(groups.get(key) ?? []), skill]);
+  }
+  return [...groups.entries()].map(([key, instances]) => {
+    const hashes = new Set(instances.map((instance) => instance.contentHash).filter(Boolean));
+    const toolIds = instances.map((instance) => instance.toolId);
+    return {
+      key,
+      name: instances[0]?.name ?? key,
+      description: instances.find((instance) => instance.description.trim())?.description ?? "",
+      instances,
+      hasContentConflict: hashes.size > 1 || new Set(toolIds).size !== toolIds.length,
+    };
+  }).sort((left, right) => left.name.localeCompare(right.name));
+}
+
+export function groupSyncStatus(group: ProjectSkillGroup): ProjectSyncStatus {
+  const priority: ProjectSyncStatus[] = [
+    "diverged",
+    "unavailable",
+    "project-changed",
+    "managed-changed",
+    "managed-missing",
+    "project-missing",
+    "project-only",
+    "in-sync",
+  ];
+  if (group.hasContentConflict) return "diverged";
+  return priority.find((status) => group.instances.some((instance) => instance.syncStatus === status))
+    ?? "in-sync";
 }
 
 function ProjectListIcon() {
@@ -355,6 +402,57 @@ export function ProjectsRoute(props: ProjectsRouteProps) {
     }
   }
 
+  async function handleToggleSkill(skill: ProjectSkillInstance, enabled: boolean) {
+    if (!activeProject) return;
+    await runAction(
+      "toggle_project_skill",
+      () => toggleProjectSkill({
+        projectId: activeProject.id,
+        toolId: skill.toolId,
+        projectRelativePath: skill.relativePath,
+        enabled,
+      }),
+      enabled
+        ? copy(`${skill.toolName} 已启用`, `${skill.toolName} enabled`)
+        : copy(`${skill.toolName} 已关闭`, `${skill.toolName} disabled`),
+    );
+  }
+
+  async function handleToggleSkillGroup(group: ProjectSkillGroup, enabled: boolean) {
+    if (!activeProject) return;
+    const targets = group.instances.filter((instance) => (
+      instance.entryKind === "directory" && instance.isEnabled !== enabled
+    ));
+    if (targets.length === 0) return;
+    setIsBusy(true);
+    setErrorMessage("");
+    let latestSnapshot: ProjectWorkspaceSnapshot | null = null;
+    try {
+      for (const skill of targets) {
+        latestSnapshot = await toggleProjectSkill({
+          projectId: activeProject.id,
+          toolId: skill.toolId,
+          projectRelativePath: skill.relativePath,
+          enabled,
+        });
+      }
+      if (latestSnapshot) props.onWorkspaceChange(latestSnapshot);
+      notify({
+        tone: "success",
+        message: enabled
+          ? copy(`${group.name} 已启用`, `${group.name} enabled`)
+          : copy(`${group.name} 已关闭`, `${group.name} disabled`),
+      });
+    } catch (error) {
+      if (latestSnapshot) props.onWorkspaceChange(latestSnapshot);
+      const fallbackMessage = copy("切换项目 Skill 状态失败", "Failed to toggle project Skill");
+      reportFailure(error, { operation: "toggle_project_skill_group", fallbackMessage });
+      setErrorMessage(error instanceof Error ? error.message : fallbackMessage);
+    } finally {
+      setIsBusy(false);
+    }
+  }
+
   async function handleConfirmSync() {
     if (!activeProject || !diffState) return;
     const common = {
@@ -382,12 +480,15 @@ export function ProjectsRoute(props: ProjectsRouteProps) {
   }
 
   const normalizedQuery = props.query.trim().toLocaleLowerCase();
-  const filteredSkills = activeProject?.skills.filter((skill) => (
-    (activeToolId === "all" || skill.toolId === activeToolId)
-    && (props.statusFilter === "all" || skill.syncStatus === props.statusFilter)
-    && (!normalizedQuery || [skill.name, skill.description, skill.toolName, skill.relativePath]
-      .some((value) => value.toLocaleLowerCase().includes(normalizedQuery)))
-  )) ?? [];
+  const groupedSkills = groupProjectSkills(activeProject?.skills ?? []);
+  const filteredSkills = groupedSkills.filter((group) => (
+    (activeToolId === "all" || group.instances.some((instance) => instance.toolId === activeToolId))
+    && (props.statusFilter === "all" || groupSyncStatus(group) === props.statusFilter)
+    && (!normalizedQuery || [group.name, group.description, ...group.instances.flatMap((instance) => [
+      instance.toolName,
+      instance.relativePath,
+    ])].some((value) => value.toLocaleLowerCase().includes(normalizedQuery)))
+  ));
   const filteredMcpServers = activeProject?.mcpServers.filter((server) => (
     (activeToolId === "all" || server.toolId === activeToolId)
     && (!normalizedQuery || [server.serverName, server.toolName, server.configRelativePath]
@@ -424,21 +525,23 @@ export function ProjectsRoute(props: ProjectsRouteProps) {
           {activeProject.errors.map((error) => <div className="dialog-error" key={error}>{error}</div>)}
           {activeTab === "skills" ? (
             <div className={`card-list project-resource-list${props.viewMode === "grid" ? " skill-card-grid" : ""}`}>
-                  {filteredSkills.map((skill) => (
-                    <ProjectSkillRow
-                      key={`${skill.toolId}:${skill.relativePath}`}
-                      skill={skill}
+                  {filteredSkills.map((group) => (
+                    <ProjectSkillCard
+                      key={group.key}
+                      group={group}
                       language={language}
                       layout={props.viewMode}
                       disabled={isBusy}
-                      onImport={() => void runAction(
+                      onImport={(skill) => void runAction(
                         "import_project_skill",
                         () => importProjectSkill({ projectId: activeProject.id, toolId: skill.toolId, projectRelativePath: skill.relativePath }),
                         copy("项目 Skill 已上传到托管", "Project Skill imported"),
                       )}
-                      onUpdateProject={() => void handlePreviewSkill(skill, "managed-to-project")}
-                      onUpdateManaged={() => void handlePreviewSkill(skill, "project-to-managed")}
-                      onUnlink={() => void runAction(
+                      onToggle={(skill, enabled) => void handleToggleSkill(skill, enabled)}
+                      onToggleAll={(enabled) => void handleToggleSkillGroup(group, enabled)}
+                      onUpdateProject={(skill) => void handlePreviewSkill(skill, "managed-to-project")}
+                      onUpdateManaged={(skill) => void handlePreviewSkill(skill, "project-to-managed")}
+                      onUnlink={(skill) => void runAction(
                         "unlink_project_skill",
                         () => unlinkProjectResource({ projectId: activeProject.id, resourceType: "skill", toolId: skill.toolId, resourceKey: skill.relativePath }),
                         copy("Skill 关联已解除", "Skill unlinked"),
@@ -514,50 +617,202 @@ export function ProjectsRoute(props: ProjectsRouteProps) {
   );
 }
 
-function ProjectSkillRow(props: {
-  skill: ProjectSkillInstance;
+function ProjectSkillMonogram({ name }: { name: string }) {
+  return (
+    <div className="link-badge link-badge--monogram" aria-hidden="true">
+      <span className="link-badge__type-mark link-badge__type-mark--skill">
+        <svg viewBox="0 0 12 12" fill="none">
+          <path d="M6 1.5 7.1 4.9 10.5 6 7.1 7.1 6 10.5 4.9 7.1 1.5 6 4.9 4.9 6 1.5Z" fill="currentColor" />
+        </svg>
+      </span>
+      <span className="link-badge__label">{getMonogramLabel(name)}</span>
+    </div>
+  );
+}
+
+function ProjectToolIcon({ instance }: { instance: ProjectSkillInstance }) {
+  const [logoLoadFailed, setLogoLoadFailed] = useState(false);
+  const logoUrl = resolveToolLogoUrl(instance.toolName);
+  return (
+    <span
+      className={`skill-card__tool-icon${instance.isEnabled ? "" : " is-disabled"}`}
+      title={`${instance.toolName} · ${instance.isEnabled ? "已启用" : "已关闭"}`}
+      aria-hidden="true"
+    >
+      {logoUrl && !logoLoadFailed
+        ? <img src={logoUrl} alt="" loading="lazy" onError={() => setLogoLoadFailed(true)} />
+        : <span>{getMonogramLabel(instance.toolName)}</span>}
+    </span>
+  );
+}
+
+function ProjectSkillCard(props: {
+  group: ProjectSkillGroup;
   language: "zh-CN" | "en";
   layout: ProjectViewMode;
   disabled: boolean;
-  onImport: () => void;
-  onUpdateProject: () => void;
-  onUpdateManaged: () => void;
-  onUnlink: () => void;
+  onImport: (skill: ProjectSkillInstance) => void;
+  onToggle: (skill: ProjectSkillInstance, enabled: boolean) => void;
+  onToggleAll: (enabled: boolean) => void;
+  onUpdateProject: (skill: ProjectSkillInstance) => void;
+  onUpdateManaged: (skill: ProjectSkillInstance) => void;
+  onUnlink: (skill: ProjectSkillInstance) => void;
 }) {
-  const { skill, language } = props;
+  const { group, language } = props;
   const copy = (zh: string, en: string) => language === "en" ? en : zh;
-  const isLinked = Boolean(skill.managedSkillPath);
-  const canReverse = skill.projectCapability === "bidirectional";
-  const unavailable = skill.entryKind === "symlink" || skill.syncStatus === "unavailable";
+  const [expanded, setExpanded] = useState(false);
+  const isGridLayout = props.layout === "grid";
+  const duplicateToolIds = new Set(group.instances
+    .filter((instance, index, instances) => (
+      instances.findIndex((candidate) => candidate.toolId === instance.toolId) !== index
+    ))
+    .map((instance) => instance.toolId));
+  const hasDuplicateToolInstances = duplicateToolIds.size > 0;
+  const enabledInstances = group.instances.filter((instance) => (
+    instance.entryKind === "directory" && instance.isEnabled
+  ));
+  const toggleableInstances = group.instances.filter((instance) => instance.entryKind === "directory");
+  const allEnabled = toggleableInstances.length > 0 && toggleableInstances.every((instance) => instance.isEnabled);
+  const partiallyEnabled = enabledInstances.length > 0 && !allEnabled;
+  const status = groupSyncStatus(group);
+  const toggleState = allEnabled ? "is-enabled" : partiallyEnabled ? "is-partial" : "is-disabled";
+  const enabledLabel = enabledInstances.length > 0
+    ? copy(`已启用 ${enabledInstances.length}`, `Enabled ${enabledInstances.length}`)
+    : copy("已关闭", "Disabled");
+  const details = (
+    <>
+      <section>
+        <div className="skill-card__section-header"><h4>{copy("基本信息", "Basic information")}</h4></div>
+        <dl className="detail-grid detail-grid--single">
+          <div><dt>{copy("描述", "Description")}</dt><dd>{group.description || copy("暂无描述", "No description")}</dd></div>
+        </dl>
+        {group.hasContentConflict ? (
+          <div className="projects-page__resource-warning">
+            {hasDuplicateToolInstances
+              ? copy(
+                  "同一工具的启用和关闭目录中同时存在同名 Skill。请先手动处理目录冲突，再执行启停或同步。",
+                  "The same Skill exists in both enabled and disabled directories. Resolve the directory conflict before toggling or syncing.",
+                )
+              : copy(
+                  "不同工具中的同名 Skill 内容不一致。请分别预览与托管中心的差异，再明确选择同步方向。",
+                  "This Skill has different content across tools. Preview each library diff before choosing a sync direction.",
+                )}
+          </div>
+        ) : null}
+      </section>
+      <section className="project-skill-tools">
+        <div className="skill-card__section-header"><h4>{copy("项目工具", "Project tools")}</h4></div>
+        <div className="project-skill-tools__list">
+          {group.instances.map((skill) => {
+            const isLinked = Boolean(skill.managedSkillPath);
+            const unavailable = skill.entryKind !== "directory"
+              || skill.syncStatus === "unavailable"
+              || duplicateToolIds.has(skill.toolId);
+            return (
+              <article className="project-skill-tool-row" key={`${skill.toolId}:${skill.localPath}`}>
+                <div className="project-skill-tool-row__identity">
+                  <ProjectToolIcon instance={skill} />
+                  <div>
+                    <strong>{skill.toolName}</strong>
+                    <span title={skill.localPath}>{skill.isEnabled ? skill.relativePath : `${skill.relativePath} · ${copy("已关闭", "Disabled")}`}</span>
+                  </div>
+                </div>
+                <span className={`projects-page__status is-${skill.syncStatus}`}>
+                  {statusLabels[skill.syncStatus][language === "en" ? "en" : "zh"]}
+                </span>
+                {skill.projectCapability === "export-only" ? (
+                  <span className="projects-page__owner">Agent CLI · {copy("仅下发", "Export only")}</span>
+                ) : null}
+                <div className="project-skill-tool-row__actions">
+                  {!isLinked ? <button className="secondary-button secondary-button--compact" type="button" disabled={props.disabled || unavailable} onClick={() => props.onImport(skill)}>{copy("上传托管", "Import")}</button> : null}
+                  {isLinked && canUpdateProject(skill.syncStatus) ? <button className="secondary-button secondary-button--compact is-primary" type="button" disabled={props.disabled || unavailable} onClick={() => props.onUpdateProject(skill)}>{copy("更新项目", "Update project")}</button> : null}
+                  {isLinked && skill.projectCapability === "bidirectional" && canUpdateManaged(skill.syncStatus) ? <button className="secondary-button secondary-button--compact" type="button" disabled={props.disabled || unavailable} onClick={() => props.onUpdateManaged(skill)}>{copy("同步回托管", "Sync to library")}</button> : null}
+                  {isLinked ? <button className="ghost-button" type="button" disabled={props.disabled} onClick={() => props.onUnlink(skill)}>{copy("解除关联", "Unlink")}</button> : null}
+                  <button
+                    className={`switch-button${skill.isEnabled ? " is-enabled" : ""}`}
+                    type="button"
+                    disabled={props.disabled || skill.entryKind !== "directory"}
+                    aria-pressed={skill.isEnabled}
+                    aria-label={skill.isEnabled
+                      ? copy(`关闭 ${skill.toolName}`, `Disable ${skill.toolName}`)
+                      : copy(`启用 ${skill.toolName}`, `Enable ${skill.toolName}`)}
+                    onClick={() => props.onToggle(skill, !skill.isEnabled)}
+                  ><span /></button>
+                </div>
+              </article>
+            );
+          })}
+        </div>
+      </section>
+    </>
+  );
   return (
-    <article className={`skill-card project-resource-card skill-card--${props.layout}`}>
-      <div className="skill-card__header">
-        <div className="skill-card__identity">
-          <span className="link-badge project-resource-card__monogram" aria-hidden="true">
-            {skill.name.slice(0, 1).toLocaleUpperCase()}
-          </span>
-          <div className="skill-card__summary-main">
-            <div className="skill-card__title-row">
-              <h3>{skill.name}</h3>
-              {skill.projectCapability === "export-only" ? <span className="projects-page__owner">Agent CLI · {copy("仅下发", "Export only")}</span> : null}
+    <>
+      <article className={`skill-card project-resource-card skill-card--${props.layout}${expanded ? " is-expanded" : ""}`} aria-label={group.name}>
+        <div className="skill-card__header">
+          <button
+            className="skill-card__summary-button"
+            type="button"
+            aria-expanded={expanded}
+            aria-label={expanded
+              ? copy(`收起 ${group.name}`, `Collapse ${group.name}`)
+              : copy(`展开 ${group.name}`, `Expand ${group.name}`)}
+            onClick={() => setExpanded(!expanded)}
+          >
+            <div className="skill-card__summary-content">
+              <div className="skill-card__identity">
+                <ProjectSkillMonogram name={group.name} />
+                <div className="skill-card__title-stack">
+                  <div className="skill-card__title-row">
+                    <h3>{group.name}</h3>
+                    {!isGridLayout ? <span className={`status-badge skill-card__grid-enabled-badge ${enabledInstances.length > 0 ? "tone-info" : "tone-neutral"}`}>{enabledLabel}</span> : null}
+                    {!isGridLayout ? <div className="skill-card__summary-tools">{group.instances.map((instance) => <ProjectToolIcon key={`${instance.toolId}:${instance.localPath}`} instance={instance} />)}</div> : null}
+                  </div>
+                  <p className="skill-card__summary-description">{group.description || copy("暂无描述", "No description")}</p>
+                  {isGridLayout ? (
+                    <div className="skill-card__grid-meta">
+                      <span className={`status-badge skill-card__grid-enabled-badge ${enabledInstances.length > 0 ? "tone-info" : "tone-neutral"}`}>{enabledLabel}</span>
+                      <div className="skill-card__summary-tools">{group.instances.map((instance) => <ProjectToolIcon key={`${instance.toolId}:${instance.localPath}`} instance={instance} />)}</div>
+                    </div>
+                  ) : null}
+                </div>
+              </div>
             </div>
-            <p className="skill-card__summary-description">{skill.description || skill.relativePath}</p>
-            <div className="project-resource-card__meta">
-              <span>{skill.toolName}</span>
-              <span>{skill.relativePath}</span>
-            </div>
+          </button>
+          <div className="skill-card__list-actions project-resource-card__actions">
+            <span className={`projects-page__status is-${status}`}>{group.hasContentConflict ? copy("多版本冲突", "Version conflict") : statusLabels[status][language === "en" ? "en" : "zh"]}</span>
+            <button
+              className={`skill-card__icon-button plugins-page__toggle-icon-button ${toggleState}`}
+              type="button"
+              disabled={props.disabled || toggleableInstances.length === 0 || hasDuplicateToolInstances}
+              aria-label={allEnabled ? copy(`关闭 ${group.name}`, `Disable ${group.name}`) : copy(`启用 ${group.name}`, `Enable ${group.name}`)}
+              onClick={() => props.onToggleAll(!allEnabled)}
+            ><PowerToggleIcon isSpinning={props.disabled} /></button>
+            {!isGridLayout ? (
+              <button className="skill-card__chevron-button" type="button" onClick={() => setExpanded(!expanded)} aria-expanded={expanded} aria-label={expanded ? copy(`收起 ${group.name} 详情`, `Collapse ${group.name} details`) : copy(`展开 ${group.name} 详情`, `Expand ${group.name} details`)}>
+                <span className="skill-card__chevron" aria-hidden="true">{expanded ? "⌄" : "›"}</span>
+              </button>
+            ) : null}
           </div>
         </div>
-        <div className="skill-card__list-actions project-resource-card__actions">
-          <span className={`projects-page__status is-${skill.syncStatus}`}>{statusLabels[skill.syncStatus][language === "en" ? "en" : "zh"]}</span>
-          {!isLinked ? <button className="secondary-button secondary-button--compact" type="button" disabled={props.disabled || unavailable} onClick={props.onImport}>{copy("上传托管", "Import")}</button> : null}
-          {isLinked && canUpdateProject(skill.syncStatus) ? <button className="secondary-button secondary-button--compact is-primary" type="button" disabled={props.disabled} onClick={props.onUpdateProject}>{copy("更新项目", "Update project")}</button> : null}
-          {isLinked && canReverse && canUpdateManaged(skill.syncStatus) ? <button className="secondary-button secondary-button--compact" type="button" disabled={props.disabled || unavailable} onClick={props.onUpdateManaged}>{copy("同步回托管", "Sync to library")}</button> : null}
-          {isLinked ? <button className="ghost-button" type="button" disabled={props.disabled} onClick={props.onUnlink}>{copy("解除关联", "Unlink")}</button> : null}
-        </div>
-      </div>
-      {skill.error ? <div className="projects-page__resource-warning">{skill.error}</div> : null}
-    </article>
+        {expanded && !isGridLayout ? <div className="skill-card__details">{details}</div> : null}
+      </article>
+      {expanded && isGridLayout ? createPortal(
+        <div className="skill-card-detail-modal__backdrop" role="presentation" onClick={() => setExpanded(false)}>
+          <section className="skill-card-detail-modal" role="dialog" aria-modal="true" aria-label={copy(`${group.name} 详情`, `${group.name} details`)} onClick={(event) => event.stopPropagation()}>
+            <header className="skill-card-detail-modal__header">
+              <div className="skill-card-detail-modal__identity">
+                <ProjectSkillMonogram name={group.name} />
+                <div className="skill-card-detail-modal__copy"><div className="skill-card-detail-modal__title"><h3>{group.name}</h3><span className={`projects-page__status is-${status}`}>{group.hasContentConflict ? copy("多版本冲突", "Version conflict") : statusLabels[status][language === "en" ? "en" : "zh"]}</span></div></div>
+              </div>
+              <button className="skill-card-detail-modal__close" type="button" onClick={() => setExpanded(false)} aria-label={copy(`关闭 ${group.name} 详情`, `Close ${group.name} details`)}><span aria-hidden="true">×</span></button>
+            </header>
+            <div className="skill-card__details skill-card-detail-modal__body">{details}</div>
+          </section>
+        </div>,
+        document.body,
+      ) : null}
+    </>
   );
 }
 

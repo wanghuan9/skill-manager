@@ -4,6 +4,7 @@ import {
   fetchProjectWorkspaces,
   previewProjectSkillSync,
   syncProjectMcp,
+  toggleProjectSkill,
 } from "@/features/skills/api/skill-client";
 import { projectWorkspaceFixture } from "@/features/skills/state/skill-fixtures";
 
@@ -25,6 +26,7 @@ test("maps project workspace and sync commands to Tauri arguments", async () => 
       targetHash: "target",
       files: [],
     })
+    .mockResolvedValueOnce(structuredClone(projectWorkspaceFixture))
     .mockResolvedValueOnce(structuredClone(projectWorkspaceFixture));
 
   await fetchProjectWorkspaces();
@@ -33,6 +35,12 @@ test("maps project workspace and sync commands to Tauri arguments", async () => 
     toolId: "claude-code",
     projectRelativePath: ".claude/skills/skill-publisher",
     direction: "managed-to-project",
+  });
+  await toggleProjectSkill({
+    projectId: "project-demo-workspace",
+    toolId: "cursor",
+    projectRelativePath: ".cursor/skills/skill-publisher",
+    enabled: false,
   });
   await syncProjectMcp({
     projectId: "project-demo-workspace",
@@ -50,7 +58,13 @@ test("maps project workspace and sync commands to Tauri arguments", async () => 
     projectRelativePath: ".claude/skills/skill-publisher",
     direction: "managed-to-project",
   });
-  expect(invoke).toHaveBeenNthCalledWith(3, "sync_project_mcp", {
+  expect(invoke).toHaveBeenNthCalledWith(3, "toggle_project_skill", {
+    projectId: "project-demo-workspace",
+    toolId: "cursor",
+    projectRelativePath: ".cursor/skills/skill-publisher",
+    enabled: false,
+  });
+  expect(invoke).toHaveBeenNthCalledWith(4, "sync_project_mcp", {
     projectId: "project-demo-workspace",
     toolId: "cursor",
     serverName: "context7",

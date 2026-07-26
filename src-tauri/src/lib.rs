@@ -138,6 +138,7 @@ pub fn run() {
             project_manager::import_project_skill,
             project_manager::preview_project_skill_sync,
             project_manager::sync_project_skill,
+            project_manager::toggle_project_skill,
             project_manager::distribute_mcp_to_project,
             project_manager::import_project_mcp,
             project_manager::preview_project_mcp_sync,

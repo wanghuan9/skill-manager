@@ -29,6 +29,12 @@ const IGNORED_SKILL_NAMES: [&str; 7] = [
 ];
 
 #[derive(Clone, Copy)]
+enum ProjectSkillPathFallback {
+    PreferEnabled,
+    RequireExisting,
+}
+
+#[derive(Clone, Copy)]
 struct ProjectToolSpec {
     id: &'static str,
     name: &'static str,
@@ -133,6 +139,7 @@ pub struct ProjectSkillInstance {
     pub relative_path: String,
     pub local_path: String,
     pub entry_kind: String,
+    pub is_enabled: bool,
     pub managed_skill_path: String,
     pub project_capability: String,
     pub content_hash: String,
@@ -293,7 +300,9 @@ pub fn distribute_skill_to_project(
     let managed_skill = managed_skill_source(&managed_skill_path)?;
     let target_root = safe_project_path(&project_root, tool.skill_relative_path)?;
     let target_path = target_root.join(target_name.trim());
-    if fs::symlink_metadata(&target_path).is_ok() {
+    let disabled_root = project_disabled_skill_root(&project_root, tool)?;
+    let disabled_path = disabled_root.join(target_name.trim());
+    if fs::symlink_metadata(&target_path).is_ok() || fs::symlink_metadata(&disabled_path).is_ok() {
         return Err("项目目标位置已存在，请先比较或选择其他名称。".into());
     }
 
@@ -327,8 +336,12 @@ pub fn import_project_skill(
     let mut persistence = load_project_persistence()?;
     let project_root = project_root(&persistence, &project_id)?;
     let tool = project_tool_spec(&tool_id)?;
-    let project_path = safe_project_path(&project_root, &project_relative_path)?;
-    ensure_path_within_tool_root(&project_root, &project_path, tool.skill_relative_path)?;
+    let project_path = resolve_project_skill_path(
+        &project_root,
+        tool,
+        &project_relative_path,
+        ProjectSkillPathFallback::RequireExisting,
+    )?;
     ensure_real_skill_directory(&project_path, "项目 Skill")?;
     let skill_name = project_path
         .file_name()
@@ -371,7 +384,13 @@ pub fn preview_project_skill_sync(
     let persistence = load_project_persistence()?;
     let binding = find_skill_binding(&persistence, &project_id, &tool_id, &project_relative_path)?;
     let project_root = project_root(&persistence, &project_id)?;
-    let project_path = safe_project_path(&project_root, &project_relative_path)?;
+    let tool = project_tool_spec(&tool_id)?;
+    let project_path = resolve_project_skill_path(
+        &project_root,
+        tool,
+        &project_relative_path,
+        ProjectSkillPathFallback::PreferEnabled,
+    )?;
     let managed_path = PathBuf::from(&binding.managed_skill_path);
     let capability = managed_skill_capability(&managed_path)?;
     if direction == SYNC_DIRECTION_PROJECT_TO_MANAGED
@@ -404,7 +423,13 @@ pub fn sync_project_skill(
         return Err("Agent Skills CLI 托管的 Skill 只支持下发到项目，不能反向同步。".into());
     }
     let project_root = project_root(&persistence, &project_id)?;
-    let project_path = safe_project_path(&project_root, &project_relative_path)?;
+    let tool = project_tool_spec(&tool_id)?;
+    let project_path = resolve_project_skill_path(
+        &project_root,
+        tool,
+        &project_relative_path,
+        ProjectSkillPathFallback::PreferEnabled,
+    )?;
     let (source, target) = skill_sync_paths(&direction, &project_path, &managed_path)?;
     verify_preview_hashes(source, target, &source_hash, &target_hash)?;
     let preserve_git = direction == SYNC_DIRECTION_PROJECT_TO_MANAGED;
@@ -415,6 +440,62 @@ pub fn sync_project_skill(
     persistence.skill_bindings[binding_index].last_synced_at = now_label();
     save_project_persistence(&persistence)?;
     build_project_workspace_snapshot()
+}
+
+#[tauri::command]
+pub fn toggle_project_skill(
+    project_id: String,
+    tool_id: String,
+    project_relative_path: String,
+    enabled: bool,
+) -> Result<ProjectWorkspaceSnapshot, String> {
+    let persistence = load_project_persistence()?;
+    let project_root = project_root(&persistence, &project_id)?;
+    let tool = project_tool_spec(&tool_id)?;
+    set_project_skill_enabled_state(&project_root, tool, &project_relative_path, enabled)?;
+    build_project_workspace_snapshot()
+}
+
+fn set_project_skill_enabled_state(
+    project_root: &Path,
+    tool: ProjectToolSpec,
+    project_relative_path: &str,
+    enabled: bool,
+) -> Result<(), String> {
+    let enabled_root = safe_project_path(&project_root, tool.skill_relative_path)?;
+    let disabled_root = project_disabled_skill_root(&project_root, tool)?;
+    let enabled_path = project_skill_enabled_path(&project_root, tool, &project_relative_path)?;
+    let disabled_path = project_skill_disabled_path(&project_root, tool, &project_relative_path)?;
+    let (source, target, source_root, source_label, target_label) = if enabled {
+        (
+            &disabled_path,
+            &enabled_path,
+            &disabled_root,
+            "关闭目录",
+            "启用目录",
+        )
+    } else {
+        (
+            &enabled_path,
+            &disabled_path,
+            &enabled_root,
+            "启用目录",
+            "关闭目录",
+        )
+    };
+
+    ensure_real_skill_directory(source, source_label)?;
+    if fs::symlink_metadata(target).is_ok() {
+        return Err(format!(
+            "{target_label}中已存在同名 Skill，请先处理目录冲突。"
+        ));
+    }
+    if let Some(parent) = target.parent() {
+        fs::create_dir_all(parent).map_err(|error| format!("创建项目 Skill 目录失败: {error}"))?;
+    }
+    fs::rename(source, target).map_err(|error| format!("切换项目 Skill 状态失败: {error}"))?;
+    cleanup_empty_project_skill_parents(source.parent(), source_root);
+    Ok(())
 }
 
 #[tauri::command]
@@ -746,7 +827,43 @@ fn scan_project_skills(
     bindings: &[ProjectSkillBinding],
     managed_skills: &[ProjectManagedSkill],
 ) -> Result<Vec<ProjectSkillInstance>, String> {
-    let root = safe_project_path(project_root, tool.skill_relative_path)?;
+    let enabled_root = safe_project_path(project_root, tool.skill_relative_path)?;
+    let disabled_root = project_disabled_skill_root(project_root, tool)?;
+    let mut instances = scan_project_skill_root(
+        &enabled_root,
+        tool,
+        project_id,
+        bindings,
+        managed_skills,
+        true,
+    )?;
+    instances.extend(scan_project_skill_root(
+        &disabled_root,
+        tool,
+        project_id,
+        bindings,
+        managed_skills,
+        false,
+    )?);
+    append_missing_project_skill_bindings(
+        project_root,
+        tool,
+        project_id,
+        bindings,
+        managed_skills,
+        &mut instances,
+    );
+    Ok(instances)
+}
+
+fn scan_project_skill_root(
+    root: &Path,
+    tool: ProjectToolSpec,
+    project_id: &str,
+    bindings: &[ProjectSkillBinding],
+    managed_skills: &[ProjectManagedSkill],
+    is_enabled: bool,
+) -> Result<Vec<ProjectSkillInstance>, String> {
     if !root.exists() {
         return Ok(Vec::new());
     }
@@ -754,10 +871,10 @@ fn scan_project_skills(
         return Err("项目 Skill 路径不是目录。".into());
     }
     let mut skill_paths = Vec::new();
-    collect_project_skill_paths(&root, &root, 0, &mut skill_paths)?;
+    collect_project_skill_paths(root, root, 0, &mut skill_paths)?;
     let mut instances = Vec::new();
     for (path, entry_kind) in skill_paths {
-        let relative_path = relative_path_string(project_root, &path)?;
+        let relative_path = project_skill_binding_relative_path(root, &path, tool)?;
         let content_hash = if entry_kind == "directory" {
             hash_skill_directory(&path).unwrap_or_default()
         } else {
@@ -799,6 +916,7 @@ fn scan_project_skills(
             relative_path,
             local_path: path.to_string_lossy().to_string(),
             entry_kind: entry_kind.into(),
+            is_enabled,
             managed_skill_path: binding
                 .map(|binding| binding.managed_skill_path.clone())
                 .unwrap_or_default(),
@@ -818,6 +936,17 @@ fn scan_project_skills(
             },
         });
     }
+    Ok(instances)
+}
+
+fn append_missing_project_skill_bindings(
+    project_root: &Path,
+    tool: ProjectToolSpec,
+    project_id: &str,
+    bindings: &[ProjectSkillBinding],
+    managed_skills: &[ProjectManagedSkill],
+    instances: &mut Vec<ProjectSkillInstance>,
+) {
     let existing_paths = instances
         .iter()
         .map(|instance| instance.relative_path.clone())
@@ -827,7 +956,9 @@ fn scan_project_skills(
             && binding.tool_id == tool.id
             && !existing_paths.contains(&binding.project_relative_path)
     }) {
-        let Ok(path) = safe_project_path(project_root, &binding.project_relative_path) else {
+        let Ok(path) =
+            project_skill_enabled_path(project_root, tool, &binding.project_relative_path)
+        else {
             continue;
         };
         let managed_skill = managed_skills.iter().find(|skill| {
@@ -850,6 +981,7 @@ fn scan_project_skills(
             relative_path: binding.project_relative_path.clone(),
             local_path: path.to_string_lossy().to_string(),
             entry_kind: "missing".into(),
+            is_enabled: true,
             managed_skill_path: binding.managed_skill_path.clone(),
             project_capability: binding.project_capability.clone(),
             content_hash: String::new(),
@@ -857,7 +989,6 @@ fn scan_project_skills(
             error: "项目 Skill 已不存在，可从托管端恢复。".into(),
         });
     }
-    Ok(instances)
 }
 
 fn collect_project_skill_paths(
@@ -1734,6 +1865,86 @@ fn safe_project_path(project_root: &Path, relative_path: &str) -> Result<PathBuf
     Ok(target)
 }
 
+fn project_disabled_skill_root(
+    project_root: &Path,
+    tool: ProjectToolSpec,
+) -> Result<PathBuf, String> {
+    safe_project_path(
+        project_root,
+        &format!("{}-disabled", tool.skill_relative_path),
+    )
+}
+
+fn project_skill_binding_relative_path(
+    scanned_root: &Path,
+    skill_path: &Path,
+    tool: ProjectToolSpec,
+) -> Result<String, String> {
+    let nested_path = relative_path_string(scanned_root, skill_path)?;
+    Ok(format!("{}/{}", tool.skill_relative_path, nested_path))
+}
+
+fn project_skill_enabled_path(
+    project_root: &Path,
+    tool: ProjectToolSpec,
+    project_relative_path: &str,
+) -> Result<PathBuf, String> {
+    let path = safe_project_path(project_root, project_relative_path)?;
+    ensure_path_within_tool_root(project_root, &path, tool.skill_relative_path)?;
+    Ok(path)
+}
+
+fn project_skill_disabled_path(
+    project_root: &Path,
+    tool: ProjectToolSpec,
+    project_relative_path: &str,
+) -> Result<PathBuf, String> {
+    let enabled_root = safe_project_path(project_root, tool.skill_relative_path)?;
+    let enabled_path = project_skill_enabled_path(project_root, tool, project_relative_path)?;
+    let nested_path = enabled_path
+        .strip_prefix(&enabled_root)
+        .map_err(|_| "项目 Skill 路径不属于所选工具。".to_string())?;
+    Ok(project_disabled_skill_root(project_root, tool)?.join(nested_path))
+}
+
+fn resolve_project_skill_path(
+    project_root: &Path,
+    tool: ProjectToolSpec,
+    project_relative_path: &str,
+    fallback: ProjectSkillPathFallback,
+) -> Result<PathBuf, String> {
+    let enabled_path = project_skill_enabled_path(project_root, tool, project_relative_path)?;
+    let disabled_path = project_skill_disabled_path(project_root, tool, project_relative_path)?;
+    let enabled_exists = fs::symlink_metadata(&enabled_path).is_ok();
+    let disabled_exists = fs::symlink_metadata(&disabled_path).is_ok();
+    match (enabled_exists, disabled_exists) {
+        (true, true) => return Err("启用和关闭目录中同时存在同名 Skill，请先处理目录冲突。".into()),
+        (true, false) => return Ok(enabled_path),
+        (false, true) => return Ok(disabled_path),
+        (false, false) => {}
+    }
+
+    match fallback {
+        ProjectSkillPathFallback::PreferEnabled => Ok(enabled_path),
+        ProjectSkillPathFallback::RequireExisting => Err("项目 Skill 目录不存在。".into()),
+    }
+}
+
+fn cleanup_empty_project_skill_parents(start: Option<&Path>, root: &Path) {
+    let Some(mut current) = start else {
+        return;
+    };
+    while current.starts_with(root) {
+        if current == root || fs::remove_dir(current).is_err() {
+            return;
+        }
+        let Some(parent) = current.parent() else {
+            return;
+        };
+        current = parent;
+    }
+}
+
 fn ensure_path_within_tool_root(
     project_root: &Path,
     path: &Path,
@@ -1959,6 +2170,84 @@ mod tests {
             fs::read_to_string(target.join("SKILL.md")).unwrap(),
             "# Demo\n"
         );
+        fs::remove_dir_all(temp).unwrap();
+    }
+
+    #[test]
+    fn toggles_project_skill_by_moving_the_real_directory() {
+        let temp = test_temp_dir("toggle-project-skill");
+        let project_root = temp.canonicalize().unwrap();
+        let enabled = project_root.join(".claude/skills/demo");
+        let disabled = project_root.join(".claude/skills-disabled/demo");
+        fs::create_dir_all(&enabled).unwrap();
+        fs::write(enabled.join("SKILL.md"), "# Demo\n").unwrap();
+
+        set_project_skill_enabled_state(
+            &project_root,
+            PROJECT_TOOL_SPECS[0],
+            ".claude/skills/demo",
+            false,
+        )
+        .unwrap();
+        assert!(!enabled.exists());
+        assert_eq!(
+            fs::read_to_string(disabled.join("SKILL.md")).unwrap(),
+            "# Demo\n"
+        );
+
+        set_project_skill_enabled_state(
+            &project_root,
+            PROJECT_TOOL_SPECS[0],
+            ".claude/skills/demo",
+            true,
+        )
+        .unwrap();
+        assert!(enabled.join("SKILL.md").is_file());
+        assert!(!disabled.exists());
+        fs::remove_dir_all(temp).unwrap();
+    }
+
+    #[test]
+    fn refuses_to_toggle_over_an_existing_project_skill() {
+        let temp = test_temp_dir("toggle-project-skill-conflict");
+        let project_root = temp.canonicalize().unwrap();
+        let enabled = project_root.join(".cursor/skills/demo");
+        let disabled = project_root.join(".cursor/skills-disabled/demo");
+        fs::create_dir_all(&enabled).unwrap();
+        fs::create_dir_all(&disabled).unwrap();
+        fs::write(enabled.join("SKILL.md"), "# Enabled\n").unwrap();
+        fs::write(disabled.join("SKILL.md"), "# Disabled\n").unwrap();
+
+        let error = set_project_skill_enabled_state(
+            &project_root,
+            PROJECT_TOOL_SPECS[2],
+            ".cursor/skills/demo",
+            false,
+        )
+        .unwrap_err();
+        assert!(error.contains("已存在同名 Skill"));
+        assert_eq!(
+            fs::read_to_string(enabled.join("SKILL.md")).unwrap(),
+            "# Enabled\n"
+        );
+        fs::remove_dir_all(temp).unwrap();
+    }
+
+    #[test]
+    fn refuses_to_resolve_duplicate_enabled_and_disabled_project_skills() {
+        let temp = test_temp_dir("resolve-project-skill-conflict");
+        let project_root = temp.canonicalize().unwrap();
+        fs::create_dir_all(project_root.join(".codex/skills/demo")).unwrap();
+        fs::create_dir_all(project_root.join(".codex/skills-disabled/demo")).unwrap();
+
+        let error = resolve_project_skill_path(
+            &project_root,
+            PROJECT_TOOL_SPECS[1],
+            ".codex/skills/demo",
+            ProjectSkillPathFallback::RequireExisting,
+        )
+        .unwrap_err();
+        assert!(error.contains("同时存在同名 Skill"));
         fs::remove_dir_all(temp).unwrap();
     }
 

@@ -14646,6 +14646,86 @@ button.settings-form-item:disabled {
   margin-right: auto;
 }
 
+.project-resource-card .skill-card__tool-icon.is-disabled {
+  border-color: var(--line);
+  background: var(--surface-strong);
+  filter: grayscale(1);
+  opacity: 0.42;
+}
+
+.project-resource-card.skill-card--grid .skill-card__summary-button {
+  width: 100%;
+}
+
+.project-resource-card.skill-card--grid .skill-card__title-row {
+  grid-column: 2;
+  padding-right: 0;
+}
+
+.project-resource-card.skill-card--grid .skill-card__summary-description,
+.project-resource-card.skill-card--grid .skill-card__grid-meta {
+  grid-column: 1 / -1;
+}
+
+.project-skill-tools__list {
+  display: grid;
+  gap: 8px;
+}
+
+.project-skill-tool-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) auto auto minmax(220px, auto);
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.project-skill-tool-row__identity {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+}
+
+.project-skill-tool-row__identity > div {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.project-skill-tool-row__identity strong {
+  color: var(--heading);
+  font-size: 0.82rem;
+  font-weight: 500;
+}
+
+.project-skill-tool-row__identity span {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.72rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-skill-tool-row__actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  min-width: 0;
+}
+
+.project-skill-tool-row__actions .secondary-button,
+.project-skill-tool-row__actions .ghost-button {
+  min-width: 0;
+  white-space: nowrap;
+}
+
 .projects-page__resource-warning {
   margin-top: 8px;
 }
@@ -14662,6 +14742,14 @@ button.settings-form-item:disabled {
 
   .project-resource-list.skill-card-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .project-skill-tool-row {
+    grid-template-columns: minmax(160px, 1fr) auto;
+  }
+
+  .project-skill-tool-row__actions {
+    grid-column: 1 / -1;
   }
 }
 
