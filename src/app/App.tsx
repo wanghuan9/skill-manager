@@ -9,6 +9,7 @@ import {
   type CSSProperties,
 } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { open } from "@tauri-apps/plugin-dialog";
 import { SkillsRoute } from "@/app/routes/skills";
 import { ToolsRoute } from "@/app/routes/tools";
 import { McpRoute } from "@/app/routes/mcp";
@@ -20,7 +21,13 @@ import {
 import { SettingsRoute } from "@/app/routes/settings";
 import { AboutRoute } from "@/app/routes/about";
 import { PluginsRoute } from "@/app/routes/plugins";
-import { ProjectsRoute } from "@/app/routes/projects";
+import {
+  ProjectWorkspaceToolbar,
+  ProjectsRoute,
+  type ProjectResourceTab,
+  type ProjectStatusFilter,
+  type ProjectViewMode,
+} from "@/app/routes/projects";
 import { AppI18nProvider, tx, useTranslate } from "@/app/i18n";
 import { NotificationProvider, useNotifications } from "@/app/notifications";
 import { useFailureReporter } from "@/app/failure-feedback";
@@ -28,13 +35,22 @@ import { FailureTracker } from "@/app/failure-tracker";
 import { waitForNextPaint } from "@/app/utils/wait-for-next-paint";
 import { AppUpdateAutoPrompt } from "@/features/app-update/AppUpdateAutoPrompt";
 import { AppTooltip } from "@/app/components/AppTooltip";
-import { fetchAgentSkillsCliStatus } from "@/features/skills/api/skill-client";
+import {
+  addManagedProject,
+  fetchAgentSkillsCliStatus,
+  fetchProjectWorkspaces,
+  shouldUseFixtureData,
+} from "@/features/skills/api/skill-client";
 import {
   SkillWorkspaceProvider,
   useSkillWorkspace,
 } from "@/features/skills/state/skill-workspace";
 import { SkillListToolbar } from "@/features/skills/components/SkillListPage";
-import type { ManagedSkillOwnerFilter, SkillStatusFilter } from "@/features/skills/state/skill-store";
+import type {
+  ManagedSkillOwnerFilter,
+  ProjectWorkspaceSnapshot,
+  SkillStatusFilter,
+} from "@/features/skills/state/skill-store";
 import {
   readSkillViewModePreference,
   resolveSkillViewModePreference,
@@ -59,7 +75,6 @@ import {
 type RouteKey =
   | "skills"
   | "plugins"
-  | "projects"
   | "tools"
   | "install"
   | "settings"
@@ -144,11 +159,6 @@ const routes: RouteDefinition[] = [
     descriptionKey: "app.nav.plugins.description",
   },
   {
-    key: "projects",
-    labelKey: "app.nav.projects.label",
-    descriptionKey: "app.nav.projects.description",
-  },
-  {
     key: "tools",
     labelKey: "app.nav.tools.label",
     descriptionKey: "app.nav.tools.description",
@@ -190,6 +200,10 @@ function isWindowsWindow() {
 
 function formatSkillDirectoryPath(path: string) {
   return path.trim().replace(/^\/Users\/[^/]+(?=\/|$)/, "~");
+}
+
+function selectedDirectoryPath(value: string | string[] | null) {
+  return Array.isArray(value) ? value[0] ?? "" : value ?? "";
 }
 
 function NavRouteIcon(props: { route: RouteKey }) {
@@ -247,21 +261,6 @@ function NavRouteIcon(props: { route: RouteKey }) {
           fill="none"
           stroke="currentColor"
           strokeWidth="1.7"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-      </svg>
-    );
-  }
-
-  if (route === "projects") {
-    return (
-      <svg viewBox="0 0 24 24" aria-hidden="true">
-        <path
-          d="M3.5 6.5h6l1.8 2h9.2v9a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2v-11Z"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="1.8"
           strokeLinecap="round"
           strokeLinejoin="round"
         />
@@ -329,6 +328,14 @@ function renderRoute(
   onInstallPluginFromMarketplace: () => void,
   onPluginHostChange: (hostName: string | null) => void,
   activeSkillsSection: SkillsSectionKey,
+  projectWorkspace: ProjectWorkspaceSnapshot | null,
+  activeProjectId: string,
+  projectQuery: string,
+  projectStatusFilter: ProjectStatusFilter,
+  projectViewMode: ProjectViewMode,
+  projectResourceTab: ProjectResourceTab,
+  projectAddResourceRequest: number,
+  onProjectWorkspaceChange: (snapshot: ProjectWorkspaceSnapshot) => void,
 ) {
   if (route === "tools") {
     return <ToolsRoute />;
@@ -351,9 +358,6 @@ function renderRoute(
       />
     );
   }
-  if (route === "projects") {
-    return <ProjectsRoute />;
-  }
   if (route === "settings") {
     return <SettingsRoute />;
   }
@@ -363,6 +367,21 @@ function renderRoute(
 
   if (activeSkillsSection === "mcp") {
     return <McpRoute onInstallFromMarketplace={onInstallMcpFromMarketplace} />;
+  }
+
+  if (activeProjectId) {
+    return (
+      <ProjectsRoute
+        workspace={projectWorkspace}
+        activeProjectId={activeProjectId}
+        query={projectQuery}
+        statusFilter={projectStatusFilter}
+        viewMode={projectViewMode}
+        activeTab={projectResourceTab}
+        addResourceRequest={projectAddResourceRequest}
+        onWorkspaceChange={onProjectWorkspaceChange}
+      />
+    );
   }
 
   return (
@@ -406,6 +425,21 @@ function McpNavIcon() {
         stroke="currentColor"
         strokeWidth="1.6"
         strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+function ProjectFolderIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path
+        d="M3.5 6.5h6l1.8 2h9.2v9a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2v-11Z"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
       />
     </svg>
   );
@@ -622,6 +656,15 @@ function AppContent() {
   const [activeInstallTab, setActiveInstallTab] =
     useState<InstallTab>("market");
   const [activePluginHostName, setActivePluginHostName] = useState<string | null>(null);
+  const [projectWorkspace, setProjectWorkspace] = useState<ProjectWorkspaceSnapshot | null>(null);
+  const [activeProjectId, setActiveProjectId] = useState("");
+  const [isProjectWorkspaceExpanded, setIsProjectWorkspaceExpanded] = useState(true);
+  const [isProjectWorkspaceRefreshing, setIsProjectWorkspaceRefreshing] = useState(false);
+  const [projectQuery, setProjectQuery] = useState("");
+  const [projectStatusFilter, setProjectStatusFilter] = useState<ProjectStatusFilter>("all");
+  const [projectViewMode, setProjectViewMode] = useState<ProjectViewMode>("grid");
+  const [projectResourceTab, setProjectResourceTab] = useState<ProjectResourceTab>("skills");
+  const [projectAddResourceRequest, setProjectAddResourceRequest] = useState(0);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [sidebarHandleTop, setSidebarHandleTop] = useState<number | null>(null);
   const [mcpServerCount, setMcpServerCount] = useState(
@@ -630,6 +673,28 @@ function AppContent() {
   const routeLocalAlignInFlightRef = useRef(false);
   const lastRouteLocalAlignRef = useRef<{ key: string; timestamp: number } | null>(null);
   const compatibilityPromptCheckStartedRef = useRef(false);
+
+  useEffect(() => {
+    let isMounted = true;
+    void fetchProjectWorkspaces()
+      .then((snapshot) => {
+        if (isMounted) {
+          setProjectWorkspace(snapshot);
+        }
+      })
+      .catch((error) => {
+        if (!isMounted) {
+          return;
+        }
+        reportFailure(error, {
+          operation: "fetch_project_workspaces_from_app_shell",
+          fallbackMessage: language === "en" ? "Failed to load projects" : "读取项目失败",
+        });
+      });
+    return () => {
+      isMounted = false;
+    };
+  }, [language, reportFailure]);
 
   useEffect(() => {
     if (
@@ -675,6 +740,9 @@ function AppContent() {
   const hasShownSkillUpdateNotificationRef = useRef(false);
   const activeDefinition =
     routes.find((route) => route.key === activeRoute) ?? routes[0];
+  const activeProject = projectWorkspace?.projects.find(
+    (project) => project.id === activeProjectId,
+  ) ?? null;
   const updatableSkillCount = installedSkills.filter((skill) => (
     skill.collabStatus === "update-available"
     || (appSettings.skillLibraryProvider === "agent-skills"
@@ -708,7 +776,11 @@ function AppContent() {
       tool.mcpConfigPathRecognized,
   ).length;
   const activeDescription =
-    activeRoute === "skills" && activeSkillsSection === "skills"
+    activeRoute === "skills" && activeSkillsSection === "skills" && activeProject
+      ? language === "en"
+        ? `${formatSkillDirectoryPath(activeProject.canonicalRootPath)} · ${activeProject.skills.length} Skills · ${activeProject.mcpServers.length} MCP servers`
+        : `${formatSkillDirectoryPath(activeProject.canonicalRootPath)} · ${activeProject.skills.length} 个 Skills · ${activeProject.mcpServers.length} 个 MCP`
+      : activeRoute === "skills" && activeSkillsSection === "skills"
       ? activeSkillSourceTool && activeToolSkillCounts
         ? tx(language, "app.header.skills.sourceSummary", {
             path: formatSkillDirectoryPath(activeSkillSourceTool.skillsPath),
@@ -732,6 +804,27 @@ function AppContent() {
               count: installedToolCount,
             })
           : tx(language, activeDefinition.descriptionKey);
+
+  const projectStatusCounts = activeProject
+    ? activeProject.skills.reduce<Record<ProjectStatusFilter, number>>(
+        (counts, skill) => {
+          counts.all += 1;
+          counts[skill.syncStatus] += 1;
+          return counts;
+        },
+        {
+          all: 0,
+          "project-only": 0,
+          "project-missing": 0,
+          "managed-missing": 0,
+          "in-sync": 0,
+          "project-changed": 0,
+          "managed-changed": 0,
+          diverged: 0,
+          unavailable: 0,
+        },
+      )
+    : undefined;
 
   function handleActiveSkillSourceIdChange(sourceId: SkillSourceId) {
     if (pageContentRef.current) {
@@ -898,6 +991,80 @@ function AppContent() {
       });
   }, [activeRoute, activeSkillsSection, alignLocalWorkspaceState, reportFailure, t]);
 
+  function handleSelectProject(projectId: string) {
+    setActiveRoute("skills");
+    setActiveSkillsSection("skills");
+    setActiveProjectId(projectId);
+    setProjectQuery("");
+    setProjectStatusFilter("all");
+  }
+
+  function handleProjectWorkspaceChange(snapshot: ProjectWorkspaceSnapshot) {
+    setProjectWorkspace(snapshot);
+    if (
+      activeProjectId
+      && !snapshot.projects.some((project) => project.id === activeProjectId)
+    ) {
+      setActiveProjectId(snapshot.projects[0]?.id ?? "");
+    }
+  }
+
+  async function handleRefreshProjects() {
+    if (isProjectWorkspaceRefreshing) {
+      return;
+    }
+
+    setIsProjectWorkspaceRefreshing(true);
+    try {
+      handleProjectWorkspaceChange(await fetchProjectWorkspaces());
+    } catch (error) {
+      reportFailure(error, {
+        operation: "refresh_managed_projects_from_app_shell",
+        fallbackMessage: language === "en" ? "Failed to refresh projects" : "刷新项目失败",
+      });
+    } finally {
+      setIsProjectWorkspaceRefreshing(false);
+    }
+  }
+
+  async function handleAddProject() {
+    const knownProjectIds = new Set(projectWorkspace?.projects.map((project) => project.id) ?? []);
+    const path = shouldUseFixtureData()
+      ? "/Users/demo/Projects/new-project"
+      : selectedDirectoryPath(await open({
+          directory: true,
+          multiple: false,
+          title: language === "en" ? "Choose a project directory" : "选择要管理的项目目录",
+        }));
+    if (!path) {
+      return;
+    }
+
+    setIsProjectWorkspaceRefreshing(true);
+    try {
+      const snapshot = await addManagedProject(path);
+      const addedProject = snapshot.projects.find((project) => !knownProjectIds.has(project.id))
+        ?? snapshot.projects.find((project) => project.canonicalRootPath === path)
+        ?? snapshot.projects.at(-1);
+      setProjectWorkspace(snapshot);
+      setIsProjectWorkspaceExpanded(true);
+      if (addedProject) {
+        handleSelectProject(addedProject.id);
+      }
+      notify({
+        message: language === "en" ? "Project added" : "项目已加入管理",
+        tone: "success",
+      });
+    } catch (error) {
+      reportFailure(error, {
+        operation: "add_managed_project_from_app_shell",
+        fallbackMessage: language === "en" ? "Failed to add project" : "添加项目失败",
+      });
+    } finally {
+      setIsProjectWorkspaceRefreshing(false);
+    }
+  }
+
   async function handleToolsRefresh() {
     if (isWorkspaceRefreshing) {
       return;
@@ -955,6 +1122,22 @@ function AppContent() {
       onGoInstall={() => handleOpenSkillInstall("market")}
     />
   );
+  const projectToolbar = activeProject ? (
+    <ProjectWorkspaceToolbar
+      activeTab={projectResourceTab}
+      query={projectQuery}
+      statusFilter={projectStatusFilter}
+      statusCounts={projectStatusCounts}
+      viewMode={projectViewMode}
+      isRefreshing={isProjectWorkspaceRefreshing}
+      onActiveTabChange={setProjectResourceTab}
+      onQueryChange={setProjectQuery}
+      onStatusFilterChange={setProjectStatusFilter}
+      onViewModeChange={setProjectViewMode}
+      onRefresh={() => void handleRefreshProjects()}
+      onAddResource={() => setProjectAddResourceRequest((current) => current + 1)}
+    />
+  ) : null;
 
   return (
     <div
@@ -1047,9 +1230,10 @@ function AppContent() {
         </div>
         <div className="sidebar-divider" aria-hidden="true" />
         <nav aria-label="Primary" className="nav-list">
-          {routes.map((route) => {
+          {routes.filter((route) => route.key !== "settings" && route.key !== "about").map((route) => {
             const selected =
               route.key === activeRoute &&
+              !activeProjectId &&
               (route.key !== "skills" || activeSkillsSection === "skills");
 
             return (
@@ -1058,6 +1242,7 @@ function AppContent() {
                   className={`nav-item${selected ? " is-selected" : ""}`}
                   type="button"
                   onClick={() => {
+                    setActiveProjectId("");
                     setActiveRoute(route.key);
                     if (route.key === "skills") {
                       setActiveSkillsSection("skills");
@@ -1080,6 +1265,7 @@ function AppContent() {
                     }`}
                     type="button"
                     onClick={() => {
+                      setActiveProjectId("");
                       setActiveRoute("skills");
                       setActiveSkillsSection("mcp");
                     }}
@@ -1090,6 +1276,76 @@ function AppContent() {
                     <span className="nav-label">MCP</span>
                   </button>
                 ) : null}
+              </div>
+            );
+          })}
+          <div className="project-workspace-nav nav-group">
+            <button
+              className="project-workspace-nav__header"
+              type="button"
+              aria-expanded={isProjectWorkspaceExpanded}
+              onClick={() => setIsProjectWorkspaceExpanded((current) => !current)}
+            >
+              <span className="project-workspace-nav__chevron" aria-hidden="true">
+                {isProjectWorkspaceExpanded ? "⌄" : "›"}
+              </span>
+              <span className="nav-icon" aria-hidden="true">
+                <ProjectFolderIcon />
+              </span>
+              <span className="project-workspace-nav__label">
+                {language === "en" ? "Project workspace" : "项目工作区"}
+              </span>
+            </button>
+            {isProjectWorkspaceExpanded ? (
+              <div className="project-workspace-nav__body">
+                <div className="project-workspace-nav__projects">
+                  {projectWorkspace?.projects.map((project) => (
+                    <button
+                      className={`project-workspace-nav__project${project.id === activeProjectId ? " is-selected" : ""}`}
+                      key={project.id}
+                      type="button"
+                      aria-label={project.name}
+                      onClick={() => handleSelectProject(project.id)}
+                    >
+                      <span className="project-workspace-nav__project-icon" aria-hidden="true">
+                        <ProjectFolderIcon />
+                      </span>
+                      <span className="project-workspace-nav__project-name">{project.name}</span>
+                      <span className="project-workspace-nav__project-count">
+                        {project.skills.length + project.mcpServers.length}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+                <button
+                  className="project-workspace-nav__add"
+                  type="button"
+                  disabled={isProjectWorkspaceRefreshing}
+                  onClick={() => void handleAddProject()}
+                >
+                  <span aria-hidden="true">＋</span>
+                  <span>{language === "en" ? "Add project" : "添加项目"}</span>
+                </button>
+              </div>
+            ) : null}
+          </div>
+          {routes.filter((route) => route.key === "settings" || route.key === "about").map((route) => {
+            const selected = route.key === activeRoute && !activeProjectId;
+            return (
+              <div key={route.key} className="nav-group">
+                <button
+                  className={`nav-item${selected ? " is-selected" : ""}`}
+                  type="button"
+                  onClick={() => {
+                    setActiveProjectId("");
+                    setActiveRoute(route.key);
+                  }}
+                >
+                  <span className="nav-icon" aria-hidden="true">
+                    <NavRouteIcon route={route.key} />
+                  </span>
+                  <span className="nav-label">{tx(language, route.labelKey)}</span>
+                </button>
               </div>
             );
           })}
@@ -1115,6 +1371,27 @@ function AppContent() {
         ) : null}
         <header className="page-header">
           {activeRoute === "skills" ? (
+            activeProject ? (
+              <div
+                key={`project-${activeProject.id}`}
+                className="page-header--split project-page-header"
+                data-tauri-drag-region={macOSDragRegion}
+              >
+                <div
+                  className="page-header__row"
+                  data-tauri-drag-region={macOSDragRegion}
+                >
+                  <div className="project-page-header__identity">
+                    <span className="project-page-header__icon" aria-hidden="true">
+                      <ProjectFolderIcon />
+                    </span>
+                    <h1>{activeProject.name}</h1>
+                  </div>
+                  {projectToolbar}
+                </div>
+                <p>{activeDescription}</p>
+              </div>
+            ) : (
             <div
               key={`skills-${activeSkillsSection}`}
               className={`page-header--split${isCompactManagementHeader ? " management-page-header--compact" : ""}`}
@@ -1178,6 +1455,7 @@ function AppContent() {
                 </>
               )}
             </div>
+            )
           ) : activeRoute === "tools" ? (
             <div
               key="tools"
@@ -1353,6 +1631,14 @@ function AppContent() {
               handleOpenPluginInstall,
               setActivePluginHostName,
               activeSkillsSection,
+              projectWorkspace,
+              activeProjectId,
+              projectQuery,
+              projectStatusFilter,
+              projectViewMode,
+              projectResourceTab,
+              projectAddResourceRequest,
+              handleProjectWorkspaceChange,
             )}
           </RouteErrorBoundary>
         </section>

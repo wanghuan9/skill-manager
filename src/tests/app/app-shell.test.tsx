@@ -37,8 +37,10 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
-test("renders primary navigation entries with plugins before tools and cli hidden", () => {
+test("renders primary navigation entries and embeds projects in a workspace menu", async () => {
   render(<App />);
+
+  expect(await screen.findByRole("button", { name: "demo-workspace" })).toBeInTheDocument();
 
   const navLabels = within(screen.getByRole("navigation", { name: "Primary" }))
     .getAllByRole("button")
@@ -47,7 +49,9 @@ test("renders primary navigation entries with plugins before tools and cli hidde
   expect(screen.getByRole("button", { name: /Skills/ })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "工具" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Plugins" })).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "项目" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "项目" })).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "项目工作区" })).toHaveAttribute("aria-expanded", "true");
+  expect(screen.getByRole("button", { name: "添加项目" })).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "CLI" })).not.toBeInTheDocument();
   expect(within(screen.getByRole("navigation", { name: "Primary" })).getByRole("button", { name: /安装/ })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: /设置/ })).toBeInTheDocument();
@@ -56,9 +60,11 @@ test("renders primary navigation entries with plugins before tools and cli hidde
     "Skills",
     "MCP",
     "Plugins",
-    "项目",
     "工具",
     "安装",
+    "⌄项目工作区",
+    "demo-workspace5",
+    "＋添加项目",
     "设置",
     "关于",
   ]);

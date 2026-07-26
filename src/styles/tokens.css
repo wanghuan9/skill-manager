@@ -14300,3 +14300,402 @@ button.settings-form-item:disabled {
     grid-template-columns: 1fr;
   }
 }
+
+/* Project workspaces reuse the Skills information architecture and card language. */
+.project-workspace-nav {
+  margin: 4px 0;
+  padding: 8px 0;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+
+.project-workspace-nav__header,
+.project-workspace-nav__project,
+.project-workspace-nav__add {
+  width: 100%;
+  border: 1px solid transparent;
+  background: transparent;
+  color: #4f5b6b;
+  cursor: pointer;
+  text-align: left;
+}
+
+.project-workspace-nav__header {
+  display: grid;
+  grid-template-columns: 12px 26px minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+  min-height: 34px;
+  padding: 3px 9px;
+  border-radius: 10px;
+}
+
+.project-workspace-nav__header:hover,
+.project-workspace-nav__header:focus-visible,
+.project-workspace-nav__project:hover,
+.project-workspace-nav__project:focus-visible,
+.project-workspace-nav__add:hover,
+.project-workspace-nav__add:focus-visible {
+  background: #eef3fb;
+  color: var(--heading);
+}
+
+.project-workspace-nav__header .nav-icon {
+  width: 26px;
+  height: 26px;
+}
+
+.project-workspace-nav__chevron {
+  color: var(--muted);
+  font-size: 0.9rem;
+  line-height: 1;
+}
+
+.project-workspace-nav__label {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 0.78rem;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-workspace-nav__body {
+  display: grid;
+  gap: 4px;
+  padding-top: 4px;
+}
+
+.project-workspace-nav__projects {
+  display: grid;
+  gap: 3px;
+  max-height: 196px;
+  overflow: auto;
+}
+
+.project-workspace-nav__project {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 7px;
+  min-height: 34px;
+  padding: 5px 9px 5px 26px;
+  border-radius: 10px;
+}
+
+.project-workspace-nav__project.is-selected {
+  border-color: #d2e0ff;
+  background: #e9f0ff;
+  color: var(--heading);
+}
+
+.project-workspace-nav__project-icon {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+  color: var(--muted);
+}
+
+.project-workspace-nav__project-icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.project-workspace-nav__project.is-selected .project-workspace-nav__project-icon {
+  background: rgba(59, 130, 246, 0.13);
+  color: var(--accent);
+}
+
+.project-workspace-nav__project-name {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 0.82rem;
+  font-weight: 550;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-workspace-nav__project-count {
+  min-width: 22px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(117, 128, 147, 0.1);
+  color: var(--muted);
+  font-size: 0.68rem;
+  text-align: center;
+}
+
+.project-workspace-nav__add {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 32px;
+  padding: 5px 9px 5px 30px;
+  border-radius: 10px;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.project-workspace-nav__add:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
+.app-shell.is-sidebar-collapsed .project-workspace-nav {
+  padding: 4px 0;
+  border: 0;
+}
+
+.app-shell.is-sidebar-collapsed .project-workspace-nav__header {
+  display: flex;
+  justify-content: center;
+  padding: 8px;
+}
+
+.app-shell.is-sidebar-collapsed .project-workspace-nav__header > :not(.nav-icon),
+.app-shell.is-sidebar-collapsed .project-workspace-nav__body {
+  display: none;
+}
+
+.project-page-header__identity {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 9px;
+}
+
+.project-page-header__icon {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: rgba(59, 130, 246, 0.12);
+  color: var(--accent);
+}
+
+.project-page-header__icon svg {
+  width: 17px;
+  height: 17px;
+}
+
+.project-workspace-toolbar {
+  min-width: 0;
+}
+
+.project-workspace-toolbar .skill-search-field {
+  width: min(280px, 24vw);
+}
+
+.project-workspace-toolbar__tabs {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--surface-strong);
+}
+
+.project-workspace-toolbar__tabs button {
+  min-height: 28px;
+  padding: 4px 9px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 0.76rem;
+}
+
+.project-workspace-toolbar__tabs button.is-active {
+  background: var(--surface);
+  color: var(--heading);
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.1);
+}
+
+.project-workspace-toolbar__filter {
+  min-width: 104px;
+}
+
+.projects-page {
+  display: grid;
+  min-height: 0;
+  align-content: start;
+  gap: 12px;
+}
+
+.projects-page__detail {
+  display: grid;
+  min-width: 0;
+  gap: 12px;
+  padding: 0;
+}
+
+.projects-page__context-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.projects-page__header-actions,
+.projects-page__tool-filters {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.projects-page__tool-filters button {
+  min-height: 28px;
+  padding: 4px 10px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 0.76rem;
+}
+
+.projects-page__tool-filters button:hover,
+.projects-page__tool-filters button.is-active {
+  border-color: var(--line);
+  background: var(--surface-strong);
+  color: var(--heading);
+}
+
+.project-resource-list {
+  gap: 12px;
+}
+
+.project-resource-list.skill-card-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-items: start;
+}
+
+.project-resource-list .project-resource-card {
+  min-width: 0;
+}
+
+.project-resource-card__monogram {
+  color: var(--accent);
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+
+.project-resource-card__meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.project-resource-card__meta span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-resource-card__meta span + span::before {
+  margin-right: 6px;
+  content: "·";
+}
+
+.project-resource-card__actions .secondary-button,
+.project-resource-card__actions .ghost-button,
+.skill-card--grid .project-resource-card__actions > button {
+  flex: 0 0 auto;
+  width: auto;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.project-resource-card.skill-card--grid {
+  min-height: 176px;
+}
+
+.project-resource-card.skill-card--grid .skill-card__header {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  height: 100%;
+}
+
+.project-resource-card.skill-card--grid .skill-card__identity {
+  flex: 1;
+}
+
+.project-resource-card.skill-card--grid .skill-card__title-row {
+  grid-column: 1;
+  padding-right: 0;
+}
+
+.project-resource-card.skill-card--grid .skill-card__summary-description {
+  grid-column: 1;
+}
+
+.project-resource-card.skill-card--grid .project-resource-card__actions {
+  margin-top: auto;
+  overflow: visible;
+}
+
+.project-resource-card.skill-card--grid .projects-page__status {
+  margin-right: auto;
+}
+
+.projects-page__resource-warning {
+  margin-top: 8px;
+}
+
+.projects-page__resource-empty {
+  grid-column: 1 / -1;
+}
+
+@media (max-width: 1180px) {
+  .project-workspace-toolbar__filter,
+  .project-workspace-toolbar .skills-toolbar-button > span:last-child {
+    display: none;
+  }
+
+  .project-resource-list.skill-card-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 820px) {
+  .project-workspace-toolbar .skill-search-field {
+    width: min(220px, 36vw);
+  }
+
+  .project-workspace-toolbar__tabs,
+  .project-workspace-toolbar__add {
+    display: none;
+  }
+
+  .project-resource-list.skill-card-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .projects-page__context-bar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
+
+:root[data-theme="dark"] .project-workspace-nav__header:hover,
+:root[data-theme="dark"] .project-workspace-nav__project:hover,
+:root[data-theme="dark"] .project-workspace-nav__add:hover {
+  background: rgba(70, 89, 119, 0.28);
+}
+
+:root[data-theme="dark"] .project-workspace-nav__project.is-selected {
+  border-color: rgba(91, 141, 239, 0.34);
+  background: rgba(54, 94, 166, 0.26);
+}

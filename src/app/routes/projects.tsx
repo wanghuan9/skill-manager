@@ -1,19 +1,17 @@
 import { useEffect, useMemo, useState } from "react";
-import { open } from "@tauri-apps/plugin-dialog";
+import { SearchFieldIcon } from "@/app/components/SearchFieldIcon";
+import { AppSelect } from "@/app/components/AppSelect";
 import { useNotifications } from "@/app/notifications";
 import { useFailureReporter } from "@/app/failure-feedback";
 import {
-  addManagedProject,
   distributeMcpToProject,
   distributeSkillToProject,
-  fetchProjectWorkspaces,
   importProjectMcp,
   importProjectSkill,
   openPathInFinder,
   previewProjectMcpSync,
   previewProjectSkillSync,
   removeManagedProject,
-  shouldUseFixtureData,
   syncProjectMcp,
   syncProjectSkill,
   unlinkProjectResource,
@@ -30,7 +28,9 @@ import type {
   ProjectWorkspaceSnapshot,
 } from "@/features/skills/state/skill-store";
 
-type ProjectResourceTab = "skills" | "mcp";
+export type ProjectResourceTab = "skills" | "mcp";
+export type ProjectViewMode = "list" | "grid";
+export type ProjectStatusFilter = "all" | ProjectSyncStatus;
 type DistributionDialog = { type: "skill" | "mcp" } | null;
 type SkillDiffState = {
   type: "skill";
@@ -64,10 +64,6 @@ const statusLabels: Record<ProjectSyncStatus, { zh: string; en: string }> = {
   unavailable: { zh: "不可同步", en: "Unavailable" },
 };
 
-function selectedPath(value: string | string[] | null) {
-  return Array.isArray(value) ? value[0] ?? "" : value ?? "";
-}
-
 function canUpdateProject(status: ProjectSyncStatus) {
   return ["project-missing", "managed-changed", "diverged"].includes(status);
 }
@@ -76,14 +72,129 @@ function canUpdateManaged(status: ProjectSyncStatus) {
   return ["managed-missing", "project-changed", "diverged"].includes(status);
 }
 
-export function ProjectsRoute() {
+function ProjectListIcon() {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+      <rect x="3.25" y="3.25" width="13.5" height="13.5" rx="2.25" stroke="currentColor" strokeWidth="1.5" />
+      <path d="M6 7h8M6 10h8M6 13h8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function ProjectGridIcon() {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+      <path d="M4 4.25h4.5v4.5H4v-4.5ZM11.5 4.25H16v4.5h-4.5v-4.5ZM4 11.25h4.5v4.5H4v-4.5ZM11.5 11.25H16v4.5h-4.5v-4.5Z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function ProjectRefreshIcon({ isSpinning }: { isSpinning: boolean }) {
+  return (
+    <svg className={isSpinning ? "skills-toolbar-button__svg is-spinning" : "skills-toolbar-button__svg"} viewBox="0 0 20 20" fill="none" aria-hidden="true">
+      <path d="M16.2 9.1a6.2 6.2 0 0 0-10.7-3.6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M3.7 3.9v3.7h3.7" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M3.8 10.9a6.2 6.2 0 0 0 10.7 3.6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M16.3 16.1v-3.7h-3.7" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+type ProjectWorkspaceToolbarProps = {
+  activeTab: ProjectResourceTab;
+  query: string;
+  statusFilter: ProjectStatusFilter;
+  statusCounts?: Record<ProjectStatusFilter, number>;
+  viewMode: ProjectViewMode;
+  isRefreshing: boolean;
+  onActiveTabChange: (value: ProjectResourceTab) => void;
+  onQueryChange: (value: string) => void;
+  onStatusFilterChange: (value: ProjectStatusFilter) => void;
+  onViewModeChange: (value: ProjectViewMode) => void;
+  onRefresh: () => void;
+  onAddResource: () => void;
+};
+
+export function ProjectWorkspaceToolbar(props: ProjectWorkspaceToolbarProps) {
+  const { language } = useSkillWorkspace();
+  const copy = (zh: string, en: string) => language === "en" ? en : zh;
+  const statusOptions: Array<{ value: ProjectStatusFilter; label: string }> = [
+    { value: "all", label: copy("全部状态", "All statuses") },
+    { value: "project-only", label: copy("仅项目", "Project only") },
+    { value: "in-sync", label: copy("已同步", "In sync") },
+    { value: "project-changed", label: copy("项目有修改", "Project changed") },
+    { value: "managed-changed", label: copy("托管有更新", "Library changed") },
+    { value: "diverged", label: copy("两侧均有修改", "Diverged") },
+  ];
+
+  return (
+    <div className="skills-header-bar__tools project-workspace-toolbar">
+      <label className="search-field search-field--header skill-search-field">
+        <span className="sr-only">{copy("搜索项目资源", "Search project resources")}</span>
+        <SearchFieldIcon />
+        <input
+          type="search"
+          autoComplete="off"
+          autoCorrect="off"
+          autoCapitalize="none"
+          spellCheck={false}
+          placeholder={props.activeTab === "skills"
+            ? copy("搜索项目中的 Skills…", "Search project Skills…")
+            : copy("搜索项目中的 MCP…", "Search project MCP…")}
+          value={props.query}
+          onChange={(event) => props.onQueryChange(event.target.value)}
+        />
+      </label>
+      <div className="project-workspace-toolbar__tabs" role="tablist" aria-label={copy("项目资源", "Project resources")}>
+        <button type="button" role="tab" aria-selected={props.activeTab === "skills"} className={props.activeTab === "skills" ? "is-active" : ""} onClick={() => props.onActiveTabChange("skills")}>Skills</button>
+        <button type="button" role="tab" aria-selected={props.activeTab === "mcp"} className={props.activeTab === "mcp" ? "is-active" : ""} onClick={() => props.onActiveTabChange("mcp")}>MCP</button>
+      </div>
+      <div className="skills-view-toggle" role="group" aria-label={copy("视图", "View")}>
+        <button className={`skills-view-toggle__button${props.viewMode === "list" ? " is-active" : ""}`} type="button" aria-pressed={props.viewMode === "list"} aria-label={copy("列表视图", "List view")} onClick={() => props.onViewModeChange("list")}><ProjectListIcon /></button>
+        <button className={`skills-view-toggle__button${props.viewMode === "grid" ? " is-active" : ""}`} type="button" aria-pressed={props.viewMode === "grid"} aria-label={copy("卡片视图", "Grid view")} onClick={() => props.onViewModeChange("grid")}><ProjectGridIcon /></button>
+      </div>
+      {props.activeTab === "skills" ? (
+        <AppSelect
+          value={props.statusFilter}
+          options={statusOptions.map((option) => ({
+            value: option.value,
+            label: `${option.label} (${props.statusCounts?.[option.value] ?? 0})`,
+          }))}
+          onChange={props.onStatusFilterChange}
+          ariaLabel={copy("同步状态筛选", "Sync status filter")}
+          className="skill-status-filter__select project-workspace-toolbar__filter"
+          menuClassName="skill-status-filter__popover"
+          minMenuWidth={112}
+        />
+      ) : null}
+      <button className={`secondary-button secondary-button--compact skills-toolbar-button${props.isRefreshing ? " is-loading" : ""}`} type="button" disabled={props.isRefreshing} onClick={props.onRefresh}>
+        <span aria-hidden="true" className="skills-toolbar-button__icon"><ProjectRefreshIcon isSpinning={props.isRefreshing} /></span>
+        <span>{copy("刷新", "Refresh")}</span>
+      </button>
+      <button className="primary-button primary-button--compact project-workspace-toolbar__add" type="button" onClick={props.onAddResource}>
+        ＋ {props.activeTab === "skills" ? copy("添加 Skill", "Add Skill") : copy("添加 MCP", "Add MCP")}
+      </button>
+    </div>
+  );
+}
+
+type ProjectsRouteProps = {
+  workspace: ProjectWorkspaceSnapshot | null;
+  activeProjectId: string;
+  query: string;
+  statusFilter: ProjectStatusFilter;
+  viewMode: ProjectViewMode;
+  activeTab: ProjectResourceTab;
+  addResourceRequest: number;
+  onWorkspaceChange: (snapshot: ProjectWorkspaceSnapshot) => void;
+};
+
+export function ProjectsRoute(props: ProjectsRouteProps) {
   const { language } = useSkillWorkspace();
   const { notify } = useNotifications();
   const reportFailure = useFailureReporter();
   const copy = (zh: string, en: string) => language === "en" ? en : zh;
-  const [workspace, setWorkspace] = useState<ProjectWorkspaceSnapshot | null>(null);
-  const [activeProjectId, setActiveProjectId] = useState("");
-  const [activeTab, setActiveTab] = useState<ProjectResourceTab>("skills");
+  const { activeProjectId, activeTab, workspace } = props;
   const [activeToolId, setActiveToolId] = useState("all");
   const [isBusy, setIsBusy] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
@@ -93,27 +204,7 @@ export function ProjectsRoute() {
   const [distributionName, setDistributionName] = useState("");
   const [diffState, setDiffState] = useState<ProjectDiffState | null>(null);
 
-  const activeProject = workspace?.projects.find((project) => project.id === activeProjectId)
-    ?? workspace?.projects[0]
-    ?? null;
-
-  useEffect(() => {
-    let isMounted = true;
-    void fetchProjectWorkspaces()
-      .then((snapshot) => {
-        if (!isMounted) return;
-        setWorkspace(snapshot);
-        setActiveProjectId((current) => current || snapshot.projects[0]?.id || "");
-      })
-      .catch((error) => {
-        if (!isMounted) return;
-        const message = error instanceof Error ? error.message : copy("读取项目失败", "Failed to load projects");
-        setErrorMessage(message);
-      });
-    return () => {
-      isMounted = false;
-    };
-  }, []);
+  const activeProject = workspace?.projects.find((project) => project.id === activeProjectId) ?? null;
 
   const availableToolIds = useMemo(() => {
     if (!activeProject) return [];
@@ -136,10 +227,7 @@ export function ProjectsRoute() {
     setErrorMessage("");
     try {
       const snapshot = await action();
-      setWorkspace(snapshot);
-      if (!snapshot.projects.some((project) => project.id === activeProjectId)) {
-        setActiveProjectId(snapshot.projects[0]?.id ?? "");
-      }
+      props.onWorkspaceChange(snapshot);
       notify({ message: successMessage, tone: "success" });
     } catch (error) {
       const fallbackMessage = copy("操作失败，请稍后重试", "Operation failed. Please try again.");
@@ -151,22 +239,6 @@ export function ProjectsRoute() {
     } finally {
       setIsBusy(false);
     }
-  }
-
-  async function handleAddProject() {
-    const path = shouldUseFixtureData()
-      ? "/Users/demo/Projects/new-project"
-      : selectedPath(await open({
-          directory: true,
-          multiple: false,
-          title: copy("选择要管理的项目目录", "Choose a project directory"),
-        }));
-    if (!path) return;
-    await runAction(
-      "add_managed_project",
-      () => addManagedProject(path),
-      copy("项目已加入管理", "Project added"),
-    );
   }
 
   async function handleRemoveProject(project: ProjectDetail) {
@@ -192,6 +264,12 @@ export function ProjectsRoute() {
       : workspace?.managedMcpServers[0]?.id ?? "");
     setDistributionName(firstResource?.name ?? "");
   }
+
+  useEffect(() => {
+    if (props.addResourceRequest > 0) {
+      openDistributionDialog(activeTab === "skills" ? "skill" : "mcp");
+    }
+  }, [props.addResourceRequest]);
 
   async function handleDistribute() {
     if (!activeProject || !distributionDialog || !distributionResourceId || !distributionName.trim()) {
@@ -303,109 +381,55 @@ export function ProjectsRoute() {
     setDiffState(null);
   }
 
-  const filteredSkills = activeProject?.skills.filter(
-    (skill) => activeToolId === "all" || skill.toolId === activeToolId,
-  ) ?? [];
-  const filteredMcpServers = activeProject?.mcpServers.filter(
-    (server) => activeToolId === "all" || server.toolId === activeToolId,
-  ) ?? [];
+  const normalizedQuery = props.query.trim().toLocaleLowerCase();
+  const filteredSkills = activeProject?.skills.filter((skill) => (
+    (activeToolId === "all" || skill.toolId === activeToolId)
+    && (props.statusFilter === "all" || skill.syncStatus === props.statusFilter)
+    && (!normalizedQuery || [skill.name, skill.description, skill.toolName, skill.relativePath]
+      .some((value) => value.toLocaleLowerCase().includes(normalizedQuery)))
+  )) ?? [];
+  const filteredMcpServers = activeProject?.mcpServers.filter((server) => (
+    (activeToolId === "all" || server.toolId === activeToolId)
+    && (!normalizedQuery || [server.serverName, server.toolName, server.configRelativePath]
+      .some((value) => value.toLocaleLowerCase().includes(normalizedQuery)))
+  )) ?? [];
 
   if (!workspace) {
     return <div className="panel-card empty-state"><p>{copy("正在扫描项目…", "Scanning projects…")}</p></div>;
   }
 
   return (
-    <div className="projects-page">
-      <div className="projects-page__toolbar">
-        <button className="primary-button" type="button" onClick={() => void handleAddProject()} disabled={isBusy}>
-          {copy("添加项目", "Add project")}
-        </button>
-        <button
-          className="secondary-button"
-          type="button"
-          onClick={() => void runAction(
-            "refresh_managed_projects",
-            fetchProjectWorkspaces,
-            copy("项目已刷新", "Projects refreshed"),
-          )}
-          disabled={isBusy}
-        >
-          {copy("刷新", "Refresh")}
-        </button>
-        <span className="projects-page__storage">{workspace.storagePath}</span>
-      </div>
+    <div className="projects-page skills-page">
       {errorMessage ? <div className="dialog-error projects-page__error">{errorMessage}</div> : null}
-
-      {workspace.projects.length === 0 ? (
-        <div className="panel-card empty-state projects-page__empty">
-          <h3>{copy("还没有受管理项目", "No managed projects")}</h3>
-          <p>{copy("添加项目后会识别其中现有的 Skills 和 MCP 配置。", "Add a project to discover its existing Skills and MCP configuration.")}</p>
-          <button className="primary-button" type="button" onClick={() => void handleAddProject()}>
-            {copy("选择项目目录", "Choose project directory")}
-          </button>
-        </div>
-      ) : (
-        <div className="projects-page__layout">
-          <aside className="projects-page__sidebar" aria-label={copy("项目列表", "Project list")}>
-            {workspace.projects.map((project) => (
-              <button
-                className={`projects-page__project${project.id === activeProject?.id ? " is-active" : ""}`}
-                key={project.id}
-                type="button"
-                onClick={() => setActiveProjectId(project.id)}
-              >
-                <span>{project.name}</span>
-                <small>{project.availability === "missing" ? copy("目录已缺失", "Missing") : project.rootPath}</small>
+      {activeProject ? (
+        <section className="projects-page__detail">
+          <div className="projects-page__context-bar">
+            <div className="projects-page__tool-filters" aria-label={copy("工具筛选", "Tool filter")}>
+              <button className={activeToolId === "all" ? "is-active" : ""} type="button" onClick={() => setActiveToolId("all")}>{copy("全部工具", "All tools")}</button>
+              {availableToolIds.map((toolId) => (
+                <button className={activeToolId === toolId ? "is-active" : ""} type="button" key={toolId} onClick={() => setActiveToolId(toolId)}>
+                  {projectToolOptions.find((tool) => tool.id === toolId)?.name ?? toolId}
+                </button>
+              ))}
+            </div>
+            <div className="projects-page__header-actions">
+              <button className="ghost-button" type="button" onClick={() => void openPathInFinder({ path: activeProject.canonicalRootPath })}>
+                {copy("打开目录", "Open folder")}
               </button>
-            ))}
-          </aside>
-
-          {activeProject ? (
-            <section className="projects-page__detail">
-              <header className="projects-page__project-header">
-                <div>
-                  <h2>{activeProject.name}</h2>
-                  <p>{activeProject.canonicalRootPath}</p>
-                </div>
-                <div className="projects-page__header-actions">
-                  <button className="secondary-button secondary-button--compact" type="button" onClick={() => void openPathInFinder({ path: activeProject.canonicalRootPath })}>
-                    {copy("打开目录", "Open folder")}
-                  </button>
-                  <button className="secondary-button secondary-button--compact is-warning" type="button" onClick={() => void handleRemoveProject(activeProject)}>
-                    {copy("移除管理", "Remove")}
-                  </button>
-                </div>
-              </header>
-              {activeProject.errors.map((error) => <div className="dialog-error" key={error}>{error}</div>)}
-              <div className="projects-page__tabs" role="tablist" aria-label={copy("项目资源", "Project resources")}>
-                <button role="tab" aria-selected={activeTab === "skills"} className={activeTab === "skills" ? "is-active" : ""} type="button" onClick={() => setActiveTab("skills")}>
-                  Skills <span>{activeProject.skills.length}</span>
-                </button>
-                <button role="tab" aria-selected={activeTab === "mcp"} className={activeTab === "mcp" ? "is-active" : ""} type="button" onClick={() => setActiveTab("mcp")}>
-                  MCP <span>{activeProject.mcpServers.length}</span>
-                </button>
-              </div>
-              <div className="projects-page__resource-toolbar">
-                <div className="projects-page__tool-filters">
-                  <button className={activeToolId === "all" ? "is-active" : ""} type="button" onClick={() => setActiveToolId("all")}>{copy("全部", "All")}</button>
-                  {availableToolIds.map((toolId) => (
-                    <button className={activeToolId === toolId ? "is-active" : ""} type="button" key={toolId} onClick={() => setActiveToolId(toolId)}>
-                      {projectToolOptions.find((tool) => tool.id === toolId)?.name ?? toolId}
-                    </button>
-                  ))}
-                </div>
-                <button className="primary-button primary-button--compact" type="button" onClick={() => openDistributionDialog(activeTab === "skills" ? "skill" : "mcp")}>
-                  {activeTab === "skills" ? copy("下发 Skill", "Distribute Skill") : copy("下发 MCP", "Distribute MCP")}
-                </button>
-              </div>
-
-              {activeTab === "skills" ? (
-                <div className="projects-page__resources">
+              <button className="ghost-button is-warning" type="button" onClick={() => void handleRemoveProject(activeProject)}>
+                {copy("移除管理", "Remove")}
+              </button>
+            </div>
+          </div>
+          {activeProject.errors.map((error) => <div className="dialog-error" key={error}>{error}</div>)}
+          {activeTab === "skills" ? (
+            <div className={`card-list project-resource-list${props.viewMode === "grid" ? " skill-card-grid" : ""}`}>
                   {filteredSkills.map((skill) => (
                     <ProjectSkillRow
                       key={`${skill.toolId}:${skill.relativePath}`}
                       skill={skill}
                       language={language}
+                      layout={props.viewMode}
                       disabled={isBusy}
                       onImport={() => void runAction(
                         "import_project_skill",
@@ -422,14 +446,15 @@ export function ProjectsRoute() {
                     />
                   ))}
                   {filteredSkills.length === 0 ? <ResourceEmpty label={copy("未识别到项目 Skill", "No project Skills found")} /> : null}
-                </div>
-              ) : (
-                <div className="projects-page__resources">
+            </div>
+          ) : (
+            <div className={`card-list project-resource-list${props.viewMode === "grid" ? " skill-card-grid" : ""}`}>
                   {filteredMcpServers.map((server) => (
                     <ProjectMcpRow
                       key={`${server.toolId}:${server.serverName}`}
                       server={server}
                       language={language}
+                      layout={props.viewMode}
                       disabled={isBusy}
                       onImport={() => void runAction(
                         "import_project_mcp",
@@ -446,18 +471,22 @@ export function ProjectsRoute() {
                     />
                   ))}
                   {filteredMcpServers.length === 0 ? <ResourceEmpty label={copy("未识别到项目 MCP", "No project MCP servers found")} /> : null}
-                </div>
-              )}
-            </section>
-          ) : null}
+            </div>
+          )}
+        </section>
+      ) : (
+        <div className="panel-card empty-state projects-page__empty">
+          <h3>{copy("项目不可用", "Project unavailable")}</h3>
+          <p>{copy("请从左侧项目工作区重新选择项目。", "Choose a project again from the project workspace.")}</p>
         </div>
       )}
 
-      {distributionDialog ? (
+      {distributionDialog && activeProject ? (
         <DistributionModal
           type={distributionDialog.type}
           language={language}
           workspace={workspace}
+          project={activeProject}
           toolId={distributionToolId}
           resourceId={distributionResourceId}
           targetName={distributionName}
@@ -488,6 +517,7 @@ export function ProjectsRoute() {
 function ProjectSkillRow(props: {
   skill: ProjectSkillInstance;
   language: "zh-CN" | "en";
+  layout: ProjectViewMode;
   disabled: boolean;
   onImport: () => void;
   onUpdateProject: () => void;
@@ -500,23 +530,33 @@ function ProjectSkillRow(props: {
   const canReverse = skill.projectCapability === "bidirectional";
   const unavailable = skill.entryKind === "symlink" || skill.syncStatus === "unavailable";
   return (
-    <article className="projects-page__resource-card">
-      <div className="projects-page__resource-copy">
-        <div className="projects-page__resource-title">
-          <h3>{skill.name}</h3>
-          <span className={`projects-page__status is-${skill.syncStatus}`}>{statusLabels[skill.syncStatus][language === "en" ? "en" : "zh"]}</span>
-          {skill.projectCapability === "export-only" ? <span className="projects-page__owner">Agent CLI · {copy("仅下发", "Export only")}</span> : null}
+    <article className={`skill-card project-resource-card skill-card--${props.layout}`}>
+      <div className="skill-card__header">
+        <div className="skill-card__identity">
+          <span className="link-badge project-resource-card__monogram" aria-hidden="true">
+            {skill.name.slice(0, 1).toLocaleUpperCase()}
+          </span>
+          <div className="skill-card__summary-main">
+            <div className="skill-card__title-row">
+              <h3>{skill.name}</h3>
+              {skill.projectCapability === "export-only" ? <span className="projects-page__owner">Agent CLI · {copy("仅下发", "Export only")}</span> : null}
+            </div>
+            <p className="skill-card__summary-description">{skill.description || skill.relativePath}</p>
+            <div className="project-resource-card__meta">
+              <span>{skill.toolName}</span>
+              <span>{skill.relativePath}</span>
+            </div>
+          </div>
         </div>
-        <p>{skill.description || skill.relativePath}</p>
-        <small>{skill.toolName} · {skill.relativePath}</small>
-        {skill.error ? <div className="projects-page__resource-warning">{skill.error}</div> : null}
+        <div className="skill-card__list-actions project-resource-card__actions">
+          <span className={`projects-page__status is-${skill.syncStatus}`}>{statusLabels[skill.syncStatus][language === "en" ? "en" : "zh"]}</span>
+          {!isLinked ? <button className="secondary-button secondary-button--compact" type="button" disabled={props.disabled || unavailable} onClick={props.onImport}>{copy("上传托管", "Import")}</button> : null}
+          {isLinked && canUpdateProject(skill.syncStatus) ? <button className="secondary-button secondary-button--compact is-primary" type="button" disabled={props.disabled} onClick={props.onUpdateProject}>{copy("更新项目", "Update project")}</button> : null}
+          {isLinked && canReverse && canUpdateManaged(skill.syncStatus) ? <button className="secondary-button secondary-button--compact" type="button" disabled={props.disabled || unavailable} onClick={props.onUpdateManaged}>{copy("同步回托管", "Sync to library")}</button> : null}
+          {isLinked ? <button className="ghost-button" type="button" disabled={props.disabled} onClick={props.onUnlink}>{copy("解除关联", "Unlink")}</button> : null}
+        </div>
       </div>
-      <div className="projects-page__resource-actions">
-        {!isLinked ? <button className="secondary-button secondary-button--compact" type="button" disabled={props.disabled || unavailable} onClick={props.onImport}>{copy("上传托管", "Import")}</button> : null}
-        {isLinked && canUpdateProject(skill.syncStatus) ? <button className="secondary-button secondary-button--compact is-primary" type="button" disabled={props.disabled} onClick={props.onUpdateProject}>{copy("更新项目", "Update project")}</button> : null}
-        {isLinked && canReverse && canUpdateManaged(skill.syncStatus) ? <button className="secondary-button secondary-button--compact" type="button" disabled={props.disabled || unavailable} onClick={props.onUpdateManaged}>{copy("同步回托管", "Sync to library")}</button> : null}
-        {isLinked ? <button className="ghost-button" type="button" disabled={props.disabled} onClick={props.onUnlink}>{copy("解除关联", "Unlink")}</button> : null}
-      </div>
+      {skill.error ? <div className="projects-page__resource-warning">{skill.error}</div> : null}
     </article>
   );
 }
@@ -524,6 +564,7 @@ function ProjectSkillRow(props: {
 function ProjectMcpRow(props: {
   server: ProjectMcpInstance;
   language: "zh-CN" | "en";
+  layout: ProjectViewMode;
   disabled: boolean;
   onImport: () => void;
   onUpdateProject: () => void;
@@ -535,22 +576,28 @@ function ProjectMcpRow(props: {
   const isLinked = Boolean(server.managedMcpId);
   const hasSecretRisk = server.secretRisk === "literal-secret-suspected";
   return (
-    <article className="projects-page__resource-card">
-      <div className="projects-page__resource-copy">
-        <div className="projects-page__resource-title">
-          <h3>{server.serverName}</h3>
-          <span className={`projects-page__status is-${server.syncStatus}`}>{statusLabels[server.syncStatus][language === "en" ? "en" : "zh"]}</span>
-          {hasSecretRisk ? <span className="projects-page__secret">{copy("疑似明文密钥", "Possible plaintext secret")}</span> : null}
+    <article className={`skill-card project-resource-card skill-card--${props.layout}`}>
+      <div className="skill-card__header">
+        <div className="skill-card__identity">
+          <span className="link-badge project-resource-card__monogram" aria-hidden="true">M</span>
+          <div className="skill-card__summary-main">
+            <div className="skill-card__title-row">
+              <h3>{server.serverName}</h3>
+              {hasSecretRisk ? <span className="projects-page__secret">{copy("疑似明文密钥", "Possible plaintext secret")}</span> : null}
+            </div>
+            <p className="skill-card__summary-description">{server.toolName}</p>
+            <div className="project-resource-card__meta"><span>{server.configRelativePath}</span></div>
+          </div>
         </div>
-        <p>{server.toolName} · {server.configRelativePath}</p>
-        {server.error ? <div className="projects-page__resource-warning">{server.error}</div> : null}
+        <div className="skill-card__list-actions project-resource-card__actions">
+          <span className={`projects-page__status is-${server.syncStatus}`}>{statusLabels[server.syncStatus][language === "en" ? "en" : "zh"]}</span>
+          {!isLinked ? <button className="secondary-button secondary-button--compact" type="button" disabled={props.disabled || hasSecretRisk} onClick={props.onImport}>{copy("上传托管", "Import")}</button> : null}
+          {isLinked && canUpdateProject(server.syncStatus) ? <button className="secondary-button secondary-button--compact is-primary" type="button" disabled={props.disabled || hasSecretRisk} onClick={props.onUpdateProject}>{copy("更新项目", "Update project")}</button> : null}
+          {isLinked && canUpdateManaged(server.syncStatus) ? <button className="secondary-button secondary-button--compact" type="button" disabled={props.disabled || hasSecretRisk} onClick={props.onUpdateManaged}>{copy("同步回托管", "Sync to library")}</button> : null}
+          {isLinked ? <button className="ghost-button" type="button" disabled={props.disabled} onClick={props.onUnlink}>{copy("解除关联", "Unlink")}</button> : null}
+        </div>
       </div>
-      <div className="projects-page__resource-actions">
-        {!isLinked ? <button className="secondary-button secondary-button--compact" type="button" disabled={props.disabled || hasSecretRisk} onClick={props.onImport}>{copy("上传托管", "Import")}</button> : null}
-        {isLinked && canUpdateProject(server.syncStatus) ? <button className="secondary-button secondary-button--compact is-primary" type="button" disabled={props.disabled || hasSecretRisk} onClick={props.onUpdateProject}>{copy("更新项目", "Update project")}</button> : null}
-        {isLinked && canUpdateManaged(server.syncStatus) ? <button className="secondary-button secondary-button--compact" type="button" disabled={props.disabled || hasSecretRisk} onClick={props.onUpdateManaged}>{copy("同步回托管", "Sync to library")}</button> : null}
-        {isLinked ? <button className="ghost-button" type="button" disabled={props.disabled} onClick={props.onUnlink}>{copy("解除关联", "Unlink")}</button> : null}
-      </div>
+      {server.error ? <div className="projects-page__resource-warning">{server.error}</div> : null}
     </article>
   );
 }
@@ -563,6 +610,7 @@ function DistributionModal(props: {
   type: "skill" | "mcp";
   language: "zh-CN" | "en";
   workspace: ProjectWorkspaceSnapshot;
+  project: ProjectDetail;
   toolId: string;
   resourceId: string;
   targetName: string;
@@ -576,6 +624,16 @@ function DistributionModal(props: {
   const copy = (zh: string, en: string) => props.language === "en" ? en : zh;
   const resources = props.type === "skill" ? props.workspace.managedSkills : props.workspace.managedMcpServers;
   const tools = props.type === "skill" ? projectToolOptions : mcpToolOptions;
+  const normalizedTargetName = props.targetName.trim().toLocaleLowerCase();
+  const targetAlreadyExists = props.type === "skill"
+    ? props.project.skills.some((skill) => (
+        skill.toolId === props.toolId
+        && skill.name.toLocaleLowerCase() === normalizedTargetName
+      ))
+    : props.project.mcpServers.some((server) => (
+        server.toolId === props.toolId
+        && server.serverName.toLocaleLowerCase() === normalizedTargetName
+      ));
   return (
     <div className="dialog-backdrop" role="presentation" onClick={props.onClose}>
       <div className="projects-page__dialog" role="dialog" aria-modal="true" aria-label={props.type === "skill" ? copy("下发 Skill", "Distribute Skill") : copy("下发 MCP", "Distribute MCP")} onClick={(event) => event.stopPropagation()}>
@@ -604,10 +662,11 @@ function DistributionModal(props: {
             <input value={props.targetName} onChange={(event) => props.onTargetNameChange(event.target.value)} />
           </label>
           {resources.length === 0 ? <div className="dialog-error">{copy("当前没有可下发的托管资源", "No managed resources available")}</div> : null}
+          {targetAlreadyExists ? <div className="dialog-error">{copy("目标工具中已存在同名资源，请修改名称或选择其他工具。", "A resource with this name already exists in the target tool.")}</div> : null}
         </div>
         <footer>
           <button className="secondary-button" type="button" onClick={props.onClose}>{copy("取消", "Cancel")}</button>
-          <button className="primary-button" type="button" onClick={props.onConfirm} disabled={props.disabled || !props.resourceId || !props.targetName.trim()}>{copy("下发到项目", "Distribute")}</button>
+          <button className="primary-button" type="button" onClick={props.onConfirm} disabled={props.disabled || !props.resourceId || !props.targetName.trim() || targetAlreadyExists}>{copy("下发到项目", "Distribute")}</button>
         </footer>
       </div>
     </div>
