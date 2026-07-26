@@ -61,7 +61,7 @@ test("switches to project MCP and exposes project-only servers for import", asyn
 test("collapses project workspaces and supports project card and list views", async () => {
   render(<App />);
 
-  const workspaceToggle = screen.getByRole("button", { name: "项目工作区" });
+  const workspaceToggle = screen.getByRole("button", { name: "项目" });
   expect(workspaceToggle).toHaveAttribute("aria-expanded", "true");
   expect(await screen.findByRole("button", { name: "demo-workspace" })).toBeInTheDocument();
 

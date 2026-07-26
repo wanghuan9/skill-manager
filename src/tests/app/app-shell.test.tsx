@@ -49,8 +49,7 @@ test("renders primary navigation entries and embeds projects in a workspace menu
   expect(screen.getByRole("button", { name: /Skills/ })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "工具" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Plugins" })).toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: "项目" })).not.toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "项目工作区" })).toHaveAttribute("aria-expanded", "true");
+  expect(screen.getByRole("button", { name: "项目" })).toHaveAttribute("aria-expanded", "true");
   expect(screen.getByRole("button", { name: "添加项目" })).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "CLI" })).not.toBeInTheDocument();
   expect(within(screen.getByRole("navigation", { name: "Primary" })).getByRole("button", { name: /安装/ })).toBeInTheDocument();
@@ -62,7 +61,7 @@ test("renders primary navigation entries and embeds projects in a workspace menu
     "Plugins",
     "工具",
     "安装",
-    "⌄项目工作区",
+    "项目⌄",
     "demo-workspace5",
     "＋添加项目",
     "设置",

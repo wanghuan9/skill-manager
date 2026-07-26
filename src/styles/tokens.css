@@ -14322,12 +14322,11 @@ button.settings-form-item:disabled {
 
 .project-workspace-nav__header {
   display: grid;
-  grid-template-columns: 12px 26px minmax(0, 1fr);
+  grid-template-columns: 26px minmax(0, 1fr) 12px;
   align-items: center;
-  gap: 7px;
-  min-height: 34px;
-  padding: 3px 9px;
-  border-radius: 10px;
+  gap: 8px;
+  padding: 10px;
+  border-radius: 12px;
 }
 
 .project-workspace-nav__header:hover,
@@ -14346,17 +14345,21 @@ button.settings-form-item:disabled {
 }
 
 .project-workspace-nav__chevron {
+  display: grid;
+  place-items: center;
   color: var(--muted);
   font-size: 0.9rem;
   line-height: 1;
+  transition: transform var(--motion-fast) var(--ease-standard);
+}
+
+.project-workspace-nav__chevron.is-collapsed {
+  transform: rotate(-90deg);
 }
 
 .project-workspace-nav__label {
   min-width: 0;
   overflow: hidden;
-  font-size: 0.78rem;
-  font-weight: 650;
-  letter-spacing: 0.04em;
   text-overflow: ellipsis;
   white-space: nowrap;
 }

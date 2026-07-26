@@ -1286,14 +1286,17 @@ function AppContent() {
               aria-expanded={isProjectWorkspaceExpanded}
               onClick={() => setIsProjectWorkspaceExpanded((current) => !current)}
             >
-              <span className="project-workspace-nav__chevron" aria-hidden="true">
-                {isProjectWorkspaceExpanded ? "⌄" : "›"}
-              </span>
               <span className="nav-icon" aria-hidden="true">
                 <ProjectFolderIcon />
               </span>
-              <span className="project-workspace-nav__label">
-                {language === "en" ? "Project workspace" : "项目工作区"}
+              <span className="nav-label project-workspace-nav__label">
+                {language === "en" ? "Projects" : "项目"}
+              </span>
+              <span
+                className={`project-workspace-nav__chevron${isProjectWorkspaceExpanded ? "" : " is-collapsed"}`}
+                aria-hidden="true"
+              >
+                ⌄
               </span>
             </button>
             {isProjectWorkspaceExpanded ? (
