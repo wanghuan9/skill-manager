@@ -836,7 +836,7 @@ pub fn global_status() -> AgentSkillsCliStatus {
     let global_path = global_skill_root()
         .map(|path| path.to_string_lossy().to_string())
         .unwrap_or_default();
-    let Some(program) = find_cli_program_for_operation() else {
+    let Some(program) = find_local_cli_program() else {
         return AgentSkillsCliStatus {
             available: false,
             global_path,
@@ -1162,7 +1162,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn global_status_uses_operation_fallback_when_direct_cli_is_missing() {
+    fn global_status_does_not_use_operation_fallback_when_direct_cli_is_missing() {
         let _guard = crate::workspace::TEST_ENV_LOCK.lock().expect("env lock");
         let original_home = env::var_os("HOME");
         let original_path = env::var_os("PATH");
@@ -1180,17 +1180,8 @@ mod tests {
         fs::write(
             &fake_npx,
             r#"#!/bin/sh
-if [ "$1" != "--yes" ] || [ "$2" != "skills" ]; then
-  exit 1
-fi
-if [ "$3" = "--version" ]; then
-  exit 0
-fi
-if [ "$3" = "ls" ]; then
-  printf '%s' '[{"name":"demo","path":"/tmp/.agents/skills/demo","scope":"global","agents":["Claude Code"]}]'
-  exit 0
-fi
-exit 1
+touch "$HOME/npx-invoked"
+exit 0
 "#,
         )
         .expect("write fake npx executable");
@@ -1212,6 +1203,7 @@ exit 1
         }
 
         let status = global_status();
+        let fallback_was_used = temp_home.join("npx-invoked").exists();
 
         match original_home {
             Some(value) => unsafe { env::set_var("HOME", value) },
@@ -1223,10 +1215,9 @@ exit 1
         }
         let _ = fs::remove_dir_all(temp_home);
 
-        assert!(status.available);
-        assert!(status.error.is_empty());
-        assert_eq!(status.entries.len(), 1);
-        assert_eq!(status.entries[0].name, "demo");
+        assert!(!status.available);
+        assert!(status.entries.is_empty());
+        assert!(!fallback_was_used);
     }
 
     #[test]
