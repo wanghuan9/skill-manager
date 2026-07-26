@@ -168,12 +168,17 @@ const MARKETPLACE_CACHE_VERSION: u64 = 3;
 const MARKETPLACE_SKILL_FILE_LIMIT: usize = 200;
 const MARKETPLACE_SKILL_FILE_SIZE_LIMIT: u64 = 512 * 1024;
 const MARKETPLACE_SKILL_ROOT_CACHE_LIMIT: usize = 64;
+const MARKETPLACE_GITHUB_TREE_CACHE_TTL: Duration = Duration::from_secs(10 * 60);
+const MARKETPLACE_GITHUB_TREE_CACHE_LIMIT: usize = 64;
 static SKILLS_SH_DESCRIPTION_CACHE: OnceLock<HashMap<String, String>> = OnceLock::new();
 static SKILLS_SH_LIVE_DESCRIPTION_CACHE: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
 static SKILLS_SH_HOMEPAGE_CACHE: OnceLock<Mutex<Option<Vec<SkillsShSkill>>>> = OnceLock::new();
 static SKILLS_SH_PAGE_CACHE: OnceLock<Mutex<HashMap<usize, SkillsShPagePayload>>> = OnceLock::new();
 static SKILLS_MANAGER_SKILLS_CACHE: OnceLock<Vec<SkillsManagerCachedSkill>> = OnceLock::new();
 static MARKETPLACE_SKILL_ROOT_CACHE: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
+static MARKETPLACE_GITHUB_TREE_CACHE: OnceLock<
+    Mutex<HashMap<String, CachedMarketplaceGitHubTree>>,
+> = OnceLock::new();
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -228,6 +233,26 @@ struct GitHubContentEntry {
     path: String,
     #[serde(rename = "type")]
     entry_type: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+struct GitHubTreeEntry {
+    path: String,
+    #[serde(rename = "type")]
+    entry_type: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct GitHubTreeResponse {
+    #[serde(default)]
+    truncated: bool,
+    tree: Vec<GitHubTreeEntry>,
+}
+
+#[derive(Clone, Debug)]
+struct CachedMarketplaceGitHubTree {
+    fetched_at: Instant,
+    entries: Vec<GitHubTreeEntry>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -404,18 +429,57 @@ fn cache_marketplace_skill_root(cache_key: String, root_path: String) {
     }
 }
 
+fn marketplace_github_tree_cache_key(source: &GitHubMarketplaceSource) -> String {
+    format!(
+        "{}/{}#{}",
+        source.owner,
+        source.repository,
+        source.branch.as_deref().unwrap_or("HEAD")
+    )
+}
+
+fn cached_marketplace_github_tree(cache_key: &str) -> Option<Vec<GitHubTreeEntry>> {
+    let cache = MARKETPLACE_GITHUB_TREE_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut guard = cache.lock().ok()?;
+    let cached = guard.get(cache_key)?.clone();
+    if cached.fetched_at.elapsed() > MARKETPLACE_GITHUB_TREE_CACHE_TTL {
+        guard.remove(cache_key);
+        return None;
+    }
+    Some(cached.entries)
+}
+
+fn cache_marketplace_github_tree(cache_key: String, entries: Vec<GitHubTreeEntry>) {
+    let cache = MARKETPLACE_GITHUB_TREE_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Ok(mut guard) = cache.lock() {
+        if guard.len() >= MARKETPLACE_GITHUB_TREE_CACHE_LIMIT && !guard.contains_key(&cache_key) {
+            guard.clear();
+        }
+        guard.insert(
+            cache_key,
+            CachedMarketplaceGitHubTree {
+                fetched_at: Instant::now(),
+                entries,
+            },
+        );
+    }
+}
+
 fn marketplace_skill_root_from_tree(
     tree_output: &str,
     skill_path: &str,
     skill_name: &str,
 ) -> Option<String> {
+    let has_root_skill = tree_output
+        .lines()
+        .any(|entry_path| entry_path.eq_ignore_ascii_case("SKILL.md"));
     let normalized_path = normalize_marketplace_file_path(skill_path, true).ok()?;
     let expected_name = normalized_path
         .rsplit('/')
         .find(|segment| !segment.is_empty())
         .unwrap_or_else(|| skill_name.trim());
     if expected_name.is_empty() {
-        return None;
+        return has_root_skill.then(String::new);
     }
 
     let normalized_path_lower = normalized_path.to_lowercase();
@@ -454,7 +518,87 @@ fn marketplace_skill_root_from_tree(
         })
         .collect::<Vec<_>>();
     candidates.sort();
-    candidates.into_iter().next().map(|(_, _, _, path)| path)
+    candidates
+        .into_iter()
+        .next()
+        .map(|(_, _, _, path)| path)
+        .or_else(|| has_root_skill.then(String::new))
+}
+
+fn marketplace_skill_root_from_github_tree(
+    entries: &[GitHubTreeEntry],
+    skill_path: &str,
+    skill_name: &str,
+) -> Option<String> {
+    let tree_output = entries
+        .iter()
+        .filter(|entry| entry.entry_type == "blob")
+        .map(|entry| entry.path.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    marketplace_skill_root_from_tree(&tree_output, skill_path, skill_name)
+}
+
+fn marketplace_skill_entries_from_github_tree(
+    tree_entries: &[GitHubTreeEntry],
+    root_path: &str,
+    root_name: &str,
+) -> Result<Vec<SkillFileEntry>, String> {
+    let normalized_root = root_path.trim_matches('/');
+    let root_prefix = if normalized_root.is_empty() {
+        String::new()
+    } else {
+        format!("{normalized_root}/")
+    };
+    let mut entries = vec![SkillFileEntry {
+        path: String::new(),
+        name: root_name.to_string(),
+        entry_type: "directory".into(),
+        depth: 0,
+    }];
+
+    for tree_entry in tree_entries {
+        if !matches!(tree_entry.entry_type.as_str(), "blob" | "tree") {
+            continue;
+        }
+        let full_path = tree_entry.path.trim_matches('/');
+        let relative_path = if normalized_root.is_empty() {
+            full_path
+        } else if let Some(path) = full_path.strip_prefix(&root_prefix) {
+            path
+        } else {
+            continue;
+        };
+        if relative_path.is_empty() {
+            continue;
+        }
+        let relative_path = normalize_marketplace_file_path(relative_path, false)?;
+        let name = relative_path
+            .rsplit('/')
+            .next()
+            .unwrap_or(&relative_path)
+            .to_string();
+        let depth = relative_path.split('/').count();
+        entries.push(SkillFileEntry {
+            path: relative_path,
+            name,
+            entry_type: if tree_entry.entry_type == "tree" {
+                "directory"
+            } else {
+                "file"
+            }
+            .into(),
+            depth,
+        });
+        if entries.len() > MARKETPLACE_SKILL_FILE_LIMIT + 1 {
+            return Err(format!(
+                "Skill 文件数量超过 {} 个，暂不支持在线预览",
+                MARKETPLACE_SKILL_FILE_LIMIT
+            ));
+        }
+    }
+
+    Ok(entries)
 }
 
 fn github_contents_api_url(
@@ -480,6 +624,73 @@ fn github_contents_api_url(
     }
 
     Ok(api_url)
+}
+
+fn github_tree_api_url(source: &GitHubMarketplaceSource) -> Result<url::Url, String> {
+    let mut api_url = url::Url::parse("https://api.github.com")
+        .map_err(|error| format!("构建 GitHub 请求地址失败: {error}"))?;
+    {
+        let mut segments = api_url
+            .path_segments_mut()
+            .map_err(|_| "构建 GitHub 请求地址失败".to_string())?;
+        segments.push("repos");
+        segments.push(&source.owner);
+        segments.push(&source.repository);
+        segments.push("git");
+        segments.push("trees");
+        segments.push(source.branch.as_deref().unwrap_or("HEAD"));
+    }
+    api_url.query_pairs_mut().append_pair("recursive", "1");
+    Ok(api_url)
+}
+
+fn github_raw_file_url(source: &GitHubMarketplaceSource, path: &str) -> Result<url::Url, String> {
+    let mut raw_url = url::Url::parse("https://raw.githubusercontent.com")
+        .map_err(|error| format!("构建 GitHub Raw 请求地址失败: {error}"))?;
+    {
+        let mut segments = raw_url
+            .path_segments_mut()
+            .map_err(|_| "构建 GitHub Raw 请求地址失败".to_string())?;
+        segments.push(&source.owner);
+        segments.push(&source.repository);
+        segments.push(source.branch.as_deref().unwrap_or("HEAD"));
+        for segment in path.split('/').filter(|segment| !segment.is_empty()) {
+            segments.push(segment);
+        }
+    }
+    Ok(raw_url)
+}
+
+async fn fetch_marketplace_github_tree(
+    client: &Client,
+    source: &GitHubMarketplaceSource,
+) -> Result<Vec<GitHubTreeEntry>, String> {
+    let cache_key = marketplace_github_tree_cache_key(source);
+    if let Some(entries) = cached_marketplace_github_tree(&cache_key) {
+        return Ok(entries);
+    }
+
+    let api_url = github_tree_api_url(source)?;
+    let response = client
+        .get(api_url)
+        .send()
+        .await
+        .map_err(|error| format!("读取 GitHub 文件树失败: {error}"))?;
+    if response.status().as_u16() == 403 {
+        return Err("GitHub API 请求受限，请稍后重试".into());
+    }
+    let response = response
+        .error_for_status()
+        .map_err(|error| format!("读取 GitHub 文件树失败: {error}"))?;
+    let payload = response
+        .json::<GitHubTreeResponse>()
+        .await
+        .map_err(|error| format!("解析 GitHub 文件树失败: {error}"))?;
+    if payload.truncated {
+        return Err("GitHub 文件树过大，改用兼容模式读取".into());
+    }
+    cache_marketplace_github_tree(cache_key, payload.tree.clone());
+    Ok(payload.tree)
 }
 
 fn github_clone_url(source: &GitHubMarketplaceSource) -> Result<String, String> {
@@ -686,16 +897,12 @@ async fn fetch_marketplace_skill_file_document(
         .filter(|segment| !segment.is_empty())
         .collect::<Vec<_>>()
         .join("/");
-    let api_url = github_contents_api_url(source, &full_path)?;
+    let raw_url = github_raw_file_url(source, &full_path)?;
     let response = client
-        .get(api_url)
-        .header("Accept", "application/vnd.github.raw+json")
+        .get(raw_url)
         .send()
         .await
         .map_err(|error| format!("读取 GitHub Skill 文件失败: {error}"))?;
-    if response.status().as_u16() == 403 {
-        return Err("GitHub API 请求受限，请稍后重试".into());
-    }
     let response = response
         .error_for_status()
         .map_err(|error| format!("读取 GitHub Skill 文件失败: {error}"))?;
@@ -6027,14 +6234,38 @@ pub async fn get_marketplace_skill_file_browser(
 ) -> Result<SkillFileBrowserSnapshot, String> {
     let source = parse_github_marketplace_source(&source_url)?;
     let cache_key = marketplace_skill_root_cache_key(&source, &skill_path);
+    let client = marketplace_http_client()?;
+    let mut last_error = match fetch_marketplace_github_tree(&client, &source).await {
+        Ok(tree_entries) => {
+            let root_path =
+                marketplace_skill_root_from_github_tree(&tree_entries, &skill_path, &skill_name)
+                    .ok_or_else(|| format!("未在 GitHub 仓库中找到 {skill_name}/SKILL.md"))?;
+            let mut entries =
+                marketplace_skill_entries_from_github_tree(&tree_entries, &root_path, &skill_name)?;
+            if entries.len() <= 1 {
+                return Err("Skill 目录中没有可预览文件".into());
+            }
+            cache_marketplace_skill_root(cache_key.clone(), root_path);
+            let root_entry = entries.remove(0);
+            entries.sort_by_key(marketplace_entry_sort_key);
+            entries.insert(0, root_entry);
+            let initial_file_path = marketplace_initial_file_path(&entries);
+            return Ok(SkillFileBrowserSnapshot {
+                skill_name,
+                root_name: entries[0].name.clone(),
+                entries,
+                initial_file_path,
+            });
+        }
+        Err(error) => error,
+    };
+
     let mut root_paths = marketplace_skill_path_candidates(&skill_path)?;
     if let Some(cached_root) = cached_marketplace_skill_root(&cache_key) {
         if !root_paths.contains(&cached_root) {
             root_paths.insert(0, cached_root);
         }
     }
-    let client = marketplace_http_client()?;
-    let mut last_error = "Skill 目录中没有可预览文件".to_string();
 
     for root_path in &root_paths {
         match fetch_marketplace_skill_entries(&client, &source, &root_path, &skill_name).await {
@@ -6089,15 +6320,34 @@ pub async fn get_marketplace_skill_file_content(
 ) -> Result<SkillFileDocument, String> {
     let source = parse_github_marketplace_source(&source_url)?;
     let cache_key = marketplace_skill_root_cache_key(&source, &skill_path);
-    let mut root_paths = marketplace_skill_path_candidates(&skill_path)?;
-    if let Some(cached_root) = cached_marketplace_skill_root(&cache_key) {
-        if !root_paths.contains(&cached_root) {
-            root_paths.insert(0, cached_root);
-        }
-    }
     let relative_path = normalize_marketplace_file_path(&relative_path, false)?;
     let client = marketplace_http_client()?;
-    let mut last_error = "Skill 文件不存在或路径无效".to_string();
+    if let Some(cached_root) = cached_marketplace_skill_root(&cache_key) {
+        return fetch_marketplace_skill_file_document(
+            &client,
+            &source,
+            &cached_root,
+            &relative_path,
+        )
+        .await;
+    }
+
+    let skill_name = skill_path.rsplit('/').next().unwrap_or_default();
+    let mut last_error = match fetch_marketplace_github_tree(&client, &source).await {
+        Ok(tree_entries) => {
+            let root_path =
+                marketplace_skill_root_from_github_tree(&tree_entries, &skill_path, skill_name)
+                    .ok_or_else(|| format!("未在 GitHub 仓库中找到 {skill_name}/SKILL.md"))?;
+            let document =
+                fetch_marketplace_skill_file_document(&client, &source, &root_path, &relative_path)
+                    .await?;
+            cache_marketplace_skill_root(cache_key, root_path);
+            return Ok(document);
+        }
+        Err(error) => error,
+    };
+
+    let root_paths = marketplace_skill_path_candidates(&skill_path)?;
     for root_path in &root_paths {
         match fetch_marketplace_skill_file_document(&client, &source, &root_path, &relative_path)
             .await
@@ -6110,7 +6360,6 @@ pub async fn get_marketplace_skill_file_content(
         }
     }
 
-    let skill_name = skill_path.rsplit('/').next().unwrap_or_default();
     let discovered_root = discover_marketplace_skill_root(&source, &skill_path, skill_name)
         .await
         .map_err(|error| format!("{last_error}；{error}"))?;
@@ -8563,11 +8812,22 @@ mod tests {
         .expect("parse GitHub marketplace source");
         let api_url =
             super::github_contents_api_url(&source, "skills/demo").expect("build API url");
+        let tree_url = super::github_tree_api_url(&source).expect("build tree API url");
+        let raw_url =
+            super::github_raw_file_url(&source, "skills/demo/SKILL.md").expect("build raw URL");
 
         assert_eq!(source.branch, None);
         assert_eq!(
             api_url.as_str(),
             "https://api.github.com/repos/example/skills/contents/skills/demo"
+        );
+        assert_eq!(
+            tree_url.as_str(),
+            "https://api.github.com/repos/example/skills/git/trees/HEAD?recursive=1"
+        );
+        assert_eq!(
+            raw_url.as_str(),
+            "https://raw.githubusercontent.com/example/skills/HEAD/skills/demo/SKILL.md"
         );
     }
 
@@ -8637,6 +8897,98 @@ mod tests {
             )
             .as_deref(),
             Some("plugins/languages/skills/typescript-advanced-types")
+        );
+    }
+
+    #[test]
+    fn discovers_marketplace_skill_at_repository_root() {
+        let tree_output = concat!(
+            "SKILL.md\n",
+            "examples/adler-perspective/SKILL.md\n",
+            "examples/paul-graham-perspective/SKILL.md\n",
+        );
+
+        assert_eq!(
+            super::marketplace_skill_root_from_tree(tree_output, "cangjie", "cangjie").as_deref(),
+            Some("")
+        );
+    }
+
+    #[test]
+    fn builds_root_marketplace_preview_from_github_tree() {
+        let tree_entries = vec![
+            super::GitHubTreeEntry {
+                path: "SKILL.md".into(),
+                entry_type: "blob".into(),
+            },
+            super::GitHubTreeEntry {
+                path: "examples".into(),
+                entry_type: "tree".into(),
+            },
+            super::GitHubTreeEntry {
+                path: "examples/adler-perspective/SKILL.md".into(),
+                entry_type: "blob".into(),
+            },
+        ];
+
+        let root =
+            super::marketplace_skill_root_from_github_tree(&tree_entries, "cangjie", "cangjie")
+                .expect("discover repository root skill");
+        let entries =
+            super::marketplace_skill_entries_from_github_tree(&tree_entries, &root, "cangjie")
+                .expect("build root preview entries");
+
+        assert_eq!(root, "");
+        assert!(entries.iter().any(|entry| entry.path == "SKILL.md"));
+        assert!(entries
+            .iter()
+            .any(|entry| entry.path == "examples/adler-perspective/SKILL.md"));
+    }
+
+    #[test]
+    fn github_tree_preview_only_includes_selected_nested_skill() {
+        let tree_entries = vec![
+            super::GitHubTreeEntry {
+                path: "skills/demo/SKILL.md".into(),
+                entry_type: "blob".into(),
+            },
+            super::GitHubTreeEntry {
+                path: "skills/demo/reference.md".into(),
+                entry_type: "blob".into(),
+            },
+            super::GitHubTreeEntry {
+                path: "skills/other/SKILL.md".into(),
+                entry_type: "blob".into(),
+            },
+        ];
+
+        let entries =
+            super::marketplace_skill_entries_from_github_tree(&tree_entries, "skills/demo", "demo")
+                .expect("build nested preview entries");
+
+        assert!(entries.iter().any(|entry| entry.path == "SKILL.md"));
+        assert!(entries.iter().any(|entry| entry.path == "reference.md"));
+        assert!(!entries.iter().any(|entry| entry.path.contains("other")));
+    }
+
+    #[test]
+    fn caches_marketplace_github_tree_by_repository_and_branch() {
+        let source = super::GitHubMarketplaceSource {
+            owner: "cache-test-owner".into(),
+            repository: "cache-test-repo".into(),
+            branch: Some("main".into()),
+        };
+        let cache_key = super::marketplace_github_tree_cache_key(&source);
+        let entries = vec![super::GitHubTreeEntry {
+            path: "SKILL.md".into(),
+            entry_type: "blob".into(),
+        }];
+
+        super::cache_marketplace_github_tree(cache_key.clone(), entries.clone());
+
+        assert_eq!(
+            super::cached_marketplace_github_tree(&cache_key),
+            Some(entries)
         );
     }
 

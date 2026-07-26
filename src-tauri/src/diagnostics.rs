@@ -129,11 +129,19 @@ fn build_safe_issue_url(title: &str, body: &str) -> String {
 
 fn build_issue_url_body(entry: &FailureLogEntry, log_path: &str) -> String {
     let compact_log = build_compact_failure_log(entry, log_path);
+    let failure_log_entry = serde_json::to_string(entry)
+        .map(|line| redact_home_path(&line))
+        .unwrap_or_else(|_| "{\"error\":\"诊断日志序列化失败\"}".to_string());
     let mut body = format!(
         r#"## 问题描述
 请描述你刚才点击了什么、期望发生什么、实际发生了什么。
 
-## 本次失败日志（自动过滤）
+## 本次错误日志原文（已自动脱敏）
+```jsonl
+{}
+```
+
+## 本次失败摘要（自动过滤）
 ```text
 {}
 ```
@@ -141,7 +149,7 @@ fn build_issue_url_body(entry: &FailureLogEntry, log_path: &str) -> String {
 ## 补充信息
 以上是 SkillDock 自动提取的关键错误信息；完整诊断仅保存在用户本机日志文件中。
 "#,
-        compact_log,
+        failure_log_entry, compact_log,
     );
     if body.chars().count() > MAX_ISSUE_URL_BODY_CHARS {
         body = body
@@ -419,4 +427,66 @@ fn macos_version_label() -> String {
 
 fn urlencoding(value: &str) -> String {
     url::form_urlencoded::byte_serialize(value.as_bytes()).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::{build_issue_url_body, sanitize_value, FailureLogEntry};
+
+    #[test]
+    fn issue_url_body_includes_the_matching_sanitized_failure_log_entry() {
+        let entry = FailureLogEntry {
+            id: "err-1785069593059".to_string(),
+            created_at: "1785069593".to_string(),
+            operation: "auto_check_for_app_update".to_string(),
+            message: "error sending request for url (https://example.com/latest.json)".to_string(),
+            app_version: "1.0.3".to_string(),
+            os_version: "macOS 26.5.2".to_string(),
+            context: sanitize_value(json!({
+                "route": "settings",
+                "authorization": "Bearer private-value",
+                "errorDetails": {
+                    "rootCause": "dns error: failed to lookup address information",
+                    "causeChain": [
+                        "client error (Connect)",
+                        "dns error: failed to lookup address information"
+                    ]
+                }
+            })),
+        };
+
+        let body = build_issue_url_body(&entry, "/Users/example/.skilldock/logs/errors.jsonl");
+        let expected_log_line = serde_json::to_string(&entry).expect("entry should serialize");
+
+        assert!(body.contains(&expected_log_line));
+        assert!(body.contains("diagnosticId: err-1785069593059"));
+        assert!(body.contains("\"authorization\":\"[REDACTED]\""));
+        assert!(!body.contains("Bearer private-value"));
+    }
+
+    #[test]
+    fn issue_url_body_keeps_the_full_failure_entry_before_truncating_the_summary() {
+        let root_cause = "network request failed ".repeat(30);
+        let entry = FailureLogEntry {
+            id: "err-long-context".to_string(),
+            created_at: "1785069593".to_string(),
+            operation: "auto_check_for_app_update".to_string(),
+            message: "update check failed".to_string(),
+            app_version: "1.0.3".to_string(),
+            os_version: "macOS 26.5.2".to_string(),
+            context: json!({
+                "errorDetails": {
+                    "rootCause": root_cause
+                }
+            }),
+        };
+
+        let body = build_issue_url_body(&entry, "/Users/example/.skilldock/logs/errors.jsonl");
+        let expected_log_line = serde_json::to_string(&entry).expect("entry should serialize");
+
+        assert!(body.contains(&expected_log_line));
+        assert!(body.ends_with("...摘要过长，已截断。"));
+    }
 }
