@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, vi } from "vitest";
 import { App } from "@/app/App";
@@ -10,32 +10,55 @@ import {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  appSettingsFixture.skillLibraryProvider = "skilldock";
+  appSettingsFixture.agentSkillsCompatibilityEnabled = false;
+  appSettingsFixture.agentSkillsCompatibilityConfigured = true;
+  window.localStorage.removeItem("skilldock.agentSkillsCompatibilityPromptCount");
 });
 
-test("prompts existing users up to three times when Agent Skills CLI is detected", async () => {
+test("prompts unconfigured existing users without checking Agent Skills CLI", async () => {
   const user = userEvent.setup();
+  appSettingsFixture.skillLibraryProvider = "skilldock";
   appSettingsFixture.agentSkillsCompatibilityEnabled = false;
-  window.localStorage.setItem("skilldock.agentSkillsCompatibilityPromptCount", "2");
-  const statusSpy = vi.spyOn(skillClient, "fetchAgentSkillsCliStatus").mockResolvedValue({
-    available: true,
-    globalPath: "/Users/demo/.agents/skills",
-    entries: [],
-    error: "",
-  });
+  appSettingsFixture.agentSkillsCompatibilityConfigured = false;
+  window.localStorage.setItem("skilldock.agentSkillsCompatibilityPromptCount", "3");
+  const statusSpy = vi.spyOn(skillClient, "fetchAgentSkillsCliStatus");
 
-  const firstRender = render(<App />);
+  render(<App />);
 
   expect(await screen.findByText("检测到 Agent Skills CLI，可在设置中开启兼容识别")).toBeInTheDocument();
-  expect(window.localStorage.getItem("skilldock.agentSkillsCompatibilityPromptCount")).toBe("3");
+  expect(window.localStorage.getItem("skilldock.agentSkillsCompatibilityPromptCount")).toBe("4");
+  expect(appSettingsFixture.agentSkillsCompatibilityConfigured).toBe(false);
+  expect(statusSpy).not.toHaveBeenCalled();
 
   await user.click(screen.getByRole("button", { name: "前往设置" }));
   expect(screen.getByRole("heading", { name: "设置" })).toBeInTheDocument();
+});
 
-  firstRender.unmount();
-  render(<App />);
+test("writes compatibility disabled after the fifth prompt", async () => {
+  appSettingsFixture.skillLibraryProvider = "skilldock";
+  appSettingsFixture.agentSkillsCompatibilityEnabled = false;
+  appSettingsFixture.agentSkillsCompatibilityConfigured = false;
+  window.localStorage.setItem("skilldock.agentSkillsCompatibilityPromptCount", "4");
+
+  let firstRender: ReturnType<typeof render>;
+  await act(async () => {
+    firstRender = render(<App />);
+  });
+
+  expect(await screen.findByText("检测到 Agent Skills CLI，可在设置中开启兼容识别")).toBeInTheDocument();
+  expect(window.localStorage.getItem("skilldock.agentSkillsCompatibilityPromptCount")).toBe("5");
+  await waitFor(() => {
+    expect(appSettingsFixture.agentSkillsCompatibilityConfigured).toBe(true);
+  });
+  expect(appSettingsFixture.agentSkillsCompatibilityEnabled).toBe(false);
+
+  firstRender!.unmount();
+  await act(async () => {
+    render(<App />);
+  });
 
   expect(screen.queryByText("检测到 Agent Skills CLI，可在设置中开启兼容识别")).not.toBeInTheDocument();
-  expect(statusSpy).toHaveBeenCalledTimes(1);
 });
 
 test("shows same-name Skill instances with their directory owners", async () => {

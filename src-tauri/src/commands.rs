@@ -8411,6 +8411,7 @@ mod tests {
             skill_library_path: "/tmp/.skilldock/skills".into(),
             skill_library_provider: "skilldock".into(),
             agent_skills_compatibility_enabled: false,
+            agent_skills_compatibility_configured: true,
             default_open_tool_id: "cursor".into(),
             skill_install_activation: "apply-all-tools".into(),
             mcp_install_activation: "apply-all-tools".into(),

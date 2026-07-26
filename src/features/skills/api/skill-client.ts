@@ -1264,6 +1264,7 @@ export async function fetchAppSettings(): Promise<AppSettings> {
     ...settings,
     agentSkillsCompatibilityEnabled:
       settings.agentSkillsCompatibilityEnabled ?? settings.skillLibraryProvider === "agent-skills",
+    agentSkillsCompatibilityConfigured: settings.agentSkillsCompatibilityConfigured ?? true,
   };
 }
 

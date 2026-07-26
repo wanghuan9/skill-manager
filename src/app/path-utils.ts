@@ -14,3 +14,19 @@ export function getDirectoryPath(filePath: string) {
 
   return normalizedPath.slice(0, lastSeparatorIndex);
 }
+
+export function formatPathForDisplay(filePath: string) {
+  return filePath.trim()
+    .replace(/^\\\\\?\\UNC\\/i, "\\\\")
+    .replace(/^\\\\\?\\/, "")
+    .replace(/^\/\/\?\/UNC\//i, "//")
+    .replace(/^\/\/\?\//, "");
+}
+
+export function formatHomePathForDisplay(filePath: string) {
+  const normalizedPath = formatPathForDisplay(filePath).replace(/\\/g, "/");
+
+  return normalizedPath
+    .replace(/^\/Users\/[^/]+(?=\/|$)/, "~")
+    .replace(/^[A-Z]:\/Users\/[^/]+(?=\/|$)/i, "~");
+}

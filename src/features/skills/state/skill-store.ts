@@ -343,6 +343,7 @@ export type AppSettings = {
   skillLibraryPath: string;
   skillLibraryProvider: SkillLibraryProvider;
   agentSkillsCompatibilityEnabled: boolean;
+  agentSkillsCompatibilityConfigured: boolean;
   defaultOpenToolId: string;
   skillInstallActivation: InstallActivationMode;
   mcpInstallActivation: InstallActivationMode;

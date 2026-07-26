@@ -5,6 +5,7 @@ import { alignExpandedRowIntoView } from "@/app/utils/align-expanded-row";
 import { useTranslate } from "@/app/i18n";
 import { useNotifications } from "@/app/notifications";
 import { useFailureReporter } from "@/app/failure-feedback";
+import { formatPathForDisplay } from "@/app/path-utils";
 import { waitForNextPaint } from "@/app/utils/wait-for-next-paint";
 import { PowerToggleIcon } from "@/features/skills/components/PowerToggleIcon";
 import { SkillStatusBadge } from "@/features/skills/components/SkillStatusBadge";
@@ -316,6 +317,7 @@ export function SkillCard({
       ? t("skill.card.sourceMethod.git")
       : t("skill.card.sourceMethod.local");
   const managedPath = skill.canonicalPath ?? skill.localPath;
+  const managedPathLabel = formatPathForDisplay(managedPath);
   const gridSourceSummary = `${sourceMethodLabel} · ${managementOwnerLabel}`;
   const showDetailAction = skill.collabStatus === "update-available";
   const canPreviewUpdates = showDetailAction
@@ -623,15 +625,15 @@ export function SkillCard({
             <dd className="skill-source-card__directory-value">
               <span
                 className="skill-source-card__directory-path detail-grid__single-line"
-                data-tooltip={managedPath}
+                data-tooltip={managedPathLabel}
               >
-                {managedPath}
+                {managedPathLabel}
               </span>
               <button
                 className="skill-card__icon-button skill-source-card__directory-open-button"
                 type="button"
                 onClick={() => void handleOpenManagedFolder()}
-                aria-label={t("skills.source.openPath", { path: managedPath })}
+                aria-label={t("skills.source.openPath", { path: managedPathLabel })}
                 data-tooltip={t("skills.source.openFolder")}
               >
                 <FolderIcon />

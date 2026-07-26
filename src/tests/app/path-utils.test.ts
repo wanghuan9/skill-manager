@@ -1,4 +1,8 @@
-import { getDirectoryPath } from "@/app/path-utils";
+import {
+  formatHomePathForDisplay,
+  formatPathForDisplay,
+  getDirectoryPath,
+} from "@/app/path-utils";
 
 test("getDirectoryPath strips settings file on macOS paths", () => {
   expect(getDirectoryPath("/Users/demo/.skilldock/settings.json")).toBe("/Users/demo/.skilldock");
@@ -12,4 +16,20 @@ test("getDirectoryPath strips settings file on Windows paths", () => {
 test("getDirectoryPath supports mixed separators", () => {
   expect(getDirectoryPath(String.raw`C:/Users/demo/.skilldock\settings.json`))
     .toBe(String.raw`C:/Users/demo/.skilldock`);
+});
+
+test.each([
+  ["/Users/demo/.skilldock/skills", "~/.skilldock/skills"],
+  [String.raw`C:\Users\demo\.skilldock\skills`, "~/.skilldock/skills"],
+  [String.raw`c:\users\demo\.agents\skills`, "~/.agents/skills"],
+  [String.raw`\\?\C:\Users\demo\.agents\skills\analyze-project`, "~/.agents/skills/analyze-project"],
+])("formatHomePathForDisplay abbreviates user directories", (filePath, expected) => {
+  expect(formatHomePathForDisplay(filePath)).toBe(expected);
+});
+
+test("formatPathForDisplay only removes the Windows extended path prefix", () => {
+  expect(formatPathForDisplay(String.raw`\\?\C:\Users\demo\.agents\skills`))
+    .toBe(String.raw`C:\Users\demo\.agents\skills`);
+  expect(formatPathForDisplay(String.raw`\\?\UNC\server\share\skills`))
+    .toBe(String.raw`\\server\share\skills`);
 });

@@ -550,6 +550,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
           skillLibraryPath: "",
           skillLibraryProvider: "skilldock",
           agentSkillsCompatibilityEnabled: false,
+          agentSkillsCompatibilityConfigured: false,
           defaultOpenToolId: "",
           skillInstallActivation: "apply-all-tools",
           mcpInstallActivation: "apply-all-tools",
@@ -695,6 +696,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       ...appSettings,
       skillLibraryProvider: provider,
       agentSkillsCompatibilityEnabled: provider === "agent-skills",
+      agentSkillsCompatibilityConfigured: true,
     };
     setAppSettings(nextSettings);
     try {

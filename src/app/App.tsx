@@ -24,10 +24,10 @@ import { AppI18nProvider, tx, useTranslate } from "@/app/i18n";
 import { NotificationProvider, useNotifications } from "@/app/notifications";
 import { useFailureReporter } from "@/app/failure-feedback";
 import { FailureTracker } from "@/app/failure-tracker";
+import { formatHomePathForDisplay } from "@/app/path-utils";
 import { waitForNextPaint } from "@/app/utils/wait-for-next-paint";
 import { AppUpdateAutoPrompt } from "@/features/app-update/AppUpdateAutoPrompt";
 import { AppTooltip } from "@/app/components/AppTooltip";
-import { fetchAgentSkillsCliStatus } from "@/features/skills/api/skill-client";
 import {
   SkillWorkspaceProvider,
   useSkillWorkspace,
@@ -81,7 +81,7 @@ type RouteErrorBoundaryState = {
 
 const ROUTE_LOCAL_ALIGN_COOLDOWN_MS = 10_000;
 const AGENT_SKILLS_COMPATIBILITY_PROMPT_COUNT_KEY = "skilldock.agentSkillsCompatibilityPromptCount";
-const AGENT_SKILLS_COMPATIBILITY_PROMPT_MAX_COUNT = 3;
+const AGENT_SKILLS_COMPATIBILITY_PROMPT_MAX_COUNT = 5;
 
 class RouteErrorBoundary extends Component<
   RouteErrorBoundaryProps,
@@ -179,10 +179,6 @@ function isMacOSWindow() {
 
 function isWindowsWindow() {
   return /windows|win32|win64/i.test(getWindowPlatformSignature());
-}
-
-function formatSkillDirectoryPath(path: string) {
-  return path.trim().replace(/^\/Users\/[^/]+(?=\/|$)/, "~");
 }
 
 function NavRouteIcon(props: { route: RouteKey }) {
@@ -561,6 +557,7 @@ function AppContent() {
     language,
     toolSkillEntries,
     refreshWorkspace,
+    setSkillLibraryProvider,
     toolConfigs,
   } = useSkillWorkspace();
   const { t } = useTranslate();
@@ -608,7 +605,7 @@ function AppContent() {
 
   useEffect(() => {
     if (
-      appSettings.agentSkillsCompatibilityEnabled
+      appSettings.agentSkillsCompatibilityConfigured
       || appSettings.storagePath.trim().length === 0
       || compatibilityPromptCheckStartedRef.current
     ) {
@@ -624,28 +621,34 @@ function AppContent() {
     }
 
     compatibilityPromptCheckStartedRef.current = true;
-    void fetchAgentSkillsCliStatus()
-      .then((status) => {
-        if (!status.available) {
-          return;
-        }
+    const nextPromptCount = promptCount + 1;
+    window.localStorage.setItem(
+      AGENT_SKILLS_COMPATIBILITY_PROMPT_COUNT_KEY,
+      String(nextPromptCount),
+    );
+    notify({
+      message: t("settings.skillLibrary.startupPrompt"),
+      tone: "info",
+      actionLabel: t("settings.skillLibrary.openSettings"),
+      onAction: () => setActiveRoute("settings"),
+    });
 
-        const nextPromptCount = promptCount + 1;
+    if (nextPromptCount >= AGENT_SKILLS_COMPATIBILITY_PROMPT_MAX_COUNT) {
+      void setSkillLibraryProvider("skilldock").catch((error) => {
         window.localStorage.setItem(
           AGENT_SKILLS_COMPATIBILITY_PROMPT_COUNT_KEY,
-          String(nextPromptCount),
+          String(AGENT_SKILLS_COMPATIBILITY_PROMPT_MAX_COUNT - 1),
         );
-        notify({
-          message: t("settings.skillLibrary.startupPrompt"),
-          tone: "info",
-          actionLabel: t("settings.skillLibrary.openSettings"),
-          onAction: () => setActiveRoute("settings"),
-        });
-      })
-      .catch((error) => {
-        console.warn("Failed to detect Agent Skills CLI for startup prompt", error);
+        console.warn("Failed to finalize Agent Skills CLI compatibility prompt", error);
       });
-  }, [appSettings.agentSkillsCompatibilityEnabled, appSettings.storagePath, notify, t]);
+    }
+  }, [
+    appSettings.agentSkillsCompatibilityConfigured,
+    appSettings.storagePath,
+    notify,
+    setSkillLibraryProvider,
+    t,
+  ]);
 
   const hasShownSkillUpdateNotificationRef = useRef(false);
   const activeDefinition =
@@ -682,13 +685,13 @@ function AppContent() {
     activeRoute === "skills" && activeSkillsSection === "skills"
       ? activeSkillSourceTool && activeToolSkillCounts
         ? tx(language, "app.header.skills.sourceSummary", {
-            path: formatSkillDirectoryPath(activeSkillSourceTool.skillsPath),
+            path: formatHomePathForDisplay(activeSkillSourceTool.skillsPath),
             managed: activeToolSkillCounts.managed,
             unmanaged: activeToolSkillCounts.unmanaged,
             mismatch: activeToolSkillCounts.mismatch,
           })
         : tx(language, "app.header.skills.summary", {
-            path: formatSkillDirectoryPath(appSettings.skillLibraryPath),
+            path: formatHomePathForDisplay(appSettings.skillLibraryPath),
             installed: enabledManagedSkillCount,
             updatable: updatableSkillCount,
             pending: pendingSkillCount,
