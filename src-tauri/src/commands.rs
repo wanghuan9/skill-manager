@@ -12135,9 +12135,41 @@ mod tests {
             .find(|tool| tool.id == "mimo-code")
             .expect("mimo config");
         assert_eq!(
-            mimo.mcp_config_path,
-            home.join(".mimo-code/config.json").to_string_lossy()
+            mimo.skills_path,
+            home.join(".config/mimocode/skills").to_string_lossy()
         );
+        assert_eq!(
+            mimo.mcp_config_path,
+            home.join(".config/mimocode/mimocode.json")
+                .to_string_lossy()
+        );
+        let workbuddy = configs
+            .iter()
+            .find(|tool| tool.id == "workbuddy")
+            .expect("workbuddy config");
+        assert_eq!(
+            workbuddy.skills_path,
+            home.join(".workbuddy/skills").to_string_lossy()
+        );
+        assert_eq!(
+            workbuddy.mcp_config_path,
+            home.join(".workbuddy/.mcp.json").to_string_lossy()
+        );
+    }
+
+    #[test]
+    fn registered_tool_installation_uses_mimocode_install_root() {
+        let home = temp_test_dir("mimocode-installation-detection");
+        fs::create_dir_all(home.join(".mimocode/bin")).expect("create mimocode install root");
+
+        let configs = super::build_registered_tool_configs(&home);
+        let mimo = configs
+            .iter()
+            .find(|tool| tool.id == "mimo-code")
+            .expect("mimo config");
+        assert_eq!(mimo.status_label, "已安装");
+
+        let _ = fs::remove_dir_all(home);
     }
 
     #[test]

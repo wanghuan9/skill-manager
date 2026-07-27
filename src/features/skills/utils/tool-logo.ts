@@ -18,6 +18,7 @@ const TOOL_NAME_IDS: Record<string, string> = {
   "Qwen Code": "qwen-code",
   "Roo Code": "roo-code",
   "Trae CN": "trae-cn",
+  WorkBuddy: "workbuddy",
   Windsurf: "windsurf",
 };
 
@@ -28,6 +29,7 @@ const TOOL_DISPLAY_ORDER = [
   "omp",
   "grok",
   "mimo-code",
+  "workbuddy",
   "opencode",
   "cursor",
   "gemini",

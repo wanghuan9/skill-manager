@@ -5,15 +5,8 @@ use std::path::{Path, PathBuf};
 pub enum McpAdapterFormat {
     None,
     JsonObject { field: &'static str },
-    JsonArray { field: &'static str },
+    JsonObjectCommandArray { field: &'static str },
     TomlTable { field: &'static str },
-}
-
-/// Transport types accepted by a host tool's native MCP configuration.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum McpTransportPolicy {
-    Any,
-    StdioOnly,
 }
 
 /// Declarative metadata for a host tool added through the adapter registry.
@@ -28,12 +21,12 @@ pub struct ToolAdapterDefinition {
     pub surface_types: &'static [&'static str],
     pub supports_direct_open: bool,
     pub mcp_format: McpAdapterFormat,
-    pub mcp_transport_policy: McpTransportPolicy,
     pub software_app_names: &'static [&'static str],
     pub software_executable_names: &'static [&'static str],
 }
 
 const CLI_SURFACE: &[&str] = &["cli"];
+const DESKTOP_SURFACE: &[&str] = &["desktop"];
 const NO_SOFTWARE_NAMES: &[&str] = &[];
 
 /// New host tools supported by the extensible adapter path.
@@ -48,7 +41,6 @@ pub const TOOL_ADAPTER_DEFINITIONS: &[ToolAdapterDefinition] = &[
         surface_types: CLI_SURFACE,
         supports_direct_open: false,
         mcp_format: McpAdapterFormat::None,
-        mcp_transport_policy: McpTransportPolicy::Any,
         software_app_names: NO_SOFTWARE_NAMES,
         software_executable_names: &["pi"],
     },
@@ -64,7 +56,6 @@ pub const TOOL_ADAPTER_DEFINITIONS: &[ToolAdapterDefinition] = &[
         mcp_format: McpAdapterFormat::JsonObject {
             field: "mcpServers",
         },
-        mcp_transport_policy: McpTransportPolicy::Any,
         software_app_names: NO_SOFTWARE_NAMES,
         software_executable_names: &["omp"],
     },
@@ -80,25 +71,36 @@ pub const TOOL_ADAPTER_DEFINITIONS: &[ToolAdapterDefinition] = &[
         mcp_format: McpAdapterFormat::TomlTable {
             field: "mcp_servers",
         },
-        mcp_transport_policy: McpTransportPolicy::Any,
         software_app_names: NO_SOFTWARE_NAMES,
         software_executable_names: &["grok"],
     },
     ToolAdapterDefinition {
         id: "mimo-code",
         name: "MiMo Code",
-        skills_relative_path: ".mimo-code/skills",
-        mcp_relative_path: ".mimo-code/config.json",
-        install_probe_relative_path: ".mimo-code",
+        skills_relative_path: ".config/mimocode/skills",
+        mcp_relative_path: ".config/mimocode/mimocode.json",
+        install_probe_relative_path: ".mimocode",
         primary_type: "cli",
         surface_types: CLI_SURFACE,
         supports_direct_open: false,
-        mcp_format: McpAdapterFormat::JsonArray {
+        mcp_format: McpAdapterFormat::JsonObjectCommandArray { field: "mcp" },
+        software_app_names: NO_SOFTWARE_NAMES,
+        software_executable_names: &["mimo"],
+    },
+    ToolAdapterDefinition {
+        id: "workbuddy",
+        name: "WorkBuddy",
+        skills_relative_path: ".workbuddy/skills",
+        mcp_relative_path: ".workbuddy/.mcp.json",
+        install_probe_relative_path: ".workbuddy",
+        primary_type: "desktop",
+        surface_types: DESKTOP_SURFACE,
+        supports_direct_open: false,
+        mcp_format: McpAdapterFormat::JsonObject {
             field: "mcpServers",
         },
-        mcp_transport_policy: McpTransportPolicy::StdioOnly,
-        software_app_names: NO_SOFTWARE_NAMES,
-        software_executable_names: &["mimo-code"],
+        software_app_names: &["WorkBuddy"],
+        software_executable_names: NO_SOFTWARE_NAMES,
     },
 ];
 
@@ -126,7 +128,7 @@ mod tests {
     use std::path::PathBuf;
 
     #[test]
-    fn registry_contains_four_new_hosts_with_expected_paths() {
+    fn registry_contains_new_hosts_with_expected_paths() {
         let home = PathBuf::from("/Users/demo");
         let pi = definition("pi").expect("pi adapter");
         assert_eq!(
@@ -161,12 +163,30 @@ mod tests {
 
         let mimo = definition("mimo-code").expect("mimo adapter");
         assert_eq!(
+            resolve_skills_path(mimo, &home),
+            home.join(".config/mimocode/skills")
+        );
+        assert_eq!(
             resolve_mcp_path(mimo, &home),
-            Some(home.join(".mimo-code/config.json"))
+            Some(home.join(".config/mimocode/mimocode.json"))
         );
         assert!(matches!(
             mimo.mcp_format,
-            McpAdapterFormat::JsonArray {
+            McpAdapterFormat::JsonObjectCommandArray { field: "mcp" }
+        ));
+
+        let workbuddy = definition("workbuddy").expect("workbuddy adapter");
+        assert_eq!(
+            resolve_skills_path(workbuddy, &home),
+            home.join(".workbuddy/skills")
+        );
+        assert_eq!(
+            resolve_mcp_path(workbuddy, &home),
+            Some(home.join(".workbuddy/.mcp.json"))
+        );
+        assert!(matches!(
+            workbuddy.mcp_format,
+            McpAdapterFormat::JsonObject {
                 field: "mcpServers"
             }
         ));

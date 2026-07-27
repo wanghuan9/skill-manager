@@ -368,7 +368,8 @@ export const toolConfigFixtures: ToolConfig[] = [
   { id: "pi", name: "Pi", skillsPath: "/Users/demo/.pi/agent/skills", mcpConfigPath: "", supportsMcp: false, mcpConfigPathRecognized: false, statusLabel: "未安装", isEnabled: false, primaryType: "cli", surfaceTypes: ["cli"], supportsDirectOpen: false },
   { id: "omp", name: "OMP", skillsPath: "/Users/demo/.omp/agent/skills", mcpConfigPath: "/Users/demo/.omp/agent/mcp.json", supportsMcp: true, mcpConfigPathRecognized: true, statusLabel: "未安装", isEnabled: false, primaryType: "cli", surfaceTypes: ["cli"], supportsDirectOpen: false },
   { id: "grok", name: "Grok Build", skillsPath: "/Users/demo/.grok/skills", mcpConfigPath: "/Users/demo/.grok/config.toml", supportsMcp: true, mcpConfigPathRecognized: true, statusLabel: "未安装", isEnabled: false, primaryType: "cli", surfaceTypes: ["cli"], supportsDirectOpen: false },
-  { id: "mimo-code", name: "MiMo Code", skillsPath: "/Users/demo/.mimo-code/skills", mcpConfigPath: "/Users/demo/.mimo-code/config.json", supportsMcp: true, mcpConfigPathRecognized: true, statusLabel: "未安装", isEnabled: false, primaryType: "cli", surfaceTypes: ["cli"], supportsDirectOpen: false },
+  { id: "mimo-code", name: "MiMo Code", skillsPath: "/Users/demo/.config/mimocode/skills", mcpConfigPath: "/Users/demo/.config/mimocode/mimocode.json", supportsMcp: true, mcpConfigPathRecognized: true, statusLabel: "未安装", isEnabled: false, primaryType: "cli", surfaceTypes: ["cli"], supportsDirectOpen: false },
+  { id: "workbuddy", name: "WorkBuddy", skillsPath: "/Users/demo/.workbuddy/skills", mcpConfigPath: "/Users/demo/.workbuddy/.mcp.json", supportsMcp: true, mcpConfigPathRecognized: true, statusLabel: "未安装", isEnabled: false, primaryType: "desktop", surfaceTypes: ["desktop"], supportsDirectOpen: false },
 ];
 
 const managedToolSkillEntryFixtures: ToolSkillEntry[] = toolConfigFixtures.flatMap((tool) =>
