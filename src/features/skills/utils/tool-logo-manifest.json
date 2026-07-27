@@ -1,6 +1,10 @@
 {
   "claude-code": "/tool-logos/claude-code.png",
   "codex": "/tool-logos/codex.png",
+  "pi": "/tool-logos/pi.svg",
+  "omp": "/tool-logos/omp.svg",
+  "grok": "/tool-logos/grok.svg",
+  "mimo-code": "/tool-logos/mimo-code.svg",
   "opencode": "/tool-logos/opencode.png",
   "cursor": "/tool-logos/cursor.png",
   "gemini": "/tool-logos/gemini.svg",

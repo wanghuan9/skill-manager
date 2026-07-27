@@ -17,6 +17,7 @@ use tauri::{AppHandle, Emitter};
 
 use crate::library::{command_for_executable, resolve_command_path};
 use crate::state::{load_app_settings, normalize_mcp_install_activation};
+use crate::tool_adapters;
 use crate::workspace::{
     self, remove_legacy_workspace_file, workspace_file_candidates, workspace_file_path,
 };
@@ -54,6 +55,12 @@ const APP_ROO_CODE: &str = "roo-code";
 const APP_TRAE: &str = "trae";
 const APP_TRAE_CN: &str = "trae-cn";
 const APP_ZENCODER: &str = "zencoder";
+#[cfg(test)]
+const APP_OMP: &str = "omp";
+#[cfg(test)]
+const APP_GROK: &str = "grok";
+#[cfg(test)]
+const APP_MIMO_CODE: &str = "mimo-code";
 const MCP_IMPORT_PROGRESS_EVENT: &str = "mcp-import-progress";
 static MCP_NPM_METADATA_CACHE: OnceLock<Mutex<HashMap<String, McpResolvedMetadata>>> =
     OnceLock::new();
@@ -858,7 +865,7 @@ fn target_app_specs() -> Result<Vec<McpTargetAppSpec>, String> {
     let home_dir = home_dir()?;
     let application_support_dir = workspace::application_support_dir_for_home(&home_dir);
 
-    Ok(vec![
+    let mut specs = vec![
         supported_app_spec(
             APP_AUGMENT,
             "Augment",
@@ -1030,7 +1037,21 @@ fn target_app_specs() -> Result<Vec<McpTargetAppSpec>, String> {
             application_support_dir.join("Trae CN/User/mcp.json"),
             application_support_dir.join("Trae CN"),
         ),
-    ])
+    ];
+
+    for definition in tool_adapters::TOOL_ADAPTER_DEFINITIONS {
+        let Some(config_path) = tool_adapters::resolve_mcp_path(definition, &home_dir) else {
+            continue;
+        };
+        specs.push(supported_app_spec(
+            definition.id,
+            definition.name,
+            config_path,
+            home_dir.join(definition.install_probe_relative_path),
+        ));
+    }
+
+    Ok(specs)
 }
 
 fn supported_app_spec(
@@ -1045,6 +1066,101 @@ fn supported_app_spec(
         config_path,
         config_dir,
         is_mcp_supported: true,
+    }
+}
+
+fn read_registered_mcp_servers(
+    app_id: &str,
+    config_path: &Path,
+) -> Result<Vec<(String, Value)>, String> {
+    let definition =
+        tool_adapters::definition(app_id).ok_or_else(|| format!("不支持的 MCP 应用：{app_id}"))?;
+    match definition.mcp_format {
+        tool_adapters::McpAdapterFormat::None => Ok(Vec::new()),
+        tool_adapters::McpAdapterFormat::JsonObject { field } => {
+            read_json_mcp_servers(config_path, field, false)
+        }
+        tool_adapters::McpAdapterFormat::JsonArray { field } => {
+            read_json_array_mcp_servers(config_path, field)
+        }
+        tool_adapters::McpAdapterFormat::TomlTable { field } => {
+            read_toml_mcp_servers(config_path, field)
+        }
+    }
+}
+
+fn upsert_registered_mcp_server(
+    app_id: &str,
+    config_path: &Path,
+    server_id: &str,
+    server: &Value,
+) -> Result<(), String> {
+    let definition =
+        tool_adapters::definition(app_id).ok_or_else(|| format!("不支持的 MCP 应用：{app_id}"))?;
+    validate_registered_mcp_transport(definition, server)?;
+    match definition.mcp_format {
+        tool_adapters::McpAdapterFormat::None => Err(format!("{app_id} 暂不支持 MCP 配置同步")),
+        tool_adapters::McpAdapterFormat::JsonObject { field } => {
+            upsert_json_mcp_server(config_path, field, server_id, server)
+        }
+        tool_adapters::McpAdapterFormat::JsonArray { field } => {
+            upsert_json_array_mcp_server(config_path, field, server_id, server)
+        }
+        tool_adapters::McpAdapterFormat::TomlTable { field } => {
+            upsert_toml_mcp_server(config_path, field, server_id, server)
+        }
+    }
+}
+
+fn validate_registered_mcp_transport(
+    definition: &tool_adapters::ToolAdapterDefinition,
+    server: &Value,
+) -> Result<(), String> {
+    if !matches!(
+        definition.mcp_transport_policy,
+        tool_adapters::McpTransportPolicy::StdioOnly
+    ) {
+        return Ok(());
+    }
+
+    let server_type = server
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| {
+            if server.get("url").is_some() {
+                "http"
+            } else {
+                "stdio"
+            }
+        });
+    if server_type == "stdio" {
+        Ok(())
+    } else {
+        Err(format!(
+            "{} MCP 配置仅支持 stdio 类型服务器",
+            definition.name
+        ))
+    }
+}
+
+fn remove_registered_mcp_server(
+    app_id: &str,
+    config_path: &Path,
+    server_id: &str,
+) -> Result<(), String> {
+    let definition =
+        tool_adapters::definition(app_id).ok_or_else(|| format!("不支持的 MCP 应用：{app_id}"))?;
+    match definition.mcp_format {
+        tool_adapters::McpAdapterFormat::None => Err(format!("{app_id} 暂不支持 MCP 配置同步")),
+        tool_adapters::McpAdapterFormat::JsonObject { field } => {
+            remove_json_mcp_server(config_path, field, server_id)
+        }
+        tool_adapters::McpAdapterFormat::JsonArray { field } => {
+            remove_json_array_mcp_server(config_path, field, server_id)
+        }
+        tool_adapters::McpAdapterFormat::TomlTable { field } => {
+            remove_toml_mcp_server(config_path, field, server_id)
+        }
     }
 }
 
@@ -1077,7 +1193,7 @@ fn read_servers_from_app(app: &McpTargetAppSpec) -> Result<Vec<(String, Value)>,
         APP_TRAE_CN => read_trae_cn_mcp_servers(),
         APP_DROID => read_json_mcp_servers(&app.config_path, "mcpServers", false),
         APP_CRUSH => read_json_mcp_servers(&app.config_path, "mcp", false),
-        _ => Ok(Vec::new()),
+        _ => read_registered_mcp_servers(app.id, &app.config_path),
     }
 }
 
@@ -1122,7 +1238,7 @@ fn sync_server_to_app(app_id: &str, server_id: &str, server: &Value) -> Result<(
         APP_TRAE_CN => upsert_trae_cn_mcp_server(server_id, server),
         APP_DROID => upsert_json_mcp_server(&spec.config_path, "mcpServers", server_id, server),
         APP_CRUSH => upsert_json_mcp_server(&spec.config_path, "mcp", server_id, server),
-        _ => Err(format!("不支持的 MCP 应用：{app_id}")),
+        _ => upsert_registered_mcp_server(app_id, &spec.config_path, server_id, server),
     }
 }
 
@@ -1163,7 +1279,7 @@ fn remove_server_from_app(app_id: &str, server_id: &str) -> Result<(), String> {
         APP_TRAE_CN => remove_trae_cn_mcp_server(server_id),
         APP_DROID => remove_json_mcp_server(&spec.config_path, "mcpServers", server_id),
         APP_CRUSH => remove_json_mcp_server(&spec.config_path, "mcp", server_id),
-        _ => Err(format!("不支持的 MCP 应用：{app_id}")),
+        _ => remove_registered_mcp_server(app_id, &spec.config_path, server_id),
     }
 }
 
@@ -1294,6 +1410,104 @@ fn ensure_json_object_path<'a>(
         .or_insert_with(|| Value::Object(Map::new()));
     leaf.as_object_mut()
         .ok_or_else(|| format!("{field_name} 必须是 JSON 对象"))
+}
+
+fn ensure_json_array_path<'a>(
+    root: &'a mut Map<String, Value>,
+    field_name: &str,
+) -> Result<&'a mut Vec<Value>, String> {
+    let entry = root
+        .entry(field_name.to_string())
+        .or_insert_with(|| Value::Array(Vec::new()));
+    entry
+        .as_array_mut()
+        .ok_or_else(|| format!("{field_name} 必须是 JSON 数组"))
+}
+
+fn read_json_array_mcp_servers(
+    path: &Path,
+    field_name: &str,
+) -> Result<Vec<(String, Value)>, String> {
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+
+    let root = read_json_value(path, false)?;
+    let Some(entries) = root.get(field_name).and_then(Value::as_array) else {
+        return Ok(Vec::new());
+    };
+    let mut servers = Vec::new();
+    for entry in entries {
+        let Some(mut server) = entry.as_object().cloned() else {
+            continue;
+        };
+        let Some(server_id) = server
+            .remove("name")
+            .and_then(|value| value.as_str().map(str::to_string))
+        else {
+            continue;
+        };
+        if server_id.trim().is_empty() {
+            continue;
+        }
+        let mut server = Value::Object(server);
+        normalize_imported_mcp_server(&mut server);
+        servers.push((server_id, server));
+    }
+    Ok(servers)
+}
+
+fn upsert_json_array_mcp_server(
+    path: &Path,
+    field_name: &str,
+    server_id: &str,
+    server: &Value,
+) -> Result<(), String> {
+    let mut root = if path.exists() {
+        read_json_value(path, false)?
+    } else {
+        json!({})
+    };
+    let obj = root
+        .as_object_mut()
+        .ok_or_else(|| format!("{} 根节点必须是 JSON 对象", path.display()))?;
+    let entries = ensure_json_array_path(obj, field_name)?;
+    let mut native_server = server
+        .as_object()
+        .cloned()
+        .ok_or_else(|| "MCP 服务器定义必须为 JSON 对象".to_string())?;
+    native_server.remove("type");
+    native_server.insert("name".to_string(), Value::String(server_id.to_string()));
+    entries.retain(|entry| {
+        entry
+            .get("name")
+            .and_then(Value::as_str)
+            .map(|name| name != server_id)
+            .unwrap_or(true)
+    });
+    entries.push(Value::Object(native_server));
+    write_json_value(path, &root)
+}
+
+fn remove_json_array_mcp_server(
+    path: &Path,
+    field_name: &str,
+    server_id: &str,
+) -> Result<(), String> {
+    if !path.exists() {
+        return Ok(());
+    }
+    let mut root = read_json_value(path, false)?;
+    if let Some(entries) = root.get_mut(field_name).and_then(Value::as_array_mut) {
+        entries.retain(|entry| {
+            entry
+                .get("name")
+                .and_then(Value::as_str)
+                .map(|name| name != server_id)
+                .unwrap_or(true)
+        });
+    }
+    write_json_value(path, &root)
 }
 
 fn codebuddy_mcp_candidate_paths() -> Result<Vec<PathBuf>, String> {
@@ -1514,6 +1728,57 @@ fn read_codex_mcp_servers(path: &Path) -> Result<Vec<(String, Value)>, String> {
         }
     }
     Ok(servers)
+}
+
+fn read_toml_mcp_servers(path: &Path, field_name: &str) -> Result<Vec<(String, Value)>, String> {
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let doc = read_toml_document(path)?;
+    let Some(table) = doc.get(field_name).and_then(|item| item.as_table()) else {
+        return Ok(Vec::new());
+    };
+    let mut servers = Vec::new();
+    for (id, item) in table {
+        let Some(server_table) = item.as_table() else {
+            continue;
+        };
+        if server_table
+            .get("enabled")
+            .and_then(|value| value.as_bool())
+            == Some(false)
+        {
+            continue;
+        }
+        servers.push((id.to_string(), codex_table_to_json(server_table)));
+    }
+    Ok(servers)
+}
+
+fn upsert_toml_mcp_server(
+    path: &Path,
+    field_name: &str,
+    server_id: &str,
+    server: &Value,
+) -> Result<(), String> {
+    let mut doc = read_toml_document(path)?;
+    if !doc.as_table().contains_key(field_name) {
+        doc[field_name] = toml_edit::table();
+    }
+    let table = json_server_to_toml_table(server)?;
+    doc[field_name][server_id] = toml_edit::Item::Table(table);
+    write_text_value(path, &doc.to_string())
+}
+
+fn remove_toml_mcp_server(path: &Path, field_name: &str, server_id: &str) -> Result<(), String> {
+    if !path.exists() {
+        return Ok(());
+    }
+    let mut doc = read_toml_document(path)?;
+    if let Some(table) = doc.get_mut(field_name).and_then(|item| item.as_table_mut()) {
+        table.remove(server_id);
+    }
+    write_text_value(path, &doc.to_string())
 }
 
 fn upsert_codex_mcp_server(path: &Path, server_id: &str, server: &Value) -> Result<(), String> {
@@ -5264,6 +5529,117 @@ fn base64_url_decode(value: &str) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn registered_json_object_adapter_round_trips_omp_config() {
+        let temp_dir = env::temp_dir().join(format!(
+            "skilldock-omp-adapter-{}-{}",
+            std::process::id(),
+            unix_millis()
+        ));
+        fs::create_dir_all(&temp_dir).expect("create omp adapter directory");
+        let path = temp_dir.join("mcp.json");
+        fs::write(
+            &path,
+            r#"{"$schema":"keep","mcpServers":{"existing":{"command":"old"}},"other":true}"#,
+        )
+        .expect("write omp config");
+        let server = json!({"type":"stdio","command":"npx","args":["-y","demo-mcp"]});
+
+        upsert_registered_mcp_server(APP_OMP, &path, "demo", &server).expect("upsert omp server");
+        let servers = read_registered_mcp_servers(APP_OMP, &path).expect("read omp servers");
+        assert!(servers.iter().any(|(id, _)| id == "existing"));
+        assert!(servers.iter().any(|(id, _)| id == "demo"));
+        let root: Value = serde_json::from_str(&fs::read_to_string(&path).expect("read omp file"))
+            .expect("parse omp file");
+        assert_eq!(root.get("$schema").and_then(Value::as_str), Some("keep"));
+        assert_eq!(root.get("other").and_then(Value::as_bool), Some(true));
+
+        remove_registered_mcp_server(APP_OMP, &path, "demo").expect("remove omp server");
+        let servers = read_registered_mcp_servers(APP_OMP, &path).expect("read omp after remove");
+        assert_eq!(servers.len(), 1);
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn registered_toml_adapter_round_trips_grok_config() {
+        let temp_dir = env::temp_dir().join(format!(
+            "skilldock-grok-adapter-{}-{}",
+            std::process::id(),
+            unix_millis()
+        ));
+        fs::create_dir_all(&temp_dir).expect("create grok adapter directory");
+        let path = temp_dir.join("config.toml");
+        fs::write(&path, "[models]\ndefault = \"grok-4.5\"\n").expect("write grok config");
+        let server = json!({"type":"stdio","command":"npx","args":["-y","demo-mcp"]});
+
+        upsert_registered_mcp_server(APP_GROK, &path, "demo", &server).expect("upsert grok server");
+        let servers = read_registered_mcp_servers(APP_GROK, &path).expect("read grok servers");
+        assert_eq!(servers.len(), 1);
+        assert_eq!(servers[0].0, "demo");
+        assert_eq!(
+            servers[0].1.get("command").and_then(Value::as_str),
+            Some("npx")
+        );
+        let content = fs::read_to_string(&path).expect("read grok file");
+        assert!(content.contains("[models]"));
+        assert!(content.contains("[mcp_servers.demo]"));
+
+        remove_registered_mcp_server(APP_GROK, &path, "demo").expect("remove grok server");
+        assert!(read_registered_mcp_servers(APP_GROK, &path)
+            .expect("read grok after remove")
+            .is_empty());
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn registered_json_array_adapter_round_trips_mimo_config() {
+        let temp_dir = env::temp_dir().join(format!(
+            "skilldock-mimo-adapter-{}-{}",
+            std::process::id(),
+            unix_millis()
+        ));
+        fs::create_dir_all(&temp_dir).expect("create mimo adapter directory");
+        let path = temp_dir.join("config.json");
+        fs::write(
+            &path,
+            r#"{"apiKey":"keep","mcpServers":[{"name":"existing","command":"old"}]}"#,
+        )
+        .expect("write mimo config");
+        let server = json!({"type":"stdio","command":"npx","args":["-y","demo-mcp"]});
+
+        upsert_registered_mcp_server(APP_MIMO_CODE, &path, "demo", &server)
+            .expect("upsert mimo server");
+        let servers = read_registered_mcp_servers(APP_MIMO_CODE, &path).expect("read mimo servers");
+        assert_eq!(servers.len(), 2);
+        assert!(servers.iter().any(|(id, _)| id == "demo"));
+        let root: Value = serde_json::from_str(&fs::read_to_string(&path).expect("read mimo file"))
+            .expect("parse mimo file");
+        assert_eq!(root.get("apiKey").and_then(Value::as_str), Some("keep"));
+
+        let remote_server = json!({"type":"http","url":"https://example.com/mcp"});
+        let error = upsert_registered_mcp_server(APP_MIMO_CODE, &path, "remote", &remote_server)
+            .expect_err("mimo should reject remote server");
+        assert!(error.contains("仅支持 stdio"));
+        let implicit_remote_server = json!({"url":"https://example.com/mcp"});
+        let error = upsert_registered_mcp_server(
+            APP_MIMO_CODE,
+            &path,
+            "implicit-remote",
+            &implicit_remote_server,
+        )
+        .expect_err("mimo should reject a remote server without an explicit type");
+        assert!(error.contains("MiMo Code"));
+
+        remove_registered_mcp_server(APP_MIMO_CODE, &path, "demo").expect("remove mimo server");
+        assert_eq!(
+            read_registered_mcp_servers(APP_MIMO_CODE, &path)
+                .expect("read mimo after remove")
+                .len(),
+            1
+        );
+        let _ = fs::remove_dir_all(temp_dir);
+    }
 
     #[test]
     fn codex_table_to_json_infers_http_from_url() {
