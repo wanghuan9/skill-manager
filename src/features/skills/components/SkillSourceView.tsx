@@ -1,6 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useFailureReporter } from "@/app/failure-feedback";
+import {
+  BatchActionBar,
+  BatchDeleteDialog,
+  BatchSelectionMark,
+} from "@/app/components/BatchActions";
+import { useBatchSelection } from "@/app/hooks/useBatchSelection";
 import { useTranslate, type TranslationKey } from "@/app/i18n";
 import { useNotifications } from "@/app/notifications";
 import { SkillFileDialog } from "@/features/skills/components/SkillFileDialog";
@@ -23,7 +29,9 @@ import {
 
 type SkillSourceViewProps = {
   activeSourceId: SkillSourceId;
+  isBatchSelecting: boolean;
   onActiveSourceIdChange: (sourceId: SkillSourceId) => void;
+  onBatchSelectingChange: (value: boolean) => void;
   onShowManagedSkill: (skillName: string) => void;
   managementFilter: ToolSkillManagementFilter;
   query: string;
@@ -127,7 +135,10 @@ function SkillSourceRow(props: {
   toolName: string;
   isExpanded: boolean;
   isImporting: boolean;
+  selectionMode: boolean;
+  selected: boolean;
   onExpandedChange: (expanded: boolean) => void;
+  onSelectionToggle: () => void;
   onImport: (item: ToolSkillViewItem) => void;
   onOpenFolder: (path: string) => void;
   onViewFiles: (item: ToolSkillViewItem) => void;
@@ -141,10 +152,13 @@ function SkillSourceRow(props: {
     toolName,
     isExpanded,
     isImporting,
+    selectionMode,
+    selected,
     onDelete,
     onExpandedChange,
     onImport,
     onOpenFolder,
+    onSelectionToggle,
     onShowManaged,
     onViewFiles,
   } = props;
@@ -305,17 +319,20 @@ function SkillSourceRow(props: {
   return (
     <>
       <article
-        className={`skill-card skill-source-card skill-source-card--${layout}${isExpanded ? " is-expanded" : ""}`}
+        className={`skill-card skill-source-card skill-source-card--${layout}${isExpanded ? " is-expanded" : ""}${selectionMode ? " is-selecting" : ""}${selected ? " is-selected" : ""}`}
         aria-label={item.name}
       >
         <button
           className="skill-card__identity skill-source-card__summary-button"
           type="button"
-          onClick={() => onExpandedChange(!isExpanded)}
-          aria-expanded={isExpanded}
-          aria-controls={detailsId}
-          aria-label={item.name}
+          onClick={selectionMode ? onSelectionToggle : () => onExpandedChange(!isExpanded)}
+          role={selectionMode ? "checkbox" : undefined}
+          aria-checked={selectionMode ? selected : undefined}
+          aria-expanded={selectionMode ? undefined : isExpanded}
+          aria-controls={selectionMode ? undefined : detailsId}
+          aria-label={selectionMode ? t("batch.item.toolSkill", { name: item.name }) : item.name}
         >
+          {selectionMode ? <BatchSelectionMark checked={selected} /> : null}
           <SkillSourceMonogram name={item.name} />
           <div className="skill-card__title-stack">
             <div className="skill-card__title-row">
@@ -335,7 +352,7 @@ function SkillSourceRow(props: {
             <p className="skill-card__summary-description">{description}</p>
           </div>
         </button>
-        <div className="skill-card__list-actions">
+        {!selectionMode ? <div className="skill-card__list-actions">
           {managedRootLabel && isGridLayout ? (
             <span className="skill-card__grid-source-label">
               <span className="skill-card__grid-source-text">{managedRootLabel}</span>
@@ -420,14 +437,14 @@ function SkillSourceRow(props: {
               </span>
             </button>
           ) : null}
-        </div>
-        {isExpanded && !isGridLayout ? (
+        </div> : null}
+        {!selectionMode && isExpanded && !isGridLayout ? (
           <div id={detailsId} className="skill-card__details skill-source-card__details">
             {detailsContent}
           </div>
         ) : null}
       </article>
-      {isExpanded && isGridLayout ? createPortal(
+      {!selectionMode && isExpanded && isGridLayout ? createPortal(
         <div
           className="skill-card-detail-modal__backdrop"
           role="presentation"
@@ -509,7 +526,16 @@ function SkillSourceRow(props: {
 }
 
 export function SkillSourceView(props: SkillSourceViewProps) {
-  const { activeSourceId, managementFilter, onActiveSourceIdChange, onShowManagedSkill, query, viewMode } = props;
+  const {
+    activeSourceId,
+    isBatchSelecting,
+    managementFilter,
+    onActiveSourceIdChange,
+    onBatchSelectingChange,
+    onShowManagedSkill,
+    query,
+    viewMode,
+  } = props;
   const { t } = useTranslate();
   const { notify } = useNotifications();
   const reportFailure = useFailureReporter();
@@ -527,6 +553,8 @@ export function SkillSourceView(props: SkillSourceViewProps) {
   const [sourceHeaderContainer, setSourceHeaderContainer] = useState<HTMLElement | null>(null);
   const [importingPaths, setImportingPaths] = useState<Set<string>>(new Set());
   const [expandedItemId, setExpandedItemId] = useState("");
+  const [batchAction, setBatchAction] = useState<"import" | "delete" | "">("");
+  const [isBatchDeleteConfirming, setIsBatchDeleteConfirming] = useState(false);
   const [viewingToolSkill, setViewingToolSkill] = useState<{ item: ToolSkillViewItem; toolId: string } | null>(null);
   const rowsByTool = useMemo(() => new Map(sourceTools.map((tool) => [
     tool.id,
@@ -547,6 +575,11 @@ export function SkillSourceView(props: SkillSourceViewProps) {
       .includes(normalizedQuery);
     return matchesFilter && matchesQuery;
   });
+  const visibleRowIds = useMemo(() => visibleRows.map((item) => item.id), [visibleRows]);
+  const batchSelection = useBatchSelection(visibleRowIds);
+  const selectedBatchRows = visibleRows.filter((item) => batchSelection.selectedIds.has(item.id));
+  const importableBatchRows = selectedBatchRows.filter((item) => item.status === "unmanaged");
+  const isBatchBusy = batchAction !== "";
   const sourceViewMode = viewMode === "grid" ? "grid" : "list";
 
   useEffect(() => {
@@ -562,6 +595,16 @@ export function SkillSourceView(props: SkillSourceViewProps) {
   useEffect(() => {
     setExpandedItemId("");
   }, [activeSourceId]);
+
+  useEffect(() => {
+    if (isBatchSelecting && selectedTool) {
+      batchSelection.enterSelection();
+      setExpandedItemId("");
+      return;
+    }
+    batchSelection.exitSelection();
+    setIsBatchDeleteConfirming(false);
+  }, [batchSelection.enterSelection, batchSelection.exitSelection, isBatchSelecting, selectedTool]);
 
   async function handleOpenFolder(item: ToolSkillViewItem, path: string) {
     try {
@@ -619,6 +662,88 @@ export function SkillSourceView(props: SkillSourceViewProps) {
     }
   }
 
+  function finishBatchAction(
+    actionLabel: string,
+    targetIds: string[],
+    results: PromiseSettledResult<void>[],
+    skippedCount = 0,
+  ) {
+    const failedIds = results.flatMap((result, index) => (
+      result.status === "rejected" ? [targetIds[index]] : []
+    ));
+    const successCount = results.length - failedIds.length;
+    batchSelection.keepSelected(failedIds);
+
+    if (failedIds.length === 0) {
+      notify({
+        tone: "success",
+        message: t("batch.result.success", { action: actionLabel, count: successCount, skipped: skippedCount }),
+      });
+      onBatchSelectingChange(false);
+      return;
+    }
+
+    notify({
+      tone: successCount > 0 ? "info" : "error",
+      message: t("batch.result.partial", {
+        action: actionLabel,
+        success: successCount,
+        failed: failedIds.length,
+        skipped: skippedCount,
+      }),
+    });
+  }
+
+  async function runBatchAction(
+    action: "import" | "delete",
+    actionLabel: string,
+    targets: ToolSkillViewItem[],
+    operation: (item: ToolSkillViewItem) => Promise<void>,
+    skippedCount = 0,
+  ) {
+    if (isBatchBusy || targets.length === 0) {
+      return;
+    }
+    setBatchAction(action);
+    const results: PromiseSettledResult<void>[] = [];
+    try {
+      for (const target of targets) {
+        try {
+          await operation(target);
+          results.push({ status: "fulfilled", value: undefined });
+        } catch (reason) {
+          results.push({ status: "rejected", reason });
+        }
+      }
+      finishBatchAction(actionLabel, targets.map((item) => item.id), results, skippedCount);
+    } finally {
+      setBatchAction("");
+    }
+  }
+
+  async function handleBatchImport() {
+    await runBatchAction(
+      "import",
+      t("batch.action.import"),
+      importableBatchRows,
+      (item) => importCandidate(item.localPath),
+      selectedBatchRows.length - importableBatchRows.length,
+    );
+  }
+
+  async function handleBatchDelete() {
+    if (!selectedTool) {
+      return;
+    }
+    setIsBatchDeleteConfirming(false);
+    await runBatchAction(
+      "delete",
+      t("batch.action.delete"),
+      selectedBatchRows,
+      (item) => deleteToolSkill({ toolId: selectedTool.id, skillName: item.name }),
+    );
+  }
+
   const sourceHeader = (
     <div className="skills-source-header">
       <SkillSourceSwitcher
@@ -639,6 +764,39 @@ export function SkillSourceView(props: SkillSourceViewProps) {
 
       {selectedTool ? (
         <>
+          {batchSelection.isSelecting ? (
+            <BatchActionBar
+              actions={selectedBatchRows.length > 0 ? [
+                ...(importableBatchRows.length > 0 ? [{
+                  key: "import",
+                  label: t("batch.action.importCount", { count: importableBatchRows.length }),
+                  tone: "accent" as const,
+                  isBusy: batchAction === "import",
+                  onClick: () => void handleBatchImport(),
+                }] : []),
+                {
+                  key: "delete",
+                  label: t("batch.action.deleteCount", { count: selectedBatchRows.length }),
+                  tone: "danger" as const,
+                  isBusy: batchAction === "delete",
+                  onClick: () => setIsBatchDeleteConfirming(true),
+                },
+              ] : []}
+              ariaLabel={t("batch.toolbar.aria")}
+              cancelLabel={t("batch.cancel")}
+              deselectAllLabel={t("batch.deselectAll")}
+              hint={t("batch.hint")}
+              isAllVisibleSelected={batchSelection.isAllVisibleSelected}
+              isBusy={isBatchBusy}
+              selectedLabel={selectedBatchRows.length > 0
+                ? t("batch.selected", { count: selectedBatchRows.length })
+                : ""}
+              selectAllDisabled={visibleRows.length === 0}
+              selectAllLabel={t("batch.selectAll")}
+              onCancel={() => onBatchSelectingChange(false)}
+              onToggleSelectAll={batchSelection.toggleSelectAll}
+            />
+          ) : null}
           <div className={`card-list${sourceViewMode === "grid" ? " skill-source-card-grid" : ""}`}>
             {visibleRows.length > 0 ? visibleRows.map((item) => (
               <SkillSourceRow
@@ -648,7 +806,10 @@ export function SkillSourceView(props: SkillSourceViewProps) {
                 toolName={selectedTool.name}
                 isExpanded={expandedItemId === item.id}
                 isImporting={importingPaths.has(item.localPath)}
+                selectionMode={batchSelection.isSelecting}
+                selected={batchSelection.selectedIds.has(item.id)}
                 onExpandedChange={(expanded) => setExpandedItemId(expanded ? item.id : "")}
+                onSelectionToggle={() => batchSelection.toggleSelection(item.id)}
                 onImport={(target) => void handleImport(target)}
                 onDelete={handleDelete}
                 onOpenFolder={(path) => void handleOpenFolder(item, path)}
@@ -662,6 +823,22 @@ export function SkillSourceView(props: SkillSourceViewProps) {
               </div>
             )}
           </div>
+          <BatchDeleteDialog
+            cancelLabel={t("batch.cancel")}
+            confirmLabel={t("batch.delete.confirm")}
+            description={t("batch.delete.description.toolSkill", {
+              count: selectedBatchRows.length,
+              tool: selectedTool.name,
+            })}
+            isBusy={batchAction === "delete"}
+            isOpen={isBatchDeleteConfirming}
+            title={t("batch.delete.title.toolSkill", {
+              count: selectedBatchRows.length,
+              tool: selectedTool.name,
+            })}
+            onCancel={() => setIsBatchDeleteConfirming(false)}
+            onConfirm={() => void handleBatchDelete()}
+          />
         </>
       ) : null}
       {viewingToolSkill ? (

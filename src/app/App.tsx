@@ -292,6 +292,8 @@ function renderRoute(
   skillOwnerFilter: ManagedSkillOwnerFilter,
   skillManagementFilter: ToolSkillManagementFilter,
   skillViewMode: SkillViewMode,
+  isSkillBatchSelecting: boolean,
+  onSkillBatchSelectingChange: (isSelecting: boolean) => void,
   activeInstallCategory: InstallCategory,
   activeInstallTab: InstallTab,
   onInstallCategoryChange: (category: InstallCategory) => void,
@@ -350,6 +352,8 @@ function renderRoute(
       ownerFilter={skillOwnerFilter}
       managementFilter={skillManagementFilter}
       viewMode={skillViewMode}
+      isBatchSelecting={isSkillBatchSelecting}
+      onBatchSelectingChange={onSkillBatchSelectingChange}
     />
   );
 }
@@ -587,6 +591,7 @@ function AppContent() {
   const [skillViewMode, setSkillViewMode] = useState<SkillViewMode>(
     () => resolveSkillViewModePreference(initialSkillViewMode, installedSkills.length),
   );
+  const [isSkillBatchSelecting, setIsSkillBatchSelecting] = useState(false);
   const [hasSavedSkillViewPreference, setHasSavedSkillViewPreference] =
     useState(initialSkillViewMode !== null);
   const [activeInstallCategory, setActiveInstallCategory] =
@@ -602,6 +607,12 @@ function AppContent() {
   const routeLocalAlignInFlightRef = useRef(false);
   const lastRouteLocalAlignRef = useRef<{ key: string; timestamp: number } | null>(null);
   const compatibilityPromptCheckStartedRef = useRef(false);
+
+  useEffect(() => {
+    if (activeRoute !== "skills" || activeSkillsSection !== "skills") {
+      setIsSkillBatchSelecting(false);
+    }
+  }, [activeRoute, activeSkillsSection]);
 
   useEffect(() => {
     if (
@@ -712,12 +723,14 @@ function AppContent() {
       pageContentRef.current.scrollTop = 0;
     }
     setActiveSkillSourceId(sourceId);
+    setIsSkillBatchSelecting(false);
     setFocusedManagedSkillName("");
     setSkillManagementFilter("all");
   }
 
   function handleShowManagedSkill(skillName: string) {
     setActiveSkillSourceId(MANAGED_SKILL_SOURCE_ID);
+    setIsSkillBatchSelecting(false);
     setFocusedManagedSkillName(skillName);
     setSkillQuery("");
     setSkillStatusFilter("all");
@@ -729,6 +742,7 @@ function AppContent() {
     setActiveRoute("skills");
     setActiveSkillsSection("skills");
     setActiveSkillSourceId(MANAGED_SKILL_SOURCE_ID);
+    setIsSkillBatchSelecting(false);
     setSkillStatusFilter("update-available");
     setSkillQuery("");
     setSkillManagementFilter("all");
@@ -926,6 +940,8 @@ function AppContent() {
       onManagementFilterChange={setSkillManagementFilter}
       viewMode={skillViewMode}
       onViewModeChange={handleSkillViewModeChange}
+      isBatchSelecting={isSkillBatchSelecting}
+      onBatchSelectingChange={setIsSkillBatchSelecting}
       onGoInstall={() => handleOpenSkillInstall("market")}
     />
   );
@@ -1316,6 +1332,8 @@ function AppContent() {
               skillOwnerFilter,
               skillManagementFilter,
               skillViewMode,
+              isSkillBatchSelecting,
+              setIsSkillBatchSelecting,
               activeInstallCategory,
               activeInstallTab,
               setActiveInstallCategory,

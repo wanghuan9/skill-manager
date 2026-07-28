@@ -93,6 +93,56 @@ test("hydrates plugins from runtime cache before the refresh request resolves", 
   fixtureSpy.mockRestore();
 });
 
+test("selects plugins without opening details and requires confirmation before batch deletion", async () => {
+  renderWithI18n(<PluginsRoute />);
+
+  await screen.findByText("Repo Scout");
+  await userEvent.click(screen.getByRole("button", { name: "批量选择" }));
+  await userEvent.click(screen.getByRole("checkbox", { name: "选择插件 Repo Scout" }));
+
+  expect(screen.queryByText("基本信息")).not.toBeInTheDocument();
+  expect(screen.getByLabelText("批量操作")).toHaveTextContent("已选 1 个");
+  await userEvent.click(screen.getByRole("button", { name: "删除 1 个" }));
+
+  expect(screen.getByRole("dialog", { name: "删除 1 个插件？" })).toHaveTextContent("关联宿主安装");
+});
+
+test("deduplicates batch plugin updates that share the same repository", async () => {
+  const sharedRoot = "/Users/demo/workspace/shared-plugin-repo";
+  const sharedPlugins: PluginSummary[] = [
+    {
+      ...pluginFixtures[0],
+      id: "shared-alpha",
+      packageId: "shared-alpha",
+      name: "Shared Alpha",
+      rootPath: sharedRoot,
+      repoRootPath: sharedRoot,
+      manifestPath: `${sharedRoot}/alpha/.codex-plugin/plugin.json`,
+    },
+    {
+      ...pluginFixtures[0],
+      id: "shared-beta",
+      packageId: "shared-beta",
+      name: "Shared Beta",
+      rootPath: sharedRoot,
+      repoRootPath: sharedRoot,
+      manifestPath: `${sharedRoot}/beta/.codex-plugin/plugin.json`,
+    },
+  ];
+  vi.spyOn(skillClient, "fetchStartupInstalledPlugins").mockResolvedValueOnce(sharedPlugins);
+  const updateSpy = vi.spyOn(skillClient, "updatePlugin").mockResolvedValue(sharedPlugins[0]);
+
+  renderWithI18n(<PluginsRoute />);
+
+  await screen.findByText("Shared Alpha");
+  await userEvent.click(screen.getByRole("button", { name: "批量选择" }));
+  await userEvent.click(screen.getByRole("checkbox", { name: "选择插件 Shared Alpha" }));
+  await userEvent.click(screen.getByRole("checkbox", { name: "选择插件 Shared Beta" }));
+  await userEvent.click(screen.getByRole("button", { name: "更新 2 个" }));
+
+  await waitFor(() => expect(updateSpy).toHaveBeenCalledTimes(1));
+});
+
 test("switches plugins to cards, opens details in a dialog, and restores the preference", async () => {
   const firstRender = renderWithI18n(<PluginsRoute />);
 

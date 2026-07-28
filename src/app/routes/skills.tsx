@@ -16,6 +16,8 @@ type SkillsRouteProps = {
   ownerFilter: ManagedSkillOwnerFilter;
   managementFilter: ToolSkillManagementFilter;
   viewMode: SkillViewMode;
+  isBatchSelecting: boolean;
+  onBatchSelectingChange: (isSelecting: boolean) => void;
 };
 
 export function SkillsRoute(props: SkillsRouteProps) {
@@ -33,6 +35,8 @@ export function SkillsRoute(props: SkillsRouteProps) {
       ownerFilter={props.ownerFilter}
       managementFilter={props.managementFilter}
       viewMode={props.viewMode}
+      isBatchSelecting={props.isBatchSelecting}
+      onBatchSelectingChange={props.onBatchSelectingChange}
     />
   );
 }

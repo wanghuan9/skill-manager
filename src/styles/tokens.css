@@ -3048,6 +3048,303 @@ code {
   font-weight: 500;
 }
 
+.batch-mode-button {
+  width: 33px;
+  padding: 0;
+}
+
+.batch-mode-button .skills-toolbar-button__icon {
+  margin: 0;
+}
+
+.batch-action-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 14px;
+  min-height: 46px;
+  margin: 4px 0 8px;
+  padding: 7px 9px 7px 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 18%, var(--line) 82%);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--surface) 96%, var(--accent-soft) 4%);
+  box-shadow: 0 4px 14px color-mix(in srgb, var(--accent) 6%, transparent);
+}
+
+.batch-action-bar__summary {
+  flex: 0 0 auto;
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 0.73rem;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.batch-action-bar__actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.batch-action-bar__selection-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.batch-action-bar__selection-controls.has-actions {
+  margin-left: 2px;
+  padding-left: 8px;
+  border-left: 1px solid color-mix(in srgb, var(--line) 78%, transparent);
+}
+
+.batch-action-button,
+.batch-delete-dialog__confirm {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-strong);
+  color: var(--text);
+  font-size: 0.74rem;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background-color var(--motion-fast) var(--ease-standard),
+    border-color var(--motion-fast) var(--ease-standard),
+    box-shadow var(--motion-fast) var(--ease-standard),
+    color var(--motion-fast) var(--ease-standard),
+    transform var(--motion-fast) var(--ease-standard);
+}
+
+.batch-action-button:hover:not(:disabled),
+.batch-delete-dialog__confirm:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 3px 9px color-mix(in srgb, var(--heading) 8%, transparent);
+}
+
+.batch-action-button:disabled,
+.batch-delete-dialog__confirm:disabled {
+  cursor: not-allowed;
+  opacity: 0.52;
+}
+
+.batch-action-button.tone-accent {
+  border-color: color-mix(in srgb, var(--accent) 34%, var(--line) 66%);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.batch-action-button.tone-success {
+  border-color: color-mix(in srgb, var(--success) 34%, var(--line) 66%);
+  background: var(--success-soft);
+  color: var(--success);
+}
+
+.batch-action-button.tone-warning {
+  border-color: color-mix(in srgb, var(--warning) 38%, var(--line) 62%);
+  background: var(--warning-soft);
+  color: color-mix(in srgb, var(--warning) 84%, var(--heading) 16%);
+}
+
+.batch-action-button.tone-danger,
+.batch-delete-dialog__confirm {
+  border-color: color-mix(in srgb, var(--danger) 34%, var(--line) 66%);
+  background: color-mix(in srgb, var(--danger) 10%, var(--surface) 90%);
+  color: var(--danger);
+}
+
+.batch-selection-action {
+  border-color: transparent;
+  background: transparent;
+  color: color-mix(in srgb, var(--text) 62%, var(--muted) 38%);
+  font-weight: 500;
+}
+
+.batch-selection-action--toggle .batch-action-button__icon {
+  display: inline-flex;
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+}
+
+.batch-selection-action--toggle .batch-action-button__icon svg {
+  display: block;
+  width: 14px;
+  height: 14px;
+}
+
+.batch-selection-action:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--muted) 8%, transparent);
+  color: var(--text);
+}
+
+.batch-action-button.is-busy::before {
+  width: 12px;
+  height: 12px;
+  border: 1.5px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  content: "";
+  animation: spin 0.8s linear infinite;
+}
+
+.batch-selection-mark {
+  display: inline-grid;
+  place-items: center;
+  width: 17px;
+  height: 17px;
+  flex: 0 0 17px;
+  border: 1.5px solid color-mix(in srgb, var(--muted) 48%, var(--line) 52%);
+  border-radius: 5px;
+  background: var(--surface-strong);
+  color: var(--surface);
+  font-size: 0.68rem;
+  font-weight: 700;
+  line-height: 1;
+  transition:
+    background-color var(--motion-fast) var(--ease-standard),
+    border-color var(--motion-fast) var(--ease-standard),
+    box-shadow var(--motion-fast) var(--ease-standard);
+}
+
+.batch-selection-mark.is-checked {
+  border-color: var(--accent);
+  background: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 11%, transparent);
+}
+
+.skill-card.is-selecting .skill-card__identity {
+  grid-template-columns: 17px 28px minmax(0, 1fr);
+}
+
+.skill-card--grid.is-selecting .skill-card__identity {
+  grid-template-columns: 17px 32px minmax(0, 1fr);
+}
+
+.skill-card--grid.is-selecting .skill-card__title-row {
+  grid-column: 3;
+}
+
+.skill-card.is-selecting .skill-card__summary-button {
+  cursor: pointer;
+}
+
+.skill-card.is-selecting .skill-card__summary-button button {
+  pointer-events: none;
+}
+
+.mcp-server-card.is-selecting .mcp-server-card__identity {
+  grid-template-columns: 17px 28px minmax(0, 1fr);
+}
+
+.mcp-server-card--grid.is-selecting .mcp-server-card__identity {
+  grid-template-columns: 17px 32px minmax(0, 1fr);
+}
+
+.mcp-server-card--grid.is-selecting .mcp-server-card__title-row {
+  grid-column: 3;
+}
+
+.mcp-server-card.is-selecting .mcp-server-card__summary-button {
+  cursor: pointer;
+}
+
+.mcp-server-card.is-selecting .mcp-server-card__summary-button button {
+  pointer-events: none;
+}
+
+.skill-card.is-selected,
+.mcp-server-card.is-selected,
+.tool-list-row.is-selected {
+  border-color: color-mix(in srgb, var(--accent) 64%, var(--line) 36%);
+  background: color-mix(in srgb, var(--surface) 94%, var(--accent-soft) 6%);
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--accent) 14%, transparent),
+    0 7px 18px color-mix(in srgb, var(--accent) 9%, transparent);
+}
+
+.batch-delete-dialog__backdrop {
+  z-index: 120;
+}
+
+.batch-delete-dialog {
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr);
+  gap: 10px 12px;
+  width: min(440px, calc(100vw - 32px));
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface);
+  box-shadow: 0 24px 70px color-mix(in srgb, #000000 28%, transparent);
+}
+
+.batch-delete-dialog__icon {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--danger) 12%, var(--surface) 88%);
+  color: var(--danger);
+  font-size: 1rem;
+  font-weight: 700;
+}
+
+.batch-delete-dialog__copy {
+  display: grid;
+  gap: 6px;
+}
+
+.batch-delete-dialog__copy h3,
+.batch-delete-dialog__copy p {
+  margin: 0;
+}
+
+.batch-delete-dialog__copy h3 {
+  color: var(--heading);
+  font-size: 0.94rem;
+}
+
+.batch-delete-dialog__copy p {
+  color: var(--muted);
+  font-size: 0.76rem;
+  line-height: 1.55;
+}
+
+.batch-delete-dialog__actions {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 4px;
+}
+
+@media (max-width: 900px) {
+  .batch-action-bar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .batch-action-bar__actions {
+    justify-content: flex-start;
+  }
+
+  .batch-action-bar__summary {
+    margin-left: 0;
+  }
+}
+
 .secondary-button--compact.is-selected {
   background: rgba(47, 120, 255, 0.08);
   border-color: rgba(47, 120, 255, 0.24);
@@ -9694,6 +9991,18 @@ button.settings-form-item:disabled {
   min-width: 0;
   column-gap: 10px;
   row-gap: 12px;
+}
+
+.skill-source-card--grid.is-selecting .skill-source-card__summary-button {
+  grid-template-columns: 17px 32px minmax(0, 1fr);
+}
+
+.skill-source-card--grid.is-selecting .skill-card__title-row {
+  grid-column: 3;
+}
+
+.skill-source-card.is-selecting .skill-card__summary-description {
+  grid-column: 1 / -1;
 }
 
 .skill-source-card--grid .link-badge {

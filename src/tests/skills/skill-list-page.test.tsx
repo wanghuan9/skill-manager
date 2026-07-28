@@ -42,6 +42,84 @@ test("preserves the current Skill header layout and opens Skill install", async 
   expect(screen.getByRole("heading", { name: "安装", level: 1 })).toBeInTheDocument();
 });
 
+test("selects managed Skills and updates only the selected updatable Skill", async () => {
+  const updateSpy = vi.spyOn(skillClient, "updateSkill");
+  render(<App />);
+
+  await userEvent.click(screen.getByRole("button", { name: "批量选择" }));
+  await userEvent.click(screen.getByRole("checkbox", { name: "选择 Skill excalidraw-diagram" }));
+
+  expect(screen.getByLabelText("批量操作")).toHaveTextContent("已选 1 个");
+  expect(screen.getByRole("button", { name: "更新 1 个" })).toBeInTheDocument();
+  expect(screen.getByRole("checkbox", { name: "选择 Skill excalidraw-diagram" }))
+    .toHaveAttribute("aria-checked", "true");
+
+  await userEvent.click(screen.getByRole("button", { name: "更新 1 个" }));
+
+  await waitFor(() => {
+    expect(updateSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ skillName: "excalidraw-diagram" }),
+    );
+  });
+  await waitFor(() => {
+    expect(screen.queryByRole("checkbox", { name: "选择 Skill excalidraw-diagram" })).not.toBeInTheDocument();
+  });
+});
+
+test("shows independent enable and disable actions for a partially enabled Skill", async () => {
+  const toggleSpy = vi.spyOn(skillClient, "setSkillAllToolStatuses");
+  render(<App />);
+
+  await userEvent.click(screen.getByRole("button", { name: "批量选择" }));
+  await userEvent.click(screen.getByRole("checkbox", { name: "选择 Skill excalidraw-diagram" }));
+
+  expect(screen.getByRole("button", { name: "启用 1 个" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "停用 1 个" })).toBeInTheDocument();
+
+  await userEvent.click(screen.getByRole("button", { name: "停用 1 个" }));
+
+  await waitFor(() => {
+    expect(toggleSpy).toHaveBeenCalledWith(expect.objectContaining({
+      enabled: false,
+      skillName: "excalidraw-diagram",
+    }));
+  });
+  toggleSpy.mockRestore();
+});
+
+test("confirms managed Skill batch deletion without losing the selection on cancel", async () => {
+  render(<App />);
+
+  await userEvent.click(screen.getByRole("button", { name: "批量选择" }));
+  await userEvent.click(screen.getByRole("checkbox", { name: "选择 Skill drawio-diagram" }));
+  await userEvent.click(screen.getByRole("button", { name: "删除 1 个" }));
+
+  const dialog = screen.getByRole("dialog", { name: "删除 1 个 Skill？" });
+  expect(dialog).toHaveTextContent("此操作无法撤销");
+  await userEvent.click(within(dialog).getByRole("button", { name: "取消" }));
+
+  expect(screen.queryByRole("dialog", { name: "删除 1 个 Skill？" })).not.toBeInTheDocument();
+  expect(screen.getByRole("checkbox", { name: "选择 Skill drawio-diagram" }))
+    .toHaveAttribute("aria-checked", "true");
+});
+
+test("temporarily expands grouped Skills while batch selection is active", async () => {
+  render(<App />);
+
+  await userEvent.click(screen.getByRole("button", { name: "分组" }));
+  expect(screen.queryByRole("heading", { name: "skill-publisher" })).not.toBeInTheDocument();
+
+  await userEvent.click(screen.getByRole("button", { name: "批量选择" }));
+
+  expect(screen.getByRole("checkbox", { name: "选择 Skill skill-publisher" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "收起来源分组 team-skills" })).not.toBeInTheDocument();
+
+  await userEvent.click(screen.getByRole("button", { name: "取消" }));
+
+  expect(screen.queryByRole("heading", { name: "skill-publisher" })).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "展开来源分组 team-skills" })).toBeInTheDocument();
+});
+
 test("switches from the managed library to a tool's real Skill directory", async () => {
   const user = userEvent.setup();
   render(<App />);
@@ -293,6 +371,70 @@ test("imports an unmanaged tool Skill through the existing local import flow", a
   });
   expect(await screen.findByText("technical-design 已导入 SkillDock")).toBeInTheDocument();
   importSpy.mockRestore();
+});
+
+test("batch imports only unmanaged Skills from the selected software source", async () => {
+  const user = userEvent.setup();
+  const importSpy = vi.spyOn(skillClient, "importLocalSkill");
+  render(<App />);
+
+  await user.click(screen.getByRole("tab", { name: "Codex 5" }));
+  await user.click(screen.getByRole("button", { name: "批量选择" }));
+  await user.click(screen.getByRole("checkbox", { name: "选择软件 Skill technical-design" }));
+  await user.click(screen.getByRole("checkbox", { name: "选择软件 Skill skill-publisher" }));
+
+  expect(screen.getByLabelText("批量操作")).toHaveTextContent("已选 2 个");
+  expect(screen.getByRole("button", { name: "导入 1 个" })).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "导入 1 个" }));
+
+  await waitFor(() => {
+    expect(importSpy).toHaveBeenCalledTimes(1);
+    expect(importSpy).toHaveBeenCalledWith("/Users/demo/.codex/skills/technical-design");
+  });
+  expect(screen.queryByRole("checkbox", { name: "选择软件 Skill skill-publisher" })).not.toBeInTheDocument();
+  importSpy.mockRestore();
+});
+
+test("batch deletes Skills only from the current software directory after confirmation", async () => {
+  const user = userEvent.setup();
+  const deleteSpy = vi.spyOn(skillClient, "deleteToolSkill");
+  render(<App />);
+
+  await user.click(screen.getByRole("tab", { name: "Codex 5" }));
+  await user.click(screen.getByRole("button", { name: "批量选择" }));
+  await user.click(screen.getByRole("checkbox", { name: "选择软件 Skill technical-design" }));
+  await user.click(screen.getByRole("checkbox", { name: "选择软件 Skill skill-publisher" }));
+  await user.click(screen.getByRole("button", { name: "删除 2 个" }));
+
+  const dialog = screen.getByRole("dialog", { name: "从 Codex 删除 2 个 Skill？" });
+  expect(dialog).toHaveTextContent("不会删除 SkillDock 托管库中的 Skill");
+  await user.click(within(dialog).getByRole("button", { name: "确认删除" }));
+
+  await waitFor(() => {
+    expect(deleteSpy).toHaveBeenCalledTimes(2);
+    expect(deleteSpy).toHaveBeenCalledWith({ toolId: "codex", skillName: "technical-design" });
+    expect(deleteSpy).toHaveBeenCalledWith({ toolId: "codex", skillName: "skill-publisher" });
+  });
+  deleteSpy.mockRestore();
+});
+
+test("supports card selection and exits batch mode when switching software sources", async () => {
+  const user = userEvent.setup();
+  const { container } = render(<App />);
+
+  await user.click(screen.getByRole("tab", { name: "Codex 5" }));
+  await user.click(screen.getByRole("button", { name: "卡片" }));
+  await user.click(screen.getByRole("button", { name: "批量选择" }));
+  await user.click(screen.getByRole("checkbox", { name: "选择软件 Skill technical-design" }));
+
+  expect(screen.getByRole("article", { name: "technical-design" })).toHaveClass("is-selecting", "is-selected");
+  expect(container.querySelector(".skill-source-card--grid.is-selecting .batch-selection-mark.is-checked"))
+    .toBeInTheDocument();
+
+  await user.click(screen.getByRole("tab", { name: /^Claude Code/ }));
+
+  expect(screen.getByRole("button", { name: "批量选择" })).toBeInTheDocument();
+  expect(screen.queryByRole("checkbox", { name: /选择软件 Skill/ })).not.toBeInTheDocument();
 });
 
 test("uses list view by default when installed skill count is at or below threshold", () => {
