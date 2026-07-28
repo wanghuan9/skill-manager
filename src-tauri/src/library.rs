@@ -9,6 +9,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::models::SkillSummary;
+use crate::tool_adapters;
 use crate::workspace;
 use crate::workspace::normalize_workspace_path;
 use serde::de::DeserializeOwned;
@@ -2833,14 +2834,16 @@ fn tool_skills_path_for_home(tool_id: &str, home_path: &Path) -> Result<PathBuf,
         "trae-cn" => home_path.join(".trae-cn/skills"),
         "hermes" => home_path.join(".hermes/skills"),
         "github-copilot" => home_path.join(".copilot/skills"),
-        _ => return Err(format!("未知的工具 ID: {tool_id}")),
+        _ => tool_adapters::definition(tool_id)
+            .map(|definition| tool_adapters::resolve_skills_path(definition, home_path))
+            .ok_or_else(|| format!("未知的工具 ID: {tool_id}"))?,
     };
 
     Ok(skills_path)
 }
 
-fn tool_ids() -> [&'static str; 30] {
-    [
+fn tool_ids() -> Vec<&'static str> {
+    let mut ids = vec![
         "claude-code",
         "codex",
         "opencode",
@@ -2871,7 +2874,13 @@ fn tool_ids() -> [&'static str; 30] {
         "trae-cn",
         "hermes",
         "github-copilot",
-    ]
+    ];
+    ids.extend(
+        tool_adapters::TOOL_ADAPTER_DEFINITIONS
+            .iter()
+            .map(|definition| definition.id),
+    );
+    ids
 }
 
 #[allow(dead_code)]

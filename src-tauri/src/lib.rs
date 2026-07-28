@@ -9,6 +9,7 @@ mod plugin_manager;
 mod plugin_watcher;
 mod skill_watcher;
 mod state;
+mod tool_adapters;
 mod workspace;
 
 #[cfg(windows)]

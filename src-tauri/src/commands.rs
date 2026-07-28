@@ -42,6 +42,7 @@ use crate::state::{
     load_app_settings, load_installed_skills, normalize_skill_install_activation,
     save_app_settings, save_installed_skills, scan_local_skill_candidates,
 };
+use crate::tool_adapters;
 use crate::workspace::{self, APP_BRAND_NAME};
 
 const REFRESH_GIT_STATES_CONCURRENCY: usize = 5;
@@ -2399,11 +2400,17 @@ fn mcp_config_path_for_tool(tool_id: &str, home_path: &Path) -> PathBuf {
         "continue" => home_path.join(".continue/config.yaml"),
         "crush" => home_path.join(".config/crush/crush.json"),
         "zencoder" => home_path.join(".zencoder/settings.json"),
-        _ => PathBuf::new(),
+        _ => tool_adapters::definition(tool_id)
+            .and_then(|definition| tool_adapters::resolve_mcp_path(definition, home_path))
+            .unwrap_or_default(),
     }
 }
 
 fn supports_mcp_for_tool(tool_id: &str) -> bool {
+    if let Some(definition) = tool_adapters::definition(tool_id) {
+        return !matches!(definition.mcp_format, tool_adapters::McpAdapterFormat::None);
+    }
+
     matches!(
         tool_id,
         "augment"
@@ -2788,7 +2795,7 @@ fn build_tool_configs() -> Vec<ToolConfig> {
         ),
     ];
 
-    tool_specs
+    let mut configs = tool_specs
         .into_iter()
         .map(
             |(
@@ -2825,6 +2832,48 @@ fn build_tool_configs() -> Vec<ToolConfig> {
                 }
             },
         )
+        .collect::<Vec<_>>();
+    configs.extend(build_registered_tool_configs(&home_path));
+    configs
+}
+
+fn build_registered_tool_configs(home_path: &Path) -> Vec<ToolConfig> {
+    tool_adapters::TOOL_ADAPTER_DEFINITIONS
+        .iter()
+        .map(|definition| {
+            let skills_path = tool_adapters::resolve_skills_path(definition, home_path);
+            let mcp_config_path = tool_adapters::resolve_mcp_path(definition, home_path);
+            let install_probe_path = home_path.join(definition.install_probe_relative_path);
+            let detection_spec = software_spec(
+                definition.software_app_names,
+                definition.software_executable_names,
+            );
+            let installed = install_probe_path.exists() || software_exists(&detection_spec);
+
+            ToolConfig {
+                id: definition.id.into(),
+                name: definition.name.into(),
+                skills_path: skills_path.to_string_lossy().to_string(),
+                mcp_config_path: mcp_config_path
+                    .as_ref()
+                    .map(|path| path.to_string_lossy().to_string())
+                    .unwrap_or_default(),
+                supports_mcp: !matches!(
+                    definition.mcp_format,
+                    tool_adapters::McpAdapterFormat::None
+                ),
+                mcp_config_path_recognized: mcp_config_path.is_some(),
+                status_label: if installed { "已安装" } else { "未安装" }.into(),
+                is_enabled: true,
+                primary_type: definition.primary_type.into(),
+                surface_types: definition
+                    .surface_types
+                    .iter()
+                    .map(|surface| (*surface).into())
+                    .collect(),
+                supports_direct_open: definition.supports_direct_open,
+            }
+        })
         .collect()
 }
 
@@ -3781,7 +3830,11 @@ fn tool_name_to_id(tool_name: &str) -> Result<String, String> {
         "Trae CN" => Ok("trae-cn".to_string()),
         "Hermes" => Ok("hermes".to_string()),
         "GitHub Copilot" => Ok("github-copilot".to_string()),
-        _ => Err(format!("未知的工具名称: {tool_name}")),
+        _ => tool_adapters::TOOL_ADAPTER_DEFINITIONS
+            .iter()
+            .find(|definition| definition.name == tool_name)
+            .map(|definition| definition.id.to_string())
+            .ok_or_else(|| format!("未知的工具名称: {tool_name}")),
     }
 }
 
@@ -12041,6 +12094,82 @@ mod tests {
                 "Code/User/globalStorage/RooVeterinaryInc.roo-cline/settings/mcp_settings.json"
             )
         );
+    }
+
+    #[test]
+    fn registered_tool_configs_expose_new_skill_and_mcp_paths() {
+        let home = PathBuf::from(if cfg!(windows) {
+            r"C:\Users\demo"
+        } else {
+            "/Users/demo"
+        });
+        let configs = super::build_registered_tool_configs(&home);
+        let pi = configs
+            .iter()
+            .find(|tool| tool.id == "pi")
+            .expect("pi config");
+        assert_eq!(
+            pi.skills_path,
+            home.join(".pi/agent/skills").to_string_lossy()
+        );
+        assert!(!pi.supports_mcp);
+        let omp = configs
+            .iter()
+            .find(|tool| tool.id == "omp")
+            .expect("omp config");
+        assert_eq!(
+            omp.mcp_config_path,
+            home.join(".omp/agent/mcp.json").to_string_lossy()
+        );
+        assert!(omp.supports_mcp);
+        let grok = configs
+            .iter()
+            .find(|tool| tool.id == "grok")
+            .expect("grok config");
+        assert_eq!(
+            grok.mcp_config_path,
+            home.join(".grok/config.toml").to_string_lossy()
+        );
+        let mimo = configs
+            .iter()
+            .find(|tool| tool.id == "mimo-code")
+            .expect("mimo config");
+        assert_eq!(
+            mimo.skills_path,
+            home.join(".config/mimocode/skills").to_string_lossy()
+        );
+        assert_eq!(
+            mimo.mcp_config_path,
+            home.join(".config/mimocode/mimocode.json")
+                .to_string_lossy()
+        );
+        let workbuddy = configs
+            .iter()
+            .find(|tool| tool.id == "workbuddy")
+            .expect("workbuddy config");
+        assert_eq!(
+            workbuddy.skills_path,
+            home.join(".workbuddy/skills").to_string_lossy()
+        );
+        assert_eq!(
+            workbuddy.mcp_config_path,
+            home.join(".workbuddy/.mcp.json").to_string_lossy()
+        );
+    }
+
+    #[test]
+    fn registered_tool_installation_uses_mimocode_install_root() {
+        let home = temp_test_dir("mimocode-installation-detection");
+        fs::create_dir_all(home.join(".mimocode/bin")).expect("create mimocode install root");
+
+        let configs = super::build_registered_tool_configs(&home);
+        let mimo = configs
+            .iter()
+            .find(|tool| tool.id == "mimo-code")
+            .expect("mimo config");
+        assert_eq!(mimo.status_label, "已安装");
+
+        let _ = fs::remove_dir_all(home);
     }
 
     #[test]

@@ -60,6 +60,11 @@ const TOOL_POPULARITY_RANK: Record<string, number> = {
   iflow: 28,
   commandcode: 29,
   hermes: 30,
+  pi: 31,
+  omp: 32,
+  grok: 33,
+  "mimo-code": 34,
+  workbuddy: 35,
 };
 
 export const OPEN_ONLY_TOOL_IDS = new Set(["intellij", "vscode"]);
