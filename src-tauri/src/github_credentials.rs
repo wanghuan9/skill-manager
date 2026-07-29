@@ -1,12 +1,15 @@
+use std::fs;
+use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 
 use serde::{Deserialize, Serialize};
 
-const KEYRING_SERVICE: &str = "com.skilldock.github";
-const KEYRING_ACCOUNT: &str = "active";
+const CREDENTIAL_FILE_NAME: &str = "github-credentials.json";
 
 static CREDENTIAL_CACHE: OnceLock<Mutex<CredentialCache>> = OnceLock::new();
-static KEYRING_ENTRY: OnceLock<keyring::Entry> = OnceLock::new();
+
+#[cfg(test)]
+static TEST_CREDENTIAL_PATH: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
 
 #[derive(Default)]
 struct CredentialCache {
@@ -19,33 +22,29 @@ struct CredentialCache {
 pub struct GithubCredential {
     pub token: String,
     pub auth_method: String,
-    #[serde(skip)]
-    pub persisted: bool,
-}
-
-#[derive(Clone, Debug)]
-pub struct StoreCredentialResult {
-    pub persisted: bool,
-    pub warning: Option<String>,
 }
 
 fn credential_cache() -> &'static Mutex<CredentialCache> {
     CREDENTIAL_CACHE.get_or_init(|| Mutex::new(CredentialCache::default()))
 }
 
-fn keyring_entry() -> Result<&'static keyring::Entry, String> {
-    if let Some(entry) = KEYRING_ENTRY.get() {
-        return Ok(entry);
+fn credential_file_path() -> Result<PathBuf, String> {
+    #[cfg(test)]
+    if let Some(path) = TEST_CREDENTIAL_PATH
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .ok()
+        .and_then(|path| path.clone())
+    {
+        return Ok(path);
     }
-    let entry = keyring::Entry::new(KEYRING_SERVICE, KEYRING_ACCOUNT)
-        .map_err(|error| format!("无法访问系统凭据存储: {error}"))?;
-    let _ = KEYRING_ENTRY.set(entry);
-    KEYRING_ENTRY
-        .get()
-        .ok_or_else(|| "无法初始化系统凭据存储".to_string())
+
+    crate::workspace::managed_workspace_root_option()
+        .map(|root| root.join(CREDENTIAL_FILE_NAME))
+        .ok_or_else(|| "无法定位 GitHub 凭据文件".to_string())
 }
 
-pub fn store_credential(token: &str, auth_method: &str) -> Result<StoreCredentialResult, String> {
+pub fn store_credential(token: &str, auth_method: &str) -> Result<(), String> {
     let token = token.trim();
     if token.is_empty() {
         return Err("GitHub 凭据为空".to_string());
@@ -54,28 +53,23 @@ pub fn store_credential(token: &str, auth_method: &str) -> Result<StoreCredentia
     let credential = GithubCredential {
         token: token.to_string(),
         auth_method: auth_method.trim().to_string(),
-        persisted: false,
     };
-    let payload = serde_json::to_string(&credential)
+    let payload = serde_json::to_string_pretty(&credential)
         .map_err(|error| format!("序列化 GitHub 凭据失败: {error}"))?;
+    let path = credential_file_path()?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| "GitHub 凭据文件目录无效".to_string())?;
+    fs::create_dir_all(parent).map_err(|error| format!("创建 GitHub 凭据目录失败: {error}"))?;
+    fs::write(&path, payload).map_err(|error| format!("保存 GitHub 凭据失败: {error}"))?;
 
-    let persistence_result = keyring_entry().and_then(|entry| {
-        entry
-            .set_password(&payload)
-            .map_err(|error| format!("保存 GitHub 凭据失败: {error}"))
-    });
-    let warning = persistence_result.err();
-    let persisted = warning.is_none();
     let mut cache = credential_cache()
         .lock()
         .map_err(|_| "GitHub 会话凭据锁不可用".to_string())?;
     cache.initialized = true;
-    cache.credential = Some(GithubCredential {
-        persisted,
-        ..credential
-    });
+    cache.credential = Some(credential);
 
-    Ok(StoreCredentialResult { persisted, warning })
+    Ok(())
 }
 
 pub fn load_credential() -> Option<GithubCredential> {
@@ -85,14 +79,11 @@ pub fn load_credential() -> Option<GithubCredential> {
     }
 
     cache.initialized = true;
-    let credential = keyring_entry()
+    let credential = credential_file_path()
         .ok()
-        .and_then(|entry| entry.get_password().ok())
+        .and_then(|path| fs::read_to_string(path).ok())
         .and_then(|payload| serde_json::from_str::<GithubCredential>(&payload).ok())
-        .map(|mut credential| {
-            credential.persisted = true;
-            credential
-        });
+        .filter(|credential| !credential.token.trim().is_empty());
     cache.credential = credential.clone();
     credential
 }
@@ -114,23 +105,23 @@ pub fn delete_credential() -> Result<(), String> {
         cache.initialized = true;
         cache.credential = None;
     }
-    let entry = keyring_entry()?;
-    match entry.delete_credential() {
-        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+    let path = credential_file_path()?;
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(format!("删除 GitHub 凭据失败: {error}")),
     }
 }
 
 #[cfg(test)]
-pub fn use_mock_keyring() {
-    static MOCK_KEYRING: std::sync::Once = std::sync::Once::new();
-    MOCK_KEYRING.call_once(|| {
-        keyring::set_default_credential_builder(keyring::mock::default_credential_builder());
-    });
+fn set_test_credential_path(path: Option<PathBuf>) {
+    if let Ok(mut test_path) = TEST_CREDENTIAL_PATH.get_or_init(|| Mutex::new(None)).lock() {
+        *test_path = path;
+    }
 }
 
 #[cfg(test)]
-pub fn clear_session_credential() {
+fn clear_session_credential() {
     if let Ok(mut cache) = credential_cache().lock() {
         cache.initialized = false;
         cache.credential = None;
@@ -141,17 +132,23 @@ pub fn clear_session_credential() {
 mod tests {
     use super::{
         active_token, clear_session_credential, delete_credential, load_credential,
-        store_credential, use_mock_keyring,
+        set_test_credential_path, store_credential,
     };
+    use std::fs;
 
     #[test]
-    fn stores_and_loads_credential_without_exposing_it_in_settings() {
-        use_mock_keyring();
-        let _ = delete_credential();
+    fn stores_and_loads_credential_from_local_file() {
+        let temp_root = std::env::temp_dir().join(format!(
+            "skilldock-github-credential-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        let credential_path = temp_root.join("github-credentials.json");
+        set_test_credential_path(Some(credential_path.clone()));
+        clear_session_credential();
 
-        let result = store_credential("  github_pat_example  ", "pat").expect("store credential");
-        assert!(result.persisted);
-        assert!(result.warning.is_none());
+        store_credential("  github_pat_example  ", "pat").expect("store credential");
+        assert!(credential_path.is_file());
         clear_session_credential();
 
         let credential = load_credential().expect("load credential");
@@ -162,5 +159,7 @@ mod tests {
         delete_credential().expect("delete credential");
         clear_session_credential();
         assert!(load_credential().is_none());
+        set_test_credential_path(None);
+        let _ = fs::remove_dir_all(temp_root);
     }
 }

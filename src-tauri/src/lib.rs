@@ -1,7 +1,6 @@
 mod agent_skills_cli;
 mod backup_merge;
 mod backup_repository;
-mod backup_scheduler;
 mod backup_snapshot;
 mod clawhub_market;
 mod commands;
@@ -59,13 +58,7 @@ pub fn run() {
             if let Err(error) = plugin_watcher::start_plugin_library_watcher(app.handle().clone()) {
                 log::warn!("Failed to start plugin library watcher: {error}");
             }
-            backup_scheduler::start(app.handle().clone());
             Ok(())
-        })
-        .on_window_event(|_window, event| {
-            if matches!(event, tauri::WindowEvent::Focused(true)) {
-                backup_scheduler::schedule_focus_sync();
-            }
         })
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())
@@ -92,12 +85,9 @@ pub fn run() {
             backup_repository::enable_github_backup,
             backup_repository::disconnect_github_backup,
             backup_repository::run_backup_sync,
-            backup_repository::list_backup_snapshots,
+            backup_repository::sync_backup_to_local,
             backup_repository::list_backup_conflicts,
             backup_repository::resolve_backup_conflict,
-            backup_repository::restore_backup_snapshot,
-            backup_repository::set_backup_device_name,
-            backup_repository::set_backup_auto_backup,
             commands::get_agent_skills_cli_status,
             commands::update_app_settings,
             commands::detect_preferred_app_language,

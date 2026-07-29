@@ -541,22 +541,6 @@ pub fn apply_library_snapshot_preserving(
     apply_result
 }
 
-pub fn replace_repository_snapshot(source: &Path, repository: &Path) -> Result<(), String> {
-    let staging_root = backup_root()?
-        .join("staging")
-        .join(format!("restore-{}", uuid::Uuid::new_v4()));
-    let _staging_guard = TemporaryDirectoryGuard::new(staging_root.clone());
-    copy_skill_tree(&source.join("skills"), &staging_root.join("skills"))?;
-    copy_skill_tree(&source.join(".skilldock"), &staging_root.join(".skilldock"))?;
-    replace_directory(&staging_root.join("skills"), &repository.join("skills"))?;
-    replace_directory(
-        &staging_root.join(".skilldock"),
-        &repository.join(".skilldock"),
-    )?;
-    let _ = fs::remove_dir_all(staging_root);
-    Ok(())
-}
-
 fn copy_skill_tree(source: &Path, target: &Path) -> Result<(), String> {
     let metadata = fs::symlink_metadata(source)
         .map_err(|error| format!("读取恢复来源失败 {}: {error}", source.display()))?;

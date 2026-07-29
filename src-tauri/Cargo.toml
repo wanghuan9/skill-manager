@@ -37,5 +37,4 @@ sha2 = "0.10"
 tauri-plugin-updater = "2.10.1"
 tauri-plugin-process = "2.3.1"
 notify = "6.1"
-keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service", "crypto-rust", "vendored"] }
 uuid = { version = "1", features = ["v4"] }

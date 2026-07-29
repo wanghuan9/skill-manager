@@ -86,7 +86,6 @@ fn start_skill_root_watcher(app_handle: AppHandle, skills_root: PathBuf) -> Resu
             for skill_name in
                 classify_skill_change_event_for_root(&event, &watched_skills, &thread_skills_root)
             {
-                crate::backup_scheduler::schedule_library_change();
                 let payload = SkillLibraryChangeEvent { skill_name };
                 if let Err(error) = thread_app_handle.emit(SKILL_LIBRARY_CHANGE_EVENT, payload) {
                     log::warn!("Failed to emit skill library change event: {error}");

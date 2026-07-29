@@ -18,7 +18,6 @@ import {
   type InstallTab,
 } from "@/app/routes/market";
 import { SettingsRoute } from "@/app/routes/settings";
-import { BackupRoute } from "@/app/routes/backup";
 import { AboutRoute } from "@/app/routes/about";
 import { PluginsRoute } from "@/app/routes/plugins";
 import { AppI18nProvider, tx, useTranslate } from "@/app/i18n";
@@ -29,7 +28,6 @@ import { formatHomePathForDisplay } from "@/app/path-utils";
 import { waitForNextPaint } from "@/app/utils/wait-for-next-paint";
 import { AppUpdateAutoPrompt } from "@/features/app-update/AppUpdateAutoPrompt";
 import { AppTooltip } from "@/app/components/AppTooltip";
-import { subscribeAutoBackupFailures } from "@/features/skills/api/skill-client";
 import {
   SkillWorkspaceProvider,
   useSkillWorkspace,
@@ -62,7 +60,6 @@ type RouteKey =
   | "plugins"
   | "tools"
   | "install"
-  | "backup"
   | "settings"
   | "about";
 type SkillsSectionKey = "skills" | "mcp";
@@ -155,11 +152,6 @@ const routes: RouteDefinition[] = [
     descriptionKey: "app.nav.install.description",
   },
   {
-    key: "backup",
-    labelKey: "app.nav.backup.label",
-    descriptionKey: "app.nav.backup.description",
-  },
-  {
     key: "settings",
     labelKey: "app.nav.settings.label",
     descriptionKey: "app.nav.settings.description",
@@ -220,22 +212,6 @@ function NavRouteIcon(props: { route: RouteKey }) {
       </svg>
     );
   }
-  if (route === "backup") {
-    return (
-      <svg viewBox="0 0 24 24" aria-hidden="true">
-        <path
-          d="M6.5 7.5a5.5 5.5 0 0 1 10.2-2.8M17.5 16.5a5.5 5.5 0 0 1-10.2 2.8M17.2 3.8v4h-4M6.8 20.2v-4h4"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="1.8"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-        <path d="M8 9h8v6H8z" fill="none" stroke="currentColor" strokeWidth="1.6" />
-      </svg>
-    );
-  }
-
   if (route === "plugins") {
     return (
       <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -328,7 +304,6 @@ function renderRoute(
   onInstallPluginFromMarketplace: () => void,
   onPluginHostChange: (hostName: string | null) => void,
   activeSkillsSection: SkillsSectionKey,
-  onOpenGithubSettings: () => void,
 ) {
   if (route === "tools") {
     return <ToolsRoute />;
@@ -342,9 +317,6 @@ function renderRoute(
         onInstallTabChange={onInstallTabChange}
       />
     );
-  }
-  if (route === "backup") {
-    return <BackupRoute onOpenGithubSettings={onOpenGithubSettings} />;
   }
   if (route === "plugins") {
     return (
@@ -639,21 +611,6 @@ function AppContent() {
   const hasShownGithubRateLimitPromptRef = useRef(false);
 
   useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    void subscribeAutoBackupFailures((failure) => {
-      notify({
-        message: failure.message,
-        tone: "error",
-        actionLabel: tx(language, "app.nav.backup.label"),
-        onAction: () => setActiveRoute("backup"),
-      });
-    }).then((cleanup) => {
-      unlisten = cleanup;
-    });
-    return () => unlisten?.();
-  }, [language, notify]);
-
-  useEffect(() => {
     if (activeRoute !== "skills" || activeSkillsSection !== "skills") {
       setIsSkillBatchSelecting(false);
     }
@@ -809,18 +766,6 @@ function AppContent() {
     setSkillStatusFilter("all");
     setSkillOwnerFilter("all");
     setSkillManagementFilter("all");
-  }
-
-  function handleOpenGithubSettings() {
-    setActiveRoute("settings");
-    window.requestAnimationFrame(() => {
-      window.requestAnimationFrame(() => {
-        document.getElementById("settings-github-api")?.scrollIntoView?.({
-          behavior: "smooth",
-          block: "center",
-        });
-      });
-    });
   }
 
   function handleShowUpdatableSkills() {
@@ -1430,7 +1375,6 @@ function AppContent() {
               handleOpenPluginInstall,
               setActivePluginHostName,
               activeSkillsSection,
-              handleOpenGithubSettings,
             )}
           </RouteErrorBoundary>
         </section>

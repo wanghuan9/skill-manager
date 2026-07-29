@@ -67,14 +67,10 @@ fn metadata_from_profile(
 async fn connect_with_token(token: &str, auth_method: &str) -> Result<GithubConnection, String> {
     let client = github_api::http_client()?;
     let profile = github_api::fetch_profile(&client, token).await?;
-    let store_result = github_credentials::store_credential(token, auth_method)?;
-    let metadata = metadata_from_profile(profile, auth_method, store_result.persisted);
+    github_credentials::store_credential(token, auth_method)?;
+    let metadata = metadata_from_profile(profile, auth_method, true);
     save_github_connection_metadata(metadata.clone(), true)?;
-    Ok(connected_connection(
-        metadata,
-        store_result.persisted,
-        store_result.warning.unwrap_or_default(),
-    ))
+    Ok(connected_connection(metadata, true, ""))
 }
 
 async fn migrate_legacy_token() -> Result<Option<GithubConnection>, String> {
@@ -84,14 +80,8 @@ async fn migrate_legacy_token() -> Result<Option<GithubConnection>, String> {
     }
     let client = github_api::http_client()?;
     let profile = github_api::fetch_profile(&client, &legacy_token).await?;
-    let store_result = github_credentials::store_credential(&legacy_token, AUTH_METHOD_PAT)?;
-    let metadata = metadata_from_profile(profile, AUTH_METHOD_PAT, store_result.persisted);
-    if !store_result.persisted {
-        let warning = store_result
-            .warning
-            .unwrap_or_else(|| "系统凭据存储不可用，旧 Token 尚未迁移".to_string());
-        return Ok(Some(connected_connection(metadata, false, warning)));
-    }
+    github_credentials::store_credential(&legacy_token, AUTH_METHOD_PAT)?;
+    let metadata = metadata_from_profile(profile, AUTH_METHOD_PAT, true);
     save_github_connection_metadata(metadata.clone(), true)?;
     Ok(Some(connected_connection(metadata, true, "")))
 }
@@ -111,7 +101,7 @@ pub async fn migrate_legacy_token_on_startup(app_handle: tauri::AppHandle) {
 #[tauri::command]
 pub async fn get_github_connection() -> Result<GithubConnection, String> {
     let metadata = load_github_connection_metadata();
-    if metadata.username.trim().is_empty() {
+    if metadata.username.trim().is_empty() || github_credentials::load_credential().is_none() {
         return Ok(disconnected_connection(""));
     }
     let credential_persisted = metadata.credential_persisted;
@@ -164,6 +154,7 @@ pub async fn connect_github_token(
 
 #[tauri::command]
 pub fn disconnect_github(app_handle: tauri::AppHandle) -> Result<GithubConnection, String> {
+    crate::backup_repository::disconnect_github_backup(app_handle.clone())?;
     github_credentials::delete_credential()?;
     save_github_connection_metadata(GithubConnectionMetadata::default(), true)?;
     let connection = disconnected_connection("");

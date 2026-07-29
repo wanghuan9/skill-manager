@@ -29,7 +29,6 @@ import type {
   AgentSkillsCliStatus,
   AppSettings,
   BackupConflict,
-  BackupSnapshotInfo,
   BackupStatus,
   BackupSyncResult,
   CliToolSummary,
@@ -1361,8 +1360,6 @@ const backupStatusFixture: BackupStatus = {
   repositoryOwner: "",
   repositoryName: "",
   repositoryUrl: "",
-  deviceName: "",
-  autoBackup: false,
   lastSyncAt: "",
   lastError: "",
   syncing: false,
@@ -1373,8 +1370,8 @@ export async function fetchBackupStatus(): Promise<BackupStatus> {
   return invokeOrFallback("get_backup_status", {}, backupStatusFixture);
 }
 
-export async function enableGithubBackup(repositoryName: string): Promise<BackupSyncResult> {
-  return invoke("enable_github_backup", { repositoryName });
+export async function enableGithubBackup(): Promise<BackupSyncResult> {
+  return invoke("enable_github_backup", {});
 }
 
 export async function disconnectGithubBackup(): Promise<BackupStatus> {
@@ -1388,12 +1385,8 @@ export async function runBackupSync(): Promise<BackupSyncResult> {
   return invoke("run_backup_sync", {});
 }
 
-export async function setBackupDeviceName(deviceName: string): Promise<BackupStatus> {
-  return invoke("set_backup_device_name", { deviceName });
-}
-
-export async function setBackupAutoBackup(enabled: boolean): Promise<BackupStatus> {
-  return invoke("set_backup_auto_backup", { enabled });
+export async function syncBackupToLocal(): Promise<BackupSyncResult> {
+  return invoke("sync_backup_to_local", {});
 }
 
 export async function fetchBackupConflicts(): Promise<BackupConflict[]> {
@@ -1405,39 +1398,6 @@ export async function resolveBackupConflict(
   resolution: "keepLocal" | "useRemote" | "keepBoth",
 ): Promise<BackupSyncResult> {
   return invoke("resolve_backup_conflict", { conflictId, resolution });
-}
-
-export async function fetchBackupSnapshots(): Promise<BackupSnapshotInfo[]> {
-  return invokeOrFallback("list_backup_snapshots", {}, []);
-}
-
-export async function restoreBackupSnapshot(tag: string): Promise<BackupSyncResult> {
-  return invoke("restore_backup_snapshot", { tag });
-}
-
-export async function subscribeBackupStatusChanges(
-  handler: (status: BackupStatus) => void,
-): Promise<UnlistenFn> {
-  if (shouldUseFixtureData()) {
-    return () => undefined;
-  }
-  return listen<BackupStatus>("backup-status-changed", (event) => handler(event.payload));
-}
-
-export type AutoBackupFailureEvent = {
-  message: string;
-  consecutiveFailures: number;
-};
-
-export async function subscribeAutoBackupFailures(
-  handler: (failure: AutoBackupFailureEvent) => void,
-): Promise<UnlistenFn> {
-  if (shouldUseFixtureData()) {
-    return () => undefined;
-  }
-  return listen<AutoBackupFailureEvent>("backup-auto-sync-failed", (event) => {
-    handler(event.payload);
-  });
 }
 
 export async function subscribeGithubConnectionChanges(

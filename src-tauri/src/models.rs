@@ -402,8 +402,6 @@ pub struct GithubBackupSettings {
     pub repository_owner: String,
     pub repository_name: String,
     pub repository_url: String,
-    pub device_name: String,
-    pub auto_backup: bool,
     pub last_sync_at: String,
     pub last_error: String,
 }
@@ -415,8 +413,6 @@ pub struct BackupStatus {
     pub repository_owner: String,
     pub repository_name: String,
     pub repository_url: String,
-    pub device_name: String,
-    pub auto_backup: bool,
     pub last_sync_at: String,
     pub last_error: String,
     pub syncing: bool,

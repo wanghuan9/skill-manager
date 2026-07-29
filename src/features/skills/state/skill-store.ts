@@ -397,8 +397,6 @@ export type BackupStatus = {
   repositoryOwner: string;
   repositoryName: string;
   repositoryUrl: string;
-  deviceName: string;
-  autoBackup: boolean;
   lastSyncAt: string;
   lastError: string;
   syncing: boolean;
@@ -410,7 +408,6 @@ export type BackupSyncResult = {
   includedSkills: number;
   excludedSkills: string[];
   changed: boolean;
-  snapshotTag: string;
 };
 
 export type BackupSkillMetadata = {
@@ -436,13 +433,6 @@ export type BackupConflict = {
   remoteCommit: string;
   local: BackupSkillMetadata | null;
   remote: BackupSkillMetadata | null;
-};
-
-export type BackupSnapshotInfo = {
-  tag: string;
-  commit: string;
-  createdAt: string;
-  message: string;
 };
 
 export type AgentSkillsCliStatus = {
