@@ -228,6 +228,7 @@ export type SkillFileBrowserSnapshot = {
   rootName: string;
   entries: SkillFileEntry[];
   initialFilePath: string | null;
+  previewMode: "full" | "basic";
 };
 
 export type SkillFileDocument = {
@@ -351,6 +352,7 @@ export type AppSettings = {
   language: AppLanguage;
   languageSource: AppLanguageSource;
   theme: AppTheme;
+  githubToken: string;
 };
 
 export type AgentSkillsCliStatus = {

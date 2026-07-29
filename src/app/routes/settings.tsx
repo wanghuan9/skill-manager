@@ -26,12 +26,18 @@ import {
   sortToolCards,
 } from "@/features/skills/utils/open-tools";
 import { getToolLogoUrl } from "@/features/skills/utils/tool-logo";
-import { clearRepoCache, getRepoCacheSize } from "@/features/skills/api/skill-client";
+import {
+  clearRepoCache,
+  getRepoCacheSize,
+  openExternalLink,
+} from "@/features/skills/api/skill-client";
 import type { AppTheme } from "@/features/skills/state/skill-store";
 import {
   applyGlobalListGridViewPreference,
   readGlobalListGridViewPreference,
 } from "@/features/skills/utils/list-grid-view-preference";
+
+const GITHUB_TOKEN_CREATION_URL = "https://github.com/settings/tokens/new?description=SkillDock";
 
 function FolderOpenIcon() {
   return (
@@ -169,6 +175,7 @@ export function SettingsRoute() {
     openPathInFinder,
     setLanguage,
     setTheme,
+    setGithubToken,
     setSkillLibraryProvider,
     setMcpInstallActivation,
     setDefaultOpenToolId,
@@ -195,6 +202,9 @@ export function SettingsRoute() {
   const [isOpeningStoragePath, setIsOpeningStoragePath] = useState(false);
   const [repoCacheSize, setRepoCacheSize] = useState<number | null>(null);
   const [isClearingCache, setIsClearingCache] = useState(false);
+  const [githubTokenDraft, setGithubTokenDraft] = useState(appSettings.githubToken);
+  const [isGithubTokenVisible, setIsGithubTokenVisible] = useState(false);
+  const [isSavingGithubToken, setIsSavingGithubToken] = useState(false);
   const [currentAppVersion, setCurrentAppVersion] = useState("");
   const [appUpdate, setAppUpdate] = useState<AppUpdateCheckResult | null>(null);
   const [appUpdateStatus, setAppUpdateStatus] = useState<
@@ -228,6 +238,44 @@ export function SettingsRoute() {
         ? t("settings.cache.empty")
         : formatBytes(repoCacheSize);
   const canClearRepoCache = !isClearingCache && repoCacheSize !== null && repoCacheSize > 0;
+  const normalizedGithubTokenDraft = githubTokenDraft.trim();
+  const isGithubTokenDirty = normalizedGithubTokenDraft !== appSettings.githubToken;
+
+  useEffect(() => {
+    setGithubTokenDraft(appSettings.githubToken);
+  }, [appSettings.githubToken]);
+
+  async function persistGithubToken(githubToken: string) {
+    if (isSavingGithubToken) {
+      return;
+    }
+    setIsSavingGithubToken(true);
+    try {
+      await setGithubToken(githubToken);
+    } catch (error) {
+      reportFailure(error, {
+        operation: "save_github_token",
+        fallbackMessage: t("settings.githubApi.saveFailed"),
+      });
+    } finally {
+      setIsSavingGithubToken(false);
+    }
+  }
+
+  async function handleSaveGithubToken() {
+    await persistGithubToken(normalizedGithubTokenDraft);
+  }
+
+  async function handleOpenGithubTokenCreation() {
+    try {
+      await openExternalLink(GITHUB_TOKEN_CREATION_URL);
+    } catch (error) {
+      reportFailure(error, {
+        operation: "open_github_token_creation",
+        fallbackMessage: t("settings.githubApi.openFailed"),
+      });
+    }
+  }
 
   async function handleAgentSkillsCompatibilityToggle() {
     const provider = appSettings.agentSkillsCompatibilityEnabled ? "skilldock" : "agent-skills";
@@ -838,9 +886,82 @@ export function SettingsRoute() {
         </div>
         <div className="panel-card placeholder-panel settings-panel settings-panel--git-account">
           <div className="settings-row settings-row--account">
-            <span className="settings-row__title">{t("settings.github.provider")}</span>
-            <span>{t("settings.github.placeholder")}</span>
-            <span className="status-badge tone-info">{t("settings.github.badge")}</span>
+            <span className="settings-row__title">{t("settings.github.account.provider")}</span>
+            <span>{t("settings.github.account.placeholder")}</span>
+            <span className="status-badge tone-info">{t("settings.github.account.badge")}</span>
+          </div>
+        </div>
+      </section>
+
+      <section id="settings-github-api" className="settings-group">
+        <div className="settings-group__heading">
+          <span className="settings-group__bar" aria-hidden="true" />
+          <h2 className="settings-group__title">{t("settings.group.githubApi")}</h2>
+        </div>
+        <div className="panel-card settings-panel settings-panel--github-api">
+          <div className="settings-form-list">
+            <div className="settings-form-item settings-form-item--github-token">
+              <div className="settings-form-item__copy">
+                <div className="settings-github-token-title-row">
+                  <span className="settings-form-item__title">{t("settings.githubApi.provider")}</span>
+                  <span
+                    className={`status-badge ${appSettings.githubToken ? "tone-success" : "tone-info"}`}
+                  >
+                    {t(
+                      appSettings.githubToken
+                        ? "settings.githubApi.configured"
+                        : "settings.githubApi.notConfigured",
+                    )}
+                  </span>
+                </div>
+                <span className="settings-form-item__description">
+                  {t("settings.githubApi.description")}
+                </span>
+              </div>
+              <div className="settings-github-token-control">
+                <div className="settings-github-token-input-wrap">
+                  <div className="settings-github-token-input-shell">
+                    <input
+                      className="settings-github-token-input"
+                      aria-label={t("settings.githubApi.provider")}
+                      type={isGithubTokenVisible ? "text" : "password"}
+                      value={githubTokenDraft}
+                      placeholder={t("settings.githubApi.placeholder")}
+                      autoComplete="off"
+                      spellCheck={false}
+                      onChange={(event) => setGithubTokenDraft(event.target.value)}
+                    />
+                    <button
+                      type="button"
+                      className="settings-github-token-visibility"
+                      onClick={() => setIsGithubTokenVisible((current) => !current)}
+                    >
+                      {t(isGithubTokenVisible ? "settings.githubApi.hide" : "settings.githubApi.show")}
+                    </button>
+                  </div>
+                  <button
+                    type="button"
+                    className="primary-button primary-button--compact"
+                    disabled={isSavingGithubToken || !isGithubTokenDirty}
+                    onClick={() => void handleSaveGithubToken()}
+                  >
+                    {t(isSavingGithubToken ? "settings.githubApi.saving" : "settings.githubApi.save")}
+                  </button>
+                </div>
+                {!appSettings.githubToken ? (
+                  <div className="settings-github-token-helper">
+                    <span>{t("settings.githubApi.generateHint")}</span>
+                    <button
+                      type="button"
+                      className="settings-github-token-generate"
+                      onClick={() => void handleOpenGithubTokenCreation()}
+                    >
+                      {t("settings.githubApi.generate")}
+                    </button>
+                  </div>
+                ) : null}
+              </div>
+            </div>
           </div>
         </div>
       </section>

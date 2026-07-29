@@ -106,6 +106,7 @@ beforeEach(() => {
           skillName: "drawio-diagram",
           rootName: "drawio-diagram",
           initialFilePath: "SKILL.md",
+          previewMode: "full",
           entries: [
             { path: "", name: "drawio-diagram", entryType: "directory", depth: 0 },
             { path: "reference", name: "reference", entryType: "directory", depth: 1 },
@@ -682,6 +683,7 @@ test("finishes saving immediately and refreshes only the edited skill in backgro
           rootName: skill.name,
           entries: [{ path: "SKILL.md", name: "SKILL.md", entryType: "file", depth: 0 }],
           initialFilePath: "SKILL.md",
+          previewMode: "full",
         };
       case "get_skill_file_content":
         return {

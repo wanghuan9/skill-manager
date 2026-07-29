@@ -1068,13 +1068,30 @@ export async function fetchStartupInstalledSkills(): Promise<SkillSummary[]> {
   return normalizeSkillSummaryList(skills);
 }
 
-export async function fetchGitStates(): Promise<SkillSummary[]> {
-  const skills = await invokeOrFallback<LegacySkillSummary[]>(
+type GitStateRefreshResult = {
+  skills: LegacySkillSummary[];
+  githubRateLimited: boolean;
+};
+
+export async function fetchGitStates(): Promise<{
+  skills: SkillSummary[];
+  githubRateLimited: boolean;
+}> {
+  const result = await invokeOrFallback<LegacySkillSummary[] | GitStateRefreshResult>(
     "refresh_git_states",
     {},
     installedSkillFixtures,
   );
-  return normalizeSkillSummaryList(skills);
+  if (Array.isArray(result)) {
+    return {
+      skills: normalizeSkillSummaryList(result),
+      githubRateLimited: false,
+    };
+  }
+  return {
+    skills: normalizeSkillSummaryList(result.skills),
+    githubRateLimited: result.githubRateLimited,
+  };
 }
 
 export async function refreshLocalGitState(skillName: string, skillPath?: string): Promise<SkillSummary> {
@@ -1219,6 +1236,7 @@ export async function fetchMarketplaceSkillFileBrowser(
       rootName: input.skillName,
       entries: [],
       initialFilePath: null,
+      previewMode: "full",
     },
   );
 }
@@ -1715,6 +1733,7 @@ export async function fetchSkillFileBrowser(
         { path: "SKILL.md", name: "SKILL.md", entryType: "file", depth: 1 },
       ],
       initialFilePath: "SKILL.md",
+      previewMode: "full",
     };
 
   return invokeOrFallback("get_skill_file_browser", { skillName, skillPath }, fallback);
@@ -1740,6 +1759,7 @@ export async function fetchToolSkillFileBrowser(input: ToolSkillInput): Promise<
         { path: "SKILL.md", name: "SKILL.md", entryType: "file" as const, depth: 1 },
       ],
       initialFilePath: "SKILL.md",
+      previewMode: "full",
     };
 
   return invokeOrFallback("get_tool_skill_file_browser", input, fallback);

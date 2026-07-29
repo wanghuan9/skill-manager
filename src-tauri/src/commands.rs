@@ -10,7 +10,8 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use regex::{Regex, RegexBuilder};
-use reqwest::Client;
+use reqwest::header::HeaderMap;
+use reqwest::{Client, RequestBuilder, StatusCode};
 use serde::{Deserialize, Deserializer, Serialize};
 use zip::ZipArchive;
 
@@ -171,6 +172,11 @@ const MARKETPLACE_SKILL_FILE_SIZE_LIMIT: u64 = 512 * 1024;
 const MARKETPLACE_SKILL_ROOT_CACHE_LIMIT: usize = 64;
 const MARKETPLACE_GITHUB_TREE_CACHE_TTL: Duration = Duration::from_secs(10 * 60);
 const MARKETPLACE_GITHUB_TREE_CACHE_LIMIT: usize = 64;
+const MARKETPLACE_PREVIEW_MODE_FULL: &str = "full";
+const MARKETPLACE_PREVIEW_MODE_BASIC: &str = "basic";
+const GITHUB_RATE_LIMIT_ERROR: &str = "GitHub API 请求受限，请稍后重试";
+const GITHUB_BASIC_PREVIEW_FILE_NAMES: [&str; 4] =
+    ["SKILL.md", "README.md", "skill.md", "readme.md"];
 static SKILLS_SH_DESCRIPTION_CACHE: OnceLock<HashMap<String, String>> = OnceLock::new();
 static SKILLS_SH_LIVE_DESCRIPTION_CACHE: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
 static SKILLS_SH_HOMEPAGE_CACHE: OnceLock<Mutex<Option<Vec<SkillsShSkill>>>> = OnceLock::new();
@@ -267,6 +273,20 @@ struct GitHubMarketplaceSource {
     branch: Option<String>,
 }
 
+#[derive(Debug)]
+enum MarketplaceGitHubApiError {
+    RateLimited(String),
+    Other(String),
+}
+
+impl MarketplaceGitHubApiError {
+    fn message(self) -> String {
+        match self {
+            Self::RateLimited(message) | Self::Other(message) => message,
+        }
+    }
+}
+
 fn default_marketplace_skills() -> Vec<MarketplaceSkill> {
     Vec::new()
 }
@@ -278,6 +298,51 @@ fn marketplace_http_client() -> Result<Client, String> {
         .timeout(Duration::from_secs(12))
         .build()
         .map_err(|error| format!("创建市场请求客户端失败: {error}"))
+}
+
+fn github_api_request(client: &Client, url: url::Url, github_token: &str) -> RequestBuilder {
+    let request = client.get(url.clone());
+    let github_token = github_token.trim();
+    // Keep credentials scoped to GitHub API requests; Raw content requests never pass here.
+    if url.host_str() == Some("api.github.com") && !github_token.is_empty() {
+        request.bearer_auth(github_token)
+    } else {
+        request
+    }
+}
+
+fn is_github_api_rate_limited(status: StatusCode, headers: &HeaderMap) -> bool {
+    if status == StatusCode::TOO_MANY_REQUESTS {
+        return true;
+    }
+    if status != StatusCode::FORBIDDEN {
+        return false;
+    }
+
+    let has_retry_after = headers.contains_key(reqwest::header::RETRY_AFTER);
+    let remaining_is_zero = headers
+        .get("x-ratelimit-remaining")
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.trim() == "0");
+    has_retry_after || remaining_is_zero
+}
+
+fn github_api_response_error(
+    response: &reqwest::Response,
+    operation: &str,
+) -> Option<MarketplaceGitHubApiError> {
+    if is_github_api_rate_limited(response.status(), response.headers()) {
+        return Some(MarketplaceGitHubApiError::RateLimited(
+            GITHUB_RATE_LIMIT_ERROR.to_string(),
+        ));
+    }
+    if !response.status().is_success() {
+        return Some(MarketplaceGitHubApiError::Other(format!(
+            "{operation}: HTTP {}",
+            response.status()
+        )));
+    }
+    None
 }
 
 fn format_compact_number(value: u64) -> String {
@@ -681,30 +746,33 @@ fn github_raw_file_url(source: &GitHubMarketplaceSource, path: &str) -> Result<u
 async fn fetch_marketplace_github_tree(
     client: &Client,
     source: &GitHubMarketplaceSource,
-) -> Result<Vec<GitHubTreeEntry>, String> {
+    github_token: &str,
+) -> Result<Vec<GitHubTreeEntry>, MarketplaceGitHubApiError> {
     let cache_key = marketplace_github_tree_cache_key(source);
     if let Some(entries) = cached_marketplace_github_tree(&cache_key) {
         return Ok(entries);
     }
 
-    let api_url = github_tree_api_url(source)?;
-    let response = client
-        .get(api_url)
+    let api_url = github_tree_api_url(source).map_err(MarketplaceGitHubApiError::Other)?;
+    let response = github_api_request(client, api_url, github_token)
         .send()
         .await
-        .map_err(|error| format!("读取 GitHub 文件树失败: {error}"))?;
-    if response.status().as_u16() == 403 {
-        return Err("GitHub API 请求受限，请稍后重试".into());
+        .map_err(|error| {
+            MarketplaceGitHubApiError::Other(format!("读取 GitHub 文件树失败: {error}"))
+        })?;
+    if let Some(error) = github_api_response_error(&response, "读取 GitHub 文件树失败") {
+        return Err(error);
     }
-    let response = response
-        .error_for_status()
-        .map_err(|error| format!("读取 GitHub 文件树失败: {error}"))?;
     let payload = response
         .json::<GitHubTreeResponse>()
         .await
-        .map_err(|error| format!("解析 GitHub 文件树失败: {error}"))?;
+        .map_err(|error| {
+            MarketplaceGitHubApiError::Other(format!("解析 GitHub 文件树失败: {error}"))
+        })?;
     if payload.truncated {
-        return Err("GitHub 文件树过大，改用兼容模式读取".into());
+        return Err(MarketplaceGitHubApiError::Other(
+            "GitHub 文件树过大，改用兼容模式读取".into(),
+        ));
     }
     cache_marketplace_github_tree(cache_key, payload.tree.clone());
     Ok(payload.tree)
@@ -728,24 +796,26 @@ async fn fetch_github_directory_entries(
     client: &Client,
     source: &GitHubMarketplaceSource,
     path: &str,
-) -> Result<Vec<GitHubContentEntry>, String> {
-    let api_url = github_contents_api_url(source, path)?;
-    let response = client
-        .get(api_url)
+    github_token: &str,
+) -> Result<Vec<GitHubContentEntry>, MarketplaceGitHubApiError> {
+    let api_url =
+        github_contents_api_url(source, path).map_err(MarketplaceGitHubApiError::Other)?;
+    let response = github_api_request(client, api_url, github_token)
         .send()
         .await
-        .map_err(|error| format!("读取 GitHub Skill 目录失败: {error}"))?;
-    if response.status().as_u16() == 403 {
-        return Err("GitHub API 请求受限，请稍后重试".into());
+        .map_err(|error| {
+            MarketplaceGitHubApiError::Other(format!("读取 GitHub Skill 目录失败: {error}"))
+        })?;
+    if let Some(error) = github_api_response_error(&response, "读取 GitHub Skill 目录失败") {
+        return Err(error);
     }
-    let response = response
-        .error_for_status()
-        .map_err(|error| format!("读取 GitHub Skill 目录失败: {error}"))?;
 
     response
         .json::<Vec<GitHubContentEntry>>()
         .await
-        .map_err(|error| format!("解析 GitHub Skill 目录失败: {error}"))
+        .map_err(|error| {
+            MarketplaceGitHubApiError::Other(format!("解析 GitHub Skill 目录失败: {error}"))
+        })
 }
 
 fn discover_marketplace_skill_root_blocking(
@@ -866,7 +936,8 @@ async fn fetch_marketplace_skill_entries(
     source: &GitHubMarketplaceSource,
     root_path: &str,
     root_name: &str,
-) -> Result<Vec<SkillFileEntry>, String> {
+    github_token: &str,
+) -> Result<Vec<SkillFileEntry>, MarketplaceGitHubApiError> {
     let mut pending_directories = VecDeque::from([root_path.to_string()]);
     let mut entries = vec![SkillFileEntry {
         path: String::new(),
@@ -876,10 +947,12 @@ async fn fetch_marketplace_skill_entries(
     }];
 
     while let Some(directory_path) = pending_directories.pop_front() {
-        let mut children = fetch_github_directory_entries(client, source, &directory_path).await?;
+        let mut children =
+            fetch_github_directory_entries(client, source, &directory_path, github_token).await?;
         sort_github_content_entries(&mut children);
         for child in children {
-            let relative_path = marketplace_entry_relative_path(&child.path, root_path)?;
+            let relative_path = marketplace_entry_relative_path(&child.path, root_path)
+                .map_err(MarketplaceGitHubApiError::Other)?;
             let is_directory = child.entry_type == "dir";
             let depth = relative_path.split('/').count();
             entries.push(SkillFileEntry {
@@ -889,10 +962,10 @@ async fn fetch_marketplace_skill_entries(
                 depth,
             });
             if entries.len() > MARKETPLACE_SKILL_FILE_LIMIT + 1 {
-                return Err(format!(
+                return Err(MarketplaceGitHubApiError::Other(format!(
                     "Skill 文件数量超过 {} 个，暂不支持在线预览",
                     MARKETPLACE_SKILL_FILE_LIMIT
-                ));
+                )));
             }
             if is_directory {
                 pending_directories.push_back(child.path);
@@ -941,6 +1014,78 @@ async fn fetch_marketplace_skill_file_document(
         path: relative_path.to_string(),
         content,
     })
+}
+
+fn build_marketplace_skill_browser_snapshot(
+    skill_name: String,
+    mut entries: Vec<SkillFileEntry>,
+    preview_mode: &str,
+) -> Result<SkillFileBrowserSnapshot, String> {
+    if entries.len() <= 1 {
+        return Err("Skill 目录中没有可预览文件".into());
+    }
+
+    let root_entry = entries.remove(0);
+    entries.sort_by_key(marketplace_entry_sort_key);
+    entries.insert(0, root_entry);
+    let initial_file_path = marketplace_initial_file_path(&entries);
+    Ok(SkillFileBrowserSnapshot {
+        skill_name,
+        root_name: entries[0].name.clone(),
+        entries,
+        initial_file_path,
+        preview_mode: preview_mode.to_string(),
+    })
+}
+
+async fn fetch_marketplace_basic_preview(
+    client: &Client,
+    source: &GitHubMarketplaceSource,
+    skill_path: &str,
+    skill_name: &str,
+    original_rate_limit_error: String,
+) -> Result<SkillFileBrowserSnapshot, String> {
+    let cache_key = marketplace_skill_root_cache_key(source, skill_path);
+    let mut root_paths = marketplace_skill_path_candidates(skill_path)?;
+    if let Some(cached_root) = cached_marketplace_skill_root(&cache_key) {
+        if !root_paths.contains(&cached_root) {
+            root_paths.insert(0, cached_root);
+        }
+    }
+
+    for root_path in root_paths {
+        let mut entries = vec![SkillFileEntry {
+            path: String::new(),
+            name: skill_name.to_string(),
+            entry_type: "directory".into(),
+            depth: 0,
+        }];
+        for file_name in GITHUB_BASIC_PREVIEW_FILE_NAMES {
+            if fetch_marketplace_skill_file_document(client, source, &root_path, file_name)
+                .await
+                .is_ok()
+            {
+                entries.push(SkillFileEntry {
+                    path: file_name.to_string(),
+                    name: file_name.to_string(),
+                    entry_type: "file".into(),
+                    depth: 1,
+                });
+            }
+        }
+        if entries.len() <= 1 {
+            continue;
+        }
+
+        cache_marketplace_skill_root(cache_key, root_path);
+        return build_marketplace_skill_browser_snapshot(
+            skill_name.to_string(),
+            entries,
+            MARKETPLACE_PREVIEW_MODE_BASIC,
+        );
+    }
+
+    Err(original_rate_limit_error)
 }
 
 fn skills_sh_marketplace_id(source: &str, skill_id: &str) -> String {
@@ -6304,29 +6449,33 @@ pub async fn get_marketplace_skill_file_browser(
     let source = parse_github_marketplace_source(&source_url)?;
     let cache_key = marketplace_skill_root_cache_key(&source, &skill_path);
     let client = marketplace_http_client()?;
-    let mut last_error = match fetch_marketplace_github_tree(&client, &source).await {
+    let github_token = load_app_settings().github_token;
+    let mut last_error = match fetch_marketplace_github_tree(&client, &source, &github_token).await
+    {
         Ok(tree_entries) => {
             let root_path =
                 marketplace_skill_root_from_github_tree(&tree_entries, &skill_path, &skill_name)
                     .ok_or_else(|| format!("未在 GitHub 仓库中找到 {skill_name}/SKILL.md"))?;
-            let mut entries =
+            let entries =
                 marketplace_skill_entries_from_github_tree(&tree_entries, &root_path, &skill_name)?;
-            if entries.len() <= 1 {
-                return Err("Skill 目录中没有可预览文件".into());
-            }
             cache_marketplace_skill_root(cache_key.clone(), root_path);
-            let root_entry = entries.remove(0);
-            entries.sort_by_key(marketplace_entry_sort_key);
-            entries.insert(0, root_entry);
-            let initial_file_path = marketplace_initial_file_path(&entries);
-            return Ok(SkillFileBrowserSnapshot {
+            return build_marketplace_skill_browser_snapshot(
                 skill_name,
-                root_name: entries[0].name.clone(),
                 entries,
-                initial_file_path,
-            });
+                MARKETPLACE_PREVIEW_MODE_FULL,
+            );
         }
-        Err(error) => error,
+        Err(MarketplaceGitHubApiError::RateLimited(error)) => {
+            return fetch_marketplace_basic_preview(
+                &client,
+                &source,
+                &skill_path,
+                &skill_name,
+                error,
+            )
+            .await;
+        }
+        Err(MarketplaceGitHubApiError::Other(error)) => error,
     };
 
     let mut root_paths = marketplace_skill_path_candidates(&skill_path)?;
@@ -6337,22 +6486,35 @@ pub async fn get_marketplace_skill_file_browser(
     }
 
     for root_path in &root_paths {
-        match fetch_marketplace_skill_entries(&client, &source, &root_path, &skill_name).await {
-            Ok(mut entries) if entries.len() > 1 => {
+        match fetch_marketplace_skill_entries(
+            &client,
+            &source,
+            root_path,
+            &skill_name,
+            &github_token,
+        )
+        .await
+        {
+            Ok(entries) if entries.len() > 1 => {
                 cache_marketplace_skill_root(cache_key, root_path.clone());
-                let root_entry = entries.remove(0);
-                entries.sort_by_key(marketplace_entry_sort_key);
-                entries.insert(0, root_entry);
-                let initial_file_path = marketplace_initial_file_path(&entries);
-                return Ok(SkillFileBrowserSnapshot {
+                return build_marketplace_skill_browser_snapshot(
                     skill_name,
-                    root_name: entries[0].name.clone(),
                     entries,
-                    initial_file_path,
-                });
+                    MARKETPLACE_PREVIEW_MODE_FULL,
+                );
             }
             Ok(_) => {}
-            Err(error) => last_error = error,
+            Err(MarketplaceGitHubApiError::RateLimited(error)) => {
+                return fetch_marketplace_basic_preview(
+                    &client,
+                    &source,
+                    &skill_path,
+                    &skill_name,
+                    error,
+                )
+                .await;
+            }
+            Err(MarketplaceGitHubApiError::Other(error)) => last_error = error,
         }
     }
 
@@ -6362,23 +6524,30 @@ pub async fn get_marketplace_skill_file_browser(
     if root_paths.contains(&discovered_root) {
         return Err(last_error);
     }
-    let mut entries =
-        fetch_marketplace_skill_entries(&client, &source, &discovered_root, &skill_name).await?;
-    if entries.len() <= 1 {
-        return Err("Skill 目录中没有可预览文件".into());
-    }
+    let entries = match fetch_marketplace_skill_entries(
+        &client,
+        &source,
+        &discovered_root,
+        &skill_name,
+        &github_token,
+    )
+    .await
+    {
+        Ok(entries) => entries,
+        Err(MarketplaceGitHubApiError::RateLimited(error)) => {
+            return fetch_marketplace_basic_preview(
+                &client,
+                &source,
+                &skill_path,
+                &skill_name,
+                error,
+            )
+            .await;
+        }
+        Err(MarketplaceGitHubApiError::Other(error)) => return Err(error),
+    };
     cache_marketplace_skill_root(cache_key, discovered_root);
-    let root_entry = entries.remove(0);
-    entries.sort_by_key(marketplace_entry_sort_key);
-    entries.insert(0, root_entry);
-    let initial_file_path = marketplace_initial_file_path(&entries);
-
-    Ok(SkillFileBrowserSnapshot {
-        skill_name,
-        root_name: entries[0].name.clone(),
-        entries,
-        initial_file_path,
-    })
+    build_marketplace_skill_browser_snapshot(skill_name, entries, MARKETPLACE_PREVIEW_MODE_FULL)
 }
 
 #[tauri::command]
@@ -6391,6 +6560,7 @@ pub async fn get_marketplace_skill_file_content(
     let cache_key = marketplace_skill_root_cache_key(&source, &skill_path);
     let relative_path = normalize_marketplace_file_path(&relative_path, false)?;
     let client = marketplace_http_client()?;
+    let github_token = load_app_settings().github_token;
     if let Some(cached_root) = cached_marketplace_skill_root(&cache_key) {
         return fetch_marketplace_skill_file_document(
             &client,
@@ -6402,7 +6572,8 @@ pub async fn get_marketplace_skill_file_content(
     }
 
     let skill_name = skill_path.rsplit('/').next().unwrap_or_default();
-    let mut last_error = match fetch_marketplace_github_tree(&client, &source).await {
+    let mut last_error = match fetch_marketplace_github_tree(&client, &source, &github_token).await
+    {
         Ok(tree_entries) => {
             let root_path =
                 marketplace_skill_root_from_github_tree(&tree_entries, &skill_path, skill_name)
@@ -6413,7 +6584,7 @@ pub async fn get_marketplace_skill_file_content(
             cache_marketplace_skill_root(cache_key, root_path);
             return Ok(document);
         }
-        Err(error) => error,
+        Err(error) => error.message(),
     };
 
     let root_paths = marketplace_skill_path_candidates(&skill_path)?;
@@ -6624,47 +6795,58 @@ fn parse_apple_languages_output(output: &str) -> Option<&'static str> {
 }
 
 #[tauri::command]
-pub async fn refresh_git_states() -> Vec<SkillSummary> {
-    let (refresh_started_skills, refreshed_skills) = tauri::async_runtime::spawn_blocking(|| {
-        let skills = load_installed_skills(&default_installed_skills());
-        let refreshed_git_skills = refresh_installed_skill_git_states(&skills);
-        let agent_skill_paths = refreshed_git_skills
-            .iter()
-            .filter(|skill| skill.instance.update_driver == "agent-skills-cli")
-            .map(|skill| {
-                let path = if skill.instance.canonical_path.trim().is_empty() {
-                    &skill.local_path
-                } else {
-                    &skill.instance.canonical_path
+pub async fn refresh_git_states() -> GitStateRefreshResult {
+    let (refresh_started_skills, refreshed_skills, github_rate_limited) =
+        tauri::async_runtime::spawn_blocking(|| {
+            let skills = load_installed_skills(&default_installed_skills());
+            let refreshed_git_skills = refresh_installed_skill_git_states(&skills);
+            let agent_skill_paths = refreshed_git_skills
+                .iter()
+                .filter(|skill| skill.instance.update_driver == "agent-skills-cli")
+                .map(|skill| {
+                    let path = if skill.instance.canonical_path.trim().is_empty() {
+                        &skill.local_path
+                    } else {
+                        &skill.instance.canonical_path
+                    };
+                    (skill.name.clone(), PathBuf::from(path))
+                })
+                .collect::<BTreeMap<_, _>>();
+            let github_token = load_app_settings().github_token;
+            let (refreshed_skills, github_rate_limited) =
+                match crate::agent_skills_cli::detect_global_updates(
+                    &agent_skill_paths,
+                    &github_token,
+                ) {
+                    Ok(check) => {
+                        let github_rate_limited = check.github_rate_limited;
+                        (
+                            apply_agent_cli_update_statuses(refreshed_git_skills, &check),
+                            github_rate_limited,
+                        )
+                    }
+                    Err(error) => {
+                        log::warn!("Agent Skills CLI update check skipped: {error}");
+                        (refreshed_git_skills, false)
+                    }
                 };
-                (skill.name.clone(), PathBuf::from(path))
-            })
-            .collect::<BTreeMap<_, _>>();
-        let refreshed_skills =
-            match crate::agent_skills_cli::detect_global_updates(&agent_skill_paths) {
-                Ok(check) => apply_agent_cli_update_statuses(refreshed_git_skills, &check),
-                Err(error) => {
-                    log::warn!("Agent Skills CLI update check skipped: {error}");
-                    refreshed_git_skills
+            if sync_trace_enabled() {
+                for skill in &refreshed_skills {
+                    let tool_statuses = skill
+                        .tools
+                        .iter()
+                        .map(|tool| format!("{}={}", tool.name, tool.status_label))
+                        .collect::<Vec<_>>();
+                    eprintln!(
+                        "[sync-trace] refreshed git skill {} tools {:?}",
+                        skill.name, tool_statuses
+                    );
                 }
-            };
-        if sync_trace_enabled() {
-            for skill in &refreshed_skills {
-                let tool_statuses = skill
-                    .tools
-                    .iter()
-                    .map(|tool| format!("{}={}", tool.name, tool.status_label))
-                    .collect::<Vec<_>>();
-                eprintln!(
-                    "[sync-trace] refreshed git skill {} tools {:?}",
-                    skill.name, tool_statuses
-                );
             }
-        }
-        (skills, refreshed_skills)
-    })
-    .await
-    .unwrap_or_default();
+            (skills, refreshed_skills, github_rate_limited)
+        })
+        .await
+        .unwrap_or_default();
     let latest_skills = load_installed_skills(&default_installed_skills());
     let refreshed_skills = merge_refreshed_skill_states_with_latest_state(
         refreshed_skills,
@@ -6672,7 +6854,17 @@ pub async fn refresh_git_states() -> Vec<SkillSummary> {
         latest_skills,
     );
     let _ = save_installed_skills(&refreshed_skills);
-    refreshed_skills
+    GitStateRefreshResult {
+        skills: refreshed_skills,
+        github_rate_limited,
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitStateRefreshResult {
+    pub skills: Vec<SkillSummary>,
+    pub github_rate_limited: bool,
 }
 
 #[tauri::command]
@@ -8128,6 +8320,7 @@ pub fn get_skill_file_browser(
         root_name,
         entries,
         initial_file_path,
+        preview_mode: MARKETPLACE_PREVIEW_MODE_FULL.into(),
     })
 }
 
@@ -8170,6 +8363,7 @@ pub fn get_tool_skill_file_browser(
         root_name: skill_name.into(),
         entries,
         initial_file_path,
+        preview_mode: MARKETPLACE_PREVIEW_MODE_FULL.into(),
     })
 }
 
@@ -8737,6 +8931,7 @@ mod tests {
             language: "zh-CN".into(),
             language_source: "manual".into(),
             theme: "system".into(),
+            github_token: String::new(),
         }
     }
 
@@ -8898,6 +9093,62 @@ mod tests {
             raw_url.as_str(),
             "https://raw.githubusercontent.com/example/skills/HEAD/skills/demo/SKILL.md"
         );
+    }
+
+    #[test]
+    fn detects_only_confirmed_github_api_rate_limits() {
+        let mut exhausted_headers = reqwest::header::HeaderMap::new();
+        exhausted_headers.insert("x-ratelimit-remaining", "0".parse().unwrap());
+        let mut retry_headers = reqwest::header::HeaderMap::new();
+        retry_headers.insert(reqwest::header::RETRY_AFTER, "60".parse().unwrap());
+
+        assert!(super::is_github_api_rate_limited(
+            reqwest::StatusCode::TOO_MANY_REQUESTS,
+            &reqwest::header::HeaderMap::new(),
+        ));
+        assert!(super::is_github_api_rate_limited(
+            reqwest::StatusCode::FORBIDDEN,
+            &exhausted_headers,
+        ));
+        assert!(super::is_github_api_rate_limited(
+            reqwest::StatusCode::FORBIDDEN,
+            &retry_headers,
+        ));
+        assert!(!super::is_github_api_rate_limited(
+            reqwest::StatusCode::FORBIDDEN,
+            &reqwest::header::HeaderMap::new(),
+        ));
+        assert!(!super::is_github_api_rate_limited(
+            reqwest::StatusCode::NOT_FOUND,
+            &exhausted_headers,
+        ));
+    }
+
+    #[test]
+    fn scopes_github_token_to_api_requests() {
+        let client = reqwest::Client::new();
+        let api_url = url::Url::parse("https://api.github.com/repos/example/skills").unwrap();
+        let raw_url =
+            url::Url::parse("https://raw.githubusercontent.com/example/skills/HEAD/SKILL.md")
+                .unwrap();
+
+        let api_request = super::github_api_request(&client, api_url, " secret-token ")
+            .build()
+            .unwrap();
+        let raw_request = super::github_api_request(&client, raw_url, "secret-token")
+            .build()
+            .unwrap();
+
+        assert_eq!(
+            api_request
+                .headers()
+                .get(reqwest::header::AUTHORIZATION)
+                .and_then(|value| value.to_str().ok()),
+            Some("Bearer secret-token"),
+        );
+        assert!(!raw_request
+            .headers()
+            .contains_key(reqwest::header::AUTHORIZATION));
     }
 
     #[test]
@@ -9500,6 +9751,7 @@ mod tests {
         let check = AgentSkillUpdateCheck {
             checked_names: BTreeSet::from(["agent-skill".to_string()]),
             updated_names: BTreeSet::from(["agent-skill".to_string()]),
+            github_rate_limited: false,
         };
 
         let refreshed = apply_agent_cli_update_statuses(vec![agent_skill, git_skill], &check);
@@ -9521,6 +9773,7 @@ mod tests {
         let check = AgentSkillUpdateCheck {
             checked_names: BTreeSet::from(["checked".to_string()]),
             updated_names: BTreeSet::new(),
+            github_rate_limited: false,
         };
 
         let refreshed = apply_agent_cli_update_statuses(vec![checked_skill, failed_skill], &check);

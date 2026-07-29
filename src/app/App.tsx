@@ -554,6 +554,7 @@ function AppContent() {
   const {
     alignLocalWorkspaceState,
     appSettings,
+    githubRateLimitNoticeVersion,
     installedSkills,
     isStartupGitStateRefreshComplete,
     didStartupGitStateRefreshSucceed,
@@ -607,6 +608,7 @@ function AppContent() {
   const routeLocalAlignInFlightRef = useRef(false);
   const lastRouteLocalAlignRef = useRef<{ key: string; timestamp: number } | null>(null);
   const compatibilityPromptCheckStartedRef = useRef(false);
+  const hasShownGithubRateLimitPromptRef = useRef(false);
 
   useEffect(() => {
     if (activeRoute !== "skills" || activeSkillsSection !== "skills") {
@@ -660,6 +662,34 @@ function AppContent() {
     setSkillLibraryProvider,
     t,
   ]);
+
+  useEffect(() => {
+    if (
+      githubRateLimitNoticeVersion === 0
+      || appSettings.githubToken.trim().length > 0
+      || hasShownGithubRateLimitPromptRef.current
+    ) {
+      return;
+    }
+
+    hasShownGithubRateLimitPromptRef.current = true;
+    notify({
+      message: t("notifications.githubRateLimited"),
+      tone: "info",
+      actionLabel: t("notifications.configureGithubToken"),
+      onAction: () => {
+        setActiveRoute("settings");
+        window.requestAnimationFrame(() => {
+          window.requestAnimationFrame(() => {
+            document.getElementById("settings-github-api")?.scrollIntoView({
+              behavior: "smooth",
+              block: "center",
+            });
+          });
+        });
+      },
+    });
+  }, [appSettings.githubToken, githubRateLimitNoticeVersion, notify, t]);
 
   const hasShownSkillUpdateNotificationRef = useRef(false);
   const activeDefinition =

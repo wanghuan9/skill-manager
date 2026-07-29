@@ -342,6 +342,8 @@ pub struct AppSettings {
     pub language: String,
     pub language_source: String,
     pub theme: String,
+    #[serde(default)]
+    pub github_token: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -412,6 +414,7 @@ pub struct SkillFileBrowserSnapshot {
     pub root_name: String,
     pub entries: Vec<SkillFileEntry>,
     pub initial_file_path: Option<String>,
+    pub preview_mode: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

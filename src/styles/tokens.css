@@ -5185,6 +5185,16 @@ code {
   grid-template-rows: auto minmax(0, 1fr);
 }
 
+.marketplace-skill-file-dialog__basic-notice {
+  margin: 0;
+  padding: 8px 12px;
+  border-bottom: 1px solid rgba(245, 158, 11, 0.24);
+  background: rgba(245, 158, 11, 0.1);
+  color: #92400e;
+  font-size: 0.76rem;
+  line-height: 1.4;
+}
+
 .marketplace-skill-file-dialog__state {
   grid-row: 1 / -1;
   min-height: 0;
@@ -8517,6 +8527,7 @@ code {
 
 .settings-panel--module,
 .settings-panel--git-account,
+.settings-panel--github-api,
 .settings-panel--tool-status {
   box-shadow:
     0 18px 36px rgba(23, 35, 63, 0.06),
@@ -8634,6 +8645,99 @@ button.settings-form-item:disabled {
   font-size: 0.78rem;
   color: #667085;
   line-height: 1.42;
+}
+
+.settings-form-item__description {
+  color: #667085;
+  font-size: 0.78rem;
+  line-height: 1.42;
+}
+
+.settings-github-token-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.settings-github-token-control {
+  display: grid;
+  width: min(520px, 48vw);
+  gap: 8px;
+}
+
+.settings-github-token-input-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.settings-github-token-input-shell {
+  display: flex;
+  min-width: 0;
+  min-height: 36px;
+  flex: 1;
+  align-items: stretch;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-strong);
+  overflow: hidden;
+}
+
+.settings-github-token-input-shell:focus-within {
+  border-color: color-mix(in srgb, var(--accent) 48%, var(--line) 52%);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.settings-github-token-input {
+  min-width: 0;
+  flex: 1;
+  border: 0;
+  padding: 0 11px;
+  outline: 0;
+  background: transparent;
+  color: var(--heading);
+  font: inherit;
+  font-size: 0.8rem;
+}
+
+.settings-github-token-visibility {
+  border: 0;
+  border-left: 1px solid var(--line);
+  padding: 0 12px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.settings-github-token-visibility:hover {
+  background: var(--surface-muted);
+  color: var(--heading);
+}
+
+.settings-github-token-helper {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 2px;
+  color: var(--muted);
+  font-size: 0.76rem;
+}
+
+.settings-github-token-generate {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.settings-github-token-generate:hover {
+  text-decoration: underline;
 }
 
 .settings-form-item__control {
@@ -11760,6 +11864,10 @@ button.settings-form-item:disabled {
     width: 100%;
   }
 
+  .settings-github-token-control {
+    width: 100%;
+  }
+
   .settings-form-item__path-group {
     align-items: stretch;
     flex-direction: column;
@@ -12929,6 +13037,7 @@ button.settings-form-item:disabled {
 
 :root[data-theme="dark"] .settings-panel--module,
 :root[data-theme="dark"] .settings-panel--git-account,
+:root[data-theme="dark"] .settings-panel--github-api,
 :root[data-theme="dark"] .settings-panel--tool-status {
   box-shadow:
     0 18px 38px rgba(0, 0, 0, 0.2),
@@ -12955,8 +13064,22 @@ button.settings-form-item:disabled {
 }
 
 :root[data-theme="dark"] .settings-form-item__copy p,
+:root[data-theme="dark"] .settings-form-item__description,
 :root[data-theme="dark"] .settings-toggle-control__state {
   color: #cccccc;
+}
+
+:root[data-theme="dark"] .settings-github-token-input-shell {
+  border-color: var(--line);
+  background: #232323;
+}
+
+:root[data-theme="dark"] .settings-github-token-input {
+  color: var(--heading);
+}
+
+:root[data-theme="dark"] .settings-github-token-visibility {
+  border-left-color: var(--line);
 }
 
 :root[data-theme="dark"] .settings-form-item__control .app-select__trigger,
@@ -14123,6 +14246,12 @@ button.settings-form-item:disabled {
   border-color: #464646;
   background: rgba(31, 31, 31, 0.8);
   color: #c4c4c4;
+}
+
+:root[data-theme="dark"] .marketplace-skill-file-dialog__basic-notice {
+  border-bottom-color: rgba(255, 194, 26, 0.2);
+  background: rgba(255, 194, 26, 0.09);
+  color: #f6d675;
 }
 
 :root[data-theme="dark"] .mcp-server-card__tool-chip {

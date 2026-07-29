@@ -53,6 +53,8 @@ struct SettingsPersistence {
     language_source: String,
     #[serde(default)]
     theme: String,
+    #[serde(default)]
+    github_token: String,
 }
 
 pub fn load_installed_skills(default_skills: &[SkillSummary]) -> Vec<SkillSummary> {
@@ -436,6 +438,7 @@ pub fn load_app_settings() -> AppSettings {
         language: normalize_app_language(&persisted.language).to_string(),
         language_source: normalize_app_language_source(&persisted.language_source).to_string(),
         theme: normalize_app_theme(&persisted.theme).to_string(),
+        github_token: persisted.github_token.trim().to_string(),
     }
 }
 
@@ -477,6 +480,7 @@ pub fn save_app_settings(input: AppSettings) -> Result<AppSettings, String> {
         language: normalize_app_language(&input.language).to_string(),
         language_source: normalize_app_language_source(&input.language_source).to_string(),
         theme: normalize_app_theme(&input.theme).to_string(),
+        github_token: input.github_token.trim().to_string(),
     };
     let persistence = SettingsPersistence {
         skill_library_provider: normalized.skill_library_provider.clone(),
@@ -490,6 +494,7 @@ pub fn save_app_settings(input: AppSettings) -> Result<AppSettings, String> {
         language: normalized.language.clone(),
         language_source: normalized.language_source.clone(),
         theme: normalized.theme.clone(),
+        github_token: normalized.github_token.clone(),
     };
     let payload = serde_json::to_string_pretty(&persistence)
         .map_err(|error| format!("序列化设置失败: {error}"))?;
@@ -1139,6 +1144,25 @@ mod tests {
 
             assert!(!saved.agent_skills_compatibility_configured);
             assert!(!content.contains("agentSkillsCompatibilityEnabled"));
+        });
+    }
+
+    #[test]
+    fn saves_and_loads_trimmed_github_token() {
+        with_temp_home(|temp_home| {
+            let workspace_root = temp_home.join(".skilldock");
+            fs::create_dir_all(&workspace_root).expect("create workspace");
+
+            let mut settings = load_app_settings();
+            assert!(settings.github_token.is_empty());
+            settings.github_token = "  github_pat_example  ".into();
+            let saved = save_app_settings(settings).expect("save GitHub token");
+            let content = fs::read_to_string(workspace_root.join("settings.json"))
+                .expect("read saved settings");
+
+            assert_eq!(saved.github_token, "github_pat_example");
+            assert_eq!(load_app_settings().github_token, "github_pat_example");
+            assert!(content.contains("\"githubToken\": \"github_pat_example\""));
         });
     }
 

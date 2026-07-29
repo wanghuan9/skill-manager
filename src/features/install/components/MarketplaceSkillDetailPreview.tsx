@@ -15,6 +15,7 @@ import type {
   SkillFileBrowserSnapshot,
   SkillFileDocument,
 } from "@/features/skills/state/skill-store";
+import { useSkillWorkspace } from "@/features/skills/state/skill-workspace";
 
 type MarketplaceSkillDetailPreviewProps = {
   skill: MarketplaceSkill;
@@ -60,7 +61,9 @@ function previewErrorMessage(error: unknown, fallback: string) {
 
 export function MarketplaceSkillDetailPreview({ skill }: MarketplaceSkillDetailPreviewProps) {
   const { t } = useTranslate();
+  const { reportGithubRateLimit } = useSkillWorkspace();
   const [entries, setEntries] = useState<SkillFileBrowserSnapshot["entries"]>([]);
+  const [previewMode, setPreviewMode] = useState<SkillFileBrowserSnapshot["previewMode"]>("full");
   const [selectedPath, setSelectedPath] = useState("");
   const [content, setContent] = useState("");
   const [isTreeLoading, setIsTreeLoading] = useState(true);
@@ -97,6 +100,10 @@ export function MarketplaceSkillDetailPreview({ skill }: MarketplaceSkillDetailP
         throw new Error(t("install.market.detail.filesUnavailable"));
       }
       setEntries(snapshot.entries);
+      setPreviewMode(snapshot.previewMode);
+      if (snapshot.previewMode === "basic") {
+        reportGithubRateLimit();
+      }
       setSelectedPath(snapshot.initialFilePath);
       setCollapsedDirectories(
         buildInitialCollapsedDirectories(snapshot.entries, snapshot.initialFilePath),
@@ -104,6 +111,7 @@ export function MarketplaceSkillDetailPreview({ skill }: MarketplaceSkillDetailP
     }
 
     setEntries([]);
+    setPreviewMode("full");
     setSelectedPath("");
     setContent("");
     setTreeErrorMessage("");
@@ -159,7 +167,7 @@ export function MarketplaceSkillDetailPreview({ skill }: MarketplaceSkillDetailP
     return () => {
       active = false;
     };
-  }, [skill, t]);
+  }, [reportGithubRateLimit, skill, t]);
 
   useEffect(() => {
     if (!selectedPath) {
@@ -254,6 +262,11 @@ export function MarketplaceSkillDetailPreview({ skill }: MarketplaceSkillDetailP
           </article>
         ) : (
           <>
+            {previewMode === "basic" ? (
+              <p className="marketplace-skill-file-dialog__basic-notice">
+                {t("install.market.detail.basicPreview")}
+              </p>
+            ) : null}
             <SkillFileContentSurface
               selectedPath={selectedPath}
               content={content}

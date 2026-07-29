@@ -31,11 +31,13 @@ beforeEach(() => {
     language: "zh-CN",
     installingMarketplaceSkillIds: new Set(),
     installFromMarket: vi.fn(),
+    reportGithubRateLimit: vi.fn(),
   } as unknown as ReturnType<typeof useSkillWorkspace>);
   mockedFetchMarketplaceSkillFileBrowser.mockResolvedValue({
     skillName: marketplaceSkillFixtures[0].name,
     rootName: marketplaceSkillFixtures[0].name,
     initialFilePath: "SKILL.md",
+    previewMode: "full",
     entries: [
       { path: "", name: marketplaceSkillFixtures[0].name, entryType: "directory", depth: 0 },
       { path: "reference", name: "reference", entryType: "directory", depth: 1 },
@@ -195,9 +197,66 @@ test("installs a marketplace skill from the detail modal", async () => {
   expect(installFromMarket).toHaveBeenCalledWith(marketplaceSkillFixtures[0]);
 });
 
+test("shows the basic preview notice when GitHub API is rate limited", async () => {
+  const reportGithubRateLimit = vi.fn();
+  mockedUseSkillWorkspace.mockReturnValue({
+    language: "zh-CN",
+    installingMarketplaceSkillIds: new Set(),
+    installFromMarket: vi.fn(),
+    reportGithubRateLimit,
+  } as unknown as ReturnType<typeof useSkillWorkspace>);
+  const skill = {
+    ...marketplaceSkillFixtures[0],
+    id: "basic-preview-skill",
+    name: "basic-preview-skill",
+    sourceUrl: "https://github.com/example/basic-preview-skill",
+  };
+  mockedFetchMarketplaceSkillFileBrowser.mockResolvedValue({
+    skillName: skill.name,
+    rootName: skill.name,
+    initialFilePath: "SKILL.md",
+    previewMode: "basic",
+    entries: [
+      { path: "", name: skill.name, entryType: "directory", depth: 0 },
+      { path: "SKILL.md", name: "SKILL.md", entryType: "file", depth: 1 },
+    ],
+  });
+
+  renderWithI18n(
+    <NotificationProvider>
+      <MarketplaceInstallPanel
+        activeSourceSite="skills.sh"
+        sourceTabs={["skills.sh", "skillsmp"]}
+        marketplaceSkills={[skill]}
+        onSourceChange={vi.fn()}
+        searchQuery=""
+        onSearchQueryChange={vi.fn()}
+        searchScope="all"
+        onSearchScopeChange={vi.fn()}
+        isSearching={false}
+        isSearchLoading={false}
+        isInitialLoading={false}
+        isLoadingMore={false}
+        hasMore={false}
+        installedMarketplaceSkillIds={new Set()}
+        onLoadMore={vi.fn()}
+      />
+    </NotificationProvider>,
+  );
+
+  await userEvent.click(screen.getByRole("heading", { name: skill.name, level: 3 }));
+  const detailDialog = screen.getByRole("dialog", { name: `${skill.name} 详情` });
+
+  expect(
+    await within(detailDialog).findByText("GitHub API 受限，当前仅展示 SKILL.md / README.md。"),
+  ).toBeInTheDocument();
+  expect(await within(detailDialog).findByText("默认说明")).toBeInTheDocument();
+  expect(reportGithubRateLimit).toHaveBeenCalledTimes(1);
+});
+
 test("shows a compact error state when the remote tree is unavailable", async () => {
   const skill = marketplaceSkillFixtures[1];
-  mockedFetchMarketplaceSkillFileBrowser.mockRejectedValue("GitHub API 请求受限，请稍后重试");
+  mockedFetchMarketplaceSkillFileBrowser.mockRejectedValue("读取 GitHub 文件树失败: HTTP 404 Not Found");
 
   renderWithI18n(
     <NotificationProvider>
@@ -225,6 +284,8 @@ test("shows a compact error state when the remote tree is unavailable", async ()
   const detailDialog = screen.getByRole("dialog", { name: `${skill.name} 详情` });
 
   expect(await within(detailDialog).findByRole("heading", { name: "Skill 介绍" })).toBeInTheDocument();
-  expect(within(detailDialog).getByText("GitHub API 请求受限，请稍后重试")).toBeInTheDocument();
+  expect(
+    within(detailDialog).getByText("读取 GitHub 文件树失败: HTTP 404 Not Found"),
+  ).toBeInTheDocument();
   expect(within(detailDialog).queryByText("暂时无法读取 Skill 文件。")).not.toBeInTheDocument();
 });

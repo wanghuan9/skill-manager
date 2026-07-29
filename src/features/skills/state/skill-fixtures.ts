@@ -833,6 +833,7 @@ export const appSettingsFixture: AppSettings = {
   language: "zh-CN",
   languageSource: "user",
   theme: "system",
+  githubToken: "",
 };
 
 export const pushTargetFixtures: Record<string, PushTargetSnapshot> = {
@@ -902,6 +903,7 @@ export const skillFileBrowserFixtures: Record<string, SkillFileBrowserSnapshot> 
     skillName: "drawio-diagram",
     rootName: "drawio-diagram",
     initialFilePath: "SKILL.md",
+    previewMode: "full",
     entries: [
       { path: "", name: "drawio-diagram", entryType: "directory", depth: 0 },
       { path: "reference", name: "reference", entryType: "directory", depth: 1 },
@@ -913,6 +915,7 @@ export const skillFileBrowserFixtures: Record<string, SkillFileBrowserSnapshot> 
     skillName: "skill-publisher",
     rootName: "skill-publisher",
     initialFilePath: "SKILL.md",
+    previewMode: "full",
     entries: [
       { path: "", name: "skill-publisher", entryType: "directory", depth: 0 },
       { path: "reference", name: "reference", entryType: "directory", depth: 1 },
