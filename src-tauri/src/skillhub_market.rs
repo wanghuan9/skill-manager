@@ -53,7 +53,7 @@ struct SkillHubListItem {
     #[serde(default)]
     updated_at: i64,
     #[serde(default, rename = "iconUrl")]
-    icon_url: String,
+    icon_url: Option<String>,
     namespace: Option<SkillHubNamespace>,
     publisher: Option<SkillHubPublisher>,
 }
@@ -368,7 +368,7 @@ fn map_list_items(
                 install_label: format!("v{}", item.version.trim_start_matches('v')),
                 source_url,
                 popularity_label: format_compact_number(item.downloads),
-                avatar_url: (!item.icon_url.trim().is_empty()).then_some(item.icon_url),
+                avatar_url: item.icon_url.filter(|url| !url.trim().is_empty()),
                 skill_path: item.slug.clone(),
                 installed: installed.is_some(),
                 update_available: installed.is_some_and(|skill| {
@@ -746,6 +746,22 @@ mod tests {
         assert_eq!(skills[0].current_version, "1.0.41");
         assert_eq!(skills[0].category_label, "在线文档");
         assert_eq!(skills[0].popularity_label, "176.7K");
+    }
+
+    #[test]
+    fn accepts_skillhub_items_without_an_icon() {
+        let item: SkillHubListItem = serde_json::from_value(json!({
+            "slug": "without-icon",
+            "name": "Without Icon",
+            "iconUrl": null
+        }))
+        .expect("parse item without icon");
+
+        let skills = map_list_items(vec![item], &[]);
+
+        assert_eq!(skills.len(), 1);
+        assert_eq!(skills[0].id, "skillhub-without-icon");
+        assert_eq!(skills[0].avatar_url, None);
     }
 
     #[test]

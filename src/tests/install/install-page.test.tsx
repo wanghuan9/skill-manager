@@ -2033,3 +2033,63 @@ test("keeps source results isolated and preserves the skills.sh display order", 
     "design-system-reviewer",
   ]);
 });
+
+test("loads the next marketplace page after a refresh finishes at the scroll bottom", async () => {
+  const firstPage = Array.from({ length: 18 }, (_, index): MarketplaceSkill => ({
+    ...marketplaceSkillFixtures[0],
+    id: `skillhub-first-${index + 1}`,
+    name: `skillhub-first-${index + 1}`,
+    sourceSite: "skillhub",
+  }));
+  const secondPageSkill: MarketplaceSkill = {
+    ...marketplaceSkillFixtures[0],
+    id: "skillhub-second-page",
+    name: "skillhub-second-page",
+    sourceSite: "skillhub",
+  };
+  let resolveRefresh: ((skills: MarketplaceSkill[]) => void) | undefined;
+  const fetchMarketplaceSkillsByPageSpy = vi
+    .spyOn(skillClient, "fetchMarketplaceSkillsByPage")
+    .mockImplementation((input) => {
+      if (input.sourceSite !== "skillhub") {
+        return Promise.resolve([]);
+      }
+      if (input.page === 2) {
+        return Promise.resolve([secondPageSkill]);
+      }
+      if (input.refresh) {
+        return new Promise((resolve) => {
+          resolveRefresh = resolve;
+        });
+      }
+      return Promise.resolve(firstPage);
+    });
+
+  render(<App />);
+  await clickNavInstall();
+  await userEvent.click(screen.getByRole("tab", { name: "skillhub" }));
+
+  expect(await screen.findByRole("heading", { name: "skillhub-first-18", level: 3 })).toBeInTheDocument();
+  await waitFor(() => {
+    expect(resolveRefresh).toBeTypeOf("function");
+  });
+
+  scrollMarketInstallToBottom();
+  expect(fetchMarketplaceSkillsByPageSpy).not.toHaveBeenCalledWith(expect.objectContaining({
+    sourceSite: "skillhub",
+    page: 2,
+  }));
+
+  await act(async () => {
+    resolveRefresh?.(firstPage);
+  });
+
+  expect(await screen.findByRole("heading", { name: "skillhub-second-page", level: 3 })).toBeInTheDocument();
+  expect(fetchMarketplaceSkillsByPageSpy).toHaveBeenCalledWith({
+    sourceSite: "skillhub",
+    page: 2,
+    limit: 18,
+  });
+
+  fetchMarketplaceSkillsByPageSpy.mockRestore();
+});

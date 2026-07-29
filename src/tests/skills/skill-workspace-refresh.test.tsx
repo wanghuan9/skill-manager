@@ -922,7 +922,7 @@ test("refreshes skillsmp marketplace after serving the initial cached page", asy
   });
 });
 
-test("keeps SkillHub pagination active until an empty page is returned", async () => {
+test("uses full marketplace pages to determine whether SkillHub has more results", async () => {
   const marketplaceCalls: Array<Record<string, unknown>> = [];
   mockedInvoke.mockImplementation(async (command, args) => {
     switch (command) {
@@ -943,10 +943,12 @@ test("keeps SkillHub pagination active until an empty page is returned", async (
         const input = args as Record<string, unknown>;
         marketplaceCalls.push(input);
         if (input.page === 1) {
-          return [createSkillHubMarketplaceSkill("first")];
+          return Array.from({ length: 18 }, (_, index) =>
+            createSkillHubMarketplaceSkill(`first-${index + 1}`));
         }
         if (input.page === 2) {
-          return [createSkillHubMarketplaceSkill("second")];
+          return Array.from({ length: 18 }, (_, index) =>
+            createSkillHubMarketplaceSkill(`second-${index + 1}`));
         }
         return [];
       }
@@ -969,7 +971,7 @@ test("keeps SkillHub pagination active until an empty page is returned", async (
 
   fireEvent.click(screen.getByRole("button", { name: "加载更多 SkillHub" }));
   await waitFor(() => {
-    expect(screen.getByTestId("skillhub-skill-names").textContent).toBe("first,second");
+    expect(screen.getByTestId("skillhub-skill-names").textContent).toContain("second-18");
     expect(screen.getByTestId("skillhub-has-more").textContent).toBe("more");
   });
 

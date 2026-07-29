@@ -228,6 +228,9 @@ export function MarketRoute(props: MarketRouteProps) {
     if (!scrollContainer) {
       return;
     }
+    if (scrollContainer.clientHeight <= 0) {
+      return;
+    }
     const remain = scrollContainer.scrollHeight - scrollContainer.scrollTop - scrollContainer.clientHeight;
     if (remain > 140) {
       return;
@@ -252,6 +255,28 @@ export function MarketRoute(props: MarketRouteProps) {
       scrollContainer.removeEventListener("scroll", handleScroll);
     };
   }, [activeInstallTab, isSearching, handleScroll, activeInstallCategory]);
+
+  useEffect(() => {
+    if (
+      activeInstallTab !== "market" ||
+      isSearching ||
+      activeInstallCategory !== "skill" ||
+      isMarketplaceLoading ||
+      !hasMoreMarketplaceSkills
+    ) {
+      return;
+    }
+
+    handleScroll();
+  }, [
+    activeInstallCategory,
+    activeInstallTab,
+    handleScroll,
+    hasMoreMarketplaceSkills,
+    isMarketplaceLoading,
+    isSearching,
+    stableTabSkills.length,
+  ]);
 
   const categorySwitcher = (
             <InstallCategorySwitcher
