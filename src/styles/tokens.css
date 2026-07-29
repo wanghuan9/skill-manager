@@ -4470,6 +4470,10 @@ code {
   width: min(320px, 100%);
 }
 
+.market-search-field--scoped {
+  width: min(300px, 100%);
+}
+
 .market-search-input-wrap {
   position: relative;
 }
@@ -4501,7 +4505,6 @@ code {
 .market-search-input:focus {
   outline: none;
   border-color: #8ab3ff;
-  box-shadow: 0 0 0 3px rgba(47, 120, 255, 0.18);
 }
 
 .market-search-spinner {
@@ -4516,6 +4519,50 @@ code {
   border-top-color: #5f7fb8;
   color: #5f7fb8;
   pointer-events: none;
+}
+
+.market-search-field--scoped .market-search-input {
+  padding-right: 92px;
+}
+
+.market-search-field--scoped .market-search-spinner {
+  right: 78px;
+}
+
+.market-search-scope {
+  position: absolute;
+  top: 50%;
+  right: 5px;
+  display: flex;
+  gap: 2px;
+  transform: translateY(-50%);
+}
+
+.market-search-scope__button {
+  min-height: 26px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: #64748b;
+  font-size: 0.66rem;
+  font-weight: 400;
+  line-height: 1;
+}
+
+.market-search-scope__button:hover {
+  background: rgba(100, 116, 139, 0.08);
+  color: #1e3a5f;
+}
+
+.market-search-scope__button.is-selected {
+  background: rgba(37, 99, 235, 0.1);
+  color: #2563eb;
+}
+
+.market-search-scope__button:focus-visible {
+  outline: 2px solid rgba(47, 120, 255, 0.48);
+  outline-offset: 1px;
 }
 
 .market-route {
@@ -12855,11 +12902,24 @@ button.settings-form-item:disabled {
 
 :root[data-theme="dark"] .market-search-input:focus {
   border-color: rgba(255, 194, 26, 0.46);
-  box-shadow: 0 0 0 3px rgba(255, 194, 26, 0.1);
 }
 
 :root[data-theme="dark"] .market-search-input::placeholder {
   color: #858585;
+}
+
+:root[data-theme="dark"] .market-search-scope__button {
+  color: #a9adb4;
+}
+
+:root[data-theme="dark"] .market-search-scope__button:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: #f2f2f2;
+}
+
+:root[data-theme="dark"] .market-search-scope__button.is-selected {
+  background: rgba(255, 194, 26, 0.1);
+  color: var(--accent);
 }
 
 :root[data-theme="dark"] .settings-panel {
@@ -13824,7 +13884,6 @@ button.settings-form-item:disabled {
 
 :root[data-theme="dark"] .search-field--header:focus-within,
 :root[data-theme="dark"] .skill-status-filter:focus-within,
-:root[data-theme="dark"] .market-search-input:focus,
 :root[data-theme="dark"] .skills-source-select-trigger:focus-visible,
 :root[data-theme="dark"] .plugins-page__status-filter:focus-within {
   border-color: rgba(255, 194, 26, 0.48);

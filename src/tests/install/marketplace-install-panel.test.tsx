@@ -59,6 +59,8 @@ test("shows initialization state before an uncached marketplace source returns",
         onSourceChange={vi.fn()}
         searchQuery=""
         onSearchQueryChange={vi.fn()}
+        searchScope="all"
+        onSearchScopeChange={vi.fn()}
         isSearching={false}
         isSearchLoading={false}
         isInitialLoading
@@ -100,6 +102,8 @@ test("loads the complete skill tree and previews files on demand", async () => {
         onSourceChange={vi.fn()}
         searchQuery=""
         onSearchQueryChange={vi.fn()}
+        searchScope="all"
+        onSearchScopeChange={vi.fn()}
         isSearching={false}
         isSearchLoading={false}
         isInitialLoading={false}
@@ -168,6 +172,8 @@ test("installs a marketplace skill from the detail modal", async () => {
         onSourceChange={vi.fn()}
         searchQuery=""
         onSearchQueryChange={vi.fn()}
+        searchScope="all"
+        onSearchScopeChange={vi.fn()}
         isSearching={false}
         isSearchLoading={false}
         isInitialLoading={false}
@@ -202,6 +208,8 @@ test("shows a compact error state when the remote tree is unavailable", async ()
         onSourceChange={vi.fn()}
         searchQuery=""
         onSearchQueryChange={vi.fn()}
+        searchScope="all"
+        onSearchScopeChange={vi.fn()}
         isSearching={false}
         isSearchLoading={false}
         isInitialLoading={false}

@@ -8,6 +8,8 @@ import { openExternalLink } from "@/features/skills/api/skill-client";
 import type { MarketplaceSkill, MarketplaceSourceSite } from "@/features/skills/state/skill-store";
 import { useSkillWorkspace } from "@/features/skills/state/skill-workspace";
 
+export type MarketplaceSearchScope = "all" | "current";
+
 type MarketplaceInstallPanelProps = {
   activeSourceSite: MarketplaceSourceSite;
   sourceTabs: MarketplaceSourceSite[];
@@ -15,6 +17,8 @@ type MarketplaceInstallPanelProps = {
   onSourceChange: (sourceSite: MarketplaceSourceSite) => void;
   searchQuery: string;
   onSearchQueryChange: (value: string) => void;
+  searchScope: MarketplaceSearchScope;
+  onSearchScopeChange: (scope: MarketplaceSearchScope) => void;
   isSearching: boolean;
   isSearchLoading: boolean;
   isInitialLoading: boolean;
@@ -33,6 +37,8 @@ export function MarketplaceInstallPanel(props: MarketplaceInstallPanelProps) {
     sourceTabs,
     searchQuery,
     onSearchQueryChange,
+    searchScope,
+    onSearchScopeChange,
     isSearching,
     isSearchLoading,
     isInitialLoading,
@@ -45,6 +51,7 @@ export function MarketplaceInstallPanel(props: MarketplaceInstallPanelProps) {
   const { notify } = useNotifications();
   const reportFailure = useFailureReporter();
   const [selectedSkill, setSelectedSkill] = useState<MarketplaceSkill | null>(null);
+  const isAllSourcesSearch = searchScope === "all";
 
   async function handleInstallSkill(skill: MarketplaceSkill) {
     try {
@@ -74,11 +81,14 @@ export function MarketplaceInstallPanel(props: MarketplaceInstallPanelProps) {
         <div className="panel-header">
           <h2>{t("install.sources.title")}</h2>
         </div>
-        <label className="market-search-field">
-          <span className="sr-only">{t("install.sources.searchAria")}</span>
+        <div className="market-search-field market-search-field--scoped">
+          <label className="sr-only" htmlFor="marketplace-skill-search">
+            {t("install.sources.searchAria")}
+          </label>
           <div className="market-search-input-wrap">
             <SearchFieldIcon />
             <input
+              id="marketplace-skill-search"
               className="market-search-input"
               type="search"
               autoComplete="off"
@@ -86,14 +96,38 @@ export function MarketplaceInstallPanel(props: MarketplaceInstallPanelProps) {
               autoCapitalize="none"
               spellCheck={false}
               value={searchQuery}
-              placeholder={t("install.sources.searchPlaceholder")}
+              placeholder={
+                isAllSourcesSearch
+                  ? t("install.sources.searchPlaceholder")
+                  : t("install.sources.searchPlaceholderCurrent", { source: activeSourceSite })
+              }
               onChange={(event) => onSearchQueryChange(event.target.value)}
             />
             {isSearchLoading ? (
               <span className="loading-spinner market-search-spinner" aria-label={t("install.sources.searching")} />
             ) : null}
+            <div className="market-search-scope" role="group" aria-label={t("install.sources.searchScopeAria")}>
+              <button
+                className={`market-search-scope__button${isAllSourcesSearch ? " is-selected" : ""}`}
+                type="button"
+                aria-pressed={isAllSourcesSearch}
+                title={t("install.sources.searchScopeAllTitle")}
+                onClick={() => onSearchScopeChange("all")}
+              >
+                {t("install.sources.searchScopeAll")}
+              </button>
+              <button
+                className={`market-search-scope__button${!isAllSourcesSearch ? " is-selected" : ""}`}
+                type="button"
+                aria-pressed={!isAllSourcesSearch}
+                title={t("install.sources.searchScopeCurrentTitle", { source: activeSourceSite })}
+                onClick={() => onSearchScopeChange("current")}
+              >
+                {t("install.sources.searchScopeCurrent")}
+              </button>
+            </div>
           </div>
-        </label>
+        </div>
         <div className="source-tab-row" role="tablist" aria-label={t("install.sources.tabsAria")}>
           {sourceTabs.map((sourceSite) => {
             const selected = sourceSite === activeSourceSite;
@@ -128,7 +162,12 @@ export function MarketplaceInstallPanel(props: MarketplaceInstallPanelProps) {
             </h3>
             <p>
               {isSearching
-                ? t("install.market.loading.searchDescription", { query: searchQuery.trim() })
+                ? isAllSourcesSearch
+                  ? t("install.market.loading.searchDescription", { query: searchQuery.trim() })
+                  : t("install.market.loading.searchDescriptionCurrent", {
+                      query: searchQuery.trim(),
+                      source: activeSourceSite,
+                    })
                 : t("install.market.loading.sourceDescription", { source: activeSourceSite })}
             </p>
           </section>
@@ -210,7 +249,12 @@ export function MarketplaceInstallPanel(props: MarketplaceInstallPanelProps) {
             <h3>{t("install.market.emptyTitle")}</h3>
             <p>
               {isSearching
-                ? t("install.market.emptySearch", { query: searchQuery.trim() })
+                ? isAllSourcesSearch
+                  ? t("install.market.emptySearch", { query: searchQuery.trim() })
+                  : t("install.market.emptySearchCurrent", {
+                      query: searchQuery.trim(),
+                      source: activeSourceSite,
+                    })
                 : t("install.market.emptySource", { source: activeSourceSite })}
             </p>
           </section>

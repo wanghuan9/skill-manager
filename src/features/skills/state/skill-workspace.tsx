@@ -131,7 +131,7 @@ type SkillWorkspaceContextValue = {
   installFromMarket: (skill: MarketplaceSkill) => Promise<void>;
   loadInitialMarketplaceSkills: (sourceSite: MarketplaceSourceSite) => Promise<void>;
   loadMoreMarketplaceSkills: (sourceSite: MarketplaceSourceSite) => Promise<void>;
-  searchMarketplaceSkills: (query: string) => Promise<MarketplaceSkill[]>;
+  searchMarketplaceSkills: (query: string, sourceSite?: MarketplaceSourceSite) => Promise<MarketplaceSkill[]>;
   discoverRepoSkills: (repoUrl: string, gitRef?: string) => Promise<RepoSkillCandidate[]>;
   installFromRepo: (repoUrl: string, selectedPaths: string[], gitRef?: string) => Promise<void>;
   discoverLocalInstallSkills: (localPath: string) => Promise<LocalInstallSkillCandidate[]>;
@@ -1257,7 +1257,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
     await loadMarketplacePage(sourceSite, nextPage <= 1 ? 1 : nextPage, nextPage > 1);
   }
 
-  async function handleSearchMarketplaceSkills(query: string) {
+  async function handleSearchMarketplaceSkills(query: string, sourceSite?: MarketplaceSourceSite) {
     const normalizedQuery = query.trim();
     if (!normalizedQuery) {
       return [];
@@ -1265,10 +1265,11 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
 
     setIsSearchLoading(true);
     try {
+      const searchSourceSites = sourceSite ? [sourceSite] : MARKETPLACE_SOURCE_SITES;
       const searchResults = await Promise.allSettled(
-        MARKETPLACE_SOURCE_SITES.map((sourceSite) =>
+        searchSourceSites.map((searchSourceSite) =>
           fetchMarketplaceSkillsByPage({
-            sourceSite,
+            sourceSite: searchSourceSite,
             page: 1,
             limit: MARKETPLACE_PAGE_SIZE * 3,
             query: normalizedQuery,

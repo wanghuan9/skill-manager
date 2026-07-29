@@ -1988,11 +1988,36 @@ test("searches marketplace skills across all supported sources", async () => {
   render(<App />);
   await clickNavInstall();
 
+  expect(screen.getByRole("button", { name: "全部" })).toHaveAttribute("aria-pressed", "true");
   const searchInput = screen.getByRole("searchbox", { name: "搜索 skill" });
   await userEvent.type(searchInput, "guardian");
 
   expect(await screen.findByText("release-guardian")).toBeInTheDocument();
   expect(screen.getByText("repo-guardian")).toBeInTheDocument();
+});
+
+test("searches marketplace skills only in the active source when current scope is selected", async () => {
+  render(<App />);
+  await clickNavInstall();
+
+  await userEvent.click(screen.getByRole("button", { name: "当前" }));
+  await userEvent.type(screen.getByRole("searchbox", { name: "搜索 skill" }), "skills");
+
+  await waitFor(() => {
+    expect(screen.getAllByRole("heading", { level: 3 }).map((item) => item.textContent)).toEqual([
+      "workflow-critic",
+      "design-system-reviewer",
+    ]);
+  });
+
+  await userEvent.click(screen.getByRole("tab", { name: "skillsmp" }));
+
+  await waitFor(() => {
+    expect(screen.getAllByRole("heading", { level: 3 }).map((item) => item.textContent)).toEqual([
+      "release-guardian",
+      "repo-guardian",
+    ]);
+  });
 });
 
 test("sorts marketplace search results by popularity across sources", async () => {

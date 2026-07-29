@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useTranslate } from "@/app/i18n";
-import { MarketplaceInstallPanel } from "@/features/install/components/MarketplaceInstallPanel";
+import {
+  MarketplaceInstallPanel,
+  type MarketplaceSearchScope,
+} from "@/features/install/components/MarketplaceInstallPanel";
 import { McpMarketplacePanel } from "@/features/install/components/McpMarketplacePanel";
 import { PluginInstallPanel } from "@/features/install/components/PluginInstallPanel";
 import { RepoInstallPanel } from "@/features/install/components/RepoInstallPanel";
@@ -105,6 +108,7 @@ export function MarketRoute(props: MarketRouteProps) {
   const activeInstallTab = controlledInstallTab ?? internalInstallTab;
   const [activeSourceSite, setActiveSourceSite] = useState<MarketplaceSourceSite>("skills.sh");
   const [searchQuery, setSearchQuery] = useState("");
+  const [searchScope, setSearchScope] = useState<MarketplaceSearchScope>("all");
   const [mcpSearchQuery, setMcpSearchQuery] = useState("");
   const [categoryToolbarContainer, setCategoryToolbarContainer] = useState<HTMLElement | null>(null);
   const [debouncedSearchQuery, setDebouncedSearchQuery] = useState("");
@@ -120,6 +124,7 @@ export function MarketRoute(props: MarketRouteProps) {
   });
   const normalizedSearchQuery = debouncedSearchQuery.trim();
   const isSearching = normalizedSearchQuery.length > 0;
+  const activeSearchSource = searchScope === "current" ? activeSourceSite : undefined;
   const tabSkills = useMemo(
     () => marketplaceSkills.filter((skill) => skill.sourceSite === activeSourceSite),
     [activeSourceSite, marketplaceSkills],
@@ -169,7 +174,7 @@ export function MarketRoute(props: MarketRouteProps) {
       return;
     }
     let cancelled = false;
-    void searchMarketplaceRef.current(normalizedSearchQuery)
+    void searchMarketplaceRef.current(normalizedSearchQuery, activeSearchSource)
       .then((skills) => {
         if (cancelled) return;
         // 按 id 去重，避免重复结果
@@ -185,7 +190,7 @@ export function MarketRoute(props: MarketRouteProps) {
     return () => {
       cancelled = true;
     };
-  }, [activeInstallTab, isSearching, normalizedSearchQuery]);
+  }, [activeInstallTab, activeSearchSource, isSearching, normalizedSearchQuery]);
 
   useEffect(() => {
     if (activeInstallTab !== "market" || isSearching) {
@@ -278,6 +283,8 @@ export function MarketRoute(props: MarketRouteProps) {
                 onSourceChange={setActiveSourceSite}
                 searchQuery={searchQuery}
                 onSearchQueryChange={setSearchQuery}
+                searchScope={searchScope}
+                onSearchScopeChange={setSearchScope}
                 isSearching={isSearching}
                 isSearchLoading={isSearchLoading}
                 isInitialLoading={isMarketplaceInitializing}
