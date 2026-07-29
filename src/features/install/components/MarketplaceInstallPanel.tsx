@@ -302,17 +302,19 @@ function SkillDetailModal(props: SkillDetailModalProps) {
                 {t("install.market.detail.viewStore")}
               </a>
             ) : null}
-            <a
-              className="skill-detail-modal__action-link"
-              href={officialRepositoryUrl}
-              onClick={(event) => {
-                event.preventDefault();
-                void openExternalLink(officialRepositoryUrl);
-              }}
-            >
-              <ExternalLinkIcon />
-              {t("install.market.detail.openRepo")}
-            </a>
+            {skill.sourceSite !== "skillhub" ? (
+              <a
+                className="skill-detail-modal__action-link"
+                href={officialRepositoryUrl}
+                onClick={(event) => {
+                  event.preventDefault();
+                  void openExternalLink(officialRepositoryUrl);
+                }}
+              >
+                <ExternalLinkIcon />
+                {t("install.market.detail.openRepo")}
+              </a>
+            ) : null}
             <button
               className="skill-detail-modal__close"
               type="button"
@@ -333,7 +335,7 @@ function buildListDescription(
   skill: MarketplaceSkill,
   t: (key: "install.market.fallbackDescription", values: Record<string, string | number>) => string,
 ) {
-  if (skill.sourceSite === "skillsmp" && skill.description && skill.description.trim()) {
+  if (skill.sourceSite !== "skills.sh" && skill.description.trim()) {
     return skill.description;
   }
   const repositoryLabel = extractRepositoryLabel(skill.sourceUrl);
@@ -378,6 +380,10 @@ function tryParseUrl(value: string) {
 }
 
 function resolveMarketplaceSkillUrl(skill: MarketplaceSkill) {
+  if (skill.sourceSite === "skillhub") {
+    return skill.sourceUrl || "https://skillhub.cn";
+  }
+
   const explicitMarketplaceUrl = skill.marketplaceUrl?.trim() ?? "";
   if (explicitMarketplaceUrl) {
     return explicitMarketplaceUrl;

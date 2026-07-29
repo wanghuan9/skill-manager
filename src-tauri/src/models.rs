@@ -217,6 +217,8 @@ pub struct SkillInstanceMetadata {
     pub skill_entries: Vec<String>,
     #[serde(default)]
     pub path_error: String,
+    #[serde(default)]
+    pub content_hash: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -235,6 +237,12 @@ pub struct MarketplaceSkill {
     pub avatar_url: Option<String>,
     #[serde(default)]
     pub skill_path: String,
+    #[serde(default)]
+    pub installed: bool,
+    #[serde(default)]
+    pub update_available: bool,
+    #[serde(default)]
+    pub current_version: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

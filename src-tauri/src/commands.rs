@@ -54,7 +54,7 @@ const SKILL_LIBRARY_REFRESHED_EVENT: &str = "skill-library-refreshed";
 const LOCAL_SKILL_TOOL_STATE_CONCURRENCY: usize = 2;
 const PACKAGE_ID_HASH_LEN: usize = 8;
 
-fn default_installed_skills() -> Vec<SkillSummary> {
+pub(crate) fn default_installed_skills() -> Vec<SkillSummary> {
     Vec::new()
 }
 
@@ -271,7 +271,7 @@ fn default_marketplace_skills() -> Vec<MarketplaceSkill> {
     Vec::new()
 }
 
-fn marketplace_http_client() -> Result<Client, String> {
+pub(crate) fn marketplace_http_client() -> Result<Client, String> {
     Client::builder()
         .user_agent("skilldock/0.1 (+https://github.com/wanghuan)")
         .connect_timeout(Duration::from_secs(8))
@@ -1105,6 +1105,9 @@ fn map_skills_sh_items_to_marketplace(paged_items: Vec<SkillsShSkill>) -> Vec<Ma
             popularity_label: format_compact_number(item.installs),
             avatar_url: None,
             skill_path: resolved_skill_id.clone(),
+            installed: false,
+            update_available: false,
+            current_version: String::new(),
         });
     }
 
@@ -1683,11 +1686,11 @@ fn normalize_repo_key_from_url(url: &str) -> String {
     )
 }
 
-fn persist_skill_timestamps(_skill: &SkillSummary) {
+pub(crate) fn persist_skill_timestamps(_skill: &SkillSummary) {
     // 预留钩子：后续可把安装/更新时间落盘到独立缓存文件。
 }
 
-fn now_timestamp_label() -> String {
+pub(crate) fn now_timestamp_label() -> String {
     format_system_time_label(SystemTime::now()).unwrap_or_else(|| "刚刚".into())
 }
 
@@ -1827,6 +1830,9 @@ fn map_skillsmp_items_to_marketplace(items: Vec<SkillsMpSkill>) -> Vec<Marketpla
                     Some(avatar_url.to_string())
                 },
                 skill_path,
+                installed: false,
+                update_available: false,
+                current_version: String::new(),
             })
         })
         .collect()
@@ -2040,6 +2046,16 @@ async fn build_marketplace_skills(
         {
             skills_mp.retain(|skill| matches_marketplace_query(skill, normalized_query.as_deref()));
             skills.append(&mut skills_mp);
+        }
+    }
+
+    if source.is_empty() || source == crate::skillhub_market::SOURCE {
+        let normalized_query = normalize_marketplace_query(query);
+        if let Ok(mut skillhub) =
+            crate::skillhub_market::list_skills(&client, page, limit, normalized_query.as_deref())
+                .await
+        {
+            skills.append(&mut skillhub);
         }
     }
 
@@ -3070,7 +3086,7 @@ fn reconcile_skill_tools_with_entries(
     }
 }
 
-fn normalize_skill_tools(skill: &SkillSummary) -> SkillSummary {
+pub(crate) fn normalize_skill_tools(skill: &SkillSummary) -> SkillSummary {
     let tool_configs = build_tool_configs();
     let installed_tool_entries = installed_tool_sync_entries_from_configs(&tool_configs);
     normalize_skill_tools_with_entries(skill, &installed_tool_entries)
@@ -3228,7 +3244,7 @@ fn normalize_installed_skill_source_url(skill: &SkillSummary) -> SkillSummary {
     normalized
 }
 
-fn apply_skill_install_activation(
+pub(crate) fn apply_skill_install_activation(
     skill: SkillSummary,
     installed_skills: &[SkillSummary],
 ) -> Result<SkillSummary, String> {
@@ -6085,7 +6101,7 @@ fn collect_repo_skill_candidates(
     Ok(())
 }
 
-fn read_skill_description(skill_file: &Path) -> String {
+pub(crate) fn read_skill_description(skill_file: &Path) -> String {
     let Ok(content) = fs::read_to_string(skill_file) else {
         return "未提供简介".into();
     };
@@ -6258,6 +6274,17 @@ pub async fn get_marketplace_skill_description(
         .map(ToOwned::to_owned)
         .unwrap_or_else(|| format!("来自 {} 的公开 skill（{}）", source_site, skill_name));
 
+    if source_site == crate::skillhub_market::SOURCE {
+        let client = match marketplace_http_client() {
+            Ok(client) => client,
+            Err(_) => return fallback,
+        };
+        let slug = skill_id
+            .strip_prefix("skillhub-")
+            .unwrap_or(skill_id.as_str());
+        return crate::skillhub_market::get_description(&client, slug, fallback).await;
+    }
+
     if source_site != "skills.sh" {
         return fallback;
     }
@@ -6297,10 +6324,28 @@ pub async fn get_marketplace_skill_description(
 
 #[tauri::command]
 pub async fn get_marketplace_skill_file_browser(
+    source_site: Option<String>,
     source_url: String,
     skill_path: String,
     skill_name: String,
+    skill_id: Option<String>,
+    version: Option<String>,
 ) -> Result<SkillFileBrowserSnapshot, String> {
+    if source_site.as_deref() == Some(crate::skillhub_market::SOURCE) {
+        let slug = skill_id
+            .as_deref()
+            .and_then(|value| value.strip_prefix("skillhub-"))
+            .or_else(|| (!skill_path.trim().is_empty()).then_some(skill_path.as_str()))
+            .ok_or_else(|| "SkillHub Skill 标识无效".to_string())?;
+        let client = marketplace_http_client()?;
+        return crate::skillhub_market::get_file_browser(
+            &client,
+            slug,
+            &skill_name,
+            version.as_deref(),
+        )
+        .await;
+    }
     let source = parse_github_marketplace_source(&source_url)?;
     let cache_key = marketplace_skill_root_cache_key(&source, &skill_path);
     let client = marketplace_http_client()?;
@@ -6383,10 +6428,28 @@ pub async fn get_marketplace_skill_file_browser(
 
 #[tauri::command]
 pub async fn get_marketplace_skill_file_content(
+    source_site: Option<String>,
     source_url: String,
     skill_path: String,
     relative_path: String,
+    skill_id: Option<String>,
+    version: Option<String>,
 ) -> Result<SkillFileDocument, String> {
+    if source_site.as_deref() == Some(crate::skillhub_market::SOURCE) {
+        let slug = skill_id
+            .as_deref()
+            .and_then(|value| value.strip_prefix("skillhub-"))
+            .or_else(|| (!skill_path.trim().is_empty()).then_some(skill_path.as_str()))
+            .ok_or_else(|| "SkillHub Skill 标识无效".to_string())?;
+        let client = marketplace_http_client()?;
+        return crate::skillhub_market::get_file_content(
+            &client,
+            slug,
+            &relative_path,
+            version.as_deref(),
+        )
+        .await;
+    }
     let source = parse_github_marketplace_source(&source_url)?;
     let cache_key = marketplace_skill_root_cache_key(&source, &skill_path);
     let relative_path = normalize_marketplace_file_path(&relative_path, false)?;
@@ -6665,6 +6728,8 @@ pub async fn refresh_git_states() -> Vec<SkillSummary> {
     })
     .await
     .unwrap_or_default();
+    let refreshed_skills =
+        crate::skillhub_market::refresh_installed_skill_update_states(refreshed_skills).await;
     let latest_skills = load_installed_skills(&default_installed_skills());
     let refreshed_skills = merge_refreshed_skill_states_with_latest_state(
         refreshed_skills,
@@ -6703,6 +6768,9 @@ pub async fn refresh_local_git_state(
 
 #[tauri::command]
 pub async fn install_skill_from_market(skill: MarketplaceSkill) -> Result<SkillSummary, String> {
+    if skill.source_site == crate::skillhub_market::SOURCE {
+        return crate::skillhub_market::install_skill(skill).await;
+    }
     tauri::async_runtime::spawn_blocking(move || install_skill_from_market_blocking(skill))
         .await
         .map_err(|error| format!("后台安装 marketplace skill 失败: {error}"))?
@@ -7933,6 +8001,11 @@ pub async fn get_update_preview_snapshot(
     local_path: String,
 ) -> Result<UpdatePreviewSnapshot, String> {
     let skill_path = (!local_path.trim().is_empty()).then_some(local_path);
+    let (installed_skills, skill_index) = find_skill_instance(&skill_name, skill_path.as_deref())?;
+    let skill = installed_skills[skill_index].clone();
+    if crate::skillhub_market::is_installed_skillhub_skill(&skill) {
+        return crate::skillhub_market::preview_installed_skill_update(skill).await;
+    }
     tauri::async_runtime::spawn_blocking(move || {
         get_update_preview_snapshot_blocking(&skill_name, skill_path.as_deref())
     })
@@ -8061,6 +8134,11 @@ pub async fn update_skill(
     skill_name: String,
     skill_path: Option<String>,
 ) -> Result<SkillSummary, String> {
+    let (installed_skills, skill_index) = find_skill_instance(&skill_name, skill_path.as_deref())?;
+    let skill = installed_skills[skill_index].clone();
+    if crate::skillhub_market::is_installed_skillhub_skill(&skill) {
+        return crate::skillhub_market::update_installed_skill(skill).await;
+    }
     tauri::async_runtime::spawn_blocking(move || {
         update_skill_blocking(&skill_name, skill_path.as_deref())
     })
@@ -10364,6 +10442,9 @@ mod tests {
             popularity_label: "1.0K".into(),
             avatar_url: None,
             skill_path: "skills/demo".into(),
+            installed: false,
+            update_available: false,
+            current_version: String::new(),
         }];
 
         save_marketplace_cache("skillsmp", &skills);

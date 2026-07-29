@@ -49,6 +49,7 @@ test("renders install-source and repository install panels", async () => {
   expect(screen.getByRole("tab", { name: "市场安装" })).toBeInTheDocument();
   expect(screen.getByRole("tab", { name: "skills.sh" })).toBeInTheDocument();
   expect(screen.getByRole("tab", { name: "skillsmp" })).toBeInTheDocument();
+  expect(screen.getByRole("tab", { name: "skillhub" })).toBeInTheDocument();
   expect(screen.queryByText("安装后默认应用到所有已安装工具")).not.toBeInTheDocument();
   await userEvent.click(screen.getByRole("tab", { name: "Git 安装" }));
   expect(screen.getByRole("textbox", { name: "Git 仓库地址" })).toBeInTheDocument();

@@ -129,6 +129,11 @@ export function MarketplaceSkillDetailPreview({ skill }: MarketplaceSkillDetailP
       sourceUrl: skill.sourceUrl,
       skillPath: skill.skillPath ?? "",
       skillName: skill.name,
+      ...(skill.sourceSite === "skillhub" ? {
+        sourceSite: skill.sourceSite,
+        skillId: skill.id,
+        version: skill.currentVersion,
+      } : {}),
     })
       .then((snapshot) => {
         if (!active) {
@@ -184,6 +189,11 @@ export function MarketplaceSkillDetailPreview({ skill }: MarketplaceSkillDetailP
       sourceUrl: skill.sourceUrl,
       skillPath: skill.skillPath ?? "",
       relativePath: selectedPath,
+      ...(skill.sourceSite === "skillhub" ? {
+        sourceSite: skill.sourceSite,
+        skillId: skill.id,
+        version: skill.currentVersion,
+      } : {}),
     })
       .then((document) => {
         if (!active) {

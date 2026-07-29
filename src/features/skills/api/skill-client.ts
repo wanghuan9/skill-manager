@@ -206,14 +206,17 @@ type SaveSkillFileInput = SkillFileInput & {
 };
 
 type MarketplaceSkillFileInput = {
+  sourceSite?: MarketplaceSourceSite;
   sourceUrl: string;
   skillPath: string;
   skillName: string;
+  skillId?: string;
+  version?: string;
 };
 
 type MarketplaceSkillFileContentInput = Pick<
   MarketplaceSkillFileInput,
-  "sourceUrl" | "skillPath"
+  "sourceSite" | "sourceUrl" | "skillPath" | "skillId" | "version"
 > & {
   relativePath: string;
 };
@@ -542,6 +545,7 @@ function normalizeSkillSummary(skill: LegacySkillSummary): SkillSummary {
     updateDriver: skill.updateDriver ?? (skill.gitLinked ? "git" : "none"),
     skillEntries: skill.skillEntries ?? [skill.entryPath ?? skill.localPath ?? ""].filter(Boolean),
     pathError: skill.pathError ?? "",
+    contentHash: skill.contentHash ?? "",
     tools: (skill.tools ?? []).map((tool) => ({
       ...tool,
       statusLabel: localizeToolStatusLabel(tool.statusLabel, language),

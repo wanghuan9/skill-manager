@@ -320,6 +320,8 @@ export function SkillCard({
       : t("skill.card.owner.skilldock");
   const sourceMethodLabel = skill.sourceType === "well-known"
     ? t("skill.card.sourceMethod.remote")
+    : skill.sourceType === "marketplace"
+      ? t("skill.card.sourceMethod.remote")
     : skill.gitLinked || skill.sourceType !== "local"
       ? t("skill.card.sourceMethod.git")
       : t("skill.card.sourceMethod.local");
@@ -328,13 +330,16 @@ export function SkillCard({
   const gridSourceSummary = `${sourceMethodLabel} · ${managementOwnerLabel}`;
   const showDetailAction = skill.collabStatus === "update-available";
   const canPreviewUpdates = showDetailAction
-    && (skill.gitLinked || skill.updateDriver === "agent-skills-cli");
+    && (skill.gitLinked
+      || skill.updateDriver === "agent-skills-cli"
+      || skill.sourceType === "marketplace");
   const previewMode: SkillFilePanelMode = (skill.localChangeCount ?? 0) > 0
     ? "changes"
     : canPreviewUpdates
       ? "updates"
       : "files";
-  const showRemoteMetadata = skill.gitLinked && skill.sourceType !== "local";
+  const showRemoteMetadata = skill.sourceType === "marketplace"
+    || (skill.gitLinked && skill.sourceType !== "local");
   const expanded = expandedProp ?? expandedState;
   const isGridLayout = layout === "grid";
 

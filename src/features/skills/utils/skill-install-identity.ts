@@ -177,6 +177,9 @@ export function buildInstalledMarketplaceSkillIds(
   const marketplaceRepoCount = new Map<string, number>();
 
   for (const marketplaceSkill of marketplaceSkills) {
+    if (marketplaceSkill.installed) {
+      installedMarketplaceSkillIds.add(marketplaceSkill.id);
+    }
     const identity = getMarketplaceIdentity(marketplaceSkill);
     if (!identity) {
       continue;
@@ -188,6 +191,9 @@ export function buildInstalledMarketplaceSkillIds(
   }
 
   for (const marketplaceSkill of marketplaceSkills) {
+    if (installedMarketplaceSkillIds.has(marketplaceSkill.id)) {
+      continue;
+    }
     const identity = getMarketplaceIdentity(marketplaceSkill);
     if (!identity) {
       continue;
