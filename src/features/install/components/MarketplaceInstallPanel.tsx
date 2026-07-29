@@ -241,10 +241,21 @@ export function MarketplaceInstallPanel(props: MarketplaceInstallPanelProps) {
                     {isInstalled ? t("install.market.installed") : isInstalling ? t("install.market.installing") : t("install.market.install")}
                   </button>
                 </div>
-                  <div className="install-card__chips">
-                    <span className="install-card__chip">{t("install.market.source")}: {skill.sourceSite}</span>
+                  <div className="install-card__chips marketplace-skill-card__chips">
+                    <span className="install-card__chip" title={skill.categoryLabel || skill.sourceSite}>
+                      {skill.sourceSite === "skillhub" && skill.categoryLabel
+                        ? `${t("install.market.category")}: ${skill.categoryLabel}`
+                        : `${t("install.market.source")}: ${skill.sourceSite}`}
+                    </span>
                     {skill.maintainer.trim() ? (
-                      <span className="install-card__chip">{t("install.market.author")}: {skill.maintainer}</span>
+                      <span
+                        className="install-card__chip marketplace-skill-card__author"
+                        title={skill.maintainer}
+                      >
+                        <span className="marketplace-skill-card__author-text">
+                          {t("install.market.author")}: {skill.maintainer}
+                        </span>
+                      </span>
                     ) : null}
                     {!isSearching && skill.topicLabel?.trim() ? (
                       <span className="install-card__chip">{skill.topicLabel}</span>
@@ -392,7 +403,7 @@ function SkillDetailModal(props: SkillDetailModalProps) {
                 {t("install.market.detail.viewStore")}
               </a>
             ) : null}
-            {detailSkill.installDriver !== "clawhub" ? (
+            {detailSkill.sourceSite !== "skillhub" && detailSkill.installDriver !== "clawhub" ? (
               <a
                 className="skill-detail-modal__action-link"
                 href={officialRepositoryUrl}
@@ -425,7 +436,7 @@ function buildListDescription(
   skill: MarketplaceSkill,
   t: (key: "install.market.fallbackDescription", values: Record<string, string | number>) => string,
 ) {
-  if (skill.sourceSite === "clawhub" && skill.description && skill.description.trim()) {
+  if (skill.sourceSite !== "skills.sh" && skill.description.trim()) {
     return skill.description;
   }
   const repositoryLabel = extractRepositoryLabel(skill.sourceUrl);
@@ -470,6 +481,10 @@ function tryParseUrl(value: string) {
 }
 
 function resolveMarketplaceSkillUrl(skill: MarketplaceSkill) {
+  if (skill.sourceSite === "skillhub") {
+    return skill.sourceUrl || "https://skillhub.cn";
+  }
+
   const explicitMarketplaceUrl = skill.marketplaceUrl?.trim() ?? "";
   if (explicitMarketplaceUrl) {
     return explicitMarketplaceUrl;

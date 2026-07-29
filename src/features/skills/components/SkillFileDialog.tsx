@@ -26,6 +26,7 @@ type SkillFileDialogProps = {
     | "collabStatus"
     | "localPath"
     | "localChangeCount"
+    | "sourceType"
     | "updateDriver"
   >>;
   isOpen: boolean;
@@ -676,6 +677,7 @@ export function SkillFileDialog({
     Boolean(skill.gitLinked)
     || skill.updateDriver === "agent-skills-cli"
     || skill.updateDriver === "clawhub"
+    || skill.sourceType === "marketplace"
   )
     && !toolId
     && !readOnly;

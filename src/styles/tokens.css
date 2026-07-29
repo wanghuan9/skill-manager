@@ -4946,6 +4946,23 @@ code {
   gap: 6px;
 }
 
+.marketplace-skill-card__chips {
+  flex-wrap: nowrap;
+  overflow: hidden;
+}
+
+.marketplace-skill-card__author {
+  flex: 1 1 auto;
+}
+
+.marketplace-skill-card__author-text {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .install-card__chip {
   min-height: 28px;
   width: auto;
@@ -5227,6 +5244,7 @@ code {
 
 .install-card__chip--metric {
   color: var(--heading);
+  flex-shrink: 0;
 }
 
 .install-meta {

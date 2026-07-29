@@ -13,6 +13,10 @@ import { useSkillWorkspace } from "@/features/skills/state/skill-workspace";
 import type { MarketplaceSkill, MarketplaceSourceSite } from "@/features/skills/state/skill-store";
 import { buildInstalledMarketplaceSkillIds } from "@/features/skills/utils/skill-install-identity";
 import { dedupeMarketplaceSkills } from "@/features/skills/utils/marketplace-skills";
+import {
+  createMarketplaceSourceRecord,
+  MARKETPLACE_SOURCE_SITES,
+} from "@/features/skills/utils/marketplace-sources";
 
 export type InstallTab = "market" | "git" | "local";
 export type InstallCategory = "skill" | "mcp" | "plugin";
@@ -28,8 +32,6 @@ const installCategories: { key: InstallCategory; labelKey: "install.category.ski
   { key: "mcp", labelKey: "install.category.mcp" },
   { key: "plugin", labelKey: "install.category.plugin" },
 ];
-
-const sourceTabs: MarketplaceSourceSite[] = ["skills.sh", "clawhub"];
 
 const MARKET_INSTALL_SCROLL_SELECTOR = ".market-install-scroll";
 
@@ -120,10 +122,9 @@ export function MarketRoute(props: MarketRouteProps) {
   const loadingMoreRef = useRef(false);
   const loadInitialRef = useRef(loadInitialMarketplaceSkills);
   const searchMarketplaceRef = useRef(searchMarketplaceSkills);
-  const lastTabSkillsRef = useRef<Record<MarketplaceSourceSite, MarketplaceSkill[]>>({
-    "skills.sh": [],
-    clawhub: [],
-  });
+  const lastTabSkillsRef = useRef<Record<MarketplaceSourceSite, MarketplaceSkill[]>>(
+    createMarketplaceSourceRecord(() => []),
+  );
   const normalizedSearchQuery = debouncedSearchQuery.trim();
   const isSearching = normalizedSearchQuery.length > 0;
   const activeSearchSource = searchScope === "current" ? activeSourceSite : undefined;
@@ -234,6 +235,9 @@ export function MarketRoute(props: MarketRouteProps) {
     if (!scrollContainer) {
       return;
     }
+    if (scrollContainer.clientHeight <= 0) {
+      return;
+    }
     const remain = scrollContainer.scrollHeight - scrollContainer.scrollTop - scrollContainer.clientHeight;
     if (remain > 140) {
       return;
@@ -259,6 +263,28 @@ export function MarketRoute(props: MarketRouteProps) {
     };
   }, [activeInstallTab, isSearching, handleScroll, activeInstallCategory]);
 
+  useEffect(() => {
+    if (
+      activeInstallTab !== "market" ||
+      isSearching ||
+      activeInstallCategory !== "skill" ||
+      isMarketplaceLoading ||
+      !hasMoreMarketplaceSkills
+    ) {
+      return;
+    }
+
+    handleScroll();
+  }, [
+    activeInstallCategory,
+    activeInstallTab,
+    handleScroll,
+    hasMoreMarketplaceSkills,
+    isMarketplaceLoading,
+    isSearching,
+    stableTabSkills.length,
+  ]);
+
   const categorySwitcher = (
             <InstallCategorySwitcher
               activeCategory={activeInstallCategory}
@@ -280,7 +306,7 @@ export function MarketRoute(props: MarketRouteProps) {
             {activeInstallTab === "market" ? (
               <MarketplaceInstallPanel
                 activeSourceSite={activeSourceSite}
-                sourceTabs={sourceTabs}
+                sourceTabs={MARKETPLACE_SOURCE_SITES}
                 marketplaceSkills={displayedMarketplaceSkills}
                 onSourceChange={setActiveSourceSite}
                 searchQuery={searchQuery}

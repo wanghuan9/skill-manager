@@ -249,6 +249,32 @@ function MarketplaceProbe() {
   );
 }
 
+function SkillHubPaginationProbe() {
+  const {
+    hasMoreMarketplaceSkillsBySource,
+    loadInitialMarketplaceSkills,
+    loadMoreMarketplaceSkills,
+    marketplaceSkills,
+  } = useSkillWorkspace();
+
+  return (
+    <div>
+      <button type="button" onClick={() => void loadInitialMarketplaceSkills("skillhub")}>
+        加载 SkillHub
+      </button>
+      <button type="button" onClick={() => void loadMoreMarketplaceSkills("skillhub")}>
+        加载更多 SkillHub
+      </button>
+      <span data-testid="skillhub-has-more">
+        {hasMoreMarketplaceSkillsBySource.skillhub ? "more" : "done"}
+      </span>
+      <span data-testid="skillhub-skill-names">
+        {marketplaceSkills.map((skill) => skill.name).join(",")}
+      </span>
+    </div>
+  );
+}
+
 function MarketplaceSearchProbe() {
   const { marketplaceSearchError, searchMarketplaceSkills } = useSkillWorkspace();
   const [searchResults, setSearchResults] = useState<MarketplaceSkill[]>([]);
@@ -283,6 +309,16 @@ function createMarketplaceSkill(name: string): MarketplaceSkill {
     sourceUrl: `https://github.com/team/repo/tree/main/skills/${name}`,
     popularityLabel: "1.0K",
     avatarUrl: null,
+  };
+}
+
+function createSkillHubMarketplaceSkill(name: string): MarketplaceSkill {
+  return {
+    ...createMarketplaceSkill(name),
+    id: `skillhub-${name}`,
+    sourceType: "marketplace",
+    sourceSite: "skillhub",
+    sourceUrl: `https://skillhub.cn/skills/${name}`,
   };
 }
 
@@ -907,6 +943,74 @@ test("refreshes clawhub marketplace after serving the initial cached page", asyn
       refresh: true,
     });
     expect(screen.getByTestId("marketplace-skill-names").textContent).toBe("fresh-skill");
+  });
+});
+
+test("uses full marketplace pages to determine whether SkillHub has more results", async () => {
+  const marketplaceCalls: Array<Record<string, unknown>> = [];
+  mockedInvoke.mockImplementation(async (command, args) => {
+    switch (command) {
+      case "list_startup_installed_skills":
+      case "refresh_git_states":
+        return installedSkillFixtures;
+      case "list_local_skill_candidates":
+        return localSkillFixtures;
+      case "list_tool_configs":
+        return toolConfigFixtures;
+      case "get_git_account_summary":
+        return gitAccountFixture;
+      case "get_app_settings":
+        return appSettingsFixture;
+      case "update_app_settings":
+        return (args as { settings: AppSettings }).settings;
+      case "list_marketplace_skills_page": {
+        const input = args as Record<string, unknown>;
+        marketplaceCalls.push(input);
+        if (input.page === 1) {
+          return {
+            skills: Array.from({ length: 18 }, (_, index) =>
+              createSkillHubMarketplaceSkill(`first-${index + 1}`)),
+            hasMore: true,
+          };
+        }
+        if (input.page === 2) {
+          return {
+            skills: Array.from({ length: 18 }, (_, index) =>
+              createSkillHubMarketplaceSkill(`second-${index + 1}`)),
+            hasMore: true,
+          };
+        }
+        return {
+          skills: [],
+          hasMore: false,
+        };
+      }
+      default:
+        throw new Error(`Unexpected command: ${command}`);
+    }
+  });
+
+  render(
+    <SkillWorkspaceProvider>
+      <SkillHubPaginationProbe />
+    </SkillWorkspaceProvider>,
+  );
+
+  fireEvent.click(screen.getByRole("button", { name: "加载 SkillHub" }));
+  await waitFor(() => {
+    expect(marketplaceCalls).toHaveLength(2);
+    expect(screen.getByTestId("skillhub-has-more").textContent).toBe("more");
+  });
+
+  fireEvent.click(screen.getByRole("button", { name: "加载更多 SkillHub" }));
+  await waitFor(() => {
+    expect(screen.getByTestId("skillhub-skill-names").textContent).toContain("second-18");
+    expect(screen.getByTestId("skillhub-has-more").textContent).toBe("more");
+  });
+
+  fireEvent.click(screen.getByRole("button", { name: "加载更多 SkillHub" }));
+  await waitFor(() => {
+    expect(screen.getByTestId("skillhub-has-more").textContent).toBe("done");
   });
 });
 

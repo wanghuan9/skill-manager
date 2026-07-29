@@ -10,7 +10,12 @@ import {
   mcpMarketplaceServerFixtures,
   toolConfigFixtures,
 } from "@/features/skills/state/skill-fixtures";
-import type { MarketplaceSkill, McpMarketplaceServer, PluginSummary } from "@/features/skills/state/skill-store";
+import type {
+  MarketplaceSkill,
+  MarketplaceSkillsPage,
+  McpMarketplaceServer,
+  PluginSummary,
+} from "@/features/skills/state/skill-store";
 import { getCachedMcpWorkspace } from "@/features/skills/utils/mcp-workspace-cache";
 import { getCachedPlugins } from "@/features/skills/utils/plugin-cache";
 import { clickNavInstall } from "@/tests/helpers/nav";
@@ -48,6 +53,8 @@ test("renders install-source and repository install panels", async () => {
   expect(screen.getByRole("tab", { name: "Plugin" })).toBeInTheDocument();
   expect(screen.getByRole("tab", { name: "市场安装" })).toBeInTheDocument();
   expect(screen.getByRole("tab", { name: "skills.sh" })).toBeInTheDocument();
+  expect(screen.getByRole("tab", { name: "skillsmp" })).toBeInTheDocument();
+  expect(screen.getByRole("tab", { name: "skillhub" })).toBeInTheDocument();
   expect(screen.getByRole("tab", { name: "clawhub" })).toBeInTheDocument();
   expect(screen.queryByText("安装后默认应用到所有已安装工具")).not.toBeInTheDocument();
   await userEvent.click(screen.getByRole("tab", { name: "Git 安装" }));
@@ -2062,4 +2069,64 @@ test("keeps source results isolated and preserves the skills.sh display order", 
     "workflow-critic",
     "design-system-reviewer",
   ]);
+});
+
+test("loads the next marketplace page after a refresh finishes at the scroll bottom", async () => {
+  const firstPage = Array.from({ length: 18 }, (_, index): MarketplaceSkill => ({
+    ...marketplaceSkillFixtures[0],
+    id: `skillhub-first-${index + 1}`,
+    name: `skillhub-first-${index + 1}`,
+    sourceSite: "skillhub",
+  }));
+  const secondPageSkill: MarketplaceSkill = {
+    ...marketplaceSkillFixtures[0],
+    id: "skillhub-second-page",
+    name: "skillhub-second-page",
+    sourceSite: "skillhub",
+  };
+  let resolveRefresh: ((page: MarketplaceSkillsPage) => void) | undefined;
+  const fetchMarketplaceSkillsByPageSpy = vi
+    .spyOn(skillClient, "fetchMarketplaceSkillsByPage")
+    .mockImplementation((input) => {
+      if (input.sourceSite !== "skillhub") {
+        return Promise.resolve({ skills: [], hasMore: false });
+      }
+      if (input.page === 2) {
+        return Promise.resolve({ skills: [secondPageSkill], hasMore: false });
+      }
+      if (input.refresh) {
+        return new Promise((resolve) => {
+          resolveRefresh = resolve;
+        });
+      }
+      return Promise.resolve({ skills: firstPage, hasMore: true });
+    });
+
+  render(<App />);
+  await clickNavInstall();
+  await userEvent.click(screen.getByRole("tab", { name: "skillhub" }));
+
+  expect(await screen.findByRole("heading", { name: "skillhub-first-18", level: 3 })).toBeInTheDocument();
+  await waitFor(() => {
+    expect(resolveRefresh).toBeTypeOf("function");
+  });
+
+  scrollMarketInstallToBottom();
+  expect(fetchMarketplaceSkillsByPageSpy).not.toHaveBeenCalledWith(expect.objectContaining({
+    sourceSite: "skillhub",
+    page: 2,
+  }));
+
+  await act(async () => {
+    resolveRefresh?.({ skills: firstPage, hasMore: true });
+  });
+
+  expect(await screen.findByRole("heading", { name: "skillhub-second-page", level: 3 })).toBeInTheDocument();
+  expect(fetchMarketplaceSkillsByPageSpy).toHaveBeenCalledWith({
+    sourceSite: "skillhub",
+    page: 2,
+    limit: 18,
+  });
+
+  fetchMarketplaceSkillsByPageSpy.mockRestore();
 });
