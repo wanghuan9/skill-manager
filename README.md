@@ -35,7 +35,7 @@ The core workflow is team collaboration without intermediate handoff directories
 - **Skill diff and collaboration** — Review staged and unstaged diffs and incoming updates, and revert individual files or hunks.
 - **Cards and dark mode** — Switch Skills, MCP, and Plugins between list and card layouts, with light, dark, and system themes.
 - **MCP tools discovery** — Detect exposed MCP tools, track whether each server config is usable, and control tool-level enablement.
-- **Skill install** — Install skills with one click from `skills.sh` and `skillsmp`, or add them from Git repositories and local folders.
+- **Skill install** — Install skills with one click from `skills.sh` and ClawHub, or add them from Git repositories and local folders.
 - **MCP install** — Install MCP servers with one click from `MCP.Directory`, then manage their shared configuration lifecycle.
 - **Plugin install** — Install plugin packages with one click from Git repositories and enable their bundled skills, commands, agents, and integrations.
 - **Complete Git workflow** — Keep Git-based skills and plugins as real repositories, detect upstream updates, local edits, and pending pushes, and preview changes before updating or pushing.
@@ -119,7 +119,7 @@ Install flows are split by package type so skills, MCP servers, and plugins can 
 
 ### Skill install
 
-Install skills with one click from `skills.sh` and `skillsmp`, or add them from Git repositories and local folders.
+Install skills with one click from `skills.sh` and ClawHub, or add them from Git repositories and local folders.
 
 **Skill marketplace install**
 

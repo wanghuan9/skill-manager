@@ -36,6 +36,7 @@ import type {
   LocalSkillCandidate,
   LocalInstallSkillCandidate,
   MarketplaceSkill,
+  MarketplaceSkillsPage,
   MarketplaceSourceSite,
   McpMarketplaceServer,
   McpMarketplaceSourceSite,
@@ -209,12 +210,13 @@ type MarketplaceSkillFileInput = {
   sourceUrl: string;
   skillPath: string;
   skillName: string;
+  sourceSite?: MarketplaceSourceSite;
+  owner?: string;
+  slug?: string;
+  version?: string;
 };
 
-type MarketplaceSkillFileContentInput = Pick<
-  MarketplaceSkillFileInput,
-  "sourceUrl" | "skillPath"
-> & {
+type MarketplaceSkillFileContentInput = Omit<MarketplaceSkillFileInput, "skillName"> & {
   relativePath: string;
 };
 
@@ -542,6 +544,10 @@ function normalizeSkillSummary(skill: LegacySkillSummary): SkillSummary {
     updateDriver: skill.updateDriver ?? (skill.gitLinked ? "git" : "none"),
     skillEntries: skill.skillEntries ?? [skill.entryPath ?? skill.localPath ?? ""].filter(Boolean),
     pathError: skill.pathError ?? "",
+    marketplaceOwner: skill.marketplaceOwner ?? "",
+    marketplaceSlug: skill.marketplaceSlug ?? "",
+    marketplaceVersion: skill.marketplaceVersion ?? "",
+    marketplaceContentHash: skill.marketplaceContentHash ?? "",
     tools: (skill.tools ?? []).map((tool) => ({
       ...tool,
       statusLabel: localizeToolStatusLabel(tool.statusLabel, language),
@@ -1169,17 +1175,13 @@ export async function refreshLocalPluginState(input: {
   return normalizePluginSummary(updatedPlugin);
 }
 
-export async function fetchMarketplaceSkills(): Promise<MarketplaceSkill[]> {
-  return invokeOrFallback("list_marketplace_skills", {}, marketplaceSkillFixtures);
-}
-
 export async function fetchMarketplaceSkillsByPage(input: {
   sourceSite?: MarketplaceSourceSite;
   page: number;
   limit: number;
   query?: string;
   refresh?: boolean;
-}): Promise<MarketplaceSkill[]> {
+}): Promise<MarketplaceSkillsPage> {
   const { sourceSite, page, limit, query, refresh } = input;
   const normalizedQuery = query?.trim().toLowerCase() ?? "";
   const filteredBySource = sourceSite
@@ -1192,11 +1194,14 @@ export async function fetchMarketplaceSkillsByPage(input: {
     })
     : filteredBySource;
   const start = Math.max(0, (page - 1) * limit);
-  const fallback = filtered.slice(start, start + limit);
-  return invokeOrFallback(
-    "list_marketplace_skills",
+  const fallbackSkills = filtered.slice(start, start + limit);
+  return invokeOrFallback<MarketplaceSkillsPage>(
+    "list_marketplace_skills_page",
     { sourceSite, page, limit, query, refresh },
-    fallback,
+    {
+      skills: fallbackSkills,
+      hasMore: start + limit < filtered.length,
+    },
   );
 }
 
@@ -1239,6 +1244,10 @@ export async function fetchMarketplaceSkillFileBrowser(
       previewMode: "full",
     },
   );
+}
+
+export async function fetchMarketplaceSkillDetail(skill: MarketplaceSkill): Promise<MarketplaceSkill> {
+  return invokeOrFallback("get_marketplace_skill_detail", { skill }, skill);
 }
 
 export async function fetchMarketplaceSkillFileContent(

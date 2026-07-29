@@ -9,7 +9,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { BusinessError } from "@/app/errors";
+import { BusinessError, normalizeErrorMessage } from "@/app/errors";
 import {
   detectPreferredAppLanguage,
   fetchAppSettings,
@@ -97,7 +97,7 @@ const APP_THEME_STORAGE_KEY = "skilldock.settings.theme";
 const APP_SKILL_SOURCE_VIEW_STYLE_STORAGE_KEY = "skilldock.settings.skillSourceViewStyle";
 const FALLBACK_OPEN_TOOL_ID = "finder";
 const MARKETPLACE_PAGE_SIZE = 18;
-const MARKETPLACE_SOURCE_SITES: MarketplaceSourceSite[] = ["skills.sh", "skillsmp"];
+const MARKETPLACE_SOURCE_SITES: MarketplaceSourceSite[] = ["skills.sh", "clawhub"];
 const STARTUP_LOAD_DELAY_MS = 0;
 const AUTO_GIT_STATE_REFRESH_INTERVAL_MS = 10 * 60 * 1000;
 const AUTO_GIT_STATE_REFRESH_COOLDOWN_MS = 60 * 1000;
@@ -125,6 +125,8 @@ type SkillWorkspaceContextValue = {
   isWorkspaceRefreshing: boolean;
   isUpdatingAllSkills: boolean;
   isMarketplaceLoadingBySource: Record<MarketplaceSourceSite, boolean>;
+  marketplaceErrorBySource: Record<MarketplaceSourceSite, string>;
+  marketplaceSearchError: string;
   isSearchLoading: boolean;
   installingMarketplaceSkillIds: Set<string>;
   hasMoreMarketplaceSkillsBySource: Record<MarketplaceSourceSite, boolean>;
@@ -363,6 +365,12 @@ function getMarketplaceSearchFailedMessage(language: AppLanguage) {
   return language === "en" ? "Failed to search sources" : "搜索安装源失败";
 }
 
+function getMarketplaceLoadFailedMessage(language: AppLanguage, sourceSite: MarketplaceSourceSite) {
+  return language === "en"
+    ? `Failed to load skills from ${sourceSite}`
+    : `加载 ${sourceSite} 技能失败`;
+}
+
 function getPartialSkillUpdateFailedMessage(input: {
   language: AppLanguage;
   updated: number;
@@ -418,6 +426,10 @@ function normalizeCachedSkillSummary(skill: CachedSkillSummary): SkillSummary {
     updateDriver: skill.updateDriver ?? (skill.gitLinked ? "git" : "none"),
     skillEntries: skill.skillEntries ?? [skill.entryPath ?? skill.localPath ?? ""].filter(Boolean),
     pathError: skill.pathError ?? "",
+    marketplaceOwner: skill.marketplaceOwner ?? "",
+    marketplaceSlug: skill.marketplaceSlug ?? "",
+    marketplaceVersion: skill.marketplaceVersion ?? "",
+    marketplaceContentHash: skill.marketplaceContentHash ?? "",
     tools: skill.tools ?? [],
   };
 }
@@ -573,30 +585,37 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
     Record<MarketplaceSourceSite, boolean>
   >({
     "skills.sh": false,
-    skillsmp: false,
+    clawhub: false,
   });
+  const [marketplaceErrorBySource, setMarketplaceErrorBySource] = useState<
+    Record<MarketplaceSourceSite, string>
+  >({
+    "skills.sh": "",
+    clawhub: "",
+  });
+  const [marketplaceSearchError, setMarketplaceSearchError] = useState("");
   const [isSearchLoading, setIsSearchLoading] = useState(false);
   const [installingMarketplaceSkillIds, setInstallingMarketplaceSkillIds] = useState<Set<string>>(new Set());
   const installingMarketplaceSkillIdsRef = useRef(new Set<string>());
   const marketplaceLoadingBySourceRef = useRef<Record<MarketplaceSourceSite, boolean>>({
     "skills.sh": false,
-    skillsmp: false,
+    clawhub: false,
   });
   const [marketplacePageBySource, setMarketplacePageBySource] = useState<
     Record<MarketplaceSourceSite, number>
   >({
     "skills.sh": 0,
-    skillsmp: 0,
+    clawhub: 0,
   });
   const [hasMoreMarketplaceSkillsBySource, setHasMoreMarketplaceSkillsBySource] = useState<
     Record<MarketplaceSourceSite, boolean>
   >({
     "skills.sh": true,
-    skillsmp: true,
+    clawhub: true,
   });
   const marketplaceHasMoreBySourceRef = useRef<Record<MarketplaceSourceSite, boolean>>({
     "skills.sh": true,
-    skillsmp: true,
+    clawhub: true,
   });
   const gitStateRefreshInFlightRef = useRef<Promise<void> | null>(null);
   const startupGitStateRefreshCompletedRef = useRef(usesFixtureData);
@@ -1224,13 +1243,18 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       [sourceSite]: true,
     };
     setIsMarketplaceLoadingBySource(marketplaceLoadingBySourceRef.current);
+    setMarketplaceErrorBySource((current) => ({
+      ...current,
+      [sourceSite]: "",
+    }));
     try {
-      const pageSkills = await fetchMarketplaceSkillsByPage({
+      const pageResult = await fetchMarketplaceSkillsByPage({
         sourceSite,
         page,
         limit: MARKETPLACE_PAGE_SIZE,
         refresh: options?.refresh,
       });
+      const pageSkills = pageResult.skills;
       setMarketplaceSkills((current) => {
         const base = current.filter((item) => item.sourceSite !== sourceSite);
         const currentSourceSkills = current.filter((item) => item.sourceSite === sourceSite);
@@ -1244,10 +1268,17 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       }));
       const nextHasMoreBySource = {
         ...marketplaceHasMoreBySourceRef.current,
-        [sourceSite]: pageSkills.length >= MARKETPLACE_PAGE_SIZE,
+        [sourceSite]: pageResult.hasMore,
       };
       marketplaceHasMoreBySourceRef.current = nextHasMoreBySource;
       setHasMoreMarketplaceSkillsBySource(nextHasMoreBySource);
+    } catch (error) {
+      const fallbackMessage = getMarketplaceLoadFailedMessage(language, sourceSite);
+      setMarketplaceErrorBySource((current) => ({
+        ...current,
+        [sourceSite]: normalizeErrorMessage(error, fallbackMessage),
+      }));
+      throw error;
     } finally {
       marketplaceLoadingBySourceRef.current = {
         ...marketplaceLoadingBySourceRef.current,
@@ -1282,6 +1313,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
     }
 
     setIsSearchLoading(true);
+    setMarketplaceSearchError("");
     try {
       const searchSourceSites = sourceSite ? [sourceSite] : MARKETPLACE_SOURCE_SITES;
       const searchResults = await Promise.allSettled(
@@ -1295,10 +1327,16 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
         ),
       );
       const fulfilledResults = searchResults.flatMap((result) =>
-        result.status === "fulfilled" ? result.value : []
+        result.status === "fulfilled" ? result.value.skills : []
       );
-      if (fulfilledResults.length === 0 && searchResults.some((result) => result.status === "rejected")) {
-        throw new BusinessError(getMarketplaceSearchFailedMessage(language));
+      const firstFailure = searchResults.find((result) => result.status === "rejected");
+      if (firstFailure?.status === "rejected") {
+        const fallbackMessage = getMarketplaceSearchFailedMessage(language);
+        const errorMessage = normalizeErrorMessage(firstFailure.reason, fallbackMessage);
+        setMarketplaceSearchError(errorMessage);
+        if (fulfilledResults.length === 0) {
+          throw new BusinessError(errorMessage);
+        }
       }
 
       const mergedSkills = dedupeMarketplaceSkills(fulfilledResults);
@@ -1657,6 +1695,8 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       isWorkspaceRefreshing,
       isUpdatingAllSkills,
       isMarketplaceLoadingBySource,
+      marketplaceErrorBySource,
+      marketplaceSearchError,
       isSearchLoading,
       installingMarketplaceSkillIds,
       hasMoreMarketplaceSkillsBySource,
@@ -1725,6 +1765,8 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       isWorkspaceRefreshing,
       isUpdatingAllSkills,
       isMarketplaceLoadingBySource,
+      marketplaceErrorBySource,
+      marketplaceSearchError,
       isSearchLoading,
       localCandidates,
       marketplacePageBySource,
