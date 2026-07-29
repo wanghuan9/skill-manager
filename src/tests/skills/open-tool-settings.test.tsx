@@ -79,9 +79,9 @@ test("prompts for a GitHub Token after a rate-limited Agent CLI refresh", async 
   render(<App />);
 
   expect(
-    await screen.findByText("GitHub API 请求受限，配置 Token 可提高访问限额。"),
+    await screen.findByText("GitHub API 配额已用尽，登录 GitHub 可提高访问额度。"),
   ).toBeInTheDocument();
-  await userEvent.click(screen.getByRole("button", { name: "连接 GitHub" }));
+  await userEvent.click(screen.getByRole("button", { name: "去配置" }));
 
   expect(await screen.findByRole("heading", { name: "账号与备份" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "登录 GitHub" })).toBeInTheDocument();

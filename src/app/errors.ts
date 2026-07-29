@@ -23,6 +23,12 @@ const SYSTEM_ERROR_PATTERNS = [
   /no such file or directory/i,
 ];
 
+const GITHUB_RATE_LIMIT_PATTERNS = [
+  /github api request limit reached/i,
+  /github api 请求受限/i,
+  /api rate limit exceeded/i,
+];
+
 export function isBusinessError(error: unknown): error is BusinessError {
   return Boolean(
     error instanceof BusinessError ||
@@ -47,6 +53,11 @@ export function normalizeErrorMessage(error: unknown, fallbackMessage: string) {
   }
 
   return fallbackMessage;
+}
+
+export function isGithubRateLimitError(error: unknown) {
+  const message = normalizeErrorMessage(error, "");
+  return GITHUB_RATE_LIMIT_PATTERNS.some((pattern) => pattern.test(message));
 }
 
 function isSystemLikeMessage(message: string) {

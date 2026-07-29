@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { BusinessError, classifyError } from "@/app/errors";
+import { BusinessError, classifyError, isGithubRateLimitError } from "@/app/errors";
 
 test("classifies BusinessError as business", () => {
   expect(classifyError(new BusinessError("MCP 配置必须是 JSON 对象"), "fallback")).toEqual({
@@ -34,4 +34,11 @@ test("normalizes plain objects with a message field", () => {
     kind: "unknown",
     message: "Operation not permitted (os error 1)",
   });
+});
+
+test("recognizes confirmed GitHub API rate-limit messages", () => {
+  expect(isGithubRateLimitError("GitHub API request limit reached")).toBe(true);
+  expect(isGithubRateLimitError(new Error("GitHub API 请求受限，请稍后重试"))).toBe(true);
+  expect(isGithubRateLimitError({ message: "API rate limit exceeded for 192.0.2.1" })).toBe(true);
+  expect(isGithubRateLimitError("读取 GitHub 文件树失败: HTTP 404 Not Found")).toBe(false);
 });

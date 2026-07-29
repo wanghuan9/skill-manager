@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { isGithubRateLimitError } from "@/app/errors";
 import { useTranslate } from "@/app/i18n";
 import {
   fetchMarketplaceSkillFileBrowser,
@@ -165,6 +166,9 @@ export function MarketplaceSkillDetailPreview({ skill }: MarketplaceSkillDetailP
         if (!active) {
           return;
         }
+        if (isGithubRateLimitError(error)) {
+          reportGithubRateLimit();
+        }
         setTreeErrorMessage(
           previewErrorMessage(error, t("install.market.detail.filesUnavailable")),
         );
@@ -224,6 +228,9 @@ export function MarketplaceSkillDetailPreview({ skill }: MarketplaceSkillDetailP
         if (!active) {
           return;
         }
+        if (isGithubRateLimitError(error)) {
+          reportGithubRateLimit();
+        }
         setContentErrorMessage(previewErrorMessage(error, t("skill.files.error.load")));
       })
       .finally(() => {
@@ -235,7 +242,7 @@ export function MarketplaceSkillDetailPreview({ skill }: MarketplaceSkillDetailP
     return () => {
       active = false;
     };
-  }, [selectedPath, skill, t]);
+  }, [reportGithubRateLimit, selectedPath, skill, t]);
 
   function handleSelectFile(path: string) {
     setSelectedPath(path);

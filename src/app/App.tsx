@@ -80,6 +80,7 @@ type RouteErrorBoundaryState = {
 };
 
 const ROUTE_LOCAL_ALIGN_COOLDOWN_MS = 10_000;
+const GITHUB_RATE_LIMIT_NOTICE_COOLDOWN_MS = 10_000;
 const AGENT_SKILLS_COMPATIBILITY_PROMPT_COUNT_KEY = "skilldock.agentSkillsCompatibilityPromptCount";
 const AGENT_SKILLS_COMPATIBILITY_PROMPT_MAX_COUNT = 5;
 
@@ -608,7 +609,7 @@ function AppContent() {
   const routeLocalAlignInFlightRef = useRef(false);
   const lastRouteLocalAlignRef = useRef<{ key: string; timestamp: number } | null>(null);
   const compatibilityPromptCheckStartedRef = useRef(false);
-  const hasShownGithubRateLimitPromptRef = useRef(false);
+  const lastGithubRateLimitPromptAtRef = useRef(0);
 
   useEffect(() => {
     if (activeRoute !== "skills" || activeSkillsSection !== "skills") {
@@ -667,12 +668,15 @@ function AppContent() {
     if (
       githubRateLimitNoticeVersion === 0
       || githubConnection.connected
-      || hasShownGithubRateLimitPromptRef.current
     ) {
       return;
     }
 
-    hasShownGithubRateLimitPromptRef.current = true;
+    const now = Date.now();
+    if (now - lastGithubRateLimitPromptAtRef.current < GITHUB_RATE_LIMIT_NOTICE_COOLDOWN_MS) {
+      return;
+    }
+    lastGithubRateLimitPromptAtRef.current = now;
     notify({
       message: t("notifications.githubRateLimited"),
       tone: "info",
