@@ -27,6 +27,7 @@ import {
   BatchActionBar,
   BatchDeleteDialog,
   BatchModeButton,
+  BatchSelectionMark,
 } from "@/app/components/BatchActions";
 import { useBatchSelection } from "@/app/hooks/useBatchSelection";
 import type {
@@ -819,11 +820,15 @@ export function SkillListPage(props: SkillListPageProps) {
             const groupTone = resolveSkillGroupTone(group.skills[0]?.sourceType);
             const groupSourceUrl = formatGroupSourceUrl(group.skills[0]?.sourceUrl ?? group.label);
             const isGroupSourceLinkable = isHttpUrl(groupSourceUrl);
+            const groupSkillIds = group.skills.map(getSkillIdentity);
+            const selectedGroupSkillCount = groupSkillIds.filter((id) => batchSelection.selectedIds.has(id)).length;
+            const isGroupSelected = groupSkillIds.length > 0 && selectedGroupSkillCount === groupSkillIds.length;
+            const isGroupPartiallySelected = selectedGroupSkillCount > 0 && !isGroupSelected;
 
             return (
               <section key={group.id} className={`skill-group-section skill-group-section--${groupTone}`}>
                 <div
-                  className="skill-group-section__header"
+                  className={`skill-group-section__header${batchSelection.isSelecting ? " is-selecting" : ""}`}
                   role={batchSelection.isSelecting ? undefined : "button"}
                   tabIndex={batchSelection.isSelecting ? undefined : 0}
                   onClick={batchSelection.isSelecting ? undefined : () => toggleGroup(group.id)}
@@ -880,7 +885,27 @@ export function SkillListPage(props: SkillListPageProps) {
                         {t("skills.group.pendingCount", { count: pendingPushCount })}
                       </span>
                     ) : null}
-                    {!batchSelection.isSelecting ? (
+                    {batchSelection.isSelecting ? (
+                      <button
+                        className="skill-group-selection-action"
+                        type="button"
+                        disabled={isBatchBusy}
+                        aria-label={t(
+                          isGroupSelected ? "batch.group.deselectAllAria" : "batch.group.selectAllAria",
+                          { name: group.label },
+                        )}
+                        aria-pressed={isGroupPartiallySelected ? "mixed" : isGroupSelected}
+                        onClick={() => batchSelection.toggleSelections(groupSkillIds)}
+                      >
+                        <BatchSelectionMark
+                          checked={isGroupSelected}
+                          indeterminate={isGroupPartiallySelected}
+                        />
+                        <span>
+                          {t(isGroupSelected ? "batch.group.deselectAll" : "batch.group.selectAll")}
+                        </span>
+                      </button>
+                    ) : (
                       <span
                         className="skill-group-section__toggle"
                         aria-hidden="true"
@@ -889,7 +914,7 @@ export function SkillListPage(props: SkillListPageProps) {
                           ⌄
                         </span>
                       </span>
-                    ) : null}
+                    )}
                   </div>
                 </div>
                 {!isCollapsed ? (

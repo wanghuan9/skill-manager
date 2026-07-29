@@ -51,10 +51,19 @@ function SelectionIcon() {
   );
 }
 
-export function BatchSelectionMark({ checked }: { checked: boolean }) {
+export function BatchSelectionMark({
+  checked,
+  indeterminate = false,
+}: {
+  checked: boolean;
+  indeterminate?: boolean;
+}) {
   return (
-    <span className={`batch-selection-mark${checked ? " is-checked" : ""}`} aria-hidden="true">
-      {checked ? <span>✓</span> : null}
+    <span
+      className={`batch-selection-mark${checked ? " is-checked" : ""}${indeterminate ? " is-indeterminate" : ""}`}
+      aria-hidden="true"
+    >
+      {indeterminate ? <span>−</span> : checked ? <span>✓</span> : null}
     </span>
   );
 }

@@ -2297,6 +2297,10 @@ code {
   outline: none;
 }
 
+.skill-group-section__header.is-selecting {
+  cursor: default;
+}
+
 .skill-group-section__title {
   flex: 1 1 auto;
   gap: 10px;
@@ -2430,6 +2434,43 @@ code {
   flex-wrap: wrap;
   justify-content: flex-end;
   flex: 0 0 auto;
+}
+
+.skill-group-selection-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 28px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: color-mix(in srgb, var(--text) 54%, var(--muted) 46%);
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 450;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background-color var(--motion-fast) var(--ease-standard),
+    color var(--motion-fast) var(--ease-standard);
+}
+
+.skill-group-selection-action:hover:not(:disabled),
+.skill-group-selection-action:focus-visible {
+  background: var(--group-accent-soft);
+  color: color-mix(in srgb, var(--group-accent) 76%, var(--text) 24%);
+  outline: none;
+}
+
+.skill-group-selection-action:focus-visible {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--group-accent) 20%, transparent);
+}
+
+.skill-group-selection-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.52;
 }
 
 .skill-group-section__state {
@@ -3057,7 +3098,14 @@ code {
   margin: 0;
 }
 
+.page-content > :has(> .batch-action-bar) {
+  flex-shrink: 0;
+}
+
 .batch-action-bar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -3067,8 +3115,9 @@ code {
   padding: 7px 9px 7px 12px;
   border: 1px solid color-mix(in srgb, var(--accent) 18%, var(--line) 82%);
   border-radius: 12px;
-  background: color-mix(in srgb, var(--surface) 96%, var(--accent-soft) 4%);
+  background: color-mix(in srgb, var(--surface) 99%, var(--accent) 1%);
   box-shadow: 0 4px 14px color-mix(in srgb, var(--accent) 6%, transparent);
+  isolation: isolate;
 }
 
 .batch-action-bar__summary {
@@ -3221,6 +3270,16 @@ code {
   border-color: var(--accent);
   background: var(--accent);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 11%, transparent);
+}
+
+.batch-selection-mark.is-indeterminate {
+  border-color: var(--accent);
+  background: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 11%, transparent);
+}
+
+.batch-selection-mark.is-indeterminate span {
+  transform: translateY(-1px);
 }
 
 .skill-card.is-selecting .skill-card__identity {

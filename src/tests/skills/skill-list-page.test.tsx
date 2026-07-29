@@ -120,6 +120,44 @@ test("temporarily expands grouped Skills while batch selection is active", async
   expect(screen.getByRole("button", { name: "展开来源分组 team-skills" })).toBeInTheDocument();
 });
 
+test("selects, partially selects, and deselects a grouped Skill source", async () => {
+  const user = userEvent.setup();
+  render(<App />);
+
+  await user.click(screen.getByRole("button", { name: "分组" }));
+  await user.click(screen.getByRole("button", { name: "批量选择" }));
+
+  const selectGroupButton = screen.getByRole("button", { name: "全选分组 team-skills" });
+  expect(selectGroupButton).toHaveAttribute("aria-pressed", "false");
+
+  await user.click(selectGroupButton);
+
+  expect(screen.getByRole("checkbox", { name: "选择 Skill skill-publisher" }))
+    .toHaveAttribute("aria-checked", "true");
+  expect(screen.getByRole("checkbox", { name: "选择 Skill drawio-diagram" }))
+    .toHaveAttribute("aria-checked", "true");
+  expect(screen.getByLabelText("批量操作")).toHaveTextContent("已选 2 个");
+
+  await user.click(screen.getByRole("button", { name: "取消全选分组 team-skills" }));
+
+  expect(screen.getByRole("checkbox", { name: "选择 Skill skill-publisher" }))
+    .toHaveAttribute("aria-checked", "false");
+  expect(screen.getByRole("checkbox", { name: "选择 Skill drawio-diagram" }))
+    .toHaveAttribute("aria-checked", "false");
+
+  await user.click(screen.getByRole("checkbox", { name: "选择 Skill skill-publisher" }));
+
+  const partiallySelectedButton = screen.getByRole("button", { name: "全选分组 team-skills" });
+  expect(partiallySelectedButton).toHaveAttribute("aria-pressed", "mixed");
+  expect(partiallySelectedButton.querySelector(".batch-selection-mark")).toHaveClass("is-indeterminate");
+
+  await user.click(partiallySelectedButton);
+
+  expect(screen.getByLabelText("批量操作")).toHaveTextContent("已选 2 个");
+  expect(screen.getByRole("button", { name: "取消全选分组 team-skills" }))
+    .toHaveAttribute("aria-pressed", "true");
+});
+
 test("switches from the managed library to a tool's real Skill directory", async () => {
   const user = userEvent.setup();
   render(<App />);

@@ -38,14 +38,15 @@ export function useBatchSelection(visibleIds: string[]) {
     });
   }, []);
 
-  const toggleSelectAll = useCallback(() => {
+  const toggleSelections = useCallback((ids: string[]) => {
     setSelectedIds((current) => {
-      if (visibleIds.length === 0) {
+      const selectableIds = ids.filter((id) => visibleIdSet.has(id));
+      if (selectableIds.length === 0) {
         return current;
       }
       const next = new Set(current);
-      const shouldDeselect = visibleIds.every((id) => current.has(id));
-      for (const id of visibleIds) {
+      const shouldDeselect = selectableIds.every((id) => current.has(id));
+      for (const id of selectableIds) {
         if (shouldDeselect) {
           next.delete(id);
         } else {
@@ -54,7 +55,11 @@ export function useBatchSelection(visibleIds: string[]) {
       }
       return next;
     });
-  }, [visibleIds]);
+  }, [visibleIdSet]);
+
+  const toggleSelectAll = useCallback(() => {
+    toggleSelections(visibleIds);
+  }, [toggleSelections, visibleIds]);
 
   const keepSelected = useCallback((ids: string[]) => {
     setSelectedIds(new Set(ids));
@@ -69,5 +74,6 @@ export function useBatchSelection(visibleIds: string[]) {
     selectedIds,
     toggleSelectAll,
     toggleSelection,
+    toggleSelections,
   };
 }

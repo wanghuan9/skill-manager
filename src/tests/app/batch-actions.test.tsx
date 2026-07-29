@@ -40,6 +40,16 @@ test("keeps only failed selections after a batch operation", () => {
   expect(result.current.selectedIds.size).toBe(0);
 });
 
+test("selects and deselects a visible id group", () => {
+  const { result } = renderHook(() => useBatchSelection(["alpha", "beta", "gamma"]));
+
+  act(() => result.current.toggleSelections(["alpha", "beta"]));
+  expect([...result.current.selectedIds]).toEqual(["alpha", "beta"]);
+
+  act(() => result.current.toggleSelections(["alpha", "beta"]));
+  expect(result.current.selectedIds.size).toBe(0);
+});
+
 test("places batch actions before the selected count", () => {
   render(
     <BatchActionBar
