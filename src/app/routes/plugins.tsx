@@ -2296,6 +2296,18 @@ export function PluginsRoute(props: PluginsRouteProps = {}) {
           minMenuWidth={96}
         />
       </div>
+      <BatchModeButton
+        isSelecting={batchSelection.isSelecting}
+        label={t(batchSelection.isSelecting ? "batch.mode.exit" : "batch.mode.enter")}
+        onClick={() => {
+          if (batchSelection.isSelecting) {
+            batchSelection.exitSelection();
+            return;
+          }
+          handleExpandedChange(expandedId, false);
+          batchSelection.enterSelection();
+        }}
+      />
       <button
         className={`secondary-button secondary-button--compact skills-toolbar-button skills-toolbar-button--refresh${isReloading ? " is-loading" : ""}`}
         type="button"
@@ -2318,18 +2330,6 @@ export function PluginsRoute(props: PluginsRouteProps = {}) {
         </span>
         <span>{isRefreshing ? t("plugins.toolbar.scanning") : t("plugins.toolbar.scanImport")}</span>
       </button>
-      <BatchModeButton
-        isSelecting={batchSelection.isSelecting}
-        label={t(batchSelection.isSelecting ? "batch.mode.exit" : "batch.mode.enter")}
-        onClick={() => {
-          if (batchSelection.isSelecting) {
-            batchSelection.exitSelection();
-            return;
-          }
-          handleExpandedChange(expandedId, false);
-          batchSelection.enterSelection();
-        }}
-      />
       {!batchSelection.isSelecting && props.onGoInstall ? (
         <ToolbarGoInstallButton onClick={props.onGoInstall} />
       ) : null}

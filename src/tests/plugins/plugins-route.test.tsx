@@ -52,6 +52,20 @@ function setWorkspaceLanguage(language: "zh-CN" | "en") {
   } as unknown as ReturnType<typeof useSkillWorkspace>);
 }
 
+test("places plugin batch selection after the filter and before refresh", async () => {
+  renderWithI18n(<PluginsRoute />);
+
+  await screen.findByText("Repo Scout");
+  const toolbar = screen.getByLabelText("插件工具栏");
+  const filter = within(toolbar).getByRole("combobox", { name: "筛选插件状态" })
+    .closest(".plugins-page__toolbar-filter");
+  const batchModeButton = within(toolbar).getByRole("button", { name: "批量选择" });
+  const refreshButton = within(toolbar).getByRole("button", { name: "刷新" });
+  const filterPosition = filter?.compareDocumentPosition(batchModeButton) ?? 0;
+  expect(filterPosition & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(batchModeButton.compareDocumentPosition(refreshButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+});
+
 test("hydrates plugins from runtime cache before the refresh request resolves", async () => {
   const fixtureSpy = vi.spyOn(skillClient, "shouldUseFixtureData").mockReturnValue(false);
   const cachedPlugins: PluginSummary[] = [
