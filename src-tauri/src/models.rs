@@ -243,6 +243,8 @@ pub struct MarketplaceSkill {
     pub update_available: bool,
     #[serde(default)]
     pub current_version: String,
+    #[serde(default)]
+    pub category_label: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

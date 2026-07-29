@@ -199,6 +199,8 @@ test("loads SkillHub files with the marketplace slug and version", async () => {
     sourceUrl: "https://skillhub.cn/skills/web-tools-guide",
     skillPath: "web-tools-guide",
     currentVersion: "1.0.2",
+    categoryLabel: "信息检索",
+    maintainer: "Tencent Cloud Lighthouse",
   };
 
   renderWithI18n(
@@ -221,7 +223,18 @@ test("loads SkillHub files with the marketplace slug and version", async () => {
     </NotificationProvider>,
   );
 
-  await userEvent.click(screen.getByRole("heading", { name: skill.name, level: 3 }));
+  const skillHeading = screen.getByRole("heading", { name: skill.name, level: 3 });
+  const skillCard = skillHeading.closest("article");
+  if (!skillCard) {
+    throw new Error("SkillHub card was not rendered");
+  }
+  expect(within(skillCard).getByText("分类: 信息检索")).toBeInTheDocument();
+  expect(within(skillCard).queryByText("来源: skillhub")).not.toBeInTheDocument();
+  expect(within(skillCard).getByText("作者: Tencent Cloud Lighthouse").parentElement).toHaveClass(
+    "marketplace-skill-card__author",
+  );
+
+  await userEvent.click(skillHeading);
   const detailDialog = screen.getByRole("dialog", { name: `${skill.name} 详情` });
 
   await waitFor(() => expect(mockedFetchMarketplaceSkillFileBrowser).toHaveBeenCalledWith({

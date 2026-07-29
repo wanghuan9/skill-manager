@@ -43,6 +43,10 @@ struct SkillHubListItem {
     #[serde(default)]
     description_zh: String,
     #[serde(default)]
+    category: String,
+    #[serde(default, rename = "subCategories")]
+    sub_categories: Vec<SkillHubSubCategory>,
+    #[serde(default)]
     downloads: u64,
     #[serde(default)]
     version: String,
@@ -64,6 +68,12 @@ struct SkillHubNamespace {
 
 #[derive(Clone, Debug, Deserialize)]
 struct SkillHubPublisher {
+    #[serde(default)]
+    name: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct SkillHubSubCategory {
     #[serde(default)]
     name: String,
 }
@@ -365,6 +375,14 @@ fn map_list_items(
                     is_remote_version_newer(&skill.commit_label, &item.version)
                 }),
                 current_version: item.version,
+                category_label: item
+                    .sub_categories
+                    .iter()
+                    .find_map(|category| {
+                        let name = category.name.trim();
+                        (!name.is_empty()).then(|| name.to_string())
+                    })
+                    .unwrap_or_else(|| item.category.trim().to_string()),
             }
         })
         .collect()
@@ -707,6 +725,8 @@ mod tests {
             "slug": "tencent-docs",
             "name": "腾讯文档",
             "description_zh": "在线文档",
+            "category": "productivity",
+            "subCategories": [{ "key": "online-docs", "name": "在线文档" }],
             "downloads": 176706,
             "version": "1.0.41",
             "updated_at": 1785292997583_i64,
@@ -724,6 +744,7 @@ mod tests {
         assert_eq!(skills[0].source_site, "skillhub");
         assert_eq!(skills[0].maintainer, "腾讯文档团队");
         assert_eq!(skills[0].current_version, "1.0.41");
+        assert_eq!(skills[0].category_label, "在线文档");
         assert_eq!(skills[0].popularity_label, "176.7K");
     }
 

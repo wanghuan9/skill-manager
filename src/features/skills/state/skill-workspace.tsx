@@ -1218,7 +1218,9 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       }));
       const nextHasMoreBySource = {
         ...marketplaceHasMoreBySourceRef.current,
-        [sourceSite]: pageSkills.length >= MARKETPLACE_PAGE_SIZE,
+        [sourceSite]: sourceSite === "skillhub"
+          ? pageSkills.length > 0
+          : pageSkills.length >= MARKETPLACE_PAGE_SIZE,
       };
       marketplaceHasMoreBySourceRef.current = nextHasMoreBySource;
       setHasMoreMarketplaceSkillsBySource(nextHasMoreBySource);

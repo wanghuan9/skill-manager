@@ -186,9 +186,20 @@ export function MarketplaceInstallPanel(props: MarketplaceInstallPanelProps) {
                     {isInstalled ? t("install.market.installed") : isInstalling ? t("install.market.installing") : t("install.market.install")}
                   </button>
                 </div>
-                  <div className="install-card__chips">
-                    <span className="install-card__chip">{t("install.market.source")}: {skill.sourceSite}</span>
-                    <span className="install-card__chip">{t("install.market.author")}: {skill.maintainer}</span>
+                  <div className="install-card__chips marketplace-skill-card__chips">
+                    <span className="install-card__chip" title={skill.categoryLabel || skill.sourceSite}>
+                      {skill.sourceSite === "skillhub" && skill.categoryLabel
+                        ? `${t("install.market.category")}: ${skill.categoryLabel}`
+                        : `${t("install.market.source")}: ${skill.sourceSite}`}
+                    </span>
+                    <span
+                      className="install-card__chip marketplace-skill-card__author"
+                      title={skill.maintainer}
+                    >
+                      <span className="marketplace-skill-card__author-text">
+                        {t("install.market.author")}: {skill.maintainer}
+                      </span>
+                    </span>
                     <span className="install-card__chip install-card__chip--metric">
                       <DownloadIcon />
                       {skill.popularityLabel}

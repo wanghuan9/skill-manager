@@ -165,7 +165,7 @@ fn source_label_for_type(source_type: &str) -> &'static str {
 }
 
 const MARKETPLACE_FETCH_LIMIT: usize = 36;
-const MARKETPLACE_CACHE_VERSION: u64 = 3;
+const MARKETPLACE_CACHE_VERSION: u64 = 4;
 const MARKETPLACE_SKILL_FILE_LIMIT: usize = 200;
 const MARKETPLACE_SKILL_FILE_SIZE_LIMIT: u64 = 512 * 1024;
 const MARKETPLACE_SKILL_ROOT_CACHE_LIMIT: usize = 64;
@@ -1108,6 +1108,7 @@ fn map_skills_sh_items_to_marketplace(paged_items: Vec<SkillsShSkill>) -> Vec<Ma
             installed: false,
             update_available: false,
             current_version: String::new(),
+            category_label: String::new(),
         });
     }
 
@@ -1833,6 +1834,7 @@ fn map_skillsmp_items_to_marketplace(items: Vec<SkillsMpSkill>) -> Vec<Marketpla
                 installed: false,
                 update_available: false,
                 current_version: String::new(),
+                category_label: String::new(),
             })
         })
         .collect()
@@ -10445,6 +10447,7 @@ mod tests {
             installed: false,
             update_available: false,
             current_version: String::new(),
+            category_label: String::new(),
         }];
 
         save_marketplace_cache("skillsmp", &skills);

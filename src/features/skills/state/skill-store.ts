@@ -253,6 +253,7 @@ export type MarketplaceSkill = {
   installed?: boolean;
   updateAvailable?: boolean;
   currentVersion?: string;
+  categoryLabel?: string;
 };
 
 export type McpMarketplaceServer = {
