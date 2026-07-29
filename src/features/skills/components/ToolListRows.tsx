@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { SearchFieldIcon } from "@/app/components/SearchFieldIcon";
+import { BatchSelectionMark } from "@/app/components/BatchActions";
 import { alignExpandedRowIntoView } from "@/app/utils/align-expanded-row";
 
 type RowAction = {
@@ -40,6 +41,10 @@ type ToolListRowProps = {
   gridBadges?: RowBadge[];
   gridMeta?: ReactNode;
   gridFooter?: ReactNode;
+  selectionMode?: boolean;
+  selected?: boolean;
+  selectionLabel?: string;
+  onSelectionToggle?: () => void;
 };
 
 function ToolListRowBadges({ badges }: { badges: RowBadge[] }) {
@@ -71,6 +76,10 @@ export function ToolListRow(props: ToolListRowProps) {
     gridBadges = [],
     gridMeta,
     gridFooter,
+    selectionMode = false,
+    selected = false,
+    selectionLabel,
+    onSelectionToggle = () => undefined,
   } = props;
   const isGridLayout = layout === "grid";
 
@@ -131,17 +140,26 @@ export function ToolListRow(props: ToolListRowProps) {
 
   return (
     <article
-      className={`tool-list-row${isGridLayout ? " tool-list-row--grid" : ""}${expanded ? " is-expanded" : ""}`}
+      className={`tool-list-row${isGridLayout ? " tool-list-row--grid" : ""}${expanded ? " is-expanded" : ""}${selectionMode ? " is-selecting" : ""}${selected ? " is-selected" : ""}`}
       data-tool-list-row-id={rowId}
     >
       <div className="tool-list-row__header">
         <button
           className="tool-list-row__summary"
           type="button"
-          onClick={(event) => onExpandedChange(!expanded, event.currentTarget)}
-          aria-expanded={expanded}
-          aria-label={`${expanded ? collapseLabel : expandLabel} ${name}`}
+          role={selectionMode ? "checkbox" : undefined}
+          onClick={(event) => {
+            if (selectionMode) {
+              onSelectionToggle();
+              return;
+            }
+            onExpandedChange(!expanded, event.currentTarget);
+          }}
+          aria-expanded={selectionMode ? undefined : expanded}
+          aria-checked={selectionMode ? selected : undefined}
+          aria-label={selectionMode ? selectionLabel : `${expanded ? collapseLabel : expandLabel} ${name}`}
         >
+          {selectionMode ? <BatchSelectionMark checked={selected} /> : null}
           {leading ? <span className="tool-list-row__leading">{leading}</span> : null}
           <div className="tool-list-row__title-stack">
             <div className="tool-list-row__title-row">
@@ -161,8 +179,8 @@ export function ToolListRow(props: ToolListRowProps) {
             ) : null}
           </div>
         </button>
-        {meta ? <div className="tool-list-row__meta">{meta}</div> : null}
-        {actions.length > 0 || isGridLayout ? (
+        {!selectionMode && meta ? <div className="tool-list-row__meta">{meta}</div> : null}
+        {!selectionMode && (actions.length > 0 || isGridLayout) ? (
           <div className="tool-list-row__actions">
             {isGridLayout && gridFooter ? (
               <span className="tool-list-row__grid-footer">{gridFooter}</span>
@@ -170,14 +188,14 @@ export function ToolListRow(props: ToolListRowProps) {
             {actionButtons(false)}
           </div>
         ) : null}
-        {!isGridLayout ? (
+        {!selectionMode && !isGridLayout ? (
           <span className="tool-list-row__chevron" aria-hidden="true">
             {expanded ? "⌄" : "›"}
           </span>
         ) : null}
       </div>
-      {expanded && !isGridLayout ? <div className="tool-list-row__details">{details}</div> : null}
-      {expanded && isGridLayout ? createPortal(
+      {!selectionMode && expanded && !isGridLayout ? <div className="tool-list-row__details">{details}</div> : null}
+      {!selectionMode && expanded && isGridLayout ? createPortal(
         <div
           className="skill-card-detail-modal__backdrop"
           role="presentation"

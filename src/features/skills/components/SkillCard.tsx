@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { MouseEvent as ReactMouseEvent } from "react";
+import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent } from "react";
 import { createPortal } from "react-dom";
 import { alignExpandedRowIntoView } from "@/app/utils/align-expanded-row";
 import { useTranslate } from "@/app/i18n";
@@ -7,6 +7,7 @@ import { useNotifications } from "@/app/notifications";
 import { useFailureReporter } from "@/app/failure-feedback";
 import { formatPathForDisplay } from "@/app/path-utils";
 import { waitForNextPaint } from "@/app/utils/wait-for-next-paint";
+import { BatchSelectionMark } from "@/app/components/BatchActions";
 import { PowerToggleIcon } from "@/features/skills/components/PowerToggleIcon";
 import { SkillStatusBadge } from "@/features/skills/components/SkillStatusBadge";
 import { SkillFileDialog, type SkillFilePanelMode } from "@/features/skills/components/SkillFileDialog";
@@ -29,6 +30,9 @@ type SkillCardProps = {
   expanded?: boolean;
   autoAlignWhenExpanded?: boolean;
   onExpandedChange?: (expanded: boolean, rowElement?: HTMLElement | null) => void;
+  selectionMode?: boolean;
+  selected?: boolean;
+  onSelectionToggle?: () => void;
 };
 
 const GRID_SUMMARY_TOOL_LIMIT = 6;
@@ -262,6 +266,9 @@ export function SkillCard({
   expanded: expandedProp,
   autoAlignWhenExpanded = false,
   onExpandedChange,
+  selectionMode = false,
+  selected = false,
+  onSelectionToggle = () => undefined,
 }: SkillCardProps) {
   const { language, t } = useTranslate();
   const { notify } = useNotifications();
@@ -330,6 +337,22 @@ export function SkillCard({
   const showRemoteMetadata = skill.gitLinked && skill.sourceType !== "local";
   const expanded = expandedProp ?? expandedState;
   const isGridLayout = layout === "grid";
+
+  function handleSummaryClick() {
+    if (selectionMode) {
+      onSelectionToggle();
+      return;
+    }
+    void handleExpandedChange(!expanded);
+  }
+
+  function handleSummaryKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
+    if (!selectionMode || (event.key !== "Enter" && event.key !== " ")) {
+      return;
+    }
+    event.preventDefault();
+    onSelectionToggle();
+  }
 
   useEffect(() => {
     if (autoAlignWhenExpanded && expanded) {
@@ -674,13 +697,18 @@ export function SkillCard({
     <>
       <article
         ref={cardRef}
-        className={`skill-card skill-card--${layout}${expanded ? " is-expanded" : ""}`}
+        className={`skill-card skill-card--${layout}${expanded ? " is-expanded" : ""}${selectionMode ? " is-selecting" : ""}${selected ? " is-selected" : ""}`}
         aria-label={skill.name}
       >
         <div className="skill-card__header">
           <div
             className="skill-card__summary-button"
-            onClick={() => handleExpandedChange(!expanded)}
+            role={selectionMode ? "checkbox" : undefined}
+            tabIndex={selectionMode ? 0 : undefined}
+            aria-checked={selectionMode ? selected : undefined}
+            aria-label={selectionMode ? t("batch.item.skill", { name: skill.name }) : undefined}
+            onClick={handleSummaryClick}
+            onKeyDown={handleSummaryKeyDown}
           >
             <div className="skill-card__summary-content">
               <div className="skill-card__summary-top">
@@ -690,6 +718,7 @@ export function SkillCard({
                   </div>
                 ) : null}
                 <div className="skill-card__identity">
+                  {selectionMode ? <BatchSelectionMark checked={selected} /> : null}
                   <SkillMonogram name={skill.name} />
                   <div className="skill-card__title-stack">
                     <div className="skill-card__title-row">
@@ -743,6 +772,8 @@ export function SkillCard({
             </div>
           </div>
           <div className="skill-card__list-actions">
+            {!selectionMode ? (
+              <>
             {isGridLayout ? (
               <span className="skill-card__grid-source-label">
                 <span className="skill-card__grid-source-text">{gridSourceSummary}</span>
@@ -797,6 +828,8 @@ export function SkillCard({
                   {expanded ? "⌄" : "›"}
                 </span>
               </button>
+            ) : null}
+              </>
             ) : null}
           </div>
         </div>
