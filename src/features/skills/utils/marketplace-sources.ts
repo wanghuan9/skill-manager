@@ -4,6 +4,7 @@ export const MARKETPLACE_SOURCE_SITES: MarketplaceSourceSite[] = [
   "skills.sh",
   "skillsmp",
   "skillhub",
+  "clawhub",
 ];
 
 export function createMarketplaceSourceRecord<Value>(

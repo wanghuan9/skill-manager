@@ -366,15 +366,16 @@ fn map_list_items(
                 maintainer,
                 updated_at: format_timestamp(item.updated_at).unwrap_or_default(),
                 install_label: format!("v{}", item.version.trim_start_matches('v')),
-                source_url,
+                source_url: source_url.clone(),
                 popularity_label: format_compact_number(item.downloads),
+                topic_label: String::new(),
                 avatar_url: item.icon_url.filter(|url| !url.trim().is_empty()),
                 skill_path: item.slug.clone(),
                 installed: installed.is_some(),
                 update_available: installed.is_some_and(|skill| {
                     is_remote_version_newer(&skill.commit_label, &item.version)
                 }),
-                current_version: item.version,
+                current_version: item.version.clone(),
                 category_label: item
                     .sub_categories
                     .iter()
@@ -383,6 +384,11 @@ fn map_list_items(
                         (!name.is_empty()).then(|| name.to_string())
                     })
                     .unwrap_or_else(|| item.category.trim().to_string()),
+                marketplace_url: source_url,
+                owner: String::new(),
+                slug: item.slug,
+                version: item.version,
+                install_driver: String::new(),
             }
         })
         .collect()
@@ -433,6 +439,10 @@ fn install_skill_package(
             skill_entries: vec![local_path],
             path_error: String::new(),
             content_hash: marketplace_package::directory_content_hash(&skill_dir)?,
+            marketplace_owner: String::new(),
+            marketplace_slug: slug.to_string(),
+            marketplace_version: version.to_string(),
+            marketplace_content_hash: String::new(),
         },
         tools: vec![ToolSyncStatus {
             name: "Codex".into(),

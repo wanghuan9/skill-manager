@@ -9,7 +9,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { BusinessError } from "@/app/errors";
+import { BusinessError, normalizeErrorMessage } from "@/app/errors";
 import {
   detectPreferredAppLanguage,
   fetchAppSettings,
@@ -128,13 +128,15 @@ type SkillWorkspaceContextValue = {
   isWorkspaceRefreshing: boolean;
   isUpdatingAllSkills: boolean;
   isMarketplaceLoadingBySource: Record<MarketplaceSourceSite, boolean>;
+  marketplaceErrorBySource: Record<MarketplaceSourceSite, string>;
+  marketplaceSearchError: string;
   isSearchLoading: boolean;
   installingMarketplaceSkillIds: Set<string>;
   hasMoreMarketplaceSkillsBySource: Record<MarketplaceSourceSite, boolean>;
   installFromMarket: (skill: MarketplaceSkill) => Promise<void>;
   loadInitialMarketplaceSkills: (sourceSite: MarketplaceSourceSite) => Promise<void>;
   loadMoreMarketplaceSkills: (sourceSite: MarketplaceSourceSite) => Promise<void>;
-  searchMarketplaceSkills: (query: string) => Promise<MarketplaceSkill[]>;
+  searchMarketplaceSkills: (query: string, sourceSite?: MarketplaceSourceSite) => Promise<MarketplaceSkill[]>;
   discoverRepoSkills: (repoUrl: string, gitRef?: string) => Promise<RepoSkillCandidate[]>;
   installFromRepo: (repoUrl: string, selectedPaths: string[], gitRef?: string) => Promise<void>;
   discoverLocalInstallSkills: (localPath: string) => Promise<LocalInstallSkillCandidate[]>;
@@ -363,6 +365,12 @@ function getMarketplaceSearchFailedMessage(language: AppLanguage) {
   return language === "en" ? "Failed to search sources" : "搜索安装源失败";
 }
 
+function getMarketplaceLoadFailedMessage(language: AppLanguage, sourceSite: MarketplaceSourceSite) {
+  return language === "en"
+    ? `Failed to load skills from ${sourceSite}`
+    : `加载 ${sourceSite} 技能失败`;
+}
+
 function getPartialSkillUpdateFailedMessage(input: {
   language: AppLanguage;
   updated: number;
@@ -418,6 +426,10 @@ function normalizeCachedSkillSummary(skill: CachedSkillSummary): SkillSummary {
     updateDriver: skill.updateDriver ?? (skill.gitLinked ? "git" : "none"),
     skillEntries: skill.skillEntries ?? [skill.entryPath ?? skill.localPath ?? ""].filter(Boolean),
     pathError: skill.pathError ?? "",
+    marketplaceOwner: skill.marketplaceOwner ?? "",
+    marketplaceSlug: skill.marketplaceSlug ?? "",
+    marketplaceVersion: skill.marketplaceVersion ?? "",
+    marketplaceContentHash: skill.marketplaceContentHash ?? "",
     tools: skill.tools ?? [],
   };
 }
@@ -571,6 +583,10 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
   const [isMarketplaceLoadingBySource, setIsMarketplaceLoadingBySource] = useState<
     Record<MarketplaceSourceSite, boolean>
   >(() => createMarketplaceSourceRecord(() => false));
+  const [marketplaceErrorBySource, setMarketplaceErrorBySource] = useState<
+    Record<MarketplaceSourceSite, string>
+  >(() => createMarketplaceSourceRecord(() => ""));
+  const [marketplaceSearchError, setMarketplaceSearchError] = useState("");
   const [isSearchLoading, setIsSearchLoading] = useState(false);
   const [installingMarketplaceSkillIds, setInstallingMarketplaceSkillIds] = useState<Set<string>>(new Set());
   const installingMarketplaceSkillIdsRef = useRef(new Set<string>());
@@ -1198,13 +1214,18 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       [sourceSite]: true,
     };
     setIsMarketplaceLoadingBySource(marketplaceLoadingBySourceRef.current);
+    setMarketplaceErrorBySource((current) => ({
+      ...current,
+      [sourceSite]: "",
+    }));
     try {
-      const pageSkills = await fetchMarketplaceSkillsByPage({
+      const pageResult = await fetchMarketplaceSkillsByPage({
         sourceSite,
         page,
         limit: MARKETPLACE_PAGE_SIZE,
         refresh: options?.refresh,
       });
+      const pageSkills = pageResult.skills;
       setMarketplaceSkills((current) => {
         const base = current.filter((item) => item.sourceSite !== sourceSite);
         const currentSourceSkills = current.filter((item) => item.sourceSite === sourceSite);
@@ -1218,10 +1239,17 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       }));
       const nextHasMoreBySource = {
         ...marketplaceHasMoreBySourceRef.current,
-        [sourceSite]: pageSkills.length >= MARKETPLACE_PAGE_SIZE,
+        [sourceSite]: pageResult.hasMore,
       };
       marketplaceHasMoreBySourceRef.current = nextHasMoreBySource;
       setHasMoreMarketplaceSkillsBySource(nextHasMoreBySource);
+    } catch (error) {
+      const fallbackMessage = getMarketplaceLoadFailedMessage(language, sourceSite);
+      setMarketplaceErrorBySource((current) => ({
+        ...current,
+        [sourceSite]: normalizeErrorMessage(error, fallbackMessage),
+      }));
+      throw error;
     } finally {
       marketplaceLoadingBySourceRef.current = {
         ...marketplaceLoadingBySourceRef.current,
@@ -1249,18 +1277,20 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
     await loadMarketplacePage(sourceSite, nextPage <= 1 ? 1 : nextPage, nextPage > 1);
   }
 
-  async function handleSearchMarketplaceSkills(query: string) {
+  async function handleSearchMarketplaceSkills(query: string, sourceSite?: MarketplaceSourceSite) {
     const normalizedQuery = query.trim();
     if (!normalizedQuery) {
       return [];
     }
 
     setIsSearchLoading(true);
+    setMarketplaceSearchError("");
     try {
+      const searchSourceSites = sourceSite ? [sourceSite] : MARKETPLACE_SOURCE_SITES;
       const searchResults = await Promise.allSettled(
-        MARKETPLACE_SOURCE_SITES.map((sourceSite) =>
+        searchSourceSites.map((searchSourceSite) =>
           fetchMarketplaceSkillsByPage({
-            sourceSite,
+            sourceSite: searchSourceSite,
             page: 1,
             limit: MARKETPLACE_PAGE_SIZE * 3,
             query: normalizedQuery,
@@ -1268,10 +1298,16 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
         ),
       );
       const fulfilledResults = searchResults.flatMap((result) =>
-        result.status === "fulfilled" ? result.value : []
+        result.status === "fulfilled" ? result.value.skills : []
       );
-      if (fulfilledResults.length === 0 && searchResults.some((result) => result.status === "rejected")) {
-        throw new BusinessError(getMarketplaceSearchFailedMessage(language));
+      const firstFailure = searchResults.find((result) => result.status === "rejected");
+      if (firstFailure?.status === "rejected") {
+        const fallbackMessage = getMarketplaceSearchFailedMessage(language);
+        const errorMessage = normalizeErrorMessage(firstFailure.reason, fallbackMessage);
+        setMarketplaceSearchError(errorMessage);
+        if (fulfilledResults.length === 0) {
+          throw new BusinessError(errorMessage);
+        }
       }
 
       const mergedSkills = dedupeMarketplaceSkills(fulfilledResults);
@@ -1630,6 +1666,8 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       isWorkspaceRefreshing,
       isUpdatingAllSkills,
       isMarketplaceLoadingBySource,
+      marketplaceErrorBySource,
+      marketplaceSearchError,
       isSearchLoading,
       installingMarketplaceSkillIds,
       hasMoreMarketplaceSkillsBySource,
@@ -1694,6 +1732,8 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       isWorkspaceRefreshing,
       isUpdatingAllSkills,
       isMarketplaceLoadingBySource,
+      marketplaceErrorBySource,
+      marketplaceSearchError,
       isSearchLoading,
       localCandidates,
       marketplacePageBySource,

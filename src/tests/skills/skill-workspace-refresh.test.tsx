@@ -232,14 +232,14 @@ function MarketplaceProbe() {
   const [loadState, setLoadState] = useState("idle");
 
   async function handleLoad() {
-    await loadInitialMarketplaceSkills("skillsmp");
+    await loadInitialMarketplaceSkills("clawhub");
     setLoadState("done");
   }
 
   return (
     <div>
       <button type="button" onClick={() => void handleLoad()}>
-        加载 skillsmp
+        加载 clawhub
       </button>
       <span data-testid="marketplace-load-state">{loadState}</span>
       <span data-testid="marketplace-skill-names">
@@ -275,14 +275,35 @@ function SkillHubPaginationProbe() {
   );
 }
 
+function MarketplaceSearchProbe() {
+  const { marketplaceSearchError, searchMarketplaceSkills } = useSkillWorkspace();
+  const [searchResults, setSearchResults] = useState<MarketplaceSkill[]>([]);
+
+  async function handleSearch() {
+    setSearchResults(await searchMarketplaceSkills("guardian"));
+  }
+
+  return (
+    <div>
+      <button type="button" onClick={() => void handleSearch()}>
+        搜索市场
+      </button>
+      <span data-testid="marketplace-search-error">{marketplaceSearchError}</span>
+      <span data-testid="marketplace-search-results">
+        {searchResults.map((skill) => skill.name).join(",")}
+      </span>
+    </div>
+  );
+}
+
 function createMarketplaceSkill(name: string): MarketplaceSkill {
   return {
-    id: `skillsmp-${name}`,
+    id: `clawhub-${name}`,
     name,
     sourceType: "github",
-    sourceSite: "skillsmp",
+    sourceSite: "clawhub",
     description: name,
-    maintainer: "skillsmp",
+    maintainer: "ClawHub",
     updatedAt: "",
     installLabel: "默认按热度排序",
     sourceUrl: `https://github.com/team/repo/tree/main/skills/${name}`,
@@ -866,7 +887,7 @@ test("persists preferred default open tool after startup refresh when settings a
   });
 });
 
-test("refreshes skillsmp marketplace after serving the initial cached page", async () => {
+test("refreshes clawhub marketplace after serving the initial cached page", async () => {
   const marketplaceCalls: Array<Record<string, unknown> | undefined> = [];
   mockedInvoke.mockImplementation(async (command, args) => {
     switch (command) {
@@ -883,11 +904,14 @@ test("refreshes skillsmp marketplace after serving the initial cached page", asy
         return appSettingsFixture;
       case "update_app_settings":
         return (args as { settings: AppSettings }).settings;
-      case "list_marketplace_skills":
+      case "list_marketplace_skills_page":
         marketplaceCalls.push(args as Record<string, unknown> | undefined);
-        return marketplaceCalls.length === 1
-          ? [createMarketplaceSkill("cached-skill")]
-          : [createMarketplaceSkill("fresh-skill")];
+        return {
+          skills: marketplaceCalls.length === 1
+            ? [createMarketplaceSkill("cached-skill")]
+            : [createMarketplaceSkill("fresh-skill")],
+          hasMore: false,
+        };
       default:
         throw new Error(`Unexpected command: ${command}`);
     }
@@ -900,20 +924,20 @@ test("refreshes skillsmp marketplace after serving the initial cached page", asy
   );
 
   await act(async () => {
-    fireEvent.click(screen.getByRole("button", { name: "加载 skillsmp" }));
+    fireEvent.click(screen.getByRole("button", { name: "加载 clawhub" }));
   });
 
   await waitFor(() => {
     expect(screen.getByTestId("marketplace-load-state").textContent).toBe("done");
     expect(marketplaceCalls).toHaveLength(2);
     expect(marketplaceCalls[0]).toEqual({
-      sourceSite: "skillsmp",
+      sourceSite: "clawhub",
       page: 1,
       limit: 18,
       refresh: undefined,
     });
     expect(marketplaceCalls[1]).toEqual({
-      sourceSite: "skillsmp",
+      sourceSite: "clawhub",
       page: 1,
       limit: 18,
       refresh: true,
@@ -939,18 +963,27 @@ test("uses full marketplace pages to determine whether SkillHub has more results
         return appSettingsFixture;
       case "update_app_settings":
         return (args as { settings: AppSettings }).settings;
-      case "list_marketplace_skills": {
+      case "list_marketplace_skills_page": {
         const input = args as Record<string, unknown>;
         marketplaceCalls.push(input);
         if (input.page === 1) {
-          return Array.from({ length: 18 }, (_, index) =>
-            createSkillHubMarketplaceSkill(`first-${index + 1}`));
+          return {
+            skills: Array.from({ length: 18 }, (_, index) =>
+              createSkillHubMarketplaceSkill(`first-${index + 1}`)),
+            hasMore: true,
+          };
         }
         if (input.page === 2) {
-          return Array.from({ length: 18 }, (_, index) =>
-            createSkillHubMarketplaceSkill(`second-${index + 1}`));
+          return {
+            skills: Array.from({ length: 18 }, (_, index) =>
+              createSkillHubMarketplaceSkill(`second-${index + 1}`)),
+            hasMore: true,
+          };
         }
-        return [];
+        return {
+          skills: [],
+          hasMore: false,
+        };
       }
       default:
         throw new Error(`Unexpected command: ${command}`);
@@ -978,6 +1011,53 @@ test("uses full marketplace pages to determine whether SkillHub has more results
   fireEvent.click(screen.getByRole("button", { name: "加载更多 SkillHub" }));
   await waitFor(() => {
     expect(screen.getByTestId("skillhub-has-more").textContent).toBe("done");
+  });
+});
+
+test("keeps successful marketplace search results visible when another source fails", async () => {
+  mockedInvoke.mockImplementation(async (command, args) => {
+    switch (command) {
+      case "list_startup_installed_skills":
+      case "refresh_git_states":
+        return installedSkillFixtures;
+      case "list_local_skill_candidates":
+        return localSkillFixtures;
+      case "list_tool_configs":
+        return toolConfigFixtures;
+      case "get_git_account_summary":
+        return gitAccountFixture;
+      case "get_app_settings":
+        return appSettingsFixture;
+      case "update_app_settings":
+        return (args as { settings: AppSettings }).settings;
+      case "list_marketplace_skills_page": {
+        const sourceSite = (args as { sourceSite: string }).sourceSite;
+        if (sourceSite === "skills.sh") {
+          throw new Error("skills.sh 搜索请求失败");
+        }
+        return {
+          skills: [createMarketplaceSkill("release-guardian")],
+          hasMore: false,
+        };
+      }
+      default:
+        throw new Error(`Unexpected command: ${command}`);
+    }
+  });
+
+  render(
+    <SkillWorkspaceProvider>
+      <MarketplaceSearchProbe />
+    </SkillWorkspaceProvider>,
+  );
+
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "搜索市场" }));
+  });
+
+  await waitFor(() => {
+    expect(screen.getByTestId("marketplace-search-results").textContent).toBe("release-guardian");
+    expect(screen.getByTestId("marketplace-search-error").textContent).toBe("skills.sh 搜索请求失败");
   });
 });
 

@@ -219,6 +219,13 @@ pub struct SkillInstanceMetadata {
     pub path_error: String,
     #[serde(default)]
     pub content_hash: String,
+    pub marketplace_owner: String,
+    #[serde(default)]
+    pub marketplace_slug: String,
+    #[serde(default)]
+    pub marketplace_version: String,
+    #[serde(default)]
+    pub marketplace_content_hash: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -234,6 +241,8 @@ pub struct MarketplaceSkill {
     pub install_label: String,
     pub source_url: String,
     pub popularity_label: String,
+    #[serde(default)]
+    pub topic_label: String,
     pub avatar_url: Option<String>,
     #[serde(default)]
     pub skill_path: String,
@@ -245,6 +254,22 @@ pub struct MarketplaceSkill {
     pub current_version: String,
     #[serde(default)]
     pub category_label: String,
+    pub marketplace_url: String,
+    #[serde(default)]
+    pub owner: String,
+    #[serde(default)]
+    pub slug: String,
+    #[serde(default)]
+    pub version: String,
+    #[serde(default)]
+    pub install_driver: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MarketplaceSkillsPage {
+    pub skills: Vec<MarketplaceSkill>,
+    pub has_more: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

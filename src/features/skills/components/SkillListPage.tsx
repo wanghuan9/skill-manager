@@ -409,6 +409,11 @@ export function SkillListToolbar(props: SkillToolbarProps) {
           />
         )}
       </div>
+      <BatchModeButton
+        isSelecting={isBatchSelecting}
+        label={t(isBatchSelecting ? "batch.mode.exit" : "batch.mode.enter")}
+        onClick={() => onBatchSelectingChange(!isBatchSelecting)}
+      />
       <button
         className={`secondary-button secondary-button--compact skills-toolbar-button skills-toolbar-button--refresh${isRefreshLoading ? " is-loading" : ""}`}
         type="button"
@@ -435,11 +440,6 @@ export function SkillListToolbar(props: SkillToolbarProps) {
           </button>
         </>
       ) : null}
-      <BatchModeButton
-        isSelecting={isBatchSelecting}
-        label={t(isBatchSelecting ? "batch.mode.exit" : "batch.mode.enter")}
-        onClick={() => onBatchSelectingChange(!isBatchSelecting)}
-      />
       {!isBatchSelecting && onGoInstall ? <ToolbarGoInstallButton onClick={onGoInstall} /> : null}
     </div>
   );

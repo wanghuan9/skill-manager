@@ -25,6 +25,12 @@ test("preserves the current Skill header layout and opens Skill install", async 
   expect(searchInput).toBeInTheDocument();
   expect(searchInput.closest("label")?.querySelector(".search-field__icon")).toBeInTheDocument();
   expect(screen.getByRole("combobox", { name: "筛选 Skill" })).toBeInTheDocument();
+  const filter = screen.getByRole("combobox", { name: "筛选 Skill" }).closest(".skill-status-filter");
+  const batchModeButton = screen.getByRole("button", { name: "批量选择" });
+  const refreshButton = screen.getByRole("button", { name: "刷新" });
+  const filterPosition = filter?.compareDocumentPosition(batchModeButton) ?? 0;
+  expect(filterPosition & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(batchModeButton.compareDocumentPosition(refreshButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   const installButton = screen.getByRole("button", { name: "去安装" });
   expect(installButton).toHaveClass("skills-toolbar-button--go-install");
   expect(installButton).toHaveClass("secondary-button");

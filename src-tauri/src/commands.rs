@@ -11,7 +11,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use regex::{Regex, RegexBuilder};
 use reqwest::Client;
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 use zip::ZipArchive;
 
 use crate::git_state::{
@@ -33,9 +33,9 @@ use crate::library::{
 };
 use crate::models::{
     AppSettings, GitAccountSummary, GitBranchOption, GitChangeFile, LocalInstallSkillCandidate,
-    LocalSkillCandidate, MarketplaceSkill, PushBranchOption, PushPreviewSnapshot,
-    PushTargetSnapshot, RepoSkillCandidate, SkillFileBrowserSnapshot, SkillFileDocument,
-    SkillFileEntry, SkillSummary, ToolConfig, ToolSkillEntry, ToolSyncStatus,
+    LocalSkillCandidate, MarketplaceSkill, MarketplaceSkillsPage, PushBranchOption,
+    PushPreviewSnapshot, PushTargetSnapshot, RepoSkillCandidate, SkillFileBrowserSnapshot,
+    SkillFileDocument, SkillFileEntry, SkillSummary, ToolConfig, ToolSkillEntry, ToolSyncStatus,
     UpdatePreviewSnapshot, WorkspaceSnapshot,
 };
 use crate::state::{
@@ -165,7 +165,7 @@ fn source_label_for_type(source_type: &str) -> &'static str {
 }
 
 const MARKETPLACE_FETCH_LIMIT: usize = 36;
-const MARKETPLACE_CACHE_VERSION: u64 = 4;
+const MARKETPLACE_CACHE_VERSION: u64 = 7;
 const MARKETPLACE_SKILL_FILE_LIMIT: usize = 200;
 const MARKETPLACE_SKILL_FILE_SIZE_LIMIT: u64 = 512 * 1024;
 const MARKETPLACE_SKILL_ROOT_CACHE_LIMIT: usize = 64;
@@ -292,7 +292,7 @@ fn format_compact_number(value: u64) -> String {
 
 fn deserialize_u64_or_string<'de, D>(deserializer: D) -> Result<u64, D::Error>
 where
-    D: Deserializer<'de>,
+    D: serde::Deserializer<'de>,
 {
     let value = serde_json::Value::deserialize(deserializer)?;
     if let Some(number) = value.as_u64() {
@@ -311,7 +311,7 @@ where
 
 fn deserialize_string_or_number<'de, D>(deserializer: D) -> Result<String, D::Error>
 where
-    D: Deserializer<'de>,
+    D: serde::Deserializer<'de>,
 {
     let value = serde_json::Value::deserialize(deserializer)?;
     match value {
@@ -1103,12 +1103,18 @@ fn map_skills_sh_items_to_marketplace(paged_items: Vec<SkillsShSkill>) -> Vec<Ma
             install_label: "按安装量排序".into(),
             source_url,
             popularity_label: format_compact_number(item.installs),
+            topic_label: String::new(),
             avatar_url: None,
             skill_path: resolved_skill_id.clone(),
             installed: false,
             update_available: false,
             current_version: String::new(),
             category_label: String::new(),
+            marketplace_url: String::new(),
+            owner: String::new(),
+            slug: String::new(),
+            version: String::new(),
+            install_driver: "git".to_string(),
         });
     }
 
@@ -1825,6 +1831,7 @@ fn map_skillsmp_items_to_marketplace(items: Vec<SkillsMpSkill>) -> Vec<Marketpla
                 install_label: "默认按热度排序".into(),
                 source_url: source_url.to_string(),
                 popularity_label: format_compact_number(item.stars),
+                topic_label: String::new(),
                 avatar_url: if avatar_url.is_empty() {
                     None
                 } else {
@@ -1835,11 +1842,15 @@ fn map_skillsmp_items_to_marketplace(items: Vec<SkillsMpSkill>) -> Vec<Marketpla
                 update_available: false,
                 current_version: String::new(),
                 category_label: String::new(),
+                marketplace_url: String::new(),
+                owner: String::new(),
+                slug: String::new(),
+                version: String::new(),
+                install_driver: "git".to_string(),
             })
         })
         .collect()
 }
-
 fn marketplace_cache_file() -> Option<PathBuf> {
     workspace::managed_workspace_root()
         .ok()
@@ -1855,6 +1866,20 @@ fn marketplace_cache_key(source: &str) -> String {
 }
 
 fn load_marketplace_cache(source: &str) -> Option<Vec<MarketplaceSkill>> {
+    let source_entry = load_marketplace_cache_source_entry(source)?;
+    let skills_array = source_entry
+        .get("skills")
+        .and_then(|value| value.as_array())?;
+    Some(
+        skills_array
+            .iter()
+            .filter_map(|skill| serde_json::from_value(skill.clone()).ok())
+            .map(normalize_cached_marketplace_skill)
+            .collect(),
+    )
+}
+
+fn load_marketplace_cache_source_entry(source: &str) -> Option<serde_json::Value> {
     let cache_path = marketplace_cache_file()?;
     let content = fs::read_to_string(cache_path).ok()?;
     let cached: serde_json::Value = serde_json::from_str(&content).ok()?;
@@ -1867,15 +1892,13 @@ fn load_marketplace_cache(source: &str) -> Option<Vec<MarketplaceSkill>> {
         return None;
     }
     let sources = cached.get("sources")?.as_object()?;
-    let source_entry = sources.get(&source_key)?;
-    let skills_array = source_entry.get("skills").and_then(|v| v.as_array())?;
-    Some(
-        skills_array
-            .iter()
-            .filter_map(|skill| serde_json::from_value(skill.clone()).ok())
-            .map(normalize_cached_marketplace_skill)
-            .collect(),
-    )
+    sources.get(&source_key).cloned()
+}
+
+fn load_marketplace_cache_has_more(source: &str) -> Option<bool> {
+    load_marketplace_cache_source_entry(source)?
+        .get("hasMore")
+        .and_then(|value| value.as_bool())
 }
 
 fn load_marketplace_cache_page(
@@ -1921,7 +1944,7 @@ fn normalize_cached_marketplace_skill(mut skill: MarketplaceSkill) -> Marketplac
     skill
 }
 
-fn save_marketplace_cache(source: &str, skills: &[MarketplaceSkill]) {
+fn save_marketplace_cache(source: &str, skills: &[MarketplaceSkill], has_more: Option<bool>) {
     let cache_path = match marketplace_cache_file() {
         Some(path) => path,
         None => return,
@@ -1958,13 +1981,14 @@ fn save_marketplace_cache(source: &str, skills: &[MarketplaceSkill]) {
     let Some(sources_object) = sources_value.as_object_mut() else {
         return;
     };
-    sources_object.insert(
-        source_key,
-        serde_json::json!({
-            "timestamp": timestamp,
-            "skills": skills
-        }),
-    );
+    let mut source_entry = serde_json::json!({
+        "timestamp": timestamp,
+        "skills": skills
+    });
+    if let (Some(has_more), Some(source_object)) = (has_more, source_entry.as_object_mut()) {
+        source_object.insert("hasMore".to_string(), serde_json::json!(has_more));
+    }
+    sources_object.insert(source_key, source_entry);
 
     let _ = fs::write(
         cache_path,
@@ -2001,7 +2025,7 @@ async fn build_marketplace_skills(
                 if !homepage_skills.is_empty() {
                     let homepage_page = paginate_marketplace_skills(&homepage_skills, page, limit);
                     if page == 1 && !homepage_page.is_empty() {
-                        save_marketplace_cache(source, &homepage_page);
+                        save_marketplace_cache(source, &homepage_page, None);
                     }
                     if should_use_skills_sh_homepage_page(page, homepage_page.len(), limit) {
                         return homepage_page;
@@ -2060,7 +2084,6 @@ async fn build_marketplace_skills(
             skills.append(&mut skillhub);
         }
     }
-
     if !is_searching {
         skills.retain(|skill| matches_marketplace_query(skill, query));
     }
@@ -2084,7 +2107,7 @@ async fn build_marketplace_skills(
 
     // 如果是第一页且不是搜索，保存到缓存
     if page == 1 && !is_searching && !result.is_empty() {
-        save_marketplace_cache(source, &result);
+        save_marketplace_cache(source, &result, None);
     }
 
     result
@@ -4504,6 +4527,9 @@ fn refresh_installed_skill_git_state_with_agent_status(
     {
         return normalized_skill;
     }
+    if normalized_skill.instance.update_driver == crate::clawhub_market::UPDATE_DRIVER {
+        return normalized_skill;
+    }
     enrich_skill_with_git_state(&normalized_skill)
 }
 
@@ -6241,24 +6267,51 @@ pub fn list_installed_skills() -> Vec<SkillSummary> {
 }
 
 #[tauri::command]
-pub async fn list_marketplace_skills(
+pub async fn list_marketplace_skills_page(
     source_site: Option<String>,
     page: Option<usize>,
     limit: Option<usize>,
     query: Option<String>,
     refresh: Option<bool>,
-) -> Vec<MarketplaceSkill> {
+) -> Result<MarketplaceSkillsPage, String> {
+    let source = source_site.as_deref().unwrap_or_default().trim();
     let page = page.unwrap_or(1).max(1);
     let limit = limit.unwrap_or(MARKETPLACE_FETCH_LIMIT).max(1);
-    build_marketplace_skills(
+    let refresh = refresh.unwrap_or(false);
+    let is_searching = query
+        .as_deref()
+        .is_some_and(|value| !value.trim().is_empty());
+
+    if source == crate::clawhub_market::SOURCE_SITE {
+        if !refresh && !is_searching && page == 1 {
+            if let Some(skills) = load_marketplace_cache_page(source, page, limit) {
+                return Ok(MarketplaceSkillsPage {
+                    has_more: load_marketplace_cache_has_more(source).unwrap_or(false),
+                    skills,
+                });
+            }
+        }
+        let result =
+            crate::clawhub_market::list_page(page, limit, query.as_deref(), refresh).await?;
+        if page == 1 && !is_searching && !result.skills.is_empty() {
+            save_marketplace_cache(source, &result.skills, Some(result.has_more));
+        }
+        return Ok(result);
+    }
+
+    let skills = build_marketplace_skills(
         source_site.as_deref(),
         page,
         limit,
         query.as_deref(),
         true,
-        refresh.unwrap_or(false),
+        refresh,
     )
-    .await
+    .await;
+    Ok(MarketplaceSkillsPage {
+        has_more: skills.len() >= limit,
+        skills,
+    })
 }
 
 #[tauri::command]
@@ -6331,10 +6384,12 @@ pub async fn get_marketplace_skill_file_browser(
     skill_path: String,
     skill_name: String,
     skill_id: Option<String>,
+    owner: Option<String>,
+    slug: Option<String>,
     version: Option<String>,
 ) -> Result<SkillFileBrowserSnapshot, String> {
     if source_site.as_deref() == Some(crate::skillhub_market::SOURCE) {
-        let slug = skill_id
+        let skillhub_slug = skill_id
             .as_deref()
             .and_then(|value| value.strip_prefix("skillhub-"))
             .or_else(|| (!skill_path.trim().is_empty()).then_some(skill_path.as_str()))
@@ -6342,9 +6397,18 @@ pub async fn get_marketplace_skill_file_browser(
         let client = marketplace_http_client()?;
         return crate::skillhub_market::get_file_browser(
             &client,
-            slug,
+            skillhub_slug,
             &skill_name,
             version.as_deref(),
+        )
+        .await;
+    }
+    if source_site.as_deref() == Some(crate::clawhub_market::SOURCE_SITE) {
+        return crate::clawhub_market::get_file_browser(
+            owner.as_deref().unwrap_or_default(),
+            slug.as_deref().unwrap_or_default(),
+            version.as_deref().unwrap_or_default(),
+            &skill_name,
         )
         .await;
     }
@@ -6429,16 +6493,28 @@ pub async fn get_marketplace_skill_file_browser(
 }
 
 #[tauri::command]
+pub async fn get_marketplace_skill_detail(
+    skill: MarketplaceSkill,
+) -> Result<MarketplaceSkill, String> {
+    if skill.source_site == crate::clawhub_market::SOURCE_SITE {
+        return crate::clawhub_market::hydrate_skill_metadata(skill).await;
+    }
+    Ok(skill)
+}
+
+#[tauri::command]
 pub async fn get_marketplace_skill_file_content(
     source_site: Option<String>,
     source_url: String,
     skill_path: String,
     relative_path: String,
     skill_id: Option<String>,
+    owner: Option<String>,
+    slug: Option<String>,
     version: Option<String>,
 ) -> Result<SkillFileDocument, String> {
     if source_site.as_deref() == Some(crate::skillhub_market::SOURCE) {
-        let slug = skill_id
+        let skillhub_slug = skill_id
             .as_deref()
             .and_then(|value| value.strip_prefix("skillhub-"))
             .or_else(|| (!skill_path.trim().is_empty()).then_some(skill_path.as_str()))
@@ -6446,9 +6522,18 @@ pub async fn get_marketplace_skill_file_content(
         let client = marketplace_http_client()?;
         return crate::skillhub_market::get_file_content(
             &client,
-            slug,
+            skillhub_slug,
             &relative_path,
             version.as_deref(),
+        )
+        .await;
+    }
+    if source_site.as_deref() == Some(crate::clawhub_market::SOURCE_SITE) {
+        return crate::clawhub_market::get_file_content(
+            owner.as_deref().unwrap_or_default(),
+            slug.as_deref().unwrap_or_default(),
+            version.as_deref().unwrap_or_default(),
+            &relative_path,
         )
         .await;
     }
@@ -6732,6 +6817,8 @@ pub async fn refresh_git_states() -> Vec<SkillSummary> {
     .unwrap_or_default();
     let refreshed_skills =
         crate::skillhub_market::refresh_installed_skill_update_states(refreshed_skills).await;
+    let refreshed_skills =
+        crate::clawhub_market::refresh_installed_skill_update_states(refreshed_skills).await;
     let latest_skills = load_installed_skills(&default_installed_skills());
     let refreshed_skills = merge_refreshed_skill_states_with_latest_state(
         refreshed_skills,
@@ -6773,9 +6860,37 @@ pub async fn install_skill_from_market(skill: MarketplaceSkill) -> Result<SkillS
     if skill.source_site == crate::skillhub_market::SOURCE {
         return crate::skillhub_market::install_skill(skill).await;
     }
+    if skill.source_site == crate::clawhub_market::SOURCE_SITE {
+        let resolved_skill = crate::clawhub_market::hydrate_skill(skill).await?;
+        if resolved_skill.install_driver != crate::clawhub_market::UPDATE_DRIVER {
+            return tauri::async_runtime::spawn_blocking(move || {
+                install_skill_from_market_blocking(resolved_skill)
+            })
+            .await
+            .map_err(|error| format!("后台安装 marketplace skill 失败: {error}"))?;
+        }
+        let installed_skill = crate::clawhub_market::install_skill(resolved_skill).await?;
+        return finalize_clawhub_market_install(installed_skill);
+    }
     tauri::async_runtime::spawn_blocking(move || install_skill_from_market_blocking(skill))
         .await
         .map_err(|error| format!("后台安装 marketplace skill 失败: {error}"))?
+}
+
+fn finalize_clawhub_market_install(installed_skill: SkillSummary) -> Result<SkillSummary, String> {
+    let mut installed_skills = load_installed_skills(&default_installed_skills());
+    let normalized_skill = normalize_skill_tools(&installed_skill);
+    let installed_skill = apply_skill_install_activation(normalized_skill, &installed_skills)?;
+    persist_skill_timestamps(&installed_skill);
+    installed_skills.retain(|skill| {
+        skill.name != installed_skill.name
+            && !(skill.instance.update_driver == crate::clawhub_market::UPDATE_DRIVER
+                && skill.instance.marketplace_owner == installed_skill.instance.marketplace_owner
+                && skill.instance.marketplace_slug == installed_skill.instance.marketplace_slug)
+    });
+    installed_skills.insert(0, installed_skill.clone());
+    save_installed_skills(&installed_skills)?;
+    Ok(installed_skill)
 }
 
 fn install_skill_from_market_blocking(skill: MarketplaceSkill) -> Result<SkillSummary, String> {
@@ -8008,6 +8123,9 @@ pub async fn get_update_preview_snapshot(
     if crate::skillhub_market::is_installed_skillhub_skill(&skill) {
         return crate::skillhub_market::preview_installed_skill_update(skill).await;
     }
+    if crate::clawhub_market::is_installed_skill(&skill) {
+        return crate::clawhub_market::preview_installed_skill_update(skill).await;
+    }
     tauri::async_runtime::spawn_blocking(move || {
         get_update_preview_snapshot_blocking(&skill_name, skill_path.as_deref())
     })
@@ -8140,6 +8258,15 @@ pub async fn update_skill(
     let skill = installed_skills[skill_index].clone();
     if crate::skillhub_market::is_installed_skillhub_skill(&skill) {
         return crate::skillhub_market::update_installed_skill(skill).await;
+    }
+    if crate::clawhub_market::is_installed_skill(&skill) {
+        let updated_skill = crate::clawhub_market::update_installed_skill(skill).await?;
+        clear_skill_update_cache(&updated_skill);
+        let (mut latest_skills, latest_index) =
+            find_skill_instance(&updated_skill.name, Some(&updated_skill.local_path))?;
+        latest_skills[latest_index] = updated_skill.clone();
+        save_installed_skills(&latest_skills)?;
+        return Ok(updated_skill);
     }
     tauri::async_runtime::spawn_blocking(move || {
         update_skill_blocking(&skill_name, skill_path.as_deref())
@@ -8768,18 +8895,19 @@ mod tests {
         delete_skill_blocking, detect_preferred_app_language_from_system,
         ensure_intellij_git_project_files, import_local_skill, insert_trusted_project_path,
         inspect_skill_tool_status, install_selected_local_skill_dirs,
-        intellij_trusted_locations_for_project, load_marketplace_cache_page,
-        map_in_parallel_preserving_order, map_skillsmp_items_to_marketplace,
-        merge_refreshed_skill_states_with_latest_state, normalize_installed_skill_source_url,
-        normalize_skill_tools, open_target_path_for_skill, parse_apple_languages_output,
-        parse_repo_install_spec, parse_skills_sh_homepage_items, recover_missing_managed_skills,
-        refresh_installed_skill_git_state, remove_matching_skill_distribution,
-        remove_trusted_project_paths, repo_clone_candidates, resolve_skill_install_name,
-        resolve_startup_installed_skills, run_git_command, save_marketplace_cache,
-        scan_local_install_skill_candidates, scan_repo_skill_candidates, selected_repo_path_hint,
-        set_skill_all_tool_statuses_blocking, set_tool_skill_statuses_blocking,
-        should_use_skills_sh_homepage_page, tool_name_to_id, update_skill_blocking,
-        update_skill_repo, REFRESH_GIT_STATES_CONCURRENCY,
+        intellij_trusted_locations_for_project, load_marketplace_cache_has_more,
+        load_marketplace_cache_page, map_in_parallel_preserving_order,
+        map_skillsmp_items_to_marketplace, merge_refreshed_skill_states_with_latest_state,
+        normalize_installed_skill_source_url, normalize_skill_tools, open_target_path_for_skill,
+        parse_apple_languages_output, parse_repo_install_spec, parse_skills_sh_homepage_items,
+        recover_missing_managed_skills, refresh_installed_skill_git_state,
+        remove_matching_skill_distribution, remove_trusted_project_paths, repo_clone_candidates,
+        resolve_skill_install_name, resolve_startup_installed_skills, run_git_command,
+        save_marketplace_cache, scan_local_install_skill_candidates, scan_repo_skill_candidates,
+        selected_repo_path_hint, set_skill_all_tool_statuses_blocking,
+        set_tool_skill_statuses_blocking, should_use_skills_sh_homepage_page, tool_name_to_id,
+        update_skill_blocking, update_skill_repo, MARKETPLACE_CACHE_VERSION,
+        REFRESH_GIT_STATES_CONCURRENCY,
     };
     use crate::agent_skills_cli::{AgentSkillUpdateCheck, AgentSkillsCliStatus, CliSkillEntry};
     #[cfg(windows)]
@@ -10442,15 +10570,21 @@ mod tests {
             install_label: "默认按热度排序".into(),
             source_url: "https://github.com/team/repo/tree/main/skills/demo".into(),
             popularity_label: "1.0K".into(),
+            topic_label: String::new(),
             avatar_url: None,
             skill_path: "skills/demo".into(),
             installed: false,
             update_available: false,
             current_version: String::new(),
             category_label: String::new(),
+            marketplace_url: String::new(),
+            owner: String::new(),
+            slug: String::new(),
+            version: String::new(),
+            install_driver: "git".into(),
         }];
 
-        save_marketplace_cache("skillsmp", &skills);
+        save_marketplace_cache("skillsmp", &skills, None);
         let cached = load_marketplace_cache_page("skillsmp", 1, 18).expect("load cache page");
 
         restore_env_var("HOME", original_home);
@@ -10485,6 +10619,41 @@ mod tests {
 
         restore_env_var("HOME", original_home);
         assert!(cached.is_none());
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn reads_cached_marketplace_has_more_without_guessing_from_page_size() {
+        let _guard = TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let temp_dir = temp_test_dir("marketplace-cache-has-more");
+        let home_dir = temp_dir.join("home");
+        let cache_dir = home_dir.join(".skilldock/cache");
+        fs::create_dir_all(&cache_dir).expect("create marketplace cache dir");
+        fs::write(
+            cache_dir.join("marketplace.json"),
+            serde_json::json!({
+                "version": MARKETPLACE_CACHE_VERSION,
+                "sources": {
+                    "clawhub": {
+                        "skills": [],
+                        "hasMore": false
+                    }
+                }
+            })
+            .to_string(),
+        )
+        .expect("write marketplace cache");
+        let original_home = env::var_os("HOME");
+        unsafe {
+            env::set_var("HOME", &home_dir);
+        }
+
+        let has_more = load_marketplace_cache_has_more("clawhub");
+
+        restore_env_var("HOME", original_home);
+        assert_eq!(has_more, Some(false));
         let _ = fs::remove_dir_all(temp_dir);
     }
 

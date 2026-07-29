@@ -175,10 +175,24 @@ export function buildInstalledMarketplaceSkillIds(
   const installedIndex = buildInstalledIndex(installedSkills);
   const installedMarketplaceSkillIds = new Set<string>();
   const marketplaceRepoCount = new Map<string, number>();
+  const installedClawhubSkills = installedSkills.filter((skill) => skill.updateDriver === "clawhub");
 
   for (const marketplaceSkill of marketplaceSkills) {
     if (marketplaceSkill.installed) {
       installedMarketplaceSkillIds.add(marketplaceSkill.id);
+    }
+    if (marketplaceSkill.installDriver === "clawhub") {
+      const isInstalled = installedClawhubSkills.some((installedSkill) => {
+        const slugMatches = Boolean(marketplaceSkill.slug)
+          && installedSkill.marketplaceSlug === marketplaceSkill.slug;
+        const ownerMatches = !marketplaceSkill.owner
+          || installedSkill.marketplaceOwner === marketplaceSkill.owner;
+        return slugMatches && ownerMatches;
+      });
+      if (isInstalled) {
+        installedMarketplaceSkillIds.add(marketplaceSkill.id);
+      }
+      continue;
     }
     const identity = getMarketplaceIdentity(marketplaceSkill);
     if (!identity) {
@@ -192,6 +206,9 @@ export function buildInstalledMarketplaceSkillIds(
 
   for (const marketplaceSkill of marketplaceSkills) {
     if (installedMarketplaceSkillIds.has(marketplaceSkill.id)) {
+      continue;
+    }
+    if (marketplaceSkill.installDriver === "clawhub") {
       continue;
     }
     const identity = getMarketplaceIdentity(marketplaceSkill);

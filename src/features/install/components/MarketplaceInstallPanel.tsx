@@ -4,9 +4,14 @@ import { useTranslate } from "@/app/i18n";
 import { useFailureReporter } from "@/app/failure-feedback";
 import { useNotifications } from "@/app/notifications";
 import { MarketplaceSkillDetailPreview } from "@/features/install/components/MarketplaceSkillDetailPreview";
-import { openExternalLink } from "@/features/skills/api/skill-client";
+import {
+  fetchMarketplaceSkillDetail,
+  openExternalLink,
+} from "@/features/skills/api/skill-client";
 import type { MarketplaceSkill, MarketplaceSourceSite } from "@/features/skills/state/skill-store";
 import { useSkillWorkspace } from "@/features/skills/state/skill-workspace";
+
+export type MarketplaceSearchScope = "all" | "current";
 
 type MarketplaceInstallPanelProps = {
   activeSourceSite: MarketplaceSourceSite;
@@ -15,11 +20,14 @@ type MarketplaceInstallPanelProps = {
   onSourceChange: (sourceSite: MarketplaceSourceSite) => void;
   searchQuery: string;
   onSearchQueryChange: (value: string) => void;
+  searchScope: MarketplaceSearchScope;
+  onSearchScopeChange: (scope: MarketplaceSearchScope) => void;
   isSearching: boolean;
   isSearchLoading: boolean;
   isInitialLoading: boolean;
   isLoadingMore: boolean;
   hasMore: boolean;
+  errorMessage?: string;
   installedMarketplaceSkillIds: Set<string>;
   onLoadMore: () => void;
 };
@@ -33,11 +41,14 @@ export function MarketplaceInstallPanel(props: MarketplaceInstallPanelProps) {
     sourceTabs,
     searchQuery,
     onSearchQueryChange,
+    searchScope,
+    onSearchScopeChange,
     isSearching,
     isSearchLoading,
     isInitialLoading,
     isLoadingMore,
     hasMore,
+    errorMessage,
     installedMarketplaceSkillIds,
     onLoadMore,
   } = props;
@@ -45,6 +56,7 @@ export function MarketplaceInstallPanel(props: MarketplaceInstallPanelProps) {
   const { notify } = useNotifications();
   const reportFailure = useFailureReporter();
   const [selectedSkill, setSelectedSkill] = useState<MarketplaceSkill | null>(null);
+  const isAllSourcesSearch = searchScope === "all";
 
   async function handleInstallSkill(skill: MarketplaceSkill) {
     try {
@@ -74,11 +86,14 @@ export function MarketplaceInstallPanel(props: MarketplaceInstallPanelProps) {
         <div className="panel-header">
           <h2>{t("install.sources.title")}</h2>
         </div>
-        <label className="market-search-field">
-          <span className="sr-only">{t("install.sources.searchAria")}</span>
+        <div className="market-search-field market-search-field--scoped">
+          <label className="sr-only" htmlFor="marketplace-skill-search">
+            {t("install.sources.searchAria")}
+          </label>
           <div className="market-search-input-wrap">
             <SearchFieldIcon />
             <input
+              id="marketplace-skill-search"
               className="market-search-input"
               type="search"
               autoComplete="off"
@@ -86,14 +101,38 @@ export function MarketplaceInstallPanel(props: MarketplaceInstallPanelProps) {
               autoCapitalize="none"
               spellCheck={false}
               value={searchQuery}
-              placeholder={t("install.sources.searchPlaceholder")}
+              placeholder={
+                isAllSourcesSearch
+                  ? t("install.sources.searchPlaceholder")
+                  : t("install.sources.searchPlaceholderCurrent", { source: activeSourceSite })
+              }
               onChange={(event) => onSearchQueryChange(event.target.value)}
             />
             {isSearchLoading ? (
               <span className="loading-spinner market-search-spinner" aria-label={t("install.sources.searching")} />
             ) : null}
+            <div className="market-search-scope" role="group" aria-label={t("install.sources.searchScopeAria")}>
+              <button
+                className={`market-search-scope__button${isAllSourcesSearch ? " is-selected" : ""}`}
+                type="button"
+                aria-pressed={isAllSourcesSearch}
+                title={t("install.sources.searchScopeAllTitle")}
+                onClick={() => onSearchScopeChange("all")}
+              >
+                {t("install.sources.searchScopeAll")}
+              </button>
+              <button
+                className={`market-search-scope__button${!isAllSourcesSearch ? " is-selected" : ""}`}
+                type="button"
+                aria-pressed={!isAllSourcesSearch}
+                title={t("install.sources.searchScopeCurrentTitle", { source: activeSourceSite })}
+                onClick={() => onSearchScopeChange("current")}
+              >
+                {t("install.sources.searchScopeCurrent")}
+              </button>
+            </div>
           </div>
-        </label>
+        </div>
         <div className="source-tab-row" role="tablist" aria-label={t("install.sources.tabsAria")}>
           {sourceTabs.map((sourceSite) => {
             const selected = sourceSite === activeSourceSite;
@@ -114,6 +153,12 @@ export function MarketplaceInstallPanel(props: MarketplaceInstallPanelProps) {
         </div>
       </div>
       <div className="install-grid market-install-scroll">
+        {errorMessage ? (
+          <section className="placeholder-card" role="alert">
+            <h3>{t("install.market.error.loadTitle")}</h3>
+            <p>{errorMessage}</p>
+          </section>
+        ) : null}
         {isInitialLoading ? (
           <section className="placeholder-card">
             <h3 className="install-loading-title">
@@ -128,7 +173,12 @@ export function MarketplaceInstallPanel(props: MarketplaceInstallPanelProps) {
             </h3>
             <p>
               {isSearching
-                ? t("install.market.loading.searchDescription", { query: searchQuery.trim() })
+                ? isAllSourcesSearch
+                  ? t("install.market.loading.searchDescription", { query: searchQuery.trim() })
+                  : t("install.market.loading.searchDescriptionCurrent", {
+                      query: searchQuery.trim(),
+                      source: activeSourceSite,
+                    })
                 : t("install.market.loading.sourceDescription", { source: activeSourceSite })}
             </p>
           </section>
@@ -160,12 +210,17 @@ export function MarketplaceInstallPanel(props: MarketplaceInstallPanelProps) {
                         <h3 title={skill.name}>{skill.name}</h3>
                         <a
                           className="install-card__link"
-                          href={buildOfficialRepositoryUrl(skill.sourceUrl)}
-                          aria-label={t("install.market.aria.openRepo", { name: skill.name })}
+                          href={resolvePrimarySkillUrl(skill)}
+                          aria-label={t(
+                            skill.installDriver === "clawhub"
+                              ? "install.market.aria.openStore"
+                              : "install.market.aria.openRepo",
+                            { name: skill.name },
+                          )}
                           onClick={(event) => {
                             event.preventDefault();
                             event.stopPropagation();
-                            void openExternalLink(buildOfficialRepositoryUrl(skill.sourceUrl));
+                            void openExternalLink(resolvePrimarySkillUrl(skill));
                           }}
                         >
                           <ExternalLinkIcon />
@@ -192,14 +247,19 @@ export function MarketplaceInstallPanel(props: MarketplaceInstallPanelProps) {
                         ? `${t("install.market.category")}: ${skill.categoryLabel}`
                         : `${t("install.market.source")}: ${skill.sourceSite}`}
                     </span>
-                    <span
-                      className="install-card__chip marketplace-skill-card__author"
-                      title={skill.maintainer}
-                    >
-                      <span className="marketplace-skill-card__author-text">
-                        {t("install.market.author")}: {skill.maintainer}
+                    {skill.maintainer.trim() ? (
+                      <span
+                        className="install-card__chip marketplace-skill-card__author"
+                        title={skill.maintainer}
+                      >
+                        <span className="marketplace-skill-card__author-text">
+                          {t("install.market.author")}: {skill.maintainer}
+                        </span>
                       </span>
-                    </span>
+                    ) : null}
+                    {!isSearching && skill.topicLabel?.trim() ? (
+                      <span className="install-card__chip">{skill.topicLabel}</span>
+                    ) : null}
                     <span className="install-card__chip install-card__chip--metric">
                       <DownloadIcon />
                       {skill.popularityLabel}
@@ -216,12 +276,17 @@ export function MarketplaceInstallPanel(props: MarketplaceInstallPanelProps) {
               <p className="install-loading-text">{t("install.market.loading.done")}</p>
             ) : null}
           </>
-        ) : (
+        ) : errorMessage ? null : (
           <section className="placeholder-card">
             <h3>{t("install.market.emptyTitle")}</h3>
             <p>
               {isSearching
-                ? t("install.market.emptySearch", { query: searchQuery.trim() })
+                ? isAllSourcesSearch
+                  ? t("install.market.emptySearch", { query: searchQuery.trim() })
+                  : t("install.market.emptySearchCurrent", {
+                      query: searchQuery.trim(),
+                      source: activeSourceSite,
+                    })
                 : t("install.market.emptySource", { source: activeSourceSite })}
             </p>
           </section>
@@ -232,7 +297,7 @@ export function MarketplaceInstallPanel(props: MarketplaceInstallPanelProps) {
           skill={selectedSkill}
           isInstalled={installedMarketplaceSkillIds.has(selectedSkill.id)}
           isInstalling={installingMarketplaceSkillIds.has(selectedSkill.id)}
-          onInstall={() => void handleInstallSkill(selectedSkill)}
+          onInstall={(skill) => void handleInstallSkill(skill)}
           onClose={() => setSelectedSkill(null)}
         />
       ) : null}
@@ -244,13 +309,33 @@ type SkillDetailModalProps = {
   skill: MarketplaceSkill;
   isInstalled: boolean;
   isInstalling: boolean;
-  onInstall: () => void;
+  onInstall: (skill: MarketplaceSkill) => void;
   onClose: () => void;
 };
 
 function SkillDetailModal(props: SkillDetailModalProps) {
   const { skill, isInstalled, isInstalling, onInstall, onClose } = props;
   const { t } = useTranslate();
+  const [detailSkill, setDetailSkill] = useState(skill);
+
+  useEffect(() => {
+    setDetailSkill(skill);
+    if (skill.sourceSite !== "clawhub" || skill.maintainer.trim()) {
+      return;
+    }
+
+    let active = true;
+    void fetchMarketplaceSkillDetail(skill)
+      .then((resolvedSkill) => {
+        if (active) {
+          setDetailSkill(resolvedSkill);
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+    };
+  }, [skill]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -267,8 +352,8 @@ function SkillDetailModal(props: SkillDetailModalProps) {
     };
   }, [onClose]);
 
-  const officialRepositoryUrl = buildOfficialRepositoryUrl(skill.sourceUrl);
-  const marketplaceUrl = resolveMarketplaceSkillUrl(skill);
+  const officialRepositoryUrl = buildOfficialRepositoryUrl(detailSkill.sourceUrl);
+  const marketplaceUrl = resolveMarketplaceSkillUrl(detailSkill);
 
   return (
     <div className="dialog-backdrop" role="presentation" onClick={onClose}>
@@ -283,11 +368,16 @@ function SkillDetailModal(props: SkillDetailModalProps) {
           <div className="skill-detail-modal__title-group">
             <h3>{skill.name}</h3>
             <p>
-              {t("install.market.detail.meta", {
-                source: skill.sourceSite,
-                author: skill.maintainer,
-                downloads: skill.popularityLabel,
-              })}
+              {detailSkill.maintainer.trim()
+                ? t("install.market.detail.meta", {
+                    source: detailSkill.sourceSite,
+                    author: detailSkill.maintainer,
+                    downloads: detailSkill.popularityLabel,
+                  })
+                : t("install.market.detail.metaWithoutAuthor", {
+                    source: detailSkill.sourceSite,
+                    downloads: detailSkill.popularityLabel,
+                  })}
             </p>
           </div>
           <div className="skill-detail-modal__actions">
@@ -295,7 +385,7 @@ function SkillDetailModal(props: SkillDetailModalProps) {
               className="skill-detail-modal__action-link skill-detail-modal__action-link--primary skill-detail-modal__install-button"
               type="button"
               disabled={isInstalled || isInstalling}
-              onClick={onInstall}
+              onClick={() => onInstall(detailSkill)}
             >
               <DownloadIcon />
               {isInstalled ? t("install.market.installed") : isInstalling ? t("install.market.installing") : t("install.market.install")}
@@ -313,7 +403,7 @@ function SkillDetailModal(props: SkillDetailModalProps) {
                 {t("install.market.detail.viewStore")}
               </a>
             ) : null}
-            {skill.sourceSite !== "skillhub" ? (
+            {detailSkill.sourceSite !== "skillhub" && detailSkill.installDriver !== "clawhub" ? (
               <a
                 className="skill-detail-modal__action-link"
                 href={officialRepositoryUrl}
@@ -400,9 +490,14 @@ function resolveMarketplaceSkillUrl(skill: MarketplaceSkill) {
     return explicitMarketplaceUrl;
   }
 
-  if (skill.sourceSite === "skillsmp") {
-    const marketplaceSlug = skill.id.trim().replace(/^skillsmp-/, "");
-    return marketplaceSlug ? `https://skillsmp.com/skills/${marketplaceSlug}` : "https://skillsmp.com";
+  if (skill.sourceSite === "clawhub") {
+    if (skill.owner?.trim() && skill.slug?.trim()) {
+      return `https://clawhub.ai/${skill.owner.trim()}/skills/${skill.slug.trim()}`;
+    }
+    if (skill.slug?.trim()) {
+      return `https://clawhub.ai/skills/${skill.slug.trim()}`;
+    }
+    return "https://clawhub.ai";
   }
 
   if (skill.sourceSite !== "skills.sh") {
@@ -431,6 +526,12 @@ function resolveMarketplaceSkillUrl(skill: MarketplaceSkill) {
   return marketplacePath
     ? `https://skills.sh/${owner}/${repository}/${marketplacePath}`
     : `https://skills.sh/${owner}/${repository}`;
+}
+
+function resolvePrimarySkillUrl(skill: MarketplaceSkill) {
+  return skill.installDriver === "clawhub"
+    ? resolveMarketplaceSkillUrl(skill)
+    : buildOfficialRepositoryUrl(skill.sourceUrl);
 }
 
 function buildAvatarTone(skill: MarketplaceSkill) {

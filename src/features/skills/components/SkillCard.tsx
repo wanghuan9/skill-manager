@@ -332,6 +332,7 @@ export function SkillCard({
   const canPreviewUpdates = showDetailAction
     && (skill.gitLinked
       || skill.updateDriver === "agent-skills-cli"
+      || skill.updateDriver === "clawhub"
       || skill.sourceType === "marketplace");
   const previewMode: SkillFilePanelMode = (skill.localChangeCount ?? 0) > 0
     ? "changes"

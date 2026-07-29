@@ -1511,6 +1511,11 @@ export function McpRoute(props: McpRouteProps = {}) {
         />
       </label>
       <ListGridViewToggle value={viewMode} onChange={handleViewModeChange} />
+      <BatchModeButton
+        isSelecting={batchSelection.isSelecting}
+        label={t(batchSelection.isSelecting ? "batch.mode.exit" : "batch.mode.enter")}
+        onClick={handleBatchModeToggle}
+      />
       <button
         className={`secondary-button secondary-button--compact skills-toolbar-button skills-toolbar-button--refresh${isRefreshing ? " is-loading" : ""}`}
         type="button"
@@ -1550,11 +1555,6 @@ export function McpRoute(props: McpRouteProps = {}) {
         </span>
         <span>{t("mcp.toolbar.add")}</span>
       </button>
-      <BatchModeButton
-        isSelecting={batchSelection.isSelecting}
-        label={t(batchSelection.isSelecting ? "batch.mode.exit" : "batch.mode.enter")}
-        onClick={handleBatchModeToggle}
-      />
       {!batchSelection.isSelecting && props.onInstallFromMarketplace ? (
         <ToolbarGoInstallButton onClick={props.onInstallFromMarketplace} />
       ) : null}

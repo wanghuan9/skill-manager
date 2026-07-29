@@ -1,4 +1,5 @@
 mod agent_skills_cli;
+mod clawhub_market;
 mod commands;
 mod diagnostics;
 mod git_state;
@@ -57,8 +58,9 @@ pub fn run() {
             commands::get_workspace_snapshot,
             commands::list_startup_installed_skills,
             commands::list_installed_skills,
-            commands::list_marketplace_skills,
+            commands::list_marketplace_skills_page,
             commands::get_marketplace_skill_description,
+            commands::get_marketplace_skill_detail,
             commands::get_marketplace_skill_file_browser,
             commands::get_marketplace_skill_file_content,
             commands::list_local_skill_candidates,

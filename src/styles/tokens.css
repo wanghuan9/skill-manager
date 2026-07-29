@@ -4470,6 +4470,10 @@ code {
   width: min(320px, 100%);
 }
 
+.market-search-field--scoped {
+  width: min(300px, 100%);
+}
+
 .market-search-input-wrap {
   position: relative;
 }
@@ -4501,7 +4505,6 @@ code {
 .market-search-input:focus {
   outline: none;
   border-color: #8ab3ff;
-  box-shadow: 0 0 0 3px rgba(47, 120, 255, 0.18);
 }
 
 .market-search-spinner {
@@ -4516,6 +4519,50 @@ code {
   border-top-color: #5f7fb8;
   color: #5f7fb8;
   pointer-events: none;
+}
+
+.market-search-field--scoped .market-search-input {
+  padding-right: 92px;
+}
+
+.market-search-field--scoped .market-search-spinner {
+  right: 78px;
+}
+
+.market-search-scope {
+  position: absolute;
+  top: 50%;
+  right: 5px;
+  display: flex;
+  gap: 2px;
+  transform: translateY(-50%);
+}
+
+.market-search-scope__button {
+  min-height: 26px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: #64748b;
+  font-size: 0.66rem;
+  font-weight: 400;
+  line-height: 1;
+}
+
+.market-search-scope__button:hover {
+  background: rgba(100, 116, 139, 0.08);
+  color: #1e3a5f;
+}
+
+.market-search-scope__button.is-selected {
+  background: rgba(37, 99, 235, 0.1);
+  color: #2563eb;
+}
+
+.market-search-scope__button:focus-visible {
+  outline: 2px solid rgba(47, 120, 255, 0.48);
+  outline-offset: 1px;
 }
 
 .market-route {
@@ -5290,16 +5337,16 @@ code {
 }
 
 .repo-form__submit-button.is-loading {
-  background: #7a7a7a;
-  border-color: #7a7a7a;
-  color: rgba(20, 20, 20, 0.9);
+  background: color-mix(in srgb, var(--muted) 48%, var(--surface) 52%);
+  border-color: color-mix(in srgb, var(--muted) 56%, var(--line) 44%);
+  color: var(--heading);
   opacity: 1;
   box-shadow: none;
 }
 
 .repo-form__submit-button.is-loading:hover {
-  background: #7a7a7a;
-  border-color: #7a7a7a;
+  background: color-mix(in srgb, var(--muted) 48%, var(--surface) 52%);
+  border-color: color-mix(in srgb, var(--muted) 56%, var(--line) 44%);
 }
 
 .repo-clone-progress-bar {
@@ -5313,10 +5360,10 @@ code {
   margin-bottom: 12px;
   padding: 8px 12px;
   overflow: hidden;
-  background: #f7fbff;
-  border: 1px solid #d7e6fb;
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface) 92%);
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--line) 72%);
   border-radius: 10px;
-  box-shadow: 0 8px 18px rgba(47, 120, 255, 0.08);
+  box-shadow: 0 8px 18px color-mix(in srgb, var(--accent) 9%, transparent);
 }
 
 .repo-clone-progress-bar::before {
@@ -5325,8 +5372,8 @@ code {
   height: 14px;
   flex: 0 0 auto;
   border-radius: 999px;
-  border: 2px solid rgba(47, 120, 255, 0.22);
-  border-top-color: #2f78ff;
+  border: 2px solid color-mix(in srgb, var(--accent) 22%, transparent);
+  border-top-color: var(--accent);
   animation: spin 0.8s linear infinite;
 }
 
@@ -5338,14 +5385,14 @@ code {
   left: 12px;
   height: 2px;
   border-radius: 999px;
-  background: linear-gradient(90deg, rgba(47, 120, 255, 0), #2f78ff, rgba(47, 120, 255, 0));
+  background: linear-gradient(90deg, transparent, var(--accent), transparent);
   animation: repo-progress-slide 1.35s ease-in-out infinite;
 }
 
 .repo-clone-progress-bar__text {
   display: block;
   min-width: 0;
-  color: #34517a;
+  color: color-mix(in srgb, var(--accent) 68%, var(--heading) 32%);
   font-size: 0.78rem;
   font-weight: 600;
   line-height: 1.35;
@@ -5426,9 +5473,9 @@ code {
   gap: 8px;
   min-height: 180px;
   padding: 24px;
-  border: 1px dashed #d8e2f0;
+  border: 1px dashed var(--line);
   border-radius: 16px;
-  background: #f8fbff;
+  background: var(--surface-muted);
   text-align: center;
   color: var(--muted);
 }
@@ -5476,9 +5523,9 @@ code {
 }
 
 .repo-install__option.is-selected {
-  border-color: #a9c3fb;
-  background: #f1f6ff;
-  box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.12);
+  border-color: color-mix(in srgb, var(--accent) 44%, var(--line) 56%);
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface) 90%);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 12%, transparent);
 }
 
 .repo-install__option-title {
@@ -5683,9 +5730,9 @@ code {
   align-items: center;
   min-height: 22px;
   padding: 2px 8px;
-  border: 1px solid rgba(47, 120, 255, 0.14);
+  border: 1px solid color-mix(in srgb, var(--accent) 22%, transparent);
   border-radius: 7px;
-  background: rgba(47, 120, 255, 0.07);
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
   color: var(--accent);
   font-size: 0.7rem;
   font-weight: 500;
@@ -5729,8 +5776,8 @@ code {
 }
 
 .plugin-install-preview__host-toggle:hover {
-  border-color: rgba(47, 120, 255, 0.24);
-  background: rgba(47, 120, 255, 0.08);
+  border-color: color-mix(in srgb, var(--accent) 30%, transparent);
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
   color: var(--heading);
 }
 
@@ -5771,17 +5818,21 @@ code {
 }
 
 .plugin-install-preview__host-toggle:focus-visible {
-  outline: 2px solid rgba(47, 120, 255, 0.2);
+  outline: 2px solid color-mix(in srgb, var(--accent) 24%, transparent);
   outline-offset: 2px;
 }
 
 .plugin-install-preview__host-toggle.is-selected {
-  border-color: rgba(39, 179, 106, 0.42);
-  background: linear-gradient(180deg, rgba(39, 179, 106, 0.16), rgba(39, 179, 106, 0.09));
-  color: #138a4f;
+  border-color: color-mix(in srgb, var(--success) 44%, var(--line) 56%);
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--success) 16%, var(--surface) 84%),
+    color-mix(in srgb, var(--success) 9%, var(--surface) 91%)
+  );
+  color: var(--success);
   box-shadow:
-    0 0 0 1px rgba(39, 179, 106, 0.14),
-    0 8px 18px rgba(20, 128, 76, 0.14);
+    0 0 0 1px color-mix(in srgb, var(--success) 14%, transparent),
+    0 8px 18px color-mix(in srgb, var(--success) 12%, transparent);
 }
 
 .plugin-install-preview__host-check {
@@ -5829,41 +5880,49 @@ code {
 }
 
 .plugin-install-preview__host-toggle.is-selected .plugin-install-preview__host-icon {
-  border-color: rgba(39, 179, 106, 0.28);
-  background: rgba(255, 255, 255, 0.92);
-  color: #138a4f;
+  border-color: color-mix(in srgb, var(--success) 30%, var(--line) 70%);
+  background: color-mix(in srgb, var(--success) 10%, var(--surface-strong) 90%);
+  color: var(--success);
 }
 
 .plugin-install-preview__host-toggle.is-installed {
-  border-color: rgba(59, 130, 246, 0.18);
-  background: linear-gradient(180deg, rgba(239, 246, 255, 0.96), rgba(248, 250, 252, 0.92));
-  color: #475569;
+  border-color: color-mix(in srgb, #3b82f6 28%, var(--line) 72%);
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, #3b82f6 10%, var(--surface) 90%),
+    color-mix(in srgb, #3b82f6 5%, var(--surface) 95%)
+  );
+  color: color-mix(in srgb, var(--heading) 72%, var(--muted) 28%);
   cursor: not-allowed;
   opacity: 1;
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.92),
-    0 1px 2px rgba(15, 23, 42, 0.04);
+    inset 0 1px 0 color-mix(in srgb, var(--heading) 8%, transparent),
+    0 1px 2px rgba(15, 23, 42, 0.08);
 }
 
 .plugin-install-preview__host-toggle.is-installed:hover,
 .plugin-install-preview__host-toggle.is-installed:focus-visible {
-  border-color: rgba(59, 130, 246, 0.24);
-  background: linear-gradient(180deg, rgba(239, 246, 255, 1), rgba(241, 245, 249, 0.96));
-  color: #334155;
+  border-color: color-mix(in srgb, #3b82f6 36%, var(--line) 64%);
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, #3b82f6 14%, var(--surface) 86%),
+    color-mix(in srgb, #3b82f6 8%, var(--surface) 92%)
+  );
+  color: var(--heading);
 }
 
 .plugin-install-preview__host-toggle.is-installed .plugin-install-preview__host-icon {
-  border-color: rgba(59, 130, 246, 0.16);
-  background: rgba(255, 255, 255, 0.96);
+  border-color: color-mix(in srgb, #3b82f6 22%, var(--line) 78%);
+  background: var(--surface-strong);
   color: inherit;
   opacity: 1;
   filter: none;
 }
 
 .plugin-install-preview__host-toggle.is-unavailable {
-  border-color: rgba(117, 128, 147, 0.12);
-  background: rgba(117, 128, 147, 0.035);
-  color: rgba(107, 114, 128, 0.52);
+  border-color: color-mix(in srgb, var(--muted) 16%, transparent);
+  background: color-mix(in srgb, var(--muted) 6%, transparent);
+  color: color-mix(in srgb, var(--muted) 58%, transparent);
   cursor: not-allowed;
   opacity: 0.74;
   box-shadow: none;
@@ -5871,9 +5930,9 @@ code {
 
 .plugin-install-preview__host-toggle.is-unavailable:hover,
 .plugin-install-preview__host-toggle.is-unavailable:focus-visible {
-  border-color: rgba(117, 128, 147, 0.18);
-  background: rgba(117, 128, 147, 0.065);
-  color: rgba(75, 85, 99, 0.62);
+  border-color: color-mix(in srgb, var(--muted) 22%, transparent);
+  background: color-mix(in srgb, var(--muted) 9%, transparent);
+  color: color-mix(in srgb, var(--muted) 68%, transparent);
 }
 
 .plugin-install-preview__host-toggle.is-unavailable .plugin-install-preview__host-icon {
@@ -5983,7 +6042,7 @@ code {
   width: 0;
   height: 3px;
   border-radius: 999px;
-  background: #2f78ff;
+  background: var(--accent);
   content: "";
   transform: translateX(-50%);
   transition:
@@ -5993,7 +6052,7 @@ code {
 
 .local-install-subtab.is-selected {
   background: transparent;
-  color: #2f78ff;
+  color: var(--accent);
   font-weight: 600;
   box-shadow: none;
 }
@@ -6004,7 +6063,7 @@ code {
 
 .local-install-subtab:hover {
   background: transparent;
-  color: #344054;
+  color: var(--heading);
 }
 
 .plugin-host-tab__count {
@@ -6016,7 +6075,7 @@ code {
 
 .local-install-subtab.is-selected:hover {
   background: transparent;
-  color: #2f78ff;
+  color: var(--accent);
 }
 
 .local-install-panel,
@@ -6087,35 +6146,35 @@ code {
 
 .local-install-dropzone:hover,
 .local-install-dropzone:focus-within {
-  border-color: color-mix(in srgb, var(--accent) 64%, #9fb6d5 36%);
+  border-color: color-mix(in srgb, var(--accent) 64%, var(--line-strong) 36%);
   background: color-mix(in srgb, var(--accent-soft) 54%, transparent 46%);
   box-shadow:
-    0 0 0 3px rgba(59, 130, 246, 0.1),
-    0 10px 24px rgba(47, 124, 255, 0.08);
+    0 0 0 3px color-mix(in srgb, var(--accent) 10%, transparent),
+    0 10px 24px color-mix(in srgb, var(--accent) 8%, transparent);
 }
 
 .local-install-dropzone.is-dragging {
-  border-color: #4ade80;
-  background: color-mix(in srgb, var(--success-soft) 82%, #ffffff 18%);
+  border-color: var(--success);
+  background: color-mix(in srgb, var(--success) 14%, var(--surface) 86%);
   box-shadow:
-    0 0 0 3px rgba(74, 222, 128, 0.16),
-    0 14px 30px rgba(39, 179, 106, 0.16);
-  color: #16a34a;
+    0 0 0 3px color-mix(in srgb, var(--success) 16%, transparent),
+    0 14px 30px color-mix(in srgb, var(--success) 16%, transparent);
+  color: var(--success);
 }
 
 .local-install-dropzone.is-dragging strong,
 .local-install-dropzone.is-dragging span {
-  color: #16a34a;
+  color: var(--success);
 }
 
 .local-install-dropzone.is-selected {
   grid-template-columns: minmax(0, 1fr);
   justify-items: center;
-  border-color: #4ade80;
-  background: color-mix(in srgb, var(--success-soft) 64%, #ffffff 36%);
+  border-color: var(--success);
+  background: color-mix(in srgb, var(--success) 11%, var(--surface) 89%);
   box-shadow:
-    0 0 0 3px rgba(74, 222, 128, 0.12),
-    0 12px 26px rgba(39, 179, 106, 0.1);
+    0 0 0 3px color-mix(in srgb, var(--success) 12%, transparent),
+    0 12px 26px color-mix(in srgb, var(--success) 10%, transparent);
   text-align: center;
 }
 
@@ -6129,7 +6188,7 @@ code {
   grid-row: auto;
   width: 30px;
   height: 30px;
-  color: #16a34a;
+  color: var(--success);
 }
 
 .local-install-dropzone strong {
@@ -6152,7 +6211,7 @@ code {
 }
 
 .local-install-dropzone__selected span:last-child {
-  color: #16a34a;
+  color: var(--success);
   font-weight: 600;
 }
 
@@ -12873,11 +12932,24 @@ button.settings-form-item:disabled {
 
 :root[data-theme="dark"] .market-search-input:focus {
   border-color: rgba(255, 194, 26, 0.46);
-  box-shadow: 0 0 0 3px rgba(255, 194, 26, 0.1);
 }
 
 :root[data-theme="dark"] .market-search-input::placeholder {
   color: #858585;
+}
+
+:root[data-theme="dark"] .market-search-scope__button {
+  color: #a9adb4;
+}
+
+:root[data-theme="dark"] .market-search-scope__button:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: #f2f2f2;
+}
+
+:root[data-theme="dark"] .market-search-scope__button.is-selected {
+  background: rgba(255, 194, 26, 0.1);
+  color: var(--accent);
 }
 
 :root[data-theme="dark"] .settings-panel {
@@ -13842,7 +13914,6 @@ button.settings-form-item:disabled {
 
 :root[data-theme="dark"] .search-field--header:focus-within,
 :root[data-theme="dark"] .skill-status-filter:focus-within,
-:root[data-theme="dark"] .market-search-input:focus,
 :root[data-theme="dark"] .skills-source-select-trigger:focus-visible,
 :root[data-theme="dark"] .plugins-page__status-filter:focus-within {
   border-color: rgba(255, 194, 26, 0.48);

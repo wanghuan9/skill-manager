@@ -41,7 +41,14 @@ function setBoundedCache<Value>(
 }
 
 function marketplaceFileTreeCacheKey(skill: MarketplaceSkill) {
-  return `${skill.sourceUrl}#${skill.skillPath ?? ""}`;
+  return [
+    skill.sourceSite,
+    skill.sourceUrl,
+    skill.skillPath ?? "",
+    skill.owner ?? "",
+    skill.slug ?? "",
+    skill.version ?? "",
+  ].join("#");
 }
 
 function marketplaceFileContentCacheKey(skill: MarketplaceSkill, relativePath: string) {
@@ -129,8 +136,11 @@ export function MarketplaceSkillDetailPreview({ skill }: MarketplaceSkillDetailP
       sourceUrl: skill.sourceUrl,
       skillPath: skill.skillPath ?? "",
       skillName: skill.name,
+      sourceSite: skill.sourceSite,
+      owner: skill.owner,
+      slug: skill.slug,
+      version: skill.version,
       ...(skill.sourceSite === "skillhub" ? {
-        sourceSite: skill.sourceSite,
         skillId: skill.id,
         version: skill.currentVersion,
       } : {}),
@@ -188,6 +198,10 @@ export function MarketplaceSkillDetailPreview({ skill }: MarketplaceSkillDetailP
     void fetchMarketplaceSkillFileContent({
       sourceUrl: skill.sourceUrl,
       skillPath: skill.skillPath ?? "",
+      sourceSite: skill.sourceSite,
+      owner: skill.owner,
+      slug: skill.slug,
+      version: skill.version,
       relativePath: selectedPath,
       ...(skill.sourceSite === "skillhub" ? {
         sourceSite: skill.sourceSite,

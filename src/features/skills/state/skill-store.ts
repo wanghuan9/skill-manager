@@ -9,7 +9,7 @@ export type SkillManagementOwner = "skilldock" | "agent-skills-cli" | "external"
 export type ManagedSkillOwnerFilter = "all" | Exclude<SkillManagementOwner, "external">;
 
 export type SourceType = "github" | "gitlab" | "gitee" | "well-known" | "local" | "marketplace";
-export type MarketplaceSourceSite = "skills.sh" | "skillsmp" | "skillhub";
+export type MarketplaceSourceSite = "skills.sh" | "skillsmp" | "skillhub" | "clawhub";
 export type McpMarketplaceSourceSite = "MCP.Directory";
 export type PluginHostTool = "claude-code" | "cursor" | "codex";
 export type PluginKind = "plugin-repo" | "marketplace-root" | "standalone-assets" | "unknown";
@@ -174,10 +174,14 @@ export type SkillSummary = {
   entryPath?: string;
   canonicalPath?: string;
   managementOwner?: SkillManagementOwner;
-  updateDriver?: "git" | "agent-skills-cli" | "none";
+  updateDriver?: "git" | "agent-skills-cli" | "clawhub" | "none";
   skillEntries?: string[];
   pathError?: string;
   contentHash?: string;
+  marketplaceOwner?: string;
+  marketplaceSlug?: string;
+  marketplaceVersion?: string;
+  marketplaceContentHash?: string;
   tools: SkillToolSyncStatus[];
 };
 
@@ -249,11 +253,21 @@ export type MarketplaceSkill = {
   skillPath?: string;
   marketplaceUrl?: string | null;
   popularityLabel: string;
+  topicLabel?: string;
   avatarUrl?: string | null;
   installed?: boolean;
   updateAvailable?: boolean;
   currentVersion?: string;
   categoryLabel?: string;
+  owner?: string;
+  slug?: string;
+  version?: string;
+  installDriver?: "git" | "clawhub";
+};
+
+export type MarketplaceSkillsPage = {
+  skills: MarketplaceSkill[];
+  hasMore: boolean;
 };
 
 export type McpMarketplaceServer = {

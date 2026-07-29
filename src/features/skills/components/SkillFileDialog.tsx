@@ -676,6 +676,7 @@ export function SkillFileDialog({
   const canUseUpdatePreview = (
     Boolean(skill.gitLinked)
     || skill.updateDriver === "agent-skills-cli"
+    || skill.updateDriver === "clawhub"
     || skill.sourceType === "marketplace"
   )
     && !toolId
