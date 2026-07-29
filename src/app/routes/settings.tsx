@@ -171,16 +171,20 @@ export function SettingsRoute() {
   const { language, t } = useTranslate();
   const {
     appSettings,
+    connectGithubToken,
     defaultOpenToolId,
+    disconnectGithub,
+    githubConnection,
     openPathInFinder,
+    pollGithubDeviceFlow,
     setLanguage,
     setTheme,
-    setGithubToken,
     setSkillLibraryProvider,
     setMcpInstallActivation,
     setDefaultOpenToolId,
     setSkillInstallActivation,
     setSkillSourceViewStyle,
+    startGithubDeviceFlow,
     toolConfigs,
   } = useSkillWorkspace();
   const openToolOptions = useMemo(
@@ -202,9 +206,15 @@ export function SettingsRoute() {
   const [isOpeningStoragePath, setIsOpeningStoragePath] = useState(false);
   const [repoCacheSize, setRepoCacheSize] = useState<number | null>(null);
   const [isClearingCache, setIsClearingCache] = useState(false);
-  const [githubTokenDraft, setGithubTokenDraft] = useState(appSettings.githubToken);
+  const [githubTokenDraft, setGithubTokenDraft] = useState("");
   const [isGithubTokenVisible, setIsGithubTokenVisible] = useState(false);
-  const [isSavingGithubToken, setIsSavingGithubToken] = useState(false);
+  const [githubAuthMode, setGithubAuthMode] = useState<"idle" | "device" | "pat">("idle");
+  const [githubDeviceFlow, setGithubDeviceFlow] = useState<Awaited<
+    ReturnType<typeof startGithubDeviceFlow>
+  > | null>(null);
+  const [githubPollInterval, setGithubPollInterval] = useState(5_000);
+  const [githubPollVersion, setGithubPollVersion] = useState(0);
+  const [isConnectingGithub, setIsConnectingGithub] = useState(false);
   const [currentAppVersion, setCurrentAppVersion] = useState("");
   const [appUpdate, setAppUpdate] = useState<AppUpdateCheckResult | null>(null);
   const [appUpdateStatus, setAppUpdateStatus] = useState<
@@ -239,31 +249,96 @@ export function SettingsRoute() {
         : formatBytes(repoCacheSize);
   const canClearRepoCache = !isClearingCache && repoCacheSize !== null && repoCacheSize > 0;
   const normalizedGithubTokenDraft = githubTokenDraft.trim();
-  const isGithubTokenDirty = normalizedGithubTokenDraft !== appSettings.githubToken;
 
-  useEffect(() => {
-    setGithubTokenDraft(appSettings.githubToken);
-  }, [appSettings.githubToken]);
-
-  async function persistGithubToken(githubToken: string) {
-    if (isSavingGithubToken) {
+  async function handleStartGithubLogin() {
+    if (isConnectingGithub) {
       return;
     }
-    setIsSavingGithubToken(true);
+    setIsConnectingGithub(true);
     try {
-      await setGithubToken(githubToken);
+      const flow = await startGithubDeviceFlow(false);
+      setGithubDeviceFlow(flow);
+      setGithubPollInterval(Math.max(flow.interval, 1) * 1_000);
+      setGithubPollVersion(0);
+      setGithubAuthMode("device");
+      await openExternalLink(flow.verificationUri);
     } catch (error) {
       reportFailure(error, {
-        operation: "save_github_token",
-        fallbackMessage: t("settings.githubApi.saveFailed"),
+        operation: "start_github_login",
+        fallbackMessage: t("settings.github.connectFailed"),
       });
     } finally {
-      setIsSavingGithubToken(false);
+      setIsConnectingGithub(false);
     }
   }
 
-  async function handleSaveGithubToken() {
-    await persistGithubToken(normalizedGithubTokenDraft);
+  useEffect(() => {
+    if (!githubDeviceFlow || githubAuthMode !== "device") {
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      void pollGithubDeviceFlow(githubDeviceFlow.deviceCode).then((result) => {
+        if (result.status === "authorized") {
+          setGithubDeviceFlow(null);
+          setGithubAuthMode("idle");
+          return;
+        }
+        if (result.status === "slowDown") {
+          setGithubPollInterval((current) => current + 5_000);
+        }
+        setGithubPollVersion((current) => current + 1);
+      }).catch((error) => {
+        setGithubDeviceFlow(null);
+        setGithubAuthMode("idle");
+        reportFailure(error, {
+          operation: "poll_github_login",
+          fallbackMessage: t("settings.github.connectFailed"),
+        });
+      });
+    }, githubPollInterval);
+
+    return () => window.clearTimeout(timer);
+  }, [
+    githubAuthMode,
+    githubDeviceFlow,
+    githubPollInterval,
+    githubPollVersion,
+    pollGithubDeviceFlow,
+    reportFailure,
+    t,
+  ]);
+
+  async function handleConnectGithubToken() {
+    if (isConnectingGithub || !normalizedGithubTokenDraft) {
+      return;
+    }
+    setIsConnectingGithub(true);
+    try {
+      await connectGithubToken(normalizedGithubTokenDraft);
+      setGithubTokenDraft("");
+      setGithubAuthMode("idle");
+    } catch (error) {
+      reportFailure(error, {
+        operation: "connect_github_token",
+        fallbackMessage: t("settings.github.connectFailed"),
+      });
+    } finally {
+      setIsConnectingGithub(false);
+    }
+  }
+
+  async function handleDisconnectGithub() {
+    try {
+      await disconnectGithub();
+      setGithubDeviceFlow(null);
+      setGithubTokenDraft("");
+      setGithubAuthMode("idle");
+    } catch (error) {
+      reportFailure(error, {
+        operation: "disconnect_github",
+        fallbackMessage: t("settings.github.disconnectFailed"),
+      });
+    }
   }
 
   async function handleOpenGithubTokenCreation() {
@@ -879,76 +954,110 @@ export function SettingsRoute() {
         </section>
       </section>
 
-      <section className="settings-group">
+      <section id="settings-github-api" className="settings-group">
         <div className="settings-group__heading">
           <span className="settings-group__bar" aria-hidden="true" />
           <h2 className="settings-group__title">{t("settings.group.github")}</h2>
         </div>
-        <div className="panel-card placeholder-panel settings-panel settings-panel--git-account">
-          <div className="settings-row settings-row--account">
-            <span className="settings-row__title">{t("settings.github.account.provider")}</span>
-            <span>{t("settings.github.account.placeholder")}</span>
-            <span className="status-badge tone-info">{t("settings.github.account.badge")}</span>
-          </div>
-        </div>
-      </section>
-
-      <section id="settings-github-api" className="settings-group">
-        <div className="settings-group__heading">
-          <span className="settings-group__bar" aria-hidden="true" />
-          <h2 className="settings-group__title">{t("settings.group.githubApi")}</h2>
-        </div>
-        <div className="panel-card settings-panel settings-panel--github-api">
-          <div className="settings-form-list">
-            <div className="settings-form-item settings-form-item--github-token">
-              <div className="settings-form-item__copy">
-                <div className="settings-github-token-title-row">
-                  <span className="settings-form-item__title">{t("settings.githubApi.provider")}</span>
-                  <span
-                    className={`status-badge ${appSettings.githubToken ? "tone-success" : "tone-info"}`}
-                  >
+        <div className="panel-card settings-panel settings-panel--github-api settings-github-connect">
+          {githubConnection.connected ? (
+            <div className="settings-github-account">
+              <div className="settings-github-account__identity">
+                {githubConnection.avatarUrl ? (
+                  <img
+                    className="settings-github-account__avatar"
+                    src={githubConnection.avatarUrl}
+                    alt=""
+                  />
+                ) : null}
+                <div className="settings-form-item__copy">
+                  <div className="settings-github-token-title-row">
+                    <span className="settings-form-item__title">{githubConnection.username}</span>
+                    <span className="status-badge tone-success">
+                      {t("settings.github.connected")}
+                    </span>
+                  </div>
+                  <span className="settings-form-item__description">
                     {t(
-                      appSettings.githubToken
-                        ? "settings.githubApi.configured"
-                        : "settings.githubApi.notConfigured",
+                      githubConnection.authMethod === "oauth"
+                        ? "settings.github.connectedOauth"
+                        : "settings.github.connectedPat",
                     )}
                   </span>
+                  {githubConnection.warning ? (
+                    <span className="settings-form-item__description tone-warning">
+                      {githubConnection.warning}
+                    </span>
+                  ) : null}
+                </div>
+              </div>
+              <button
+                type="button"
+                className="secondary-button secondary-button--compact"
+                onClick={() => void handleDisconnectGithub()}
+              >
+                {t("settings.github.disconnect")}
+              </button>
+            </div>
+          ) : (
+            <div className="settings-github-connect__content">
+              <div className="settings-form-item__copy">
+                <div className="settings-github-token-title-row">
+                  <span className="settings-form-item__title">{t("settings.github.connectTitle")}</span>
+                  <span className="status-badge tone-info">{t("settings.github.notConnected")}</span>
                 </div>
                 <span className="settings-form-item__description">
-                  {t("settings.githubApi.description")}
+                  {t("settings.github.connectDescription")}
                 </span>
               </div>
-              <div className="settings-github-token-control">
-                <div className="settings-github-token-input-wrap">
-                  <div className="settings-github-token-input-shell">
-                    <input
-                      className="settings-github-token-input"
-                      aria-label={t("settings.githubApi.provider")}
-                      type={isGithubTokenVisible ? "text" : "password"}
-                      value={githubTokenDraft}
-                      placeholder={t("settings.githubApi.placeholder")}
-                      autoComplete="off"
-                      spellCheck={false}
-                      onChange={(event) => setGithubTokenDraft(event.target.value)}
-                    />
-                    <button
-                      type="button"
-                      className="settings-github-token-visibility"
-                      onClick={() => setIsGithubTokenVisible((current) => !current)}
-                    >
-                      {t(isGithubTokenVisible ? "settings.githubApi.hide" : "settings.githubApi.show")}
-                    </button>
-                  </div>
+              {githubAuthMode === "device" && githubDeviceFlow ? (
+                <div className="settings-github-device-flow">
+                  <span className="settings-form-item__description">
+                    {t("settings.github.deviceHint")}
+                  </span>
                   <button
                     type="button"
-                    className="primary-button primary-button--compact"
-                    disabled={isSavingGithubToken || !isGithubTokenDirty}
-                    onClick={() => void handleSaveGithubToken()}
+                    className="settings-github-device-flow__code"
+                    onClick={() => void openExternalLink(githubDeviceFlow.verificationUri)}
                   >
-                    {t(isSavingGithubToken ? "settings.githubApi.saving" : "settings.githubApi.save")}
+                    {githubDeviceFlow.userCode}
                   </button>
+                  <span className="settings-form-item__description">
+                    {t("settings.github.waiting")}
+                  </span>
                 </div>
-                {!appSettings.githubToken ? (
+              ) : null}
+              {githubAuthMode === "pat" ? (
+                <div className="settings-github-token-control">
+                  <div className="settings-github-token-input-wrap">
+                    <div className="settings-github-token-input-shell">
+                      <input
+                        className="settings-github-token-input"
+                        aria-label={t("settings.githubApi.provider")}
+                        type={isGithubTokenVisible ? "text" : "password"}
+                        value={githubTokenDraft}
+                        placeholder={t("settings.githubApi.placeholder")}
+                        autoComplete="off"
+                        spellCheck={false}
+                        onChange={(event) => setGithubTokenDraft(event.target.value)}
+                      />
+                      <button
+                        type="button"
+                        className="settings-github-token-visibility"
+                        onClick={() => setIsGithubTokenVisible((current) => !current)}
+                      >
+                        {t(isGithubTokenVisible ? "settings.githubApi.hide" : "settings.githubApi.show")}
+                      </button>
+                    </div>
+                    <button
+                      type="button"
+                      className="primary-button primary-button--compact"
+                      disabled={isConnectingGithub || !normalizedGithubTokenDraft}
+                      onClick={() => void handleConnectGithubToken()}
+                    >
+                      {t(isConnectingGithub ? "settings.github.connecting" : "settings.github.connect")}
+                    </button>
+                  </div>
                   <div className="settings-github-token-helper">
                     <span>{t("settings.githubApi.generateHint")}</span>
                     <button
@@ -959,10 +1068,28 @@ export function SettingsRoute() {
                       {t("settings.githubApi.generate")}
                     </button>
                   </div>
-                ) : null}
-              </div>
+                </div>
+              ) : (
+                <div className="settings-github-connect__actions">
+                  <button
+                    type="button"
+                    className="primary-button primary-button--compact"
+                    disabled={isConnectingGithub || githubAuthMode === "device"}
+                    onClick={() => void handleStartGithubLogin()}
+                  >
+                    {t(isConnectingGithub ? "settings.github.connecting" : "settings.github.login")}
+                  </button>
+                  <button
+                    type="button"
+                    className="settings-github-token-generate"
+                    onClick={() => setGithubAuthMode("pat")}
+                  >
+                    {t("settings.github.usePat")}
+                  </button>
+                </div>
+              )}
             </div>
-          </div>
+          )}
         </div>
       </section>
     </div>

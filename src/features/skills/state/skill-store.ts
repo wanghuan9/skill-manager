@@ -366,7 +366,29 @@ export type AppSettings = {
   language: AppLanguage;
   languageSource: AppLanguageSource;
   theme: AppTheme;
-  githubToken: string;
+};
+
+export type GithubConnection = {
+  connected: boolean;
+  authMethod: string;
+  userId: number | null;
+  username: string;
+  avatarUrl: string;
+  credentialPersisted: boolean;
+  warning: string;
+};
+
+export type GithubDeviceFlowStart = {
+  deviceCode: string;
+  userCode: string;
+  verificationUri: string;
+  expiresIn: number;
+  interval: number;
+};
+
+export type GithubDevicePollResult = {
+  status: "pending" | "slowDown" | "authorized";
+  connection: GithubConnection | null;
 };
 
 export type AgentSkillsCliStatus = {

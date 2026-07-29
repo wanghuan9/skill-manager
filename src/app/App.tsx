@@ -554,6 +554,7 @@ function AppContent() {
   const {
     alignLocalWorkspaceState,
     appSettings,
+    githubConnection,
     githubRateLimitNoticeVersion,
     installedSkills,
     isStartupGitStateRefreshComplete,
@@ -666,7 +667,7 @@ function AppContent() {
   useEffect(() => {
     if (
       githubRateLimitNoticeVersion === 0
-      || appSettings.githubToken.trim().length > 0
+      || githubConnection.connected
       || hasShownGithubRateLimitPromptRef.current
     ) {
       return;
@@ -689,7 +690,7 @@ function AppContent() {
         });
       },
     });
-  }, [appSettings.githubToken, githubRateLimitNoticeVersion, notify, t]);
+  }, [githubConnection.connected, githubRateLimitNoticeVersion, notify, t]);
 
   const hasShownSkillUpdateNotificationRef = useRef(false);
   const activeDefinition =

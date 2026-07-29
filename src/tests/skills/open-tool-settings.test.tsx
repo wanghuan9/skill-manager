@@ -8,6 +8,7 @@ import * as appUpdateClient from "@/features/app-update/app-update-client";
 import {
   appSettingsFixture,
   gitAccountFixture,
+  githubConnectionFixture,
   installedSkillFixtures,
   localSkillFixtures,
   toolConfigFixtures,
@@ -32,11 +33,19 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   delete (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
+  Object.assign(githubConnectionFixture, {
+    connected: false,
+    authMethod: "",
+    userId: null,
+    username: "",
+    avatarUrl: "",
+    credentialPersisted: false,
+    warning: "",
+  });
 });
 
 test("prompts for a GitHub Token after a rate-limited Agent CLI refresh", async () => {
   vi.mocked(isTauri).mockReturnValue(true);
-  appSettingsFixture.githubToken = "";
   vi.mocked(invoke).mockImplementation(async (command) => {
     switch (command) {
       case "list_startup_installed_skills":
@@ -56,6 +65,8 @@ test("prompts for a GitHub Token after a rate-limited Agent CLI refresh", async 
         return gitAccountFixture;
       case "get_app_settings":
         return appSettingsFixture;
+      case "get_github_connection":
+        return githubConnectionFixture;
       default:
         throw new Error(`Unexpected command: ${command}`);
     }
@@ -70,10 +81,10 @@ test("prompts for a GitHub Token after a rate-limited Agent CLI refresh", async 
   expect(
     await screen.findByText("GitHub API 请求受限，配置 Token 可提高访问限额。"),
   ).toBeInTheDocument();
-  await userEvent.click(screen.getByRole("button", { name: "去配置" }));
+  await userEvent.click(screen.getByRole("button", { name: "连接 GitHub" }));
 
-  expect(await screen.findByRole("heading", { name: "GitHub API" })).toBeInTheDocument();
-  expect(screen.getByLabelText("GitHub Token")).toBeInTheDocument();
+  expect(await screen.findByRole("heading", { name: "GitHub 账号" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "登录 GitHub" })).toBeInTheDocument();
 });
 
 test("allows selecting default open tool in settings", async () => {
@@ -133,19 +144,18 @@ test("allows selecting default open tool in settings", async () => {
   expect(screen.queryByText("CodeBuddy")).not.toBeInTheDocument();
 });
 
-test("saves, reveals, and clears an optional GitHub Token", async () => {
+test("connects and disconnects GitHub with a Personal Access Token", async () => {
   const user = userEvent.setup();
   const openSpy = vi.spyOn(window, "open").mockImplementation(() => null);
   window.localStorage.clear();
-  appSettingsFixture.githubToken = "";
   render(<App />);
 
   await user.click(screen.getByRole("button", { name: /设置/ }));
   expect(screen.getByRole("heading", { name: "GitHub 账号" })).toBeInTheDocument();
-  expect(screen.getByRole("heading", { name: "GitHub API" })).toBeInTheDocument();
+  expect(screen.getByText("未连接")).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "使用 Personal Access Token" }));
   const tokenInput = screen.getByLabelText("GitHub Token");
   expect(tokenInput).toHaveAttribute("type", "password");
-  expect(screen.getByText("未配置")).toBeInTheDocument();
   expect(screen.getByText("没有 Token？")).toBeInTheDocument();
   await user.click(screen.getByRole("button", { name: "前往 GitHub 生成 ↗" }));
   expect(openSpy).toHaveBeenCalledWith(
@@ -157,21 +167,17 @@ test("saves, reveals, and clears an optional GitHub Token", async () => {
   await user.type(tokenInput, "github_pat_example");
   await user.click(screen.getByRole("button", { name: "显示" }));
   expect(tokenInput).toHaveAttribute("type", "text");
-  await user.click(screen.getByRole("button", { name: "保存" }));
+  await user.click(screen.getByRole("button", { name: "连接" }));
 
-  expect(await screen.findByText("已配置")).toBeInTheDocument();
-  expect(appSettingsFixture.githubToken).toBe("github_pat_example");
+  expect(await screen.findByText("octocat")).toBeInTheDocument();
+  expect(screen.getByText("已连接")).toBeInTheDocument();
+  expect(githubConnectionFixture.connected).toBe(true);
   expect(screen.queryByText("没有 Token？")).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "前往 GitHub 生成 ↗" })).not.toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: "清除" })).not.toBeInTheDocument();
 
-  await user.clear(tokenInput);
-  await user.click(screen.getByRole("button", { name: "保存" }));
-  expect(await screen.findByText("未配置")).toBeInTheDocument();
-  expect(tokenInput).toHaveValue("");
-  expect(appSettingsFixture.githubToken).toBe("");
-  expect(screen.getByText("没有 Token？")).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "前往 GitHub 生成 ↗" })).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "退出连接" }));
+  expect(await screen.findByText("未连接")).toBeInTheDocument();
+  expect(githubConnectionFixture.connected).toBe(false);
 });
 
 test("applies the shared card preference without locking individual page layouts", async () => {

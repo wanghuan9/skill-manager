@@ -6328,7 +6328,7 @@ pub async fn get_marketplace_skill_file_browser(
     let source = parse_github_marketplace_source(&source_url)?;
     let cache_key = marketplace_skill_root_cache_key(&source, &skill_path);
     let client = marketplace_http_client()?;
-    let github_token = load_app_settings().github_token;
+    let github_token = crate::github_credentials::active_token().unwrap_or_default();
     let mut last_error = match fetch_marketplace_github_tree(&client, &source, &github_token).await
     {
         Ok(tree_entries) => {
@@ -6462,7 +6462,7 @@ pub async fn get_marketplace_skill_file_content(
     let cache_key = marketplace_skill_root_cache_key(&source, &skill_path);
     let relative_path = normalize_marketplace_file_path(&relative_path, false)?;
     let client = marketplace_http_client()?;
-    let github_token = load_app_settings().github_token;
+    let github_token = crate::github_credentials::active_token().unwrap_or_default();
     if let Some(cached_root) = cached_marketplace_skill_root(&cache_key) {
         return fetch_marketplace_skill_file_document(
             &client,
@@ -6714,7 +6714,7 @@ pub async fn refresh_git_states() -> GitStateRefreshResult {
                     (skill.name.clone(), PathBuf::from(path))
                 })
                 .collect::<BTreeMap<_, _>>();
-            let github_token = load_app_settings().github_token;
+            let github_token = crate::github_credentials::active_token().unwrap_or_default();
             let (refreshed_skills, github_rate_limited) =
                 match crate::agent_skills_cli::detect_global_updates(
                     &agent_skill_paths,
@@ -8877,7 +8877,6 @@ mod tests {
             language: "zh-CN".into(),
             language_source: "manual".into(),
             theme: "system".into(),
-            github_token: String::new(),
         }
     }
 

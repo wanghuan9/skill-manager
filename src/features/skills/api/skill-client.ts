@@ -6,6 +6,7 @@ import {
   appSettingsFixture,
   cliToolFixtures,
   gitAccountFixture,
+  githubConnectionFixture,
   installedSkillFixtures,
   localSkillFixtures,
   localInstallSkillCandidateFixtures,
@@ -33,6 +34,9 @@ import type {
   GitAccountSummary,
   GitBranchOption,
   GitChangeFile,
+  GithubConnection,
+  GithubDeviceFlowStart,
+  GithubDevicePollResult,
   LocalSkillCandidate,
   LocalInstallSkillCandidate,
   MarketplaceSkill,
@@ -1293,6 +1297,70 @@ export async function fetchAppSettings(): Promise<AppSettings> {
       settings.agentSkillsCompatibilityEnabled ?? settings.skillLibraryProvider === "agent-skills",
     agentSkillsCompatibilityConfigured: settings.agentSkillsCompatibilityConfigured ?? true,
   };
+}
+
+export async function fetchGithubConnection(): Promise<GithubConnection> {
+  const connection = await invokeOrFallback<GithubConnection | null>(
+    "get_github_connection",
+    {},
+    githubConnectionFixture,
+  );
+  return {
+    ...githubConnectionFixture,
+    ...(connection ?? {}),
+  };
+}
+
+export async function startGithubDeviceFlow(backupScope = false): Promise<GithubDeviceFlowStart> {
+  return invoke("start_github_device_flow", { backupScope });
+}
+
+export async function pollGithubDeviceFlow(deviceCode: string): Promise<GithubDevicePollResult> {
+  return invoke("poll_github_device_flow", { deviceCode });
+}
+
+export async function connectGithubToken(token: string): Promise<GithubConnection> {
+  if (shouldUseFixtureData()) {
+    Object.assign(githubConnectionFixture, {
+      connected: token.trim().length > 0,
+      authMethod: "pat",
+      userId: 1,
+      username: "octocat",
+      avatarUrl: "",
+      credentialPersisted: true,
+      warning: "",
+    });
+    return { ...githubConnectionFixture };
+  }
+  return invoke("connect_github_token", { token });
+}
+
+export async function disconnectGithub(): Promise<GithubConnection> {
+  if (shouldUseFixtureData()) {
+    Object.assign(githubConnectionFixture, {
+      connected: false,
+      authMethod: "",
+      userId: null,
+      username: "",
+      avatarUrl: "",
+      credentialPersisted: false,
+      warning: "",
+    });
+    return { ...githubConnectionFixture };
+  }
+  return invoke("disconnect_github", {});
+}
+
+export async function subscribeGithubConnectionChanges(
+  handler: (connection: GithubConnection) => void,
+): Promise<UnlistenFn> {
+  if (shouldUseFixtureData()) {
+    return () => undefined;
+  }
+
+  return listen<GithubConnection>("github-connection-changed", (event) => {
+    handler(event.payload);
+  });
 }
 
 export async function fetchAgentSkillsCliStatus(): Promise<AgentSkillsCliStatus> {

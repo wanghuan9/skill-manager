@@ -4,7 +4,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-use crate::models::{AppSettings, SkillInstanceMetadata, SkillSummary, WorkspacePersistence};
+use crate::models::{
+    AppSettings, GithubConnectionMetadata, SkillInstanceMetadata, SkillSummary,
+    WorkspacePersistence,
+};
 use crate::workspace::{
     display_path_value, home_dir_option, managed_skill_library_root, managed_workspace_root_option,
     normalize_skill_library_provider, normalize_workspace_path, remove_legacy_workspace_file,
@@ -53,8 +56,33 @@ struct SettingsPersistence {
     language_source: String,
     #[serde(default)]
     theme: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     github_token: String,
+    #[serde(default)]
+    github_connection: GithubConnectionMetadata,
+}
+
+fn load_settings_persistence() -> SettingsPersistence {
+    settings_file_candidates()
+        .into_iter()
+        .find_map(|path| fs::read_to_string(path).ok())
+        .and_then(|content| serde_json::from_str::<SettingsPersistence>(&content).ok())
+        .unwrap_or_default()
+}
+
+fn save_settings_persistence(persistence: &SettingsPersistence) -> Result<(), String> {
+    let settings_file =
+        settings_file_path().ok_or_else(|| "无法定位用户目录，不能保存设置".to_string())?;
+    let parent_dir = settings_file
+        .parent()
+        .ok_or_else(|| "设置文件目录无效".to_string())?;
+    fs::create_dir_all(parent_dir).map_err(|error| format!("创建设置目录失败: {error}"))?;
+    let payload = serde_json::to_string_pretty(persistence)
+        .map_err(|error| format!("序列化设置失败: {error}"))?;
+    atomic_write_workspace_file(&settings_file, &payload)
+        .map_err(|error| format!("写入设置文件失败: {error}"))?;
+    remove_legacy_workspace_file(SETTINGS_FILE_NAME);
+    Ok(())
 }
 
 pub fn load_installed_skills(default_skills: &[SkillSummary]) -> Vec<SkillSummary> {
@@ -399,11 +427,7 @@ pub fn load_app_settings() -> AppSettings {
         .map(|path| path.to_string_lossy().to_string())
         .unwrap_or_default();
 
-    let persisted = settings_file_candidates()
-        .into_iter()
-        .find_map(|path| fs::read_to_string(path).ok())
-        .and_then(|content| serde_json::from_str::<SettingsPersistence>(&content).ok())
-        .unwrap_or_default();
+    let persisted = load_settings_persistence();
 
     let legacy_agent_skills_enabled =
         normalize_skill_library_provider(&persisted.skill_library_provider)
@@ -442,8 +466,27 @@ pub fn load_app_settings() -> AppSettings {
         language: normalize_app_language(&persisted.language).to_string(),
         language_source: normalize_app_language_source(&persisted.language_source).to_string(),
         theme: normalize_app_theme(&persisted.theme).to_string(),
-        github_token: persisted.github_token.trim().to_string(),
     }
+}
+
+pub fn load_legacy_github_token() -> String {
+    load_settings_persistence().github_token.trim().to_string()
+}
+
+pub fn load_github_connection_metadata() -> GithubConnectionMetadata {
+    load_settings_persistence().github_connection
+}
+
+pub fn save_github_connection_metadata(
+    metadata: GithubConnectionMetadata,
+    clear_legacy_token: bool,
+) -> Result<(), String> {
+    let mut persistence = load_settings_persistence();
+    persistence.github_connection = metadata;
+    if clear_legacy_token {
+        persistence.github_token.clear();
+    }
+    save_settings_persistence(&persistence)
 }
 
 pub fn save_app_settings(input: AppSettings) -> Result<AppSettings, String> {
@@ -484,8 +527,8 @@ pub fn save_app_settings(input: AppSettings) -> Result<AppSettings, String> {
         language: normalize_app_language(&input.language).to_string(),
         language_source: normalize_app_language_source(&input.language_source).to_string(),
         theme: normalize_app_theme(&input.theme).to_string(),
-        github_token: input.github_token.trim().to_string(),
     };
+    let existing = load_settings_persistence();
     let persistence = SettingsPersistence {
         skill_library_provider: normalized.skill_library_provider.clone(),
         agent_skills_compatibility_enabled: normalized
@@ -498,15 +541,13 @@ pub fn save_app_settings(input: AppSettings) -> Result<AppSettings, String> {
         language: normalized.language.clone(),
         language_source: normalized.language_source.clone(),
         theme: normalized.theme.clone(),
-        github_token: normalized.github_token.clone(),
+        github_token: existing.github_token.trim().to_string(),
+        github_connection: existing.github_connection,
     };
-    let payload = serde_json::to_string_pretty(&persistence)
-        .map_err(|error| format!("序列化设置失败: {error}"))?;
 
     fs::create_dir_all(&normalized.skill_library_path)
         .map_err(|error| format!("创建 Skill 托管目录失败: {error}"))?;
-    fs::write(&settings_file, payload).map_err(|error| format!("写入设置文件失败: {error}"))?;
-    remove_legacy_workspace_file(SETTINGS_FILE_NAME);
+    save_settings_persistence(&persistence)?;
     Ok(normalized)
 }
 
@@ -929,15 +970,16 @@ mod tests {
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use crate::models::SkillSummary;
     use crate::models::ToolSyncStatus;
     use crate::models::WorkspacePersistence;
+    use crate::models::{GithubConnectionMetadata, SkillSummary};
     use crate::workspace::TEST_ENV_LOCK;
 
     use super::{
-        hydrate_skill_description, load_app_settings, load_installed_skills, normalize_app_theme,
-        normalize_skill_source_view_style, save_app_settings, save_installed_skills,
-        scan_local_skill_candidates,
+        hydrate_skill_description, load_app_settings, load_github_connection_metadata,
+        load_installed_skills, load_legacy_github_token, normalize_app_theme,
+        normalize_skill_source_view_style, save_app_settings, save_github_connection_metadata,
+        save_installed_skills, scan_local_skill_candidates,
     };
 
     fn with_temp_home<F>(run: F)
@@ -1152,21 +1194,39 @@ mod tests {
     }
 
     #[test]
-    fn saves_and_loads_trimmed_github_token() {
+    fn preserves_legacy_github_token_until_connection_metadata_is_saved() {
         with_temp_home(|temp_home| {
             let workspace_root = temp_home.join(".skilldock");
             fs::create_dir_all(&workspace_root).expect("create workspace");
+            let settings_path = workspace_root.join("settings.json");
+            fs::write(
+                &settings_path,
+                "{\"theme\":\"dark\",\"githubToken\":\"  github_pat_example  \"}",
+            )
+            .expect("write legacy settings");
 
             let mut settings = load_app_settings();
-            assert!(settings.github_token.is_empty());
-            settings.github_token = "  github_pat_example  ".into();
-            let saved = save_app_settings(settings).expect("save GitHub token");
-            let content = fs::read_to_string(workspace_root.join("settings.json"))
-                .expect("read saved settings");
-
-            assert_eq!(saved.github_token, "github_pat_example");
-            assert_eq!(load_app_settings().github_token, "github_pat_example");
+            assert_eq!(load_legacy_github_token(), "github_pat_example");
+            settings.theme = "light".into();
+            save_app_settings(settings).expect("save ordinary settings");
+            let content = fs::read_to_string(&settings_path).expect("read saved settings");
             assert!(content.contains("\"githubToken\": \"github_pat_example\""));
+
+            save_github_connection_metadata(
+                GithubConnectionMetadata {
+                    auth_method: "pat".into(),
+                    user_id: Some(42),
+                    username: "octocat".into(),
+                    avatar_url: "https://example.com/avatar.png".into(),
+                    credential_persisted: true,
+                },
+                true,
+            )
+            .expect("save GitHub connection metadata");
+            let migrated_content =
+                fs::read_to_string(settings_path).expect("read migrated settings");
+            assert!(!migrated_content.contains("githubToken"));
+            assert_eq!(load_github_connection_metadata().username, "octocat");
         });
     }
 

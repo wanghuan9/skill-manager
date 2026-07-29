@@ -8752,6 +8752,49 @@ button.settings-form-item:disabled {
   text-decoration: underline;
 }
 
+.settings-github-connect__content,
+.settings-github-account {
+  display: flex;
+  min-height: 76px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 16px 20px;
+}
+
+.settings-github-connect__actions,
+.settings-github-account__identity,
+.settings-github-device-flow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.settings-github-account__avatar {
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px var(--line);
+}
+
+.settings-github-device-flow {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.settings-github-device-flow__code {
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--line));
+  border-radius: 9px;
+  padding: 7px 12px;
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface-strong));
+  color: var(--heading);
+  font: inherit;
+  font-size: 0.9rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  cursor: pointer;
+}
+
 .settings-form-item__control {
   width: 220px;
   max-width: 100%;

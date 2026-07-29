@@ -841,7 +841,16 @@ export const appSettingsFixture: AppSettings = {
   language: "zh-CN",
   languageSource: "user",
   theme: "system",
-  githubToken: "",
+};
+
+export const githubConnectionFixture = {
+  connected: false,
+  authMethod: "",
+  userId: null,
+  username: "",
+  avatarUrl: "",
+  credentialPersisted: false,
+  warning: "",
 };
 
 export const pushTargetFixtures: Record<string, PushTargetSnapshot> = {

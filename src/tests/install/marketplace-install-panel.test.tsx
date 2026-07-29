@@ -357,7 +357,7 @@ test("shows the basic preview notice when GitHub API is rate limited", async () 
     <NotificationProvider>
       <MarketplaceInstallPanel
         activeSourceSite="skills.sh"
-        sourceTabs={["skills.sh", "skillsmp"]}
+        sourceTabs={["skills.sh", "clawhub"]}
         marketplaceSkills={[skill]}
         onSourceChange={vi.fn()}
         searchQuery=""

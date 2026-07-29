@@ -369,8 +369,28 @@ pub struct AppSettings {
     pub language: String,
     pub language_source: String,
     pub theme: String,
-    #[serde(default)]
-    pub github_token: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GithubConnectionMetadata {
+    pub auth_method: String,
+    pub user_id: Option<u64>,
+    pub username: String,
+    pub avatar_url: String,
+    pub credential_persisted: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GithubConnection {
+    pub connected: bool,
+    pub auth_method: String,
+    pub user_id: Option<u64>,
+    pub username: String,
+    pub avatar_url: String,
+    pub credential_persisted: bool,
+    pub warning: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

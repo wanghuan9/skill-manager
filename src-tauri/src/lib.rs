@@ -3,6 +3,9 @@ mod clawhub_market;
 mod commands;
 mod diagnostics;
 mod git_state;
+mod github_api;
+mod github_connection;
+mod github_credentials;
 mod library;
 mod mcp_manager;
 mod models;
@@ -42,6 +45,10 @@ pub fn run() {
                 .plugin(tauri_plugin_updater::Builder::new().build())?;
             let _ = library::migrate_legacy_skill_symlinks_from_all_tools();
             let _ = library::remove_reserved_workspace_symlinks_from_all_tools();
+            let app_handle = app.handle().clone();
+            tauri::async_runtime::spawn(github_connection::migrate_legacy_token_on_startup(
+                app_handle,
+            ));
             if let Err(error) = skill_watcher::start_skill_library_watcher(app.handle().clone()) {
                 log::warn!("Failed to start skill library watcher: {error}");
             }
@@ -66,6 +73,11 @@ pub fn run() {
             commands::list_tool_configs,
             commands::get_git_account_summary,
             commands::get_app_settings,
+            github_connection::get_github_connection,
+            github_connection::start_github_device_flow,
+            github_connection::poll_github_device_flow,
+            github_connection::connect_github_token,
+            github_connection::disconnect_github,
             commands::get_agent_skills_cli_status,
             commands::update_app_settings,
             commands::detect_preferred_app_language,
