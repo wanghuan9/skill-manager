@@ -48,7 +48,7 @@ test("renders install-source and repository install panels", async () => {
   expect(screen.getByRole("tab", { name: "Plugin" })).toBeInTheDocument();
   expect(screen.getByRole("tab", { name: "市场安装" })).toBeInTheDocument();
   expect(screen.getByRole("tab", { name: "skills.sh" })).toBeInTheDocument();
-  expect(screen.getByRole("tab", { name: "skillsmp" })).toBeInTheDocument();
+  expect(screen.getByRole("tab", { name: "clawhub" })).toBeInTheDocument();
   expect(screen.queryByText("安装后默认应用到所有已安装工具")).not.toBeInTheDocument();
   await userEvent.click(screen.getByRole("tab", { name: "Git 安装" }));
   expect(screen.getByRole("textbox", { name: "Git 仓库地址" })).toBeInTheDocument();
@@ -1621,7 +1621,7 @@ test("keeps the current MCP list visible until pending search results return", a
 test("keeps the current skill list visible until pending search results return", async () => {
   window.localStorage.clear();
   const originalFetchMarketplaceSkillsByPage = skillClient.fetchMarketplaceSkillsByPage;
-  let resolvePendingSearch: ((value: MarketplaceSkill[]) => void) | null = null;
+  let resolvePendingSearch: ((value: { skills: MarketplaceSkill[]; hasMore: boolean }) => void) | null = null;
   const fetchMarketplaceSkillsByPageSpy = vi
     .spyOn(skillClient, "fetchMarketplaceSkillsByPage")
     .mockImplementation((input) => {
@@ -1648,11 +1648,17 @@ test("keeps the current skill list visible until pending search results return",
   expect(screen.getByText("workflow-critic")).toBeInTheDocument();
   expect(screen.queryByText("正在搜索可安装技能")).not.toBeInTheDocument();
 
-  const finishPendingSearch = resolvePendingSearch as ((value: MarketplaceSkill[]) => void) | null;
+  const finishPendingSearch = resolvePendingSearch as ((value: {
+    skills: MarketplaceSkill[];
+    hasMore: boolean;
+  }) => void) | null;
   if (!finishPendingSearch) {
     throw new Error("pending skill marketplace search was not triggered");
   }
-  finishPendingSearch(marketplaceSkillFixtures.filter((skill) => skill.name === "workflow-critic"));
+  finishPendingSearch({
+    skills: marketplaceSkillFixtures.filter((skill) => skill.name === "workflow-critic"),
+    hasMore: false,
+  });
 
   await waitFor(() => {
     expect(screen.getByText("workflow-critic")).toBeInTheDocument();
@@ -2001,7 +2007,7 @@ test("searches marketplace skills only in the active source when current scope i
   await clickNavInstall();
 
   await userEvent.click(screen.getByRole("button", { name: "当前" }));
-  await userEvent.type(screen.getByRole("searchbox", { name: "搜索 skill" }), "skills");
+  await userEvent.type(screen.getByRole("searchbox", { name: "搜索 skill" }), "i");
 
   await waitFor(() => {
     expect(screen.getAllByRole("heading", { level: 3 }).map((item) => item.textContent)).toEqual([
@@ -2010,7 +2016,7 @@ test("searches marketplace skills only in the active source when current scope i
     ]);
   });
 
-  await userEvent.click(screen.getByRole("tab", { name: "skillsmp" }));
+  await userEvent.click(screen.getByRole("tab", { name: "clawhub" }));
 
   await waitFor(() => {
     expect(screen.getAllByRole("heading", { level: 3 }).map((item) => item.textContent)).toEqual([
@@ -2024,7 +2030,7 @@ test("sorts marketplace search results by popularity across sources", async () =
   render(<App />);
   await clickNavInstall();
 
-  await userEvent.type(screen.getByRole("searchbox", { name: "搜索 skill" }), "skills");
+  await userEvent.type(screen.getByRole("searchbox", { name: "搜索 skill" }), "i");
 
   await waitFor(() => {
     expect(screen.getAllByRole("heading", { level: 3 }).map((item) => item.textContent)).toEqual([
@@ -2045,10 +2051,10 @@ test("keeps source results isolated and preserves the skills.sh display order", 
     .map((item) => item.textContent);
   expect(skillsShCards).toEqual(["workflow-critic", "design-system-reviewer"]);
 
-  await userEvent.click(screen.getByRole("tab", { name: "skillsmp" }));
+  await userEvent.click(screen.getByRole("tab", { name: "clawhub" }));
 
-  const skillsMpCards = await screen.findAllByRole("heading", { level: 3 });
-  expect(skillsMpCards.map((item) => item.textContent)).toEqual(["release-guardian", "repo-guardian"]);
+  const clawhubCards = await screen.findAllByRole("heading", { level: 3 });
+  expect(clawhubCards.map((item) => item.textContent)).toEqual(["release-guardian", "repo-guardian"]);
   expect(screen.queryByText("workflow-critic")).not.toBeInTheDocument();
 
   await userEvent.click(screen.getByRole("tab", { name: "skills.sh" }));

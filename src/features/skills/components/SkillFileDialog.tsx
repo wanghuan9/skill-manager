@@ -672,7 +672,11 @@ export function SkillFileDialog({
   const [browserRefreshVersion, setBrowserRefreshVersion] = useState(0);
   const [pendingRevert, setPendingRevert] = useState<PendingSkillRevert | null>(null);
   const canUseChanges = Boolean(skill.gitLinked) && !toolId && !readOnly;
-  const canUseUpdatePreview = (Boolean(skill.gitLinked) || skill.updateDriver === "agent-skills-cli")
+  const canUseUpdatePreview = (
+    Boolean(skill.gitLinked)
+    || skill.updateDriver === "agent-skills-cli"
+    || skill.updateDriver === "clawhub"
+  )
     && !toolId
     && !readOnly;
   const hasLocalChanges = skill.localChangeCount == null || skill.localChangeCount > 0;

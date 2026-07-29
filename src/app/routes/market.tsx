@@ -29,7 +29,7 @@ const installCategories: { key: InstallCategory; labelKey: "install.category.ski
   { key: "plugin", labelKey: "install.category.plugin" },
 ];
 
-const sourceTabs: MarketplaceSourceSite[] = ["skills.sh", "skillsmp"];
+const sourceTabs: MarketplaceSourceSite[] = ["skills.sh", "clawhub"];
 
 const MARKET_INSTALL_SCROLL_SELECTOR = ".market-install-scroll";
 
@@ -99,6 +99,8 @@ export function MarketRoute(props: MarketRouteProps) {
     loadMoreMarketplaceSkills,
     searchMarketplaceSkills,
     isMarketplaceLoadingBySource,
+    marketplaceErrorBySource,
+    marketplaceSearchError,
     isSearchLoading,
     hasMoreMarketplaceSkillsBySource,
   } = useSkillWorkspace();
@@ -120,7 +122,7 @@ export function MarketRoute(props: MarketRouteProps) {
   const searchMarketplaceRef = useRef(searchMarketplaceSkills);
   const lastTabSkillsRef = useRef<Record<MarketplaceSourceSite, MarketplaceSkill[]>>({
     "skills.sh": [],
-    skillsmp: [],
+    clawhub: [],
   });
   const normalizedSearchQuery = debouncedSearchQuery.trim();
   const isSearching = normalizedSearchQuery.length > 0;
@@ -196,7 +198,7 @@ export function MarketRoute(props: MarketRouteProps) {
     if (activeInstallTab !== "market" || isSearching) {
       return;
     }
-    void loadInitialRef.current(activeSourceSite);
+    void loadInitialRef.current(activeSourceSite).catch(() => undefined);
   }, [activeInstallTab, activeSourceSite, isSearching, loadInitialRef]);
 
   const isMarketplaceLoadingRef = useRef(isMarketplaceLoadingBySource);
@@ -290,6 +292,7 @@ export function MarketRoute(props: MarketRouteProps) {
                 isInitialLoading={isMarketplaceInitializing}
                 isLoadingMore={isSearching ? false : isMarketplaceLoading}
                 hasMore={isSearching ? false : hasMoreMarketplaceSkills}
+                errorMessage={isSearching ? marketplaceSearchError : marketplaceErrorBySource[activeSourceSite]}
                 installedMarketplaceSkillIds={installedMarketplaceSkillIds}
                 onLoadMore={() => {
                   if (isSearching || isMarketplaceLoading || !hasMoreMarketplaceSkills) {

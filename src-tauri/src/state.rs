@@ -282,6 +282,10 @@ fn build_agent_skill_summary(
             update_driver: update_driver.into(),
             skill_entries: vec![entry_path.to_string_lossy().to_string()],
             path_error: path_error.to_string(),
+            marketplace_owner: String::new(),
+            marketplace_slug: String::new(),
+            marketplace_version: String::new(),
+            marketplace_content_hash: String::new(),
         },
         tools: Vec::new(),
     }
