@@ -37,7 +37,7 @@ import {
   readGlobalListGridViewPreference,
 } from "@/features/skills/utils/list-grid-view-preference";
 
-const GITHUB_TOKEN_CREATION_URL = "https://github.com/settings/tokens/new?description=SkillDock";
+const GITHUB_TOKEN_CREATION_URL = "https://github.com/settings/tokens/new?description=SkillDock&scopes=repo";
 
 function FolderOpenIcon() {
   return (
@@ -256,7 +256,7 @@ export function SettingsRoute() {
     }
     setIsConnectingGithub(true);
     try {
-      const flow = await startGithubDeviceFlow(false);
+      const flow = await startGithubDeviceFlow(true);
       setGithubDeviceFlow(flow);
       setGithubPollInterval(Math.max(flow.interval, 1) * 1_000);
       setGithubPollVersion(0);

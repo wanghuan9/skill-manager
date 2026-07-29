@@ -821,6 +821,7 @@ fn build_installed_skill(
         owner_plugin_id: String::new(),
         owner_plugin_name: String::new(),
         instance: crate::models::SkillInstanceMetadata {
+            backup_id: String::new(),
             entry_path: target.to_string_lossy().to_string(),
             canonical_path: target.to_string_lossy().to_string(),
             management_owner: "skilldock".to_string(),

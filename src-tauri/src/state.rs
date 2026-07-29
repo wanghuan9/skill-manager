@@ -5,8 +5,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 
 use crate::models::{
-    AppSettings, GithubConnectionMetadata, SkillInstanceMetadata, SkillSummary,
-    WorkspacePersistence,
+    AppSettings, GithubBackupSettings, GithubConnectionMetadata, SkillInstanceMetadata,
+    SkillSummary, WorkspacePersistence,
 };
 use crate::workspace::{
     display_path_value, home_dir_option, managed_skill_library_root, managed_workspace_root_option,
@@ -60,6 +60,8 @@ struct SettingsPersistence {
     github_token: String,
     #[serde(default)]
     github_connection: GithubConnectionMetadata,
+    #[serde(default)]
+    github_backup: GithubBackupSettings,
 }
 
 fn load_settings_persistence() -> SettingsPersistence {
@@ -304,6 +306,7 @@ fn build_agent_skill_summary(
         owner_plugin_id: String::new(),
         owner_plugin_name: String::new(),
         instance: SkillInstanceMetadata {
+            backup_id: String::new(),
             entry_path: entry_path.to_string_lossy().to_string(),
             canonical_path: canonical_path
                 .map(|path| path.to_string_lossy().to_string())
@@ -489,6 +492,16 @@ pub fn save_github_connection_metadata(
     save_settings_persistence(&persistence)
 }
 
+pub fn load_github_backup_settings() -> GithubBackupSettings {
+    load_settings_persistence().github_backup
+}
+
+pub fn save_github_backup_settings(settings: GithubBackupSettings) -> Result<(), String> {
+    let mut persistence = load_settings_persistence();
+    persistence.github_backup = settings;
+    save_settings_persistence(&persistence)
+}
+
 pub fn save_app_settings(input: AppSettings) -> Result<AppSettings, String> {
     let settings_file =
         settings_file_path().ok_or_else(|| "无法定位用户目录，不能保存设置".to_string())?;
@@ -543,6 +556,7 @@ pub fn save_app_settings(input: AppSettings) -> Result<AppSettings, String> {
         theme: normalized.theme.clone(),
         github_token: existing.github_token.trim().to_string(),
         github_connection: existing.github_connection,
+        github_backup: existing.github_backup,
     };
 
     fs::create_dir_all(&normalized.skill_library_path)

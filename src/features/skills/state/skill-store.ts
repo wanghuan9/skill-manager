@@ -171,6 +171,7 @@ export type SkillSummary = {
   lifecycleSource?: PluginLifecycleSource;
   ownerPluginId?: string;
   ownerPluginName?: string;
+  backupId?: string;
   entryPath?: string;
   canonicalPath?: string;
   managementOwner?: SkillManagementOwner;
@@ -389,6 +390,59 @@ export type GithubDeviceFlowStart = {
 export type GithubDevicePollResult = {
   status: "pending" | "slowDown" | "authorized";
   connection: GithubConnection | null;
+};
+
+export type BackupStatus = {
+  enabled: boolean;
+  repositoryOwner: string;
+  repositoryName: string;
+  repositoryUrl: string;
+  deviceName: string;
+  autoBackup: boolean;
+  lastSyncAt: string;
+  lastError: string;
+  syncing: boolean;
+  pendingConflicts: number;
+};
+
+export type BackupSyncResult = {
+  status: BackupStatus;
+  includedSkills: number;
+  excludedSkills: string[];
+  changed: boolean;
+  snapshotTag: string;
+};
+
+export type BackupSkillMetadata = {
+  schemaVersion: number;
+  backupId: string;
+  name: string;
+  directoryName: string;
+  sourceType: string;
+  sourceUrl: string;
+  branch: string;
+  updateDriver: string;
+  description: string;
+  tools: Record<string, boolean>;
+  contentHash: string;
+};
+
+export type BackupConflict = {
+  conflictId: string;
+  backupId: string;
+  skillName: string;
+  createdAt: string;
+  localCommit: string;
+  remoteCommit: string;
+  local: BackupSkillMetadata | null;
+  remote: BackupSkillMetadata | null;
+};
+
+export type BackupSnapshotInfo = {
+  tag: string;
+  commit: string;
+  createdAt: string;
+  message: string;
 };
 
 export type AgentSkillsCliStatus = {

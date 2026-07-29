@@ -6603,6 +6603,36 @@ fn refresh_skill_library_in_background(app_handle: tauri::AppHandle) {
     });
 }
 
+pub(crate) fn refresh_backup_library(
+    app_handle: &tauri::AppHandle,
+    installed_skills: &[SkillSummary],
+) -> Result<(), String> {
+    use tauri::Emitter;
+
+    let tool_configs = build_tool_configs();
+    for tool in tool_configs
+        .iter()
+        .filter(|tool| tool.status_label == "已安装" && supports_skill_sync_for_tool(&tool.id))
+    {
+        if tool.skills_path.trim().is_empty() {
+            continue;
+        }
+        let tool_name = canonical_tool_display_name(&tool.name);
+        let enabled_skills = enabled_skills_for_tool(installed_skills, &tool_name);
+        remove_reserved_workspace_entries(&tool.skills_path)?;
+        reconcile_tool_skill_symlinks(&tool.skills_path, &enabled_skills)?;
+    }
+
+    let payload = SkillLibraryRefreshedEvent {
+        local_candidates: build_local_candidates(installed_skills),
+        tool_skill_entries: build_tool_skill_entries(&tool_configs, installed_skills),
+        installed_skills: installed_skills.to_vec(),
+    };
+    app_handle
+        .emit(SKILL_LIBRARY_REFRESHED_EVENT, payload)
+        .map_err(|error| format!("发送 Skill 库刷新事件失败: {error}"))
+}
+
 #[tauri::command]
 pub fn update_app_settings(
     app_handle: tauri::AppHandle,

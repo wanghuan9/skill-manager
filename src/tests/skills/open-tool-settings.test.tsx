@@ -87,6 +87,74 @@ test("prompts for a GitHub Token after a rate-limited Agent CLI refresh", async 
   expect(screen.getByRole("button", { name: "登录 GitHub" })).toBeInTheDocument();
 });
 
+test("shows enabled GitHub backup status and runs a manual sync", async () => {
+  vi.mocked(isTauri).mockReturnValue(true);
+  Object.assign(githubConnectionFixture, {
+    connected: true,
+    authMethod: "oauth",
+    userId: 1,
+    username: "octocat",
+    credentialPersisted: true,
+  });
+  const backupStatus = {
+    enabled: true,
+    repositoryOwner: "octocat",
+    repositoryName: "skilldock-backup",
+    repositoryUrl: "https://github.com/octocat/skilldock-backup.git",
+    deviceName: "MacBook",
+    autoBackup: true,
+    lastSyncAt: "2026-07-29T12:00:00Z",
+    lastError: "",
+    syncing: false,
+    pendingConflicts: 0,
+  };
+  vi.mocked(invoke).mockImplementation(async (command) => {
+    switch (command) {
+      case "list_startup_installed_skills":
+        return installedSkillFixtures;
+      case "refresh_git_states":
+        return { skills: installedSkillFixtures, githubRateLimited: false };
+      case "list_local_skill_candidates":
+        return localSkillFixtures;
+      case "list_tool_configs":
+        return toolConfigFixtures;
+      case "list_tool_skill_entries":
+        return [];
+      case "get_git_account_summary":
+        return gitAccountFixture;
+      case "get_app_settings":
+        return appSettingsFixture;
+      case "get_github_connection":
+        return githubConnectionFixture;
+      case "get_backup_status":
+        return backupStatus;
+      case "list_backup_conflicts":
+      case "list_backup_snapshots":
+        return [];
+      case "run_backup_sync":
+        return {
+          status: backupStatus,
+          includedSkills: 2,
+          excludedSkills: [],
+          changed: false,
+          snapshotTag: "skilldock/snapshot/test",
+        };
+      default:
+        throw new Error(`Unexpected command: ${command}`);
+    }
+  });
+
+  render(<App />);
+  await userEvent.click(screen.getByRole("button", { name: "备份" }));
+
+  expect(await screen.findByRole("heading", { name: "GitHub 备份已启用" })).toBeInTheDocument();
+  expect(screen.getByText("octocat/skilldock-backup")).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "立即备份" }));
+
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("run_backup_sync", {}));
+  expect(await screen.findByText("Skill 库已同步")).toBeInTheDocument();
+});
+
 test("allows selecting default open tool in settings", async () => {
   window.localStorage.clear();
   render(<App />);
@@ -159,7 +227,7 @@ test("connects and disconnects GitHub with a Personal Access Token", async () =>
   expect(screen.getByText("没有 Token？")).toBeInTheDocument();
   await user.click(screen.getByRole("button", { name: "前往 GitHub 生成 ↗" }));
   expect(openSpy).toHaveBeenCalledWith(
-    "https://github.com/settings/tokens/new?description=SkillDock",
+    "https://github.com/settings/tokens/new?description=SkillDock&scopes=repo",
     "_blank",
     "noopener,noreferrer",
   );

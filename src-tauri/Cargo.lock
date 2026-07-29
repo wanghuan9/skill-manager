@@ -4430,6 +4430,7 @@ dependencies = [
  "tauri-plugin-updater",
  "toml_edit 0.22.27",
  "url",
+ "uuid",
  "zip 2.4.2",
 ]
 

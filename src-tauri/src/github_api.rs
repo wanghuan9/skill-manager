@@ -22,11 +22,35 @@ pub struct GithubProfile {
     pub avatar_url: String,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GithubRepository {
+    pub owner: String,
+    pub name: String,
+    pub clone_url: String,
+    pub html_url: String,
+    pub created: bool,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 struct GithubUserResponse {
     id: u64,
     login: String,
     avatar_url: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct GithubRepositoryResponse {
+    name: String,
+    clone_url: String,
+    html_url: String,
+    private: bool,
+    owner: GithubRepositoryOwnerResponse,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct GithubRepositoryOwnerResponse {
+    login: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -91,6 +115,96 @@ pub async fn fetch_profile(client: &Client, token: &str) -> Result<GithubProfile
         }
         status => Err(format!("GitHub 账户验证失败: HTTP {status}")),
     }
+}
+
+fn validate_repository_name(name: &str) -> Result<&str, String> {
+    let name = name.trim();
+    if name.is_empty()
+        || name.len() > 100
+        || name == "."
+        || name == ".."
+        || !name
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || "-_.".contains(character))
+    {
+        return Err("GitHub 备份仓库名称无效".to_string());
+    }
+    Ok(name)
+}
+
+fn repository_from_response(
+    response: GithubRepositoryResponse,
+    created: bool,
+) -> Result<GithubRepository, String> {
+    if !response.private {
+        return Err("备份仓库必须是私有仓库".to_string());
+    }
+    Ok(GithubRepository {
+        owner: response.owner.login,
+        name: response.name,
+        clone_url: response.clone_url,
+        html_url: response.html_url,
+        created,
+    })
+}
+
+pub async fn ensure_private_backup_repository(
+    client: &Client,
+    token: &str,
+    repository_name: &str,
+) -> Result<GithubRepository, String> {
+    let repository_name = validate_repository_name(repository_name)?;
+    let profile = fetch_profile(client, token).await?;
+    let repository_url = format!(
+        "{GITHUB_API_BASE}/repos/{}/{}",
+        profile.username, repository_name
+    );
+    let response = request(client, Method::GET, &repository_url, token)
+        .send()
+        .await
+        .map_err(|error| format!("查询 GitHub 备份仓库失败: {error}"))?;
+    if response.status() == StatusCode::OK {
+        let repository = response
+            .json::<GithubRepositoryResponse>()
+            .await
+            .map_err(|error| format!("解析 GitHub 备份仓库失败: {error}"))?;
+        return repository_from_response(repository, false);
+    }
+    if response.status() != StatusCode::NOT_FOUND {
+        return Err(format!(
+            "查询 GitHub 备份仓库失败: HTTP {}",
+            response.status()
+        ));
+    }
+
+    let response = request(
+        client,
+        Method::POST,
+        &format!("{GITHUB_API_BASE}/user/repos"),
+        token,
+    )
+    .json(&serde_json::json!({
+        "name": repository_name,
+        "private": true,
+        "auto_init": false,
+        "description": "SkillDock multi-device backup"
+    }))
+    .send()
+    .await
+    .map_err(|error| format!("创建 GitHub 备份仓库失败: {error}"))?;
+    if response.status() != StatusCode::CREATED {
+        return Err(match response.status() {
+            StatusCode::FORBIDDEN | StatusCode::NOT_FOUND => {
+                "GitHub Token 缺少创建私有仓库的权限".to_string()
+            }
+            status => format!("创建 GitHub 备份仓库失败: HTTP {status}"),
+        });
+    }
+    let repository = response
+        .json::<GithubRepositoryResponse>()
+        .await
+        .map_err(|error| format!("解析新建 GitHub 备份仓库失败: {error}"))?;
+    repository_from_response(repository, true)
 }
 
 pub async fn start_device_flow(

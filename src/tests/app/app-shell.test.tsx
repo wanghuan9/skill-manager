@@ -61,9 +61,21 @@ test("renders primary navigation entries with plugins before tools and cli hidde
     "Plugins",
     "工具",
     "安装",
+    "备份",
     "设置",
     "关于",
   ]);
+});
+
+test("opens backup setup and routes disconnected users to GitHub settings", async () => {
+  render(<App />);
+
+  await userEvent.click(screen.getByRole("button", { name: "备份" }));
+
+  expect(await screen.findByRole("heading", { name: "启用多设备备份" })).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "前往设置连接 GitHub" }));
+
+  expect(await screen.findByRole("heading", { name: "GitHub 账号" })).toBeInTheDocument();
 });
 
 test("notifies about startup Skill updates and opens the update filter", async () => {

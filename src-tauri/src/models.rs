@@ -206,6 +206,8 @@ pub struct SkillSummary {
 #[serde(rename_all = "camelCase")]
 pub struct SkillInstanceMetadata {
     #[serde(default)]
+    pub backup_id: String,
+    #[serde(default)]
     pub entry_path: String,
     #[serde(default)]
     pub canonical_path: String,
@@ -391,6 +393,34 @@ pub struct GithubConnection {
     pub avatar_url: String,
     pub credential_persisted: bool,
     pub warning: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GithubBackupSettings {
+    pub enabled: bool,
+    pub repository_owner: String,
+    pub repository_name: String,
+    pub repository_url: String,
+    pub device_name: String,
+    pub auto_backup: bool,
+    pub last_sync_at: String,
+    pub last_error: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupStatus {
+    pub enabled: bool,
+    pub repository_owner: String,
+    pub repository_name: String,
+    pub repository_url: String,
+    pub device_name: String,
+    pub auto_backup: bool,
+    pub last_sync_at: String,
+    pub last_error: String,
+    pub syncing: bool,
+    pub pending_conflicts: usize,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
