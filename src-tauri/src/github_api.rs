@@ -6,6 +6,8 @@ const GITHUB_DEVICE_CODE_URL: &str = "https://github.com/login/device/code";
 const GITHUB_ACCESS_TOKEN_URL: &str = "https://github.com/login/oauth/access_token";
 const GITHUB_API_VERSION: &str = "2022-11-28";
 const OAUTH_CLIENT_ID_ENV: &str = "SKILLDOCK_GITHUB_CLIENT_ID";
+// OAuth Client IDs are public identifiers; GitHub Device Flow does not use a client secret.
+const DEFAULT_OAUTH_CLIENT_ID: &str = "Ov23livYZ8NWkByWZMLz";
 
 pub fn http_client() -> Result<Client, String> {
     Client::builder()
@@ -70,13 +72,13 @@ pub enum DevicePollOutcome {
     Authorized(String),
 }
 
-pub fn oauth_client_id() -> Result<String, String> {
+pub fn oauth_client_id() -> String {
     std::env::var(OAUTH_CLIENT_ID_ENV)
         .ok()
         .or_else(|| option_env!("SKILLDOCK_GITHUB_CLIENT_ID").map(str::to_string))
         .map(|client_id| client_id.trim().to_string())
         .filter(|client_id| !client_id.is_empty())
-        .ok_or_else(|| "未配置 SkillDock GitHub OAuth Client ID".to_string())
+        .unwrap_or_else(|| DEFAULT_OAUTH_CLIENT_ID.to_string())
 }
 
 fn request(client: &Client, method: Method, url: &str, token: &str) -> reqwest::RequestBuilder {
@@ -211,7 +213,7 @@ pub async fn start_device_flow(
     client: &Client,
     backup_scope: bool,
 ) -> Result<DeviceFlowStart, String> {
-    let client_id = oauth_client_id()?;
+    let client_id = oauth_client_id();
     let scope = if backup_scope { "repo" } else { "" };
     let response = client
         .post(GITHUB_DEVICE_CODE_URL)
@@ -233,7 +235,7 @@ pub async fn poll_device_flow(
     client: &Client,
     device_code: &str,
 ) -> Result<DevicePollOutcome, String> {
-    let client_id = oauth_client_id()?;
+    let client_id = oauth_client_id();
     let response = client
         .post(GITHUB_ACCESS_TOKEN_URL)
         .header("Accept", "application/json")
@@ -275,17 +277,14 @@ pub async fn poll_device_flow(
 
 #[cfg(test)]
 mod tests {
-    use super::oauth_client_id;
+    use super::{oauth_client_id, DEFAULT_OAUTH_CLIENT_ID};
 
     #[test]
-    fn reports_missing_oauth_client_id() {
+    fn uses_default_oauth_client_id() {
         if option_env!("SKILLDOCK_GITHUB_CLIENT_ID").is_none()
             && std::env::var_os("SKILLDOCK_GITHUB_CLIENT_ID").is_none()
         {
-            assert_eq!(
-                oauth_client_id(),
-                Err("未配置 SkillDock GitHub OAuth Client ID".to_string())
-            );
+            assert_eq!(oauth_client_id(), DEFAULT_OAUTH_CLIENT_ID);
         }
     }
 }

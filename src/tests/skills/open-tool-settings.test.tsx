@@ -84,7 +84,14 @@ test("prompts for a GitHub Token after a rate-limited Agent CLI refresh", async 
   await userEvent.click(screen.getByRole("button", { name: "去配置" }));
 
   expect(await screen.findByRole("heading", { name: "账号与备份" })).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "登录 GitHub" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "登录 GitHub" })).toHaveClass(
+    "primary-button",
+    "settings-github-connect__action",
+  );
+  expect(screen.getByRole("button", { name: "使用 Personal Access Token" })).toHaveClass(
+    "secondary-button",
+    "settings-github-connect__action",
+  );
 });
 
 test("runs manual GitHub sync and backup from settings", async () => {

@@ -1291,7 +1291,7 @@ export function SettingsRoute() {
                 <div className="settings-github-connect__actions">
                   <button
                     type="button"
-                    className="primary-button primary-button--compact"
+                    className="primary-button primary-button--compact settings-github-connect__action"
                     disabled={isConnectingGithub || githubAuthMode === "device"}
                     onClick={() => void handleStartGithubLogin()}
                   >
@@ -1299,7 +1299,7 @@ export function SettingsRoute() {
                   </button>
                   <button
                     type="button"
-                    className="settings-github-token-generate"
+                    className="secondary-button secondary-button--compact settings-github-connect__action"
                     onClick={() => setGithubAuthMode("pat")}
                   >
                     {t("settings.github.usePat")}

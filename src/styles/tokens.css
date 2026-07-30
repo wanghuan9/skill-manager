@@ -8770,6 +8770,16 @@ button.settings-form-item:disabled {
   gap: 12px;
 }
 
+.settings-github-connect__actions {
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.settings-github-connect__action {
+  min-width: 128px;
+  min-height: 36px;
+}
+
 .settings-github-account__avatar {
   width: 42px;
   height: 42px;
@@ -12014,6 +12024,19 @@ button.settings-form-item:disabled {
 
   .settings-github-token-control {
     width: 100%;
+  }
+
+  .settings-github-connect__content {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .settings-github-connect__actions {
+    width: 100%;
+  }
+
+  .settings-github-connect__action {
+    flex: 1 1 0;
   }
 
   .settings-form-item__path-group {
