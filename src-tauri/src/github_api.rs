@@ -56,7 +56,7 @@ struct GithubRepositoryOwnerResponse {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all(serialize = "camelCase", deserialize = "snake_case"))]
 pub struct DeviceFlowStart {
     pub device_code: String,
     pub user_code: String,
@@ -277,7 +277,7 @@ pub async fn poll_device_flow(
 
 #[cfg(test)]
 mod tests {
-    use super::{oauth_client_id, DEFAULT_OAUTH_CLIENT_ID};
+    use super::{oauth_client_id, DeviceFlowStart, DEFAULT_OAUTH_CLIENT_ID};
 
     #[test]
     fn uses_default_oauth_client_id() {
@@ -286,5 +286,26 @@ mod tests {
         {
             assert_eq!(oauth_client_id(), DEFAULT_OAUTH_CLIENT_ID);
         }
+    }
+
+    #[test]
+    fn parses_github_device_flow_and_serializes_for_frontend() {
+        let payload = r#"{
+            "device_code": "device-code",
+            "user_code": "user-code",
+            "verification_uri": "https://github.com/login/device",
+            "expires_in": 900,
+            "interval": 5
+        }"#;
+
+        let device_flow =
+            serde_json::from_str::<DeviceFlowStart>(payload).expect("parse device flow");
+        let frontend_payload = serde_json::to_value(device_flow).expect("serialize device flow");
+
+        assert_eq!(frontend_payload["deviceCode"], "device-code");
+        assert_eq!(
+            frontend_payload["verificationUri"],
+            "https://github.com/login/device"
+        );
     }
 }
