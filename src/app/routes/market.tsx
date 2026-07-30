@@ -16,6 +16,7 @@ import { dedupeMarketplaceSkills } from "@/features/skills/utils/marketplace-ski
 import {
   createMarketplaceSourceRecord,
   MARKETPLACE_SOURCE_SITES,
+  VISIBLE_MARKETPLACE_SOURCE_SITES,
 } from "@/features/skills/utils/marketplace-sources";
 
 export type InstallTab = "market" | "git" | "local";
@@ -306,7 +307,7 @@ export function MarketRoute(props: MarketRouteProps) {
             {activeInstallTab === "market" ? (
               <MarketplaceInstallPanel
                 activeSourceSite={activeSourceSite}
-                sourceTabs={MARKETPLACE_SOURCE_SITES}
+                sourceTabs={VISIBLE_MARKETPLACE_SOURCE_SITES}
                 marketplaceSkills={displayedMarketplaceSkills}
                 onSourceChange={setActiveSourceSite}
                 searchQuery={searchQuery}

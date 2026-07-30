@@ -43,6 +43,33 @@ function scrollMarketInstallToBottom() {
   fireEvent.scroll(scrollContainer);
 }
 
+function mockSkillhubMarketplaceSkills() {
+  const originalFetchMarketplaceSkillsByPage = skillClient.fetchMarketplaceSkillsByPage;
+  const skillhubSkills = marketplaceSkillFixtures
+    .filter((skill) => skill.sourceSite === "clawhub")
+    .map((skill) => ({
+      ...skill,
+      id: `skillhub-${skill.id}`,
+      sourceSite: "skillhub" as const,
+    }));
+
+  return vi.spyOn(skillClient, "fetchMarketplaceSkillsByPage").mockImplementation((input) => {
+    if (input.sourceSite !== "skillhub") {
+      return originalFetchMarketplaceSkillsByPage(input);
+    }
+
+    const normalizedQuery = input.query?.trim().toLowerCase() ?? "";
+    const skills = normalizedQuery
+      ? skillhubSkills.filter((skill) =>
+          [skill.name, skill.description, skill.maintainer].some((value) =>
+            value.toLowerCase().includes(normalizedQuery),
+          ),
+        )
+      : skillhubSkills;
+    return Promise.resolve({ skills, hasMore: false });
+  });
+}
+
 test("renders install-source and repository install panels", async () => {
   render(<App />);
   await clickNavInstall();
@@ -55,7 +82,7 @@ test("renders install-source and repository install panels", async () => {
   expect(screen.getByRole("tab", { name: "skills.sh" })).toBeInTheDocument();
   expect(screen.getByRole("tab", { name: "skillsmp" })).toBeInTheDocument();
   expect(screen.getByRole("tab", { name: "skillhub" })).toBeInTheDocument();
-  expect(screen.getByRole("tab", { name: "clawhub" })).toBeInTheDocument();
+  expect(screen.queryByRole("tab", { name: "clawhub" })).not.toBeInTheDocument();
   expect(screen.queryByText("安装后默认应用到所有已安装工具")).not.toBeInTheDocument();
   await userEvent.click(screen.getByRole("tab", { name: "Git 安装" }));
   expect(screen.getByRole("textbox", { name: "Git 仓库地址" })).toBeInTheDocument();
@@ -2010,6 +2037,8 @@ test("searches marketplace skills across all supported sources", async () => {
 });
 
 test("searches marketplace skills only in the active source when current scope is selected", async () => {
+  const fetchMarketplaceSkillsByPageSpy = mockSkillhubMarketplaceSkills();
+
   render(<App />);
   await clickNavInstall();
 
@@ -2023,7 +2052,7 @@ test("searches marketplace skills only in the active source when current scope i
     ]);
   });
 
-  await userEvent.click(screen.getByRole("tab", { name: "clawhub" }));
+  await userEvent.click(screen.getByRole("tab", { name: "skillhub" }));
 
   await waitFor(() => {
     expect(screen.getAllByRole("heading", { level: 3 }).map((item) => item.textContent)).toEqual([
@@ -2031,6 +2060,8 @@ test("searches marketplace skills only in the active source when current scope i
       "repo-guardian",
     ]);
   });
+
+  fetchMarketplaceSkillsByPageSpy.mockRestore();
 });
 
 test("sorts marketplace search results by popularity across sources", async () => {
@@ -2050,6 +2081,8 @@ test("sorts marketplace search results by popularity across sources", async () =
 });
 
 test("keeps source results isolated and preserves the skills.sh display order", async () => {
+  const fetchMarketplaceSkillsByPageSpy = mockSkillhubMarketplaceSkills();
+
   render(<App />);
   await clickNavInstall();
 
@@ -2058,10 +2091,10 @@ test("keeps source results isolated and preserves the skills.sh display order", 
     .map((item) => item.textContent);
   expect(skillsShCards).toEqual(["workflow-critic", "design-system-reviewer"]);
 
-  await userEvent.click(screen.getByRole("tab", { name: "clawhub" }));
+  await userEvent.click(screen.getByRole("tab", { name: "skillhub" }));
 
-  const clawhubCards = await screen.findAllByRole("heading", { level: 3 });
-  expect(clawhubCards.map((item) => item.textContent)).toEqual(["release-guardian", "repo-guardian"]);
+  const skillhubCards = await screen.findAllByRole("heading", { level: 3 });
+  expect(skillhubCards.map((item) => item.textContent)).toEqual(["release-guardian", "repo-guardian"]);
   expect(screen.queryByText("workflow-critic")).not.toBeInTheDocument();
 
   await userEvent.click(screen.getByRole("tab", { name: "skills.sh" }));
@@ -2069,6 +2102,8 @@ test("keeps source results isolated and preserves the skills.sh display order", 
     "workflow-critic",
     "design-system-reviewer",
   ]);
+
+  fetchMarketplaceSkillsByPageSpy.mockRestore();
 });
 
 test("loads the next marketplace page after a refresh finishes at the scroll bottom", async () => {
