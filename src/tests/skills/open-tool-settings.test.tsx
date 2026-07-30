@@ -94,6 +94,38 @@ test("prompts for a GitHub Token after a rate-limited Agent CLI refresh", async 
   );
 });
 
+test("shows a compact GitHub device flow and copies its verification code", async () => {
+  const user = userEvent.setup();
+  const openSpy = vi.spyOn(window, "open").mockImplementation(() => null);
+  const clipboardSpy = vi.spyOn(navigator.clipboard, "writeText");
+  vi.mocked(invoke).mockResolvedValueOnce({
+    deviceCode: "device-code",
+    userCode: "045F-820D",
+    verificationUri: "https://github.com/login/device",
+    expiresIn: 900,
+    interval: 5,
+  });
+  window.localStorage.clear();
+
+  render(<App />);
+
+  await user.click(screen.getByRole("button", { name: /设置/ }));
+  await user.click(screen.getByRole("button", { name: "登录 GitHub" }));
+
+  const codeButton = await screen.findByRole("button", { name: /045F-820D.*复制/ });
+  expect(screen.getByText("在 GitHub 输入验证码")).toBeInTheDocument();
+  expect(screen.getByText("等待 GitHub 授权")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "登录 GitHub" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "使用 Personal Access Token" })).not.toBeInTheDocument();
+
+  await user.click(codeButton);
+  expect(clipboardSpy).toHaveBeenCalledWith("045F-820D");
+  expect(await screen.findByText("已复制")).toBeInTheDocument();
+
+  await user.click(screen.getByRole("button", { name: "打开 GitHub" }));
+  expect(openSpy).toHaveBeenCalledTimes(2);
+});
+
 test("runs manual GitHub sync and backup from settings", async () => {
   vi.mocked(isTauri).mockReturnValue(true);
   Object.assign(githubConnectionFixture, {

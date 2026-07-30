@@ -49,6 +49,7 @@ import {
 } from "@/features/skills/utils/list-grid-view-preference";
 
 const GITHUB_TOKEN_CREATION_URL = "https://github.com/settings/tokens/new?description=SkillDock&scopes=repo";
+const GITHUB_COPY_FEEDBACK_DURATION_MS = 1_500;
 
 function formatBackupTimestamp(value: string, language: string) {
   if (!value) {
@@ -237,6 +238,7 @@ export function SettingsRoute() {
   const [githubPollInterval, setGithubPollInterval] = useState(5_000);
   const [githubPollVersion, setGithubPollVersion] = useState(0);
   const [isConnectingGithub, setIsConnectingGithub] = useState(false);
+  const [isGithubDeviceCodeCopied, setIsGithubDeviceCodeCopied] = useState(false);
   const [backupStatus, setBackupStatus] = useState<BackupStatus | null>(null);
   const [backupConflicts, setBackupConflicts] = useState<BackupConflict[]>([]);
   const [activeBackupAction, setActiveBackupAction] = useState("");
@@ -248,6 +250,7 @@ export function SettingsRoute() {
   const [isAppUpdateReleaseNotesOpen, setIsAppUpdateReleaseNotesOpen] = useState(false);
   const [appUpdateMessage, setAppUpdateMessage] = useState(t("settings.update.status.idle"));
   const [appUpdateProgress, setAppUpdateProgress] = useState<AppUpdateProgress | null>(null);
+  const githubCopyFeedbackTimerRef = useRef<number | null>(null);
   const toolStatusGroupRef = useRef<HTMLElement | null>(null);
   const reportFailure = useFailureReporter();
   const toolStatusPanelClassName = "panel-card placeholder-panel settings-panel settings-panel--tool-status";
@@ -274,6 +277,14 @@ export function SettingsRoute() {
         : formatBytes(repoCacheSize);
   const canClearRepoCache = !isClearingCache && repoCacheSize !== null && repoCacheSize > 0;
   const normalizedGithubTokenDraft = githubTokenDraft.trim();
+
+  useEffect(() => {
+    return () => {
+      if (githubCopyFeedbackTimerRef.current !== null) {
+        window.clearTimeout(githubCopyFeedbackTimerRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -388,6 +399,7 @@ export function SettingsRoute() {
       setGithubDeviceFlow(flow);
       setGithubPollInterval(Math.max(flow.interval, 1) * 1_000);
       setGithubPollVersion(0);
+      setIsGithubDeviceCodeCopied(false);
       setGithubAuthMode("device");
       await openExternalLink(flow.verificationUri);
     } catch (error) {
@@ -397,6 +409,28 @@ export function SettingsRoute() {
       });
     } finally {
       setIsConnectingGithub(false);
+    }
+  }
+
+  async function handleCopyGithubDeviceCode() {
+    if (!githubDeviceFlow) {
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(githubDeviceFlow.userCode);
+      setIsGithubDeviceCodeCopied(true);
+      if (githubCopyFeedbackTimerRef.current !== null) {
+        window.clearTimeout(githubCopyFeedbackTimerRef.current);
+      }
+      githubCopyFeedbackTimerRef.current = window.setTimeout(() => {
+        setIsGithubDeviceCodeCopied(false);
+        githubCopyFeedbackTimerRef.current = null;
+      }, GITHUB_COPY_FEEDBACK_DURATION_MS);
+    } catch (error) {
+      reportFailure(error, {
+        operation: "copy_github_device_code",
+        fallbackMessage: t("settings.github.copyFailed"),
+      });
     }
   }
 
@@ -1230,22 +1264,39 @@ export function SettingsRoute() {
               </div>
               {githubAuthMode === "device" && githubDeviceFlow ? (
                 <div className="settings-github-device-flow">
-                  <span className="settings-form-item__description">
-                    {t("settings.github.deviceHint")}
+                  <div className="settings-github-device-flow__code-block">
+                    <button
+                      type="button"
+                      className="settings-github-device-flow__code"
+                      onClick={() => void handleCopyGithubDeviceCode()}
+                    >
+                      <strong>{githubDeviceFlow.userCode}</strong>
+                      <span className="settings-github-device-flow__copy">
+                        <span className="settings-github-device-flow__copy-icon" aria-hidden="true" />
+                        {t(
+                          isGithubDeviceCodeCopied
+                            ? "settings.github.copiedCode"
+                            : "settings.github.copyCode",
+                        )}
+                      </span>
+                    </button>
+                    <span className="settings-github-device-flow__hint">
+                      {t("settings.github.deviceHint")}
+                    </span>
+                  </div>
+                  <span className="settings-github-device-flow__waiting">
+                    <span className="settings-github-device-flow__waiting-dot" aria-hidden="true" />
+                    {t("settings.github.waiting")}
                   </span>
                   <button
                     type="button"
-                    className="settings-github-device-flow__code"
+                    className="primary-button primary-button--compact settings-github-device-flow__open"
                     onClick={() => void openExternalLink(githubDeviceFlow.verificationUri)}
                   >
-                    {githubDeviceFlow.userCode}
+                    {t("settings.github.openAuthorization")}
                   </button>
-                  <span className="settings-form-item__description">
-                    {t("settings.github.waiting")}
-                  </span>
                 </div>
-              ) : null}
-              {githubAuthMode === "pat" ? (
+              ) : githubAuthMode === "pat" ? (
                 <div className="settings-github-token-control">
                   <div className="settings-github-token-input-wrap">
                     <div className="settings-github-token-input-shell">

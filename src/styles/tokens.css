@@ -8762,6 +8762,38 @@ button.settings-form-item:disabled {
   padding: 16px 20px;
 }
 
+.settings-github-connect__content {
+  min-height: 72px;
+  gap: 24px;
+  padding: 13px 17px;
+}
+
+.settings-github-connect__content .settings-form-item__title {
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+
+.settings-github-connect__content .settings-form-item__description {
+  font-size: 0.68rem;
+  font-weight: 400;
+  line-height: 1.5;
+}
+
+.settings-github-connect__content .status-badge {
+  padding: 2px 6px;
+  font-size: 0.62rem;
+  font-weight: 500;
+}
+
+.settings-github-connect__content .primary-button--compact,
+.settings-github-connect__content .secondary-button--compact {
+  min-height: 30px;
+  padding-inline: 12px;
+  border-radius: 8px;
+  font-size: 0.68rem;
+  font-weight: 500;
+}
+
 .settings-github-connect__actions,
 .settings-github-account__identity,
 .settings-github-device-flow {
@@ -8776,8 +8808,7 @@ button.settings-form-item:disabled {
 }
 
 .settings-github-connect__action {
-  min-width: 128px;
-  min-height: 36px;
+  min-width: 116px;
 }
 
 .settings-github-account__avatar {
@@ -8881,21 +8912,91 @@ button.settings-form-item:disabled {
 }
 
 .settings-github-device-flow {
-  flex-wrap: wrap;
   justify-content: flex-end;
+  gap: 11px;
+  margin-left: auto;
+}
+
+.settings-github-device-flow__code-block {
+  display: grid;
+  gap: 4px;
 }
 
 .settings-github-device-flow__code {
+  display: inline-flex;
+  min-height: 30px;
+  align-items: center;
+  gap: 9px;
   border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--line));
-  border-radius: 9px;
-  padding: 7px 12px;
+  border-radius: 8px;
+  padding: 0 10px 0 12px;
   background: color-mix(in srgb, var(--accent) 8%, var(--surface-strong));
   color: var(--heading);
   font: inherit;
-  font-size: 0.9rem;
-  font-weight: 700;
-  letter-spacing: 0.12em;
   cursor: pointer;
+}
+
+.settings-github-device-flow__code strong {
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+}
+
+.settings-github-device-flow__copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--accent);
+  font-size: 0.62rem;
+  font-weight: 500;
+  letter-spacing: 0;
+}
+
+.settings-github-device-flow__copy-icon {
+  position: relative;
+  width: 9px;
+  height: 9px;
+  border: 1px solid currentColor;
+  border-radius: 2px;
+}
+
+.settings-github-device-flow__copy-icon::after {
+  position: absolute;
+  width: 7px;
+  height: 7px;
+  border: 1px solid currentColor;
+  border-radius: 2px;
+  content: "";
+  inset: -3px -3px auto auto;
+}
+
+.settings-github-device-flow__hint {
+  padding-left: 2px;
+  color: var(--muted);
+  font-size: 0.6rem;
+  font-weight: 400;
+}
+
+.settings-github-device-flow__waiting {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 0.64rem;
+  font-weight: 400;
+  white-space: nowrap;
+}
+
+.settings-github-device-flow__waiting-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.settings-github-device-flow__open {
+  white-space: nowrap;
 }
 
 .settings-form-item__control {
@@ -12033,6 +12134,13 @@ button.settings-form-item:disabled {
 
   .settings-github-connect__actions {
     width: 100%;
+  }
+
+  .settings-github-device-flow {
+    width: 100%;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+    margin-left: 0;
   }
 
   .settings-github-connect__action {
