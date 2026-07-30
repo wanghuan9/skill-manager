@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { SearchFieldIcon } from "@/app/components/SearchFieldIcon";
 import { AppSelect } from "@/app/components/AppSelect";
@@ -6,7 +6,7 @@ import { useNotifications } from "@/app/notifications";
 import { useFailureReporter } from "@/app/failure-feedback";
 import {
   distributeMcpToProject,
-  distributeSkillToProject,
+  distributeSkillsToProject,
   importProjectMcp,
   importProjectSkill,
   openPathInFinder,
@@ -28,6 +28,7 @@ import type {
   ProjectMcpInstance,
   ProjectSkillDiffSnapshot,
   ProjectSkillInstance,
+  ProjectSkillTarget,
   ProjectSyncDirection,
   ProjectSyncStatus,
   ProjectWorkspaceSnapshot,
@@ -58,12 +59,10 @@ export type ProjectSkillGroup = {
   hasContentConflict: boolean;
 };
 
-const projectToolOptions = [
+const mcpToolOptions = [
   { id: "claude-code", name: "Claude Code" },
-  { id: "codex", name: "Codex" },
   { id: "cursor", name: "Cursor" },
 ];
-const mcpToolOptions = projectToolOptions.filter((tool) => tool.id !== "codex");
 
 const statusLabels: Record<ProjectSyncStatus, { zh: string; en: string }> = {
   "project-only": { zh: "仅项目", en: "Project only" },
@@ -242,7 +241,6 @@ export function ProjectsRoute(props: ProjectsRouteProps) {
   const reportFailure = useFailureReporter();
   const copy = (zh: string, en: string) => language === "en" ? en : zh;
   const { activeProjectId, activeTab, workspace } = props;
-  const [activeToolId, setActiveToolId] = useState("all");
   const [isBusy, setIsBusy] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
   const [distributionDialog, setDistributionDialog] = useState<DistributionDialog>(null);
@@ -252,18 +250,6 @@ export function ProjectsRoute(props: ProjectsRouteProps) {
   const [diffState, setDiffState] = useState<ProjectDiffState | null>(null);
 
   const activeProject = workspace?.projects.find((project) => project.id === activeProjectId) ?? null;
-
-  const availableToolIds = useMemo(() => {
-    if (!activeProject) return [];
-    const resources = activeTab === "skills" ? activeProject.skills : activeProject.mcpServers;
-    return [...new Set(resources.map((resource) => resource.toolId))];
-  }, [activeProject, activeTab]);
-
-  useEffect(() => {
-    if (activeToolId !== "all" && !availableToolIds.includes(activeToolId)) {
-      setActiveToolId("all");
-    }
-  }, [activeToolId, availableToolIds]);
 
   async function runAction(
     operation: string,
@@ -301,15 +287,13 @@ export function ProjectsRoute(props: ProjectsRouteProps) {
   }
 
   function openDistributionDialog(type: "skill" | "mcp") {
-    const firstResource = type === "skill"
-      ? workspace?.managedSkills[0]
-      : workspace?.managedMcpServers[0];
     setDistributionDialog({ type });
-    setDistributionToolId("claude-code");
-    setDistributionResourceId(type === "skill"
-      ? workspace?.managedSkills[0]?.localPath ?? ""
-      : workspace?.managedMcpServers[0]?.id ?? "");
-    setDistributionName(firstResource?.name ?? "");
+    if (type === "mcp") {
+      const firstResource = workspace?.managedMcpServers[0];
+      setDistributionToolId("claude-code");
+      setDistributionResourceId(firstResource?.id ?? "");
+      setDistributionName(firstResource?.name ?? "");
+    }
   }
 
   useEffect(() => {
@@ -318,34 +302,63 @@ export function ProjectsRoute(props: ProjectsRouteProps) {
     }
   }, [props.addResourceRequest]);
 
-  async function handleDistribute() {
+  async function handleDistributeMcp() {
     if (!activeProject || !distributionDialog || !distributionResourceId || !distributionName.trim()) {
       return;
     }
-    if (distributionDialog.type === "skill") {
-      await runAction(
-        "distribute_skill_to_project",
-        () => distributeSkillToProject({
-          projectId: activeProject.id,
-          toolId: distributionToolId,
-          managedSkillPath: distributionResourceId,
-          targetName: distributionName.trim(),
-        }),
-        copy("Skill 已下发到项目", "Skill distributed to project"),
-      );
-    } else {
-      await runAction(
-        "distribute_mcp_to_project",
-        () => distributeMcpToProject({
-          projectId: activeProject.id,
-          toolId: distributionToolId,
-          managedMcpId: distributionResourceId,
-          serverName: distributionName.trim(),
-        }),
-        copy("MCP 已下发到项目", "MCP distributed to project"),
-      );
-    }
+    await runAction(
+      "distribute_mcp_to_project",
+      () => distributeMcpToProject({
+        projectId: activeProject.id,
+        toolId: distributionToolId,
+        managedMcpId: distributionResourceId,
+        serverName: distributionName.trim(),
+      }),
+      copy("MCP 已下发到项目", "MCP distributed to project"),
+    );
     setDistributionDialog(null);
+  }
+
+  async function handleDistributeSkills(toolIds: string[], managedSkillPaths: string[], closeDialog = true) {
+    if (!activeProject || toolIds.length === 0 || managedSkillPaths.length === 0) {
+      return;
+    }
+    setIsBusy(true);
+    setErrorMessage("");
+    try {
+      const batch = await distributeSkillsToProject({
+        projectId: activeProject.id,
+        toolIds,
+        managedSkillPaths,
+      });
+      props.onWorkspaceChange(batch.workspace);
+      const distributed = batch.results.filter((result) => result.status === "distributed").length;
+      const skipped = batch.results.filter((result) => result.status === "skipped").length;
+      const conflicts = batch.results.filter((result) => result.status === "conflict").length;
+      const failed = batch.results.filter((result) => result.status === "failed").length;
+      notify({
+        tone: conflicts > 0 || failed > 0 ? "info" : "success",
+        message: copy(
+          `下发完成：成功 ${distributed}，已存在 ${skipped}，冲突 ${conflicts}，失败 ${failed}`,
+          `Distribution complete: ${distributed} added, ${skipped} existing, ${conflicts} conflicts, ${failed} failed`,
+        ),
+      });
+      if (conflicts > 0 || failed > 0) {
+        setErrorMessage(copy(
+          `部分目标未下发：${conflicts} 个冲突，${failed} 个失败。`,
+          `${conflicts} targets conflicted and ${failed} failed.`,
+        ));
+      }
+      if (closeDialog) {
+        setDistributionDialog(null);
+      }
+    } catch (error) {
+      const fallbackMessage = copy("批量下发 Skill 失败", "Failed to distribute Skills");
+      reportFailure(error, { operation: "distribute_skills_to_project", fallbackMessage });
+      setErrorMessage(error instanceof Error ? error.message : fallbackMessage);
+    } finally {
+      setIsBusy(false);
+    }
   }
 
   async function handlePreviewSkill(
@@ -453,6 +466,20 @@ export function ProjectsRoute(props: ProjectsRouteProps) {
     }
   }
 
+  async function handleAddSkillTarget(group: ProjectSkillGroup, target: ProjectSkillTarget) {
+    const managedSkillPaths = [...new Set(group.instances
+      .map((instance) => instance.managedSkillPath)
+      .filter(Boolean))];
+    if (group.hasContentConflict || managedSkillPaths.length !== 1) {
+      setErrorMessage(copy(
+        "请先上传托管或解决多版本冲突，再添加到其他工具。",
+        "Upload the Skill or resolve its version conflict before adding another tool.",
+      ));
+      return;
+    }
+    await handleDistributeSkills([target.toolId], managedSkillPaths, false);
+  }
+
   async function handleConfirmSync() {
     if (!activeProject || !diffState) return;
     const common = {
@@ -482,17 +509,15 @@ export function ProjectsRoute(props: ProjectsRouteProps) {
   const normalizedQuery = props.query.trim().toLocaleLowerCase();
   const groupedSkills = groupProjectSkills(activeProject?.skills ?? []);
   const filteredSkills = groupedSkills.filter((group) => (
-    (activeToolId === "all" || group.instances.some((instance) => instance.toolId === activeToolId))
-    && (props.statusFilter === "all" || groupSyncStatus(group) === props.statusFilter)
+    (props.statusFilter === "all" || groupSyncStatus(group) === props.statusFilter)
     && (!normalizedQuery || [group.name, group.description, ...group.instances.flatMap((instance) => [
       instance.toolName,
       instance.relativePath,
     ])].some((value) => value.toLocaleLowerCase().includes(normalizedQuery)))
   ));
   const filteredMcpServers = activeProject?.mcpServers.filter((server) => (
-    (activeToolId === "all" || server.toolId === activeToolId)
-    && (!normalizedQuery || [server.serverName, server.toolName, server.configRelativePath]
-      .some((value) => value.toLocaleLowerCase().includes(normalizedQuery)))
+    !normalizedQuery || [server.serverName, server.toolName, server.configRelativePath]
+      .some((value) => value.toLocaleLowerCase().includes(normalizedQuery))
   )) ?? [];
 
   if (!workspace) {
@@ -504,23 +529,13 @@ export function ProjectsRoute(props: ProjectsRouteProps) {
       {errorMessage ? <div className="dialog-error projects-page__error">{errorMessage}</div> : null}
       {activeProject ? (
         <section className="projects-page__detail">
-          <div className="projects-page__context-bar">
-            <div className="projects-page__tool-filters" aria-label={copy("工具筛选", "Tool filter")}>
-              <button className={activeToolId === "all" ? "is-active" : ""} type="button" onClick={() => setActiveToolId("all")}>{copy("全部工具", "All tools")}</button>
-              {availableToolIds.map((toolId) => (
-                <button className={activeToolId === toolId ? "is-active" : ""} type="button" key={toolId} onClick={() => setActiveToolId(toolId)}>
-                  {projectToolOptions.find((tool) => tool.id === toolId)?.name ?? toolId}
-                </button>
-              ))}
-            </div>
-            <div className="projects-page__header-actions">
-              <button className="ghost-button" type="button" onClick={() => void openPathInFinder({ path: activeProject.canonicalRootPath })}>
-                {copy("打开目录", "Open folder")}
-              </button>
-              <button className="ghost-button is-warning" type="button" onClick={() => void handleRemoveProject(activeProject)}>
-                {copy("移除管理", "Remove")}
-              </button>
-            </div>
+          <div className="projects-page__project-actions">
+            <button className="ghost-button" type="button" onClick={() => void openPathInFinder({ path: activeProject.canonicalRootPath })}>
+              {copy("打开目录", "Open folder")}
+            </button>
+            <button className="ghost-button is-warning" type="button" onClick={() => void handleRemoveProject(activeProject)}>
+              {copy("移除管理", "Remove")}
+            </button>
           </div>
           {activeProject.errors.map((error) => <div className="dialog-error" key={error}>{error}</div>)}
           {activeTab === "skills" ? (
@@ -529,6 +544,7 @@ export function ProjectsRoute(props: ProjectsRouteProps) {
                     <ProjectSkillCard
                       key={group.key}
                       group={group}
+                      targets={activeProject.skillTargets}
                       language={language}
                       layout={props.viewMode}
                       disabled={isBusy}
@@ -539,6 +555,7 @@ export function ProjectsRoute(props: ProjectsRouteProps) {
                       )}
                       onToggle={(skill, enabled) => void handleToggleSkill(skill, enabled)}
                       onToggleAll={(enabled) => void handleToggleSkillGroup(group, enabled)}
+                      onAddTarget={(target) => void handleAddSkillTarget(group, target)}
                       onUpdateProject={(skill) => void handlePreviewSkill(skill, "managed-to-project")}
                       onUpdateManaged={(skill) => void handlePreviewSkill(skill, "project-to-managed")}
                       onUnlink={(skill) => void runAction(
@@ -584,9 +601,18 @@ export function ProjectsRoute(props: ProjectsRouteProps) {
         </div>
       )}
 
-      {distributionDialog && activeProject ? (
-        <DistributionModal
-          type={distributionDialog.type}
+      {distributionDialog?.type === "skill" && activeProject ? (
+        <SkillDistributionModal
+          language={language}
+          workspace={workspace}
+          project={activeProject}
+          disabled={isBusy}
+          onClose={() => setDistributionDialog(null)}
+          onConfirm={(toolIds, managedSkillPaths) => void handleDistributeSkills(toolIds, managedSkillPaths)}
+        />
+      ) : null}
+      {distributionDialog?.type === "mcp" && activeProject ? (
+        <McpDistributionModal
           language={language}
           workspace={workspace}
           project={activeProject}
@@ -601,7 +627,7 @@ export function ProjectsRoute(props: ProjectsRouteProps) {
           }}
           onTargetNameChange={setDistributionName}
           onClose={() => setDistributionDialog(null)}
-          onConfirm={() => void handleDistribute()}
+          onConfirm={() => void handleDistributeMcp()}
         />
       ) : null}
       {diffState ? (
@@ -646,14 +672,28 @@ function ProjectToolIcon({ instance }: { instance: ProjectSkillInstance }) {
   );
 }
 
+function ProjectTargetIcon({ target }: { target: ProjectSkillTarget }) {
+  const [logoLoadFailed, setLogoLoadFailed] = useState(false);
+  const logoUrl = resolveToolLogoUrl(target.toolName);
+  return (
+    <span className="tool-pill__logo" aria-hidden="true">
+      {logoUrl && !logoLoadFailed
+        ? <img src={logoUrl} alt="" loading="lazy" onError={() => setLogoLoadFailed(true)} />
+        : <span>{getMonogramLabel(target.toolName)}</span>}
+    </span>
+  );
+}
+
 function ProjectSkillCard(props: {
   group: ProjectSkillGroup;
+  targets: ProjectSkillTarget[];
   language: "zh-CN" | "en";
   layout: ProjectViewMode;
   disabled: boolean;
   onImport: (skill: ProjectSkillInstance) => void;
   onToggle: (skill: ProjectSkillInstance, enabled: boolean) => void;
   onToggleAll: (enabled: boolean) => void;
+  onAddTarget: (target: ProjectSkillTarget) => void;
   onUpdateProject: (skill: ProjectSkillInstance) => void;
   onUpdateManaged: (skill: ProjectSkillInstance) => void;
   onUnlink: (skill: ProjectSkillInstance) => void;
@@ -674,6 +714,10 @@ function ProjectSkillCard(props: {
   const toggleableInstances = group.instances.filter((instance) => instance.entryKind === "directory");
   const allEnabled = toggleableInstances.length > 0 && toggleableInstances.every((instance) => instance.isEnabled);
   const partiallyEnabled = enabledInstances.length > 0 && !allEnabled;
+  const managedSkillPaths = [...new Set(group.instances
+    .map((instance) => instance.managedSkillPath)
+    .filter(Boolean))];
+  const canAddMissingTarget = !group.hasContentConflict && managedSkillPaths.length === 1;
   const status = groupSyncStatus(group);
   const toggleState = allEnabled ? "is-enabled" : partiallyEnabled ? "is-partial" : "is-disabled";
   const enabledLabel = enabledInstances.length > 0
@@ -700,8 +744,65 @@ function ProjectSkillCard(props: {
           </div>
         ) : null}
       </section>
+      <section className="tool-sync-panel project-skill-target-panel">
+        <div className="skill-card__section-header">
+          <h4>{copy("启用到工具", "Enable in tools")}</h4>
+          <div className="tool-sync-panel__actions">
+            <button className="secondary-button secondary-button--compact semantic-action semantic-action--enable" type="button" disabled={props.disabled || toggleableInstances.length === 0 || allEnabled || hasDuplicateToolInstances} onClick={() => props.onToggleAll(true)}>
+              {copy("全部开启", "Enable all")}
+            </button>
+            <button className="secondary-button secondary-button--compact semantic-action semantic-action--disable" type="button" disabled={props.disabled || enabledInstances.length === 0 || hasDuplicateToolInstances} onClick={() => props.onToggleAll(false)}>
+              {copy("全部关闭", "Disable all")}
+            </button>
+          </div>
+        </div>
+        <div className="tool-pill-grid">
+          {props.targets.map((target) => {
+            const instance = group.instances.find((candidate) => candidate.toolId === target.toolId);
+            const enabled = Boolean(instance?.isEnabled);
+            const present = Boolean(instance && instance.entryKind === "directory");
+            const unavailable = Boolean(instance && (
+              instance.entryKind !== "directory" || duplicateToolIds.has(instance.toolId)
+            ));
+            const disabled = props.disabled || unavailable || (!present && !canAddMissingTarget);
+            const stateLabel = present
+              ? enabled ? copy("已启用", "Enabled") : copy("已关闭", "Disabled")
+              : copy("未下发", "Not added");
+            const ariaLabel = present
+              ? enabled
+                ? copy(`关闭 ${target.toolName}`, `Disable ${target.toolName}`)
+                : copy(`启用 ${target.toolName}`, `Enable ${target.toolName}`)
+              : copy(`添加到 ${target.toolName}`, `Add to ${target.toolName}`);
+            return (
+              <button
+                className={`tool-pill${enabled ? " is-enabled" : ""}${present && !enabled ? " is-present-disabled" : ""}`}
+                type="button"
+                key={target.toolId}
+                disabled={disabled}
+                aria-pressed={enabled}
+                aria-label={ariaLabel}
+                data-tooltip={stateLabel}
+                onClick={() => instance
+                  ? props.onToggle(instance, !instance.isEnabled)
+                  : props.onAddTarget(target)}
+              >
+                <ProjectTargetIcon target={target} />
+                <span className="tool-pill__name">{target.toolName}</span>
+                <span className="project-skill-target-panel__state">{stateLabel}</span>
+              </button>
+            );
+          })}
+        </div>
+        {!canAddMissingTarget ? (
+          <p className="project-skill-target-panel__hint">
+            {group.hasContentConflict
+              ? copy("先解决多版本冲突，再添加到其他工具。", "Resolve the version conflict before adding another tool.")
+              : copy("先上传到托管，再添加到其他工具。", "Upload to the library before adding another tool.")}
+          </p>
+        ) : null}
+      </section>
       <section className="project-skill-tools">
-        <div className="skill-card__section-header"><h4>{copy("项目工具", "Project tools")}</h4></div>
+        <div className="skill-card__section-header"><h4>{copy("同步详情", "Sync details")}</h4></div>
         <div className="project-skill-tools__list">
           {group.instances.map((skill) => {
             const isLinked = Boolean(skill.managedSkillPath);
@@ -728,16 +829,6 @@ function ProjectSkillCard(props: {
                   {isLinked && canUpdateProject(skill.syncStatus) ? <button className="secondary-button secondary-button--compact is-primary" type="button" disabled={props.disabled || unavailable} onClick={() => props.onUpdateProject(skill)}>{copy("更新项目", "Update project")}</button> : null}
                   {isLinked && skill.projectCapability === "bidirectional" && canUpdateManaged(skill.syncStatus) ? <button className="secondary-button secondary-button--compact" type="button" disabled={props.disabled || unavailable} onClick={() => props.onUpdateManaged(skill)}>{copy("同步回托管", "Sync to library")}</button> : null}
                   {isLinked ? <button className="ghost-button" type="button" disabled={props.disabled} onClick={() => props.onUnlink(skill)}>{copy("解除关联", "Unlink")}</button> : null}
-                  <button
-                    className={`switch-button${skill.isEnabled ? " is-enabled" : ""}`}
-                    type="button"
-                    disabled={props.disabled || skill.entryKind !== "directory"}
-                    aria-pressed={skill.isEnabled}
-                    aria-label={skill.isEnabled
-                      ? copy(`关闭 ${skill.toolName}`, `Disable ${skill.toolName}`)
-                      : copy(`启用 ${skill.toolName}`, `Enable ${skill.toolName}`)}
-                    onClick={() => props.onToggle(skill, !skill.isEnabled)}
-                  ><span /></button>
                 </div>
               </article>
             );
@@ -861,8 +952,187 @@ function ResourceEmpty({ label }: { label: string }) {
   return <div className="projects-page__resource-empty">{label}</div>;
 }
 
-function DistributionModal(props: {
-  type: "skill" | "mcp";
+function SkillDistributionModal(props: {
+  language: "zh-CN" | "en";
+  workspace: ProjectWorkspaceSnapshot;
+  project: ProjectDetail;
+  disabled: boolean;
+  onClose: () => void;
+  onConfirm: (toolIds: string[], managedSkillPaths: string[]) => void;
+}) {
+  const copy = (zh: string, en: string) => props.language === "en" ? en : zh;
+  const defaultToolIds = props.project.skillTargets
+    .filter((target) => target.isDetected)
+    .map((target) => target.toolId);
+  const [selectedToolIds, setSelectedToolIds] = useState(defaultToolIds);
+  const [selectedSkillPaths, setSelectedSkillPaths] = useState<string[]>([]);
+  const [query, setQuery] = useState("");
+  const [ownerFilter, setOwnerFilter] = useState<"all" | "skilldock" | "agent-skills-cli">("all");
+  const [showAllTargets, setShowAllTargets] = useState(false);
+  const sortedTargets = [...props.project.skillTargets].sort((left, right) => (
+    Number(right.isDetected) - Number(left.isDetected) || left.toolName.localeCompare(right.toolName)
+  ));
+  const visibleTargetLimit = Math.max(defaultToolIds.length, 12);
+  const visibleTargets = showAllTargets ? sortedTargets : sortedTargets.slice(0, visibleTargetLimit);
+  const hiddenTargetCount = sortedTargets.length - visibleTargets.length;
+  const normalizedQuery = query.trim().toLocaleLowerCase();
+  const filteredSkills = props.workspace.managedSkills.filter((skill) => (
+    (ownerFilter === "all" || skill.managementOwner === ownerFilter)
+    && (!normalizedQuery || [skill.name, skill.description]
+      .some((value) => value.toLocaleLowerCase().includes(normalizedQuery)))
+  ));
+  const allTargetsSelected = sortedTargets.length > 0
+    && sortedTargets.every((target) => selectedToolIds.includes(target.toolId));
+
+  function toggleTarget(target: ProjectSkillTarget) {
+    const sharedToolIds = sortedTargets
+      .filter((candidate) => candidate.targetKey === target.targetKey)
+      .map((candidate) => candidate.toolId);
+    const sharedTargetsSelected = sharedToolIds.every((toolId) => selectedToolIds.includes(toolId));
+    setSelectedToolIds((current) => sharedTargetsSelected
+      ? current.filter((toolId) => !sharedToolIds.includes(toolId))
+      : [...new Set([...current, ...sharedToolIds])]);
+  }
+
+  function skillTargetStatus(managedSkillPath: string, skillName: string) {
+    const selectedInstances = selectedToolIds.map((toolId) => props.project.skills.find((skill) => (
+      skill.toolId === toolId && skill.name.toLocaleLowerCase() === skillName.toLocaleLowerCase()
+    )));
+    const added = selectedInstances.filter((instance) => instance?.managedSkillPath === managedSkillPath).length;
+    const conflicts = selectedInstances.filter((instance) => (
+      instance && instance.managedSkillPath !== managedSkillPath
+    )).length;
+    if (selectedToolIds.length > 0 && added === selectedToolIds.length) {
+      return { key: "added", label: copy("已全部添加", "Added to all") };
+    }
+    if (conflicts > 0) {
+      return { key: "conflict", label: copy("存在冲突", "Conflict") };
+    }
+    if (added > 0) {
+      return { key: "partial", label: copy("部分已添加", "Partially added") };
+    }
+    return { key: "available", label: copy("可添加", "Available") };
+  }
+
+  const selectableSkillPaths = selectedSkillPaths.filter((path) => {
+    const skill = props.workspace.managedSkills.find((item) => item.localPath === path);
+    return skill && skillTargetStatus(skill.localPath, skill.name).key !== "added";
+  });
+
+  return (
+    <div className="dialog-backdrop" role="presentation" onClick={props.onClose}>
+      <div className="projects-page__dialog projects-page__skill-distribution" role="dialog" aria-modal="true" aria-label={copy("下发 Skill", "Distribute Skill")} onClick={(event) => event.stopPropagation()}>
+        <header>
+          <h3>{copy("从托管库添加", "Add from library")}</h3>
+          <button
+            className="skill-card-detail-modal__close"
+            type="button"
+            onClick={props.onClose}
+            aria-label={copy("关闭下发 Skill", "Close Skill distribution")}
+          >
+            <span aria-hidden="true">×</span>
+          </button>
+        </header>
+        <div className="projects-page__dialog-body projects-page__skill-distribution-body">
+          <section className="project-distribution-targets">
+            <div className="project-distribution-section-title">
+              <span>{copy("目标工具", "Target tools")}</span>
+              <button type="button" onClick={() => setSelectedToolIds(allTargetsSelected ? [] : sortedTargets.map((target) => target.toolId))}>
+                {allTargetsSelected ? copy("取消全选", "Clear all") : copy("全选", "Select all")}
+              </button>
+            </div>
+            <div className="project-distribution-target-grid">
+              {visibleTargets.map((target) => {
+                const active = selectedToolIds.includes(target.toolId);
+                return (
+                  <button
+                    className={`tool-pill project-distribution-target${active ? " is-enabled" : ""}`}
+                    type="button"
+                    key={target.toolId}
+                    aria-pressed={active}
+                    aria-label={target.toolName}
+                    onClick={() => toggleTarget(target)}
+                    title={`${target.toolName} · ${target.skillRelativePath}`}
+                  >
+                    <ProjectTargetIcon target={target} />
+                    <span className="tool-pill__name">{target.toolName}</span>
+                    {target.isDetected ? <span className="project-distribution-target__detected">{copy("项目已有", "Detected")}</span> : null}
+                  </button>
+                );
+              })}
+            </div>
+            {hiddenTargetCount > 0 ? (
+              <button className="project-distribution-more" type="button" onClick={() => setShowAllTargets(true)}>
+                {copy(`更多工具 (${hiddenTargetCount})`, `More tools (${hiddenTargetCount})`)}
+              </button>
+            ) : showAllTargets && sortedTargets.length > visibleTargetLimit ? (
+              <button className="project-distribution-more" type="button" onClick={() => setShowAllTargets(false)}>
+                {copy("收起工具", "Show fewer")}
+              </button>
+            ) : null}
+          </section>
+
+          <section className="project-distribution-library">
+            <label className="search-field project-distribution-search">
+              <span className="sr-only">{copy("搜索托管 Skill", "Search managed Skills")}</span>
+              <SearchFieldIcon />
+              <input type="search" value={query} placeholder={copy("搜索托管 Skill…", "Search managed Skills…")} onChange={(event) => setQuery(event.target.value)} />
+            </label>
+            <div className="project-distribution-owner-filters" aria-label={copy("托管方筛选", "Library owner filter")}>
+              {([
+                ["all", copy("全部来源", "All sources")],
+                ["skilldock", "SkillDock"],
+                ["agent-skills-cli", "Agent CLI"],
+              ] as const).map(([value, label]) => (
+                <button className={ownerFilter === value ? "is-active" : ""} type="button" key={value} onClick={() => setOwnerFilter(value)}>{label}</button>
+              ))}
+            </div>
+            <div className="project-distribution-skill-list">
+              {filteredSkills.map((skill) => {
+                const status = skillTargetStatus(skill.localPath, skill.name);
+                const checked = selectedSkillPaths.includes(skill.localPath);
+                const disabled = status.key === "added";
+                return (
+                  <label className={`project-distribution-skill${checked ? " is-selected" : ""}${disabled ? " is-disabled" : ""}`} key={skill.localPath}>
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      disabled={disabled}
+                      onChange={() => setSelectedSkillPaths((current) => checked
+                        ? current.filter((path) => path !== skill.localPath)
+                        : [...current, skill.localPath])}
+                    />
+                    <ProjectSkillMonogram name={skill.name} />
+                    <span className="project-distribution-skill__copy">
+                      <strong>{skill.name}</strong>
+                      <span>{skill.description || copy("暂无描述", "No description")}</span>
+                    </span>
+                    <span className="project-distribution-skill__owner">
+                      {skill.managementOwner === "agent-skills-cli" ? "Agent CLI" : "SkillDock"}
+                    </span>
+                    <span className={`project-distribution-skill__status is-${status.key}`}>{status.label}</span>
+                  </label>
+                );
+              })}
+              {filteredSkills.length === 0 ? <div className="projects-page__resource-empty">{copy("没有匹配的托管 Skill", "No matching managed Skills")}</div> : null}
+            </div>
+          </section>
+        </div>
+        <footer>
+          <span className="project-distribution-selection-summary">
+            {copy(`已选 ${selectableSkillPaths.length} 个 Skill、${selectedToolIds.length} 个工具`, `${selectableSkillPaths.length} Skills and ${selectedToolIds.length} tools selected`)}
+          </span>
+          <button className="secondary-button" type="button" onClick={props.onClose}>{copy("取消", "Cancel")}</button>
+          <button className="primary-button" type="button" onClick={() => props.onConfirm(selectedToolIds, selectableSkillPaths)} disabled={props.disabled || selectedToolIds.length === 0 || selectableSkillPaths.length === 0}>
+            {copy(`下发 ${selectableSkillPaths.length} 个 Skill 到 ${selectedToolIds.length} 个工具`, `Distribute ${selectableSkillPaths.length} Skills to ${selectedToolIds.length} tools`)}
+          </button>
+        </footer>
+      </div>
+    </div>
+  );
+}
+
+function McpDistributionModal(props: {
   language: "zh-CN" | "en";
   workspace: ProjectWorkspaceSnapshot;
   project: ProjectDetail;
@@ -877,43 +1147,36 @@ function DistributionModal(props: {
   onConfirm: () => void;
 }) {
   const copy = (zh: string, en: string) => props.language === "en" ? en : zh;
-  const resources = props.type === "skill" ? props.workspace.managedSkills : props.workspace.managedMcpServers;
-  const tools = props.type === "skill" ? projectToolOptions : mcpToolOptions;
+  const resources = props.workspace.managedMcpServers;
   const normalizedTargetName = props.targetName.trim().toLocaleLowerCase();
-  const targetAlreadyExists = props.type === "skill"
-    ? props.project.skills.some((skill) => (
-        skill.toolId === props.toolId
-        && skill.name.toLocaleLowerCase() === normalizedTargetName
-      ))
-    : props.project.mcpServers.some((server) => (
-        server.toolId === props.toolId
-        && server.serverName.toLocaleLowerCase() === normalizedTargetName
-      ));
+  const targetAlreadyExists = props.project.mcpServers.some((server) => (
+    server.toolId === props.toolId
+    && server.serverName.toLocaleLowerCase() === normalizedTargetName
+  ));
   return (
     <div className="dialog-backdrop" role="presentation" onClick={props.onClose}>
-      <div className="projects-page__dialog" role="dialog" aria-modal="true" aria-label={props.type === "skill" ? copy("下发 Skill", "Distribute Skill") : copy("下发 MCP", "Distribute MCP")} onClick={(event) => event.stopPropagation()}>
-        <header><h3>{props.type === "skill" ? copy("下发托管 Skill", "Distribute managed Skill") : copy("下发托管 MCP", "Distribute managed MCP")}</h3></header>
+      <div className="projects-page__dialog" role="dialog" aria-modal="true" aria-label={copy("下发 MCP", "Distribute MCP")} onClick={(event) => event.stopPropagation()}>
+        <header><h3>{copy("下发托管 MCP", "Distribute managed MCP")}</h3></header>
         <div className="projects-page__dialog-body">
           <label>
             <span>{copy("托管资源", "Managed resource")}</span>
             <select value={props.resourceId} onChange={(event) => {
-              const resource = resources.find((item) => ("localPath" in item ? item.localPath : item.id) === event.target.value);
+              const resource = resources.find((item) => item.id === event.target.value);
               props.onResourceChange(event.target.value, resource?.name ?? "");
             }}>
               {resources.map((resource) => {
-                const value = "localPath" in resource ? resource.localPath : resource.id;
-                return <option value={value} key={value}>{resource.name}{"managementOwner" in resource && resource.managementOwner === "agent-skills-cli" ? " · Agent CLI" : ""}</option>;
+                return <option value={resource.id} key={resource.id}>{resource.name}</option>;
               })}
             </select>
           </label>
           <label>
             <span>{copy("目标工具", "Target tool")}</span>
             <select value={props.toolId} onChange={(event) => props.onToolChange(event.target.value)}>
-              {tools.map((tool) => <option value={tool.id} key={tool.id}>{tool.name}</option>)}
+              {mcpToolOptions.map((tool) => <option value={tool.id} key={tool.id}>{tool.name}</option>)}
             </select>
           </label>
           <label>
-            <span>{props.type === "skill" ? copy("目标目录名", "Target directory name") : copy("Server 名称", "Server name")}</span>
+            <span>{copy("Server 名称", "Server name")}</span>
             <input value={props.targetName} onChange={(event) => props.onTargetNameChange(event.target.value)} />
           </label>
           {resources.length === 0 ? <div className="dialog-error">{copy("当前没有可下发的托管资源", "No managed resources available")}</div> : null}

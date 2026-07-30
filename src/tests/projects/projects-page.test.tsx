@@ -103,10 +103,11 @@ test("groups the same project Skill across tools and exposes tool toggles in det
   await userEvent.click(within(skillCard!).getByRole("button", { name: "展开 skill-publisher" }));
 
   const dialog = await screen.findByRole("dialog", { name: "skill-publisher 详情" });
-  expect(within(dialog).getByText("Claude Code")).toBeInTheDocument();
-  expect(within(dialog).getByText("Cursor")).toBeInTheDocument();
+  expect(within(dialog).getAllByText("Claude Code")).not.toHaveLength(0);
+  expect(within(dialog).getAllByText("Cursor")).not.toHaveLength(0);
   expect(within(dialog).getByRole("button", { name: "关闭 Claude Code" })).toBeInTheDocument();
   expect(within(dialog).getByRole("button", { name: "启用 Cursor" })).toBeInTheDocument();
+  expect(within(dialog).getByRole("button", { name: "添加到 Codex" })).toHaveTextContent("未下发");
 
   await userEvent.click(within(dialog).getByRole("button", { name: "关闭 skill-publisher 详情" }));
   await userEvent.click(within(skillCard!).getByRole("button", { name: "启用 skill-publisher" }));
@@ -135,13 +136,31 @@ test("adds a project from the workspace footer and selects it", async () => {
   expect(screen.getByText("项目已加入管理")).toBeInTheDocument();
 });
 
-test("prevents distributing a duplicate Skill to the same project tool", async () => {
+test("defaults to detected targets and supports selecting multiple Skills and tools", async () => {
   render(<App />);
   await openDemoProject();
 
   await userEvent.click(screen.getByRole("button", { name: /添加 Skill/ }));
 
   const dialog = screen.getByRole("dialog", { name: "下发 Skill" });
-  expect(within(dialog).getByText("目标工具中已存在同名资源，请修改名称或选择其他工具。")).toBeInTheDocument();
-  expect(within(dialog).getByRole("button", { name: "下发到项目" })).toBeDisabled();
+  expect(within(dialog).getByRole("button", { name: "Claude Code" })).toHaveAttribute("aria-pressed", "true");
+  expect(within(dialog).getByRole("button", { name: "Codex" })).toHaveAttribute("aria-pressed", "true");
+  expect(within(dialog).getByRole("button", { name: "Cursor" })).toHaveAttribute("aria-pressed", "true");
+  expect(within(dialog).getByRole("button", { name: "Antigravity" })).toHaveAttribute("aria-pressed", "false");
+
+  await userEvent.click(within(dialog).getByRole("checkbox", { name: /brainstorming/ }));
+  await userEvent.click(within(dialog).getByRole("checkbox", { name: /skill-publisher/ }));
+  await userEvent.click(within(dialog).getByRole("button", { name: "Antigravity" }));
+
+  expect(within(dialog).getByText("已选 2 个 Skill、4 个工具")).toBeInTheDocument();
+  expect(within(dialog).getByRole("button", { name: "下发 2 个 Skill 到 4 个工具" })).toBeEnabled();
+  expect(within(dialog).getByRole("button", { name: "关闭下发 Skill" })).toBeInTheDocument();
+});
+
+test("does not render a secondary project tool filter", async () => {
+  render(<App />);
+  await openDemoProject();
+
+  expect(screen.queryByRole("button", { name: "全部工具" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Claude Code" })).not.toBeInTheDocument();
 });

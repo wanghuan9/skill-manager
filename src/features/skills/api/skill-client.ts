@@ -56,6 +56,7 @@ import type {
   PluginUpdateMode,
   PluginUpdateStrategy,
   ProjectMcpDiffSnapshot,
+  ProjectSkillDistributionBatch,
   ProjectSkillDiffSnapshot,
   ProjectSyncDirection,
   ProjectWorkspaceSnapshot,
@@ -541,6 +542,7 @@ function normalizeProjectWorkspaceSnapshot(
     storagePath: workspace.storagePath ?? "",
     projects: (workspace.projects ?? []).map((project) => ({
       ...project,
+      skillTargets: project.skillTargets ?? [],
       skills: (project.skills ?? []).map((skill) => ({
         ...skill,
         isEnabled: skill.isEnabled ?? skill.entryKind !== "missing",
@@ -2201,6 +2203,10 @@ export async function addManagedProject(rootPath: string): Promise<ProjectWorksp
       rootPath: normalizedPath,
       canonicalRootPath: normalizedPath,
       availability: "available",
+      skillTargets: projectWorkspaceFixture.projects[0]?.skillTargets.map((target) => ({
+        ...target,
+        isDetected: false,
+      })) ?? [],
       skills: [],
       mcpServers: [],
       errors: [],
@@ -2256,6 +2262,84 @@ export async function distributeSkillToProject(input: {
     : project);
   const workspace = await invokeOrFallback("distribute_skill_to_project", input, fallback);
   return rememberProjectFixture(workspace);
+}
+
+export async function distributeSkillsToProject(input: {
+  projectId: string;
+  toolIds: string[];
+  managedSkillPaths: string[];
+}): Promise<ProjectSkillDistributionBatch> {
+  const fallbackWorkspace = structuredClone(projectWorkspaceFixture);
+  const project = fallbackWorkspace.projects.find((item) => item.id === input.projectId);
+  const results: ProjectSkillDistributionBatch["results"] = [];
+
+  if (project) {
+    for (const managedSkillPath of [...new Set(input.managedSkillPaths)]) {
+      const managedSkill = fallbackWorkspace.managedSkills.find((skill) => skill.localPath === managedSkillPath);
+      if (!managedSkill) {
+        continue;
+      }
+      for (const toolId of [...new Set(input.toolIds)]) {
+        const target = project.skillTargets.find((item) => item.toolId === toolId);
+        if (!target) {
+          results.push({
+            managedSkillPath,
+            skillName: managedSkill.name,
+            toolId,
+            toolName: toolId,
+            status: "failed",
+            message: "该工具尚未开放项目级资源。",
+          });
+          continue;
+        }
+        const existing = project.skills.find((skill) => (
+          skill.toolId === toolId && skill.name.toLocaleLowerCase() === managedSkill.name.toLocaleLowerCase()
+        ));
+        if (existing) {
+          const sameManagedSkill = existing.managedSkillPath === managedSkillPath;
+          results.push({
+            managedSkillPath,
+            skillName: managedSkill.name,
+            toolId,
+            toolName: target.toolName,
+            status: sameManagedSkill ? "skipped" : "conflict",
+            message: sameManagedSkill ? "项目中已存在相同内容，已保留现有文件。" : "项目中已存在同名 Skill。",
+          });
+          continue;
+        }
+        project.skills.push({
+          toolId,
+          toolName: target.toolName,
+          name: managedSkill.name,
+          description: managedSkill.description,
+          relativePath: `${target.skillRelativePath}/${managedSkill.name}`,
+          localPath: `${project.canonicalRootPath}/${target.skillRelativePath}/${managedSkill.name}`,
+          entryKind: "directory",
+          isEnabled: true,
+          managedSkillPath,
+          projectCapability: managedSkill.projectCapability,
+          contentHash: `fixture-${managedSkill.name}`,
+          syncStatus: "in-sync",
+          error: "",
+        });
+        results.push({
+          managedSkillPath,
+          skillName: managedSkill.name,
+          toolId,
+          toolName: target.toolName,
+          status: "distributed",
+          message: "已下发到项目。",
+        });
+      }
+    }
+  }
+
+  const fallback = { workspace: fallbackWorkspace, results };
+  const batch = await invokeOrFallback("distribute_skills_to_project", input, fallback);
+  return {
+    ...batch,
+    workspace: rememberProjectFixture(batch.workspace),
+  };
 }
 
 export async function importProjectSkill(

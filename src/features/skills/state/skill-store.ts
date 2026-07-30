@@ -476,6 +476,14 @@ export type ProjectSkillInstance = {
   error: string;
 };
 
+export type ProjectSkillTarget = {
+  toolId: string;
+  toolName: string;
+  skillRelativePath: string;
+  targetKey: string;
+  isDetected: boolean;
+};
+
 export type ProjectMcpInstance = {
   toolId: string;
   toolName: string;
@@ -495,6 +503,7 @@ export type ProjectDetail = {
   rootPath: string;
   canonicalRootPath: string;
   availability: "available" | "missing";
+  skillTargets: ProjectSkillTarget[];
   skills: ProjectSkillInstance[];
   mcpServers: ProjectMcpInstance[];
   errors: string[];
@@ -505,6 +514,20 @@ export type ProjectWorkspaceSnapshot = {
   projects: ProjectDetail[];
   managedSkills: ProjectManagedSkill[];
   managedMcpServers: ProjectManagedMcp[];
+};
+
+export type ProjectSkillDistributionResult = {
+  managedSkillPath: string;
+  skillName: string;
+  toolId: string;
+  toolName: string;
+  status: "distributed" | "skipped" | "conflict" | "failed";
+  message: string;
+};
+
+export type ProjectSkillDistributionBatch = {
+  workspace: ProjectWorkspaceSnapshot;
+  results: ProjectSkillDistributionResult[];
 };
 
 export type ProjectDiffFile = {

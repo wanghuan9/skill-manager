@@ -368,6 +368,51 @@ export const toolConfigFixtures: ToolConfig[] = [
   { id: "github-copilot", name: "GitHub Copilot", skillsPath: "/Users/demo/.copilot/skills", mcpConfigPath: "/Users/demo/.copilot/mcp-config.json", supportsMcp: true, mcpConfigPathRecognized: true, statusLabel: "未安装", isEnabled: false, primaryType: "editor", surfaceTypes: ["editor", "ide-plugin"], supportsDirectOpen: false },
 ];
 
+const projectSkillRelativePaths: Record<string, string> = {
+  "claude-code": ".claude/skills",
+  codex: ".codex/skills",
+  opencode: ".opencode/skills",
+  cursor: ".cursor/skills",
+  gemini: ".gemini/skills",
+  antigravity: ".gemini/antigravity/skills",
+  windsurf: ".codeium/windsurf/skills",
+  openclaw: ".openclaw/skills",
+  continue: ".continue/skills",
+  iflow: ".iflow/skills",
+  codebuddy: ".codebuddy/skills",
+  trae: ".trae/skills",
+  droid: ".factory/skills",
+  augment: ".augment/skills",
+  cline: ".agents/skills",
+  commandcode: ".commandcode/skills",
+  crush: ".config/crush/skills",
+  goose: ".config/goose/skills",
+  junie: ".junie/skills",
+  "kilo-code": ".kilocode/skills",
+  kiro: ".kiro/skills",
+  qoder: ".qoder/skills",
+  "qwen-code": ".qwen/skills",
+  "roo-code": ".roo/skills",
+  zencoder: ".zencoder/skills",
+  "trae-cn": ".trae-cn/skills",
+  hermes: ".hermes/skills",
+  "github-copilot": ".copilot/skills",
+};
+
+const projectSkillTargetFixtures = toolConfigFixtures.flatMap((tool) => {
+  const skillRelativePath = projectSkillRelativePaths[tool.id];
+  if (!skillRelativePath) {
+    return [];
+  }
+  return [{
+    toolId: tool.id,
+    toolName: tool.name,
+    skillRelativePath,
+    targetKey: skillRelativePath,
+    isDetected: false,
+  }];
+});
+
 const managedToolSkillEntryFixtures: ToolSkillEntry[] = toolConfigFixtures.flatMap((tool) =>
   installedSkillFixtures.flatMap((skill) => {
     const toolStatus = skill.tools.find((entry) => entry.name === tool.name);
@@ -819,6 +864,10 @@ export const projectWorkspaceFixture: ProjectWorkspaceSnapshot = {
       rootPath: "/Users/demo/Projects/demo-workspace",
       canonicalRootPath: "/Users/demo/Projects/demo-workspace",
       availability: "available",
+      skillTargets: projectSkillTargetFixtures.map((target) => ({
+        ...target,
+        isDetected: ["claude-code", "codex", "cursor"].includes(target.toolId),
+      })),
       errors: [],
       skills: [
         {

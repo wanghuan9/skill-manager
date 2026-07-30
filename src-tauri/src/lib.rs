@@ -135,6 +135,7 @@ pub fn run() {
             project_manager::add_managed_project,
             project_manager::remove_managed_project,
             project_manager::distribute_skill_to_project,
+            project_manager::distribute_skills_to_project,
             project_manager::import_project_skill,
             project_manager::preview_project_skill_sync,
             project_manager::sync_project_skill,

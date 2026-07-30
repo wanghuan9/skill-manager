@@ -39,27 +39,235 @@ struct ProjectToolSpec {
     id: &'static str,
     name: &'static str,
     skill_relative_path: &'static str,
+    detect_relative_path: &'static str,
+    target_key: &'static str,
     mcp_relative_path: Option<&'static str>,
 }
 
-const PROJECT_TOOL_SPECS: [ProjectToolSpec; 3] = [
+const PROJECT_TOOL_SPECS: [ProjectToolSpec; 28] = [
     ProjectToolSpec {
         id: "claude-code",
         name: "Claude Code",
         skill_relative_path: ".claude/skills",
+        detect_relative_path: ".claude",
+        target_key: ".claude/skills",
         mcp_relative_path: Some(".mcp.json"),
     },
     ProjectToolSpec {
         id: "codex",
         name: "Codex",
         skill_relative_path: ".codex/skills",
+        detect_relative_path: ".codex",
+        target_key: ".codex/skills",
+        mcp_relative_path: None,
+    },
+    ProjectToolSpec {
+        id: "opencode",
+        name: "OpenCode",
+        skill_relative_path: ".opencode/skills",
+        detect_relative_path: ".opencode",
+        target_key: ".opencode/skills",
         mcp_relative_path: None,
     },
     ProjectToolSpec {
         id: "cursor",
         name: "Cursor",
         skill_relative_path: ".cursor/skills",
+        detect_relative_path: ".cursor",
+        target_key: ".cursor/skills",
         mcp_relative_path: Some(".cursor/mcp.json"),
+    },
+    ProjectToolSpec {
+        id: "gemini",
+        name: "Gemini CLI",
+        skill_relative_path: ".gemini/skills",
+        detect_relative_path: ".gemini",
+        target_key: ".gemini/skills",
+        mcp_relative_path: None,
+    },
+    ProjectToolSpec {
+        id: "antigravity",
+        name: "Antigravity",
+        skill_relative_path: ".gemini/antigravity/skills",
+        detect_relative_path: ".gemini/antigravity",
+        target_key: ".gemini/antigravity/skills",
+        mcp_relative_path: None,
+    },
+    ProjectToolSpec {
+        id: "windsurf",
+        name: "Devin",
+        skill_relative_path: ".codeium/windsurf/skills",
+        detect_relative_path: ".codeium/windsurf",
+        target_key: ".codeium/windsurf/skills",
+        mcp_relative_path: None,
+    },
+    ProjectToolSpec {
+        id: "openclaw",
+        name: "OpenClaw",
+        skill_relative_path: ".openclaw/skills",
+        detect_relative_path: ".openclaw",
+        target_key: ".openclaw/skills",
+        mcp_relative_path: None,
+    },
+    ProjectToolSpec {
+        id: "continue",
+        name: "Continue",
+        skill_relative_path: ".continue/skills",
+        detect_relative_path: ".continue",
+        target_key: ".continue/skills",
+        mcp_relative_path: None,
+    },
+    ProjectToolSpec {
+        id: "iflow",
+        name: "iFlow",
+        skill_relative_path: ".iflow/skills",
+        detect_relative_path: ".iflow",
+        target_key: ".iflow/skills",
+        mcp_relative_path: None,
+    },
+    ProjectToolSpec {
+        id: "codebuddy",
+        name: "CodeBuddy",
+        skill_relative_path: ".codebuddy/skills",
+        detect_relative_path: ".codebuddy",
+        target_key: ".codebuddy/skills",
+        mcp_relative_path: None,
+    },
+    ProjectToolSpec {
+        id: "trae",
+        name: "Trae",
+        skill_relative_path: ".trae/skills",
+        detect_relative_path: ".trae",
+        target_key: ".trae/skills",
+        mcp_relative_path: None,
+    },
+    ProjectToolSpec {
+        id: "droid",
+        name: "Droid",
+        skill_relative_path: ".factory/skills",
+        detect_relative_path: ".factory",
+        target_key: ".factory/skills",
+        mcp_relative_path: None,
+    },
+    ProjectToolSpec {
+        id: "augment",
+        name: "Augment",
+        skill_relative_path: ".augment/skills",
+        detect_relative_path: ".augment",
+        target_key: ".augment/skills",
+        mcp_relative_path: None,
+    },
+    ProjectToolSpec {
+        id: "cline",
+        name: "Cline",
+        skill_relative_path: ".agents/skills",
+        detect_relative_path: ".cline",
+        target_key: ".agents/skills",
+        mcp_relative_path: None,
+    },
+    ProjectToolSpec {
+        id: "commandcode",
+        name: "CommandCode",
+        skill_relative_path: ".commandcode/skills",
+        detect_relative_path: ".commandcode",
+        target_key: ".commandcode/skills",
+        mcp_relative_path: None,
+    },
+    ProjectToolSpec {
+        id: "crush",
+        name: "Crush",
+        skill_relative_path: ".config/crush/skills",
+        detect_relative_path: ".config/crush",
+        target_key: ".config/crush/skills",
+        mcp_relative_path: None,
+    },
+    ProjectToolSpec {
+        id: "goose",
+        name: "Goose",
+        skill_relative_path: ".config/goose/skills",
+        detect_relative_path: ".config/goose",
+        target_key: ".config/goose/skills",
+        mcp_relative_path: None,
+    },
+    ProjectToolSpec {
+        id: "junie",
+        name: "Junie",
+        skill_relative_path: ".junie/skills",
+        detect_relative_path: ".junie",
+        target_key: ".junie/skills",
+        mcp_relative_path: None,
+    },
+    ProjectToolSpec {
+        id: "kilo-code",
+        name: "Kilo Code",
+        skill_relative_path: ".kilocode/skills",
+        detect_relative_path: ".kilocode",
+        target_key: ".kilocode/skills",
+        mcp_relative_path: None,
+    },
+    ProjectToolSpec {
+        id: "kiro",
+        name: "Kiro",
+        skill_relative_path: ".kiro/skills",
+        detect_relative_path: ".kiro",
+        target_key: ".kiro/skills",
+        mcp_relative_path: None,
+    },
+    ProjectToolSpec {
+        id: "qoder",
+        name: "Qoder",
+        skill_relative_path: ".qoder/skills",
+        detect_relative_path: ".qoder",
+        target_key: ".qoder/skills",
+        mcp_relative_path: None,
+    },
+    ProjectToolSpec {
+        id: "qwen-code",
+        name: "Qwen Code",
+        skill_relative_path: ".qwen/skills",
+        detect_relative_path: ".qwen",
+        target_key: ".qwen/skills",
+        mcp_relative_path: None,
+    },
+    ProjectToolSpec {
+        id: "roo-code",
+        name: "Roo Code",
+        skill_relative_path: ".roo/skills",
+        detect_relative_path: ".roo",
+        target_key: ".roo/skills",
+        mcp_relative_path: None,
+    },
+    ProjectToolSpec {
+        id: "zencoder",
+        name: "Zencoder",
+        skill_relative_path: ".zencoder/skills",
+        detect_relative_path: ".zencoder",
+        target_key: ".zencoder/skills",
+        mcp_relative_path: None,
+    },
+    ProjectToolSpec {
+        id: "trae-cn",
+        name: "Trae CN",
+        skill_relative_path: ".trae-cn/skills",
+        detect_relative_path: ".trae-cn",
+        target_key: ".trae-cn/skills",
+        mcp_relative_path: None,
+    },
+    ProjectToolSpec {
+        id: "hermes",
+        name: "Hermes",
+        skill_relative_path: ".hermes/skills",
+        detect_relative_path: ".hermes",
+        target_key: ".hermes/skills",
+        mcp_relative_path: None,
+    },
+    ProjectToolSpec {
+        id: "github-copilot",
+        name: "GitHub Copilot",
+        skill_relative_path: ".copilot/skills",
+        detect_relative_path: ".copilot",
+        target_key: ".copilot/skills",
+        mcp_relative_path: None,
     },
 ];
 
@@ -149,6 +357,16 @@ pub struct ProjectSkillInstance {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ProjectSkillTarget {
+    pub tool_id: String,
+    pub tool_name: String,
+    pub skill_relative_path: String,
+    pub target_key: String,
+    pub is_detected: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ProjectMcpInstance {
     pub tool_id: String,
     pub tool_name: String,
@@ -170,6 +388,7 @@ pub struct ProjectDetail {
     pub root_path: String,
     pub canonical_root_path: String,
     pub availability: String,
+    pub skill_targets: Vec<ProjectSkillTarget>,
     pub skills: Vec<ProjectSkillInstance>,
     pub mcp_servers: Vec<ProjectMcpInstance>,
     pub errors: Vec<String>,
@@ -182,6 +401,24 @@ pub struct ProjectWorkspaceSnapshot {
     pub projects: Vec<ProjectDetail>,
     pub managed_skills: Vec<ProjectManagedSkill>,
     pub managed_mcp_servers: Vec<ProjectManagedMcp>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectSkillDistributionResult {
+    pub managed_skill_path: String,
+    pub skill_name: String,
+    pub tool_id: String,
+    pub tool_name: String,
+    pub status: String,
+    pub message: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectSkillDistributionBatch {
+    pub workspace: ProjectWorkspaceSnapshot,
+    pub results: Vec<ProjectSkillDistributionResult>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -298,33 +535,252 @@ pub fn distribute_skill_to_project(
     let project_root = project_root(&persistence, &project_id)?;
     let tool = project_tool_spec(&tool_id)?;
     let managed_skill = managed_skill_source(&managed_skill_path)?;
-    let target_root = safe_project_path(&project_root, tool.skill_relative_path)?;
-    let target_path = target_root.join(target_name.trim());
-    let disabled_root = project_disabled_skill_root(&project_root, tool)?;
-    let disabled_path = disabled_root.join(target_name.trim());
+    distribute_skill_to_project_entry(
+        &mut persistence,
+        &project_root,
+        &project_id,
+        tool,
+        &managed_skill,
+        target_name.trim(),
+    )?;
+    save_project_persistence(&persistence)?;
+    build_project_workspace_snapshot()
+}
+
+#[tauri::command]
+pub fn distribute_skills_to_project(
+    project_id: String,
+    tool_ids: Vec<String>,
+    managed_skill_paths: Vec<String>,
+) -> Result<ProjectSkillDistributionBatch, String> {
+    if tool_ids.is_empty() || managed_skill_paths.is_empty() {
+        return Err("请至少选择一个目标工具和一个托管 Skill。".into());
+    }
+
+    let mut persistence = load_project_persistence()?;
+    let project_root = project_root(&persistence, &project_id)?;
+    let unique_tool_ids = tool_ids.into_iter().collect::<BTreeSet<_>>();
+    let unique_skill_paths = managed_skill_paths.into_iter().collect::<BTreeSet<_>>();
+    let mut results = Vec::new();
+
+    for managed_skill_path in unique_skill_paths {
+        let managed_skill = match managed_skill_source(&managed_skill_path) {
+            Ok(skill) => skill,
+            Err(error) => {
+                for tool_id in &unique_tool_ids {
+                    results.push(distribution_result(
+                        &managed_skill_path,
+                        "",
+                        tool_id,
+                        tool_id,
+                        "failed",
+                        &error,
+                    ));
+                }
+                continue;
+            }
+        };
+        let mut processed_targets = BTreeMap::<String, (String, String)>::new();
+
+        for tool_id in &unique_tool_ids {
+            let tool = match project_tool_spec(tool_id) {
+                Ok(tool) => tool,
+                Err(error) => {
+                    results.push(distribution_result(
+                        &managed_skill_path,
+                        &managed_skill.name,
+                        tool_id,
+                        tool_id,
+                        "failed",
+                        &error,
+                    ));
+                    continue;
+                }
+            };
+            if let Some((status, message)) = processed_targets.get(tool.target_key) {
+                results.push(distribution_result(
+                    &managed_skill_path,
+                    &managed_skill.name,
+                    tool.id,
+                    tool.name,
+                    status,
+                    message,
+                ));
+                continue;
+            }
+
+            let outcome = distribute_skill_to_project_batch_entry(
+                &mut persistence,
+                &project_root,
+                &project_id,
+                tool,
+                &managed_skill,
+            );
+            processed_targets.insert(tool.target_key.into(), outcome.clone());
+            results.push(distribution_result(
+                &managed_skill_path,
+                &managed_skill.name,
+                tool.id,
+                tool.name,
+                &outcome.0,
+                &outcome.1,
+            ));
+        }
+    }
+
+    let workspace = build_project_workspace_snapshot()?;
+    Ok(ProjectSkillDistributionBatch { workspace, results })
+}
+
+fn distribute_skill_to_project_batch_entry(
+    persistence: &mut ProjectPersistence,
+    project_root: &Path,
+    project_id: &str,
+    tool: ProjectToolSpec,
+    managed_skill: &ManagedSkillSource,
+) -> (String, String) {
+    if let Err(error) = validate_entry_name(&managed_skill.name, "Skill 名称") {
+        return ("failed".into(), error);
+    }
+
+    let target_root = match safe_project_path(project_root, tool.skill_relative_path) {
+        Ok(path) => path,
+        Err(error) => return ("failed".into(), error),
+    };
+    let disabled_root = match project_disabled_skill_root(project_root, tool) {
+        Ok(path) => path,
+        Err(error) => return ("failed".into(), error),
+    };
+    let target_path = target_root.join(&managed_skill.name);
+    let disabled_path = disabled_root.join(&managed_skill.name);
+    let existing_paths = [&target_path, &disabled_path]
+        .into_iter()
+        .filter(|path| fs::symlink_metadata(path).is_ok())
+        .collect::<Vec<_>>();
+
+    if existing_paths.len() > 1 {
+        return (
+            "conflict".into(),
+            "启用和关闭目录中都存在同名 Skill。".into(),
+        );
+    }
+    if let Some(existing_path) = existing_paths.first() {
+        let existing_hash = hash_skill_directory(existing_path);
+        let managed_hash = hash_skill_directory(&managed_skill.path);
+        if existing_hash.is_err() || managed_hash.is_err() || existing_hash != managed_hash {
+            return (
+                "conflict".into(),
+                "项目中已存在同名但内容不同的 Skill。".into(),
+            );
+        }
+        let relative_path = match relative_path_string(project_root, &target_path) {
+            Ok(path) => path,
+            Err(error) => return ("failed".into(), error),
+        };
+        upsert_project_skill_binding(
+            persistence,
+            project_id,
+            tool.id,
+            &relative_path,
+            managed_skill,
+            &existing_hash.unwrap_or_default(),
+        );
+        return match save_project_persistence(persistence) {
+            Ok(()) => (
+                "skipped".into(),
+                "项目中已存在相同内容，已保留现有文件。".into(),
+            ),
+            Err(error) => ("failed".into(), error),
+        };
+    }
+
+    let distributed = distribute_skill_to_project_entry(
+        persistence,
+        project_root,
+        project_id,
+        tool,
+        managed_skill,
+        &managed_skill.name,
+    );
+    if let Err(error) = distributed {
+        return ("failed".into(), error);
+    }
+    match save_project_persistence(persistence) {
+        Ok(()) => ("distributed".into(), "已下发到项目。".into()),
+        Err(error) => ("failed".into(), error),
+    }
+}
+
+fn distribute_skill_to_project_entry(
+    persistence: &mut ProjectPersistence,
+    project_root: &Path,
+    project_id: &str,
+    tool: ProjectToolSpec,
+    managed_skill: &ManagedSkillSource,
+    target_name: &str,
+) -> Result<(), String> {
+    let target_root = safe_project_path(project_root, tool.skill_relative_path)?;
+    let target_path = target_root.join(target_name);
+    let disabled_root = project_disabled_skill_root(project_root, tool)?;
+    let disabled_path = disabled_root.join(target_name);
     if fs::symlink_metadata(&target_path).is_ok() || fs::symlink_metadata(&disabled_path).is_ok() {
         return Err("项目目标位置已存在，请先比较或选择其他名称。".into());
     }
 
     replace_skill_directory(&managed_skill.path, &target_path, false)?;
     let baseline_hash = hash_skill_directory(&target_path)?;
-    let relative_path = relative_path_string(&project_root, &target_path)?;
+    let relative_path = relative_path_string(project_root, &target_path)?;
+    upsert_project_skill_binding(
+        persistence,
+        project_id,
+        tool.id,
+        &relative_path,
+        managed_skill,
+        &baseline_hash,
+    );
+    Ok(())
+}
+
+fn upsert_project_skill_binding(
+    persistence: &mut ProjectPersistence,
+    project_id: &str,
+    tool_id: &str,
+    project_relative_path: &str,
+    managed_skill: &ManagedSkillSource,
+    baseline_hash: &str,
+) {
     persistence.skill_bindings.retain(|binding| {
         !(binding.project_id == project_id
             && binding.tool_id == tool_id
-            && binding.project_relative_path == relative_path)
+            && binding.project_relative_path == project_relative_path)
     });
     persistence.skill_bindings.push(ProjectSkillBinding {
-        project_id,
-        tool_id,
-        project_relative_path: relative_path,
+        project_id: project_id.into(),
+        tool_id: tool_id.into(),
+        project_relative_path: project_relative_path.into(),
         managed_skill_path: managed_skill.path.to_string_lossy().to_string(),
-        project_capability: managed_skill.capability,
-        baseline_hash,
+        project_capability: managed_skill.capability.clone(),
+        baseline_hash: baseline_hash.into(),
         last_synced_at: now_label(),
     });
-    save_project_persistence(&persistence)?;
-    build_project_workspace_snapshot()
+}
+
+fn distribution_result(
+    managed_skill_path: &str,
+    skill_name: &str,
+    tool_id: &str,
+    tool_name: &str,
+    status: &str,
+    message: &str,
+) -> ProjectSkillDistributionResult {
+    ProjectSkillDistributionResult {
+        managed_skill_path: managed_skill_path.into(),
+        skill_name: skill_name.into(),
+        tool_id: tool_id.into(),
+        tool_name: tool_name.into(),
+        status: status.into(),
+        message: message.into(),
+    }
 }
 
 #[tauri::command]
@@ -677,6 +1133,7 @@ pub fn unlink_project_resource(
 }
 
 struct ManagedSkillSource {
+    name: String,
     path: PathBuf,
     capability: String,
 }
@@ -730,6 +1187,7 @@ fn build_project_detail(
             root_path: project.root_path.clone(),
             canonical_root_path: project.canonical_root_path.clone(),
             availability: "missing".into(),
+            skill_targets: project_skill_targets(&root),
             skills: Vec::new(),
             mcp_servers: Vec::new(),
             errors: Vec::new(),
@@ -773,10 +1231,25 @@ fn build_project_detail(
         root_path: project.root_path.clone(),
         canonical_root_path: project.canonical_root_path.clone(),
         availability: "available".into(),
+        skill_targets: project_skill_targets(&root),
         skills,
         mcp_servers,
         errors,
     }
+}
+
+fn project_skill_targets(project_root: &Path) -> Vec<ProjectSkillTarget> {
+    PROJECT_TOOL_SPECS
+        .iter()
+        .map(|tool| ProjectSkillTarget {
+            tool_id: tool.id.into(),
+            tool_name: tool.name.into(),
+            skill_relative_path: tool.skill_relative_path.into(),
+            target_key: tool.target_key.into(),
+            is_detected: project_root.join(tool.skill_relative_path).exists()
+                || project_root.join(tool.detect_relative_path).exists(),
+        })
+        .collect()
 }
 
 fn project_managed_skills() -> Vec<ProjectManagedSkill> {
@@ -1144,6 +1617,7 @@ fn managed_skill_source(path: &str) -> Result<ManagedSkillSource, String> {
         .find(|skill| path_key(Path::new(&skill.local_path)) == requested_key)
         .ok_or_else(|| "未找到可下发的托管 Skill。".to_string())?;
     Ok(ManagedSkillSource {
+        name: skill.name,
         path: PathBuf::from(skill.local_path),
         capability: skill.project_capability,
     })
@@ -2085,11 +2559,112 @@ fn unique_suffix() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::workspace::TEST_ENV_LOCK;
 
     fn test_temp_dir(label: &str) -> PathBuf {
         let path = std::env::temp_dir().join(format!("skilldock-{label}-{}", unique_suffix()));
         fs::create_dir_all(&path).unwrap();
         path
+    }
+
+    fn run_with_temp_home<T>(label: &str, callback: impl FnOnce(PathBuf) -> T) -> T {
+        let _guard = TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let temp_home = test_temp_dir(label);
+        let original_home = std::env::var_os("HOME");
+        // SAFETY: tests serialize HOME mutation with a process-wide mutex.
+        unsafe {
+            std::env::set_var("HOME", &temp_home);
+        }
+        let result = callback(temp_home.clone());
+        match original_home {
+            Some(home) => unsafe {
+                std::env::set_var("HOME", home);
+            },
+            None => unsafe {
+                std::env::remove_var("HOME");
+            },
+        }
+        let _ = fs::remove_dir_all(temp_home);
+        result
+    }
+
+    #[test]
+    fn exposes_all_project_skill_targets_and_detects_existing_tool_directories() {
+        let temp = test_temp_dir("project-skill-targets");
+        fs::create_dir_all(temp.join(".cursor")).unwrap();
+        fs::create_dir_all(temp.join(".gemini/antigravity/skills")).unwrap();
+
+        let targets = project_skill_targets(&temp);
+
+        assert_eq!(targets.len(), 28);
+        assert!(
+            targets
+                .iter()
+                .find(|target| target.tool_id == "cursor")
+                .unwrap()
+                .is_detected
+        );
+        assert!(
+            targets
+                .iter()
+                .find(|target| target.tool_id == "antigravity")
+                .unwrap()
+                .is_detected
+        );
+        assert!(
+            !targets
+                .iter()
+                .find(|target| target.tool_id == "claude-code")
+                .unwrap()
+                .is_detected
+        );
+        fs::remove_dir_all(temp).unwrap();
+    }
+
+    #[test]
+    fn batch_distribution_skips_equal_content_and_reports_different_content_as_conflict() {
+        run_with_temp_home("project-skill-batch", |_| {
+            let temp = test_temp_dir("project-skill-batch-root");
+            let project_root = temp.canonicalize().unwrap();
+            let managed_path = temp.join("managed/demo");
+            fs::create_dir_all(&managed_path).unwrap();
+            fs::write(managed_path.join("SKILL.md"), "# Demo\n").unwrap();
+            let managed_skill = ManagedSkillSource {
+                name: "demo".into(),
+                path: managed_path,
+                capability: PROJECT_CAPABILITY_BIDIRECTIONAL.into(),
+            };
+            let mut persistence = ProjectPersistence::default();
+
+            let equal_target = project_root.join(".claude/skills/demo");
+            fs::create_dir_all(&equal_target).unwrap();
+            fs::write(equal_target.join("SKILL.md"), "# Demo\n").unwrap();
+            let skipped = distribute_skill_to_project_batch_entry(
+                &mut persistence,
+                &project_root,
+                "project-demo",
+                project_tool_spec("claude-code").unwrap(),
+                &managed_skill,
+            );
+            assert_eq!(skipped.0, "skipped");
+            assert_eq!(persistence.skill_bindings.len(), 1);
+
+            let conflicting_target = project_root.join(".cursor/skills/demo");
+            fs::create_dir_all(&conflicting_target).unwrap();
+            fs::write(conflicting_target.join("SKILL.md"), "# Different\n").unwrap();
+            let conflict = distribute_skill_to_project_batch_entry(
+                &mut persistence,
+                &project_root,
+                "project-demo",
+                project_tool_spec("cursor").unwrap(),
+                &managed_skill,
+            );
+            assert_eq!(conflict.0, "conflict");
+            assert_eq!(persistence.skill_bindings.len(), 1);
+            fs::remove_dir_all(temp).unwrap();
+        });
     }
 
     #[test]
@@ -2220,7 +2795,7 @@ mod tests {
 
         let error = set_project_skill_enabled_state(
             &project_root,
-            PROJECT_TOOL_SPECS[2],
+            project_tool_spec("cursor").unwrap(),
             ".cursor/skills/demo",
             false,
         )

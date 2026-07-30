@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { beforeEach, vi } from "vitest";
 import {
+  distributeSkillsToProject,
   fetchProjectWorkspaces,
   previewProjectSkillSync,
   syncProjectMcp,
@@ -21,6 +22,10 @@ test("maps project workspace and sync commands to Tauri arguments", async () => 
   vi.mocked(invoke)
     .mockResolvedValueOnce(structuredClone(projectWorkspaceFixture))
     .mockResolvedValueOnce({
+      workspace: structuredClone(projectWorkspaceFixture),
+      results: [],
+    })
+    .mockResolvedValueOnce({
       direction: "managed-to-project",
       sourceHash: "source",
       targetHash: "target",
@@ -30,6 +35,11 @@ test("maps project workspace and sync commands to Tauri arguments", async () => 
     .mockResolvedValueOnce(structuredClone(projectWorkspaceFixture));
 
   await fetchProjectWorkspaces();
+  await distributeSkillsToProject({
+    projectId: "project-demo-workspace",
+    toolIds: ["claude-code", "codex"],
+    managedSkillPaths: ["/Users/demo/.skilldock/skills/skill-publisher"],
+  });
   await previewProjectSkillSync({
     projectId: "project-demo-workspace",
     toolId: "claude-code",
@@ -52,19 +62,24 @@ test("maps project workspace and sync commands to Tauri arguments", async () => 
   });
 
   expect(invoke).toHaveBeenNthCalledWith(1, "list_project_workspaces", {});
-  expect(invoke).toHaveBeenNthCalledWith(2, "preview_project_skill_sync", {
+  expect(invoke).toHaveBeenNthCalledWith(2, "distribute_skills_to_project", {
+    projectId: "project-demo-workspace",
+    toolIds: ["claude-code", "codex"],
+    managedSkillPaths: ["/Users/demo/.skilldock/skills/skill-publisher"],
+  });
+  expect(invoke).toHaveBeenNthCalledWith(3, "preview_project_skill_sync", {
     projectId: "project-demo-workspace",
     toolId: "claude-code",
     projectRelativePath: ".claude/skills/skill-publisher",
     direction: "managed-to-project",
   });
-  expect(invoke).toHaveBeenNthCalledWith(3, "toggle_project_skill", {
+  expect(invoke).toHaveBeenNthCalledWith(4, "toggle_project_skill", {
     projectId: "project-demo-workspace",
     toolId: "cursor",
     projectRelativePath: ".cursor/skills/skill-publisher",
     enabled: false,
   });
-  expect(invoke).toHaveBeenNthCalledWith(4, "sync_project_mcp", {
+  expect(invoke).toHaveBeenNthCalledWith(5, "sync_project_mcp", {
     projectId: "project-demo-workspace",
     toolId: "cursor",
     serverName: "context7",
