@@ -563,9 +563,9 @@ code {
 .app-notification__message {
   min-width: 0;
   color: var(--heading);
-  font-size: 0.82rem;
-  font-weight: 500;
-  line-height: 1.25;
+  font-size: 0.8rem;
+  font-weight: 400;
+  line-height: 1.35;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -598,8 +598,8 @@ code {
   border-radius: 6px;
   background: rgba(59, 130, 246, 0.08);
   color: var(--accent);
-  font-size: 0.76rem;
-  font-weight: 500;
+  font-size: 0.75rem;
+  font-weight: 400;
   cursor: pointer;
   transition:
     background-color var(--motion-fast) var(--ease-standard),
@@ -4460,8 +4460,10 @@ code {
 }
 
 .source-tab-row {
-  gap: 10px;
-  padding-top: 2px;
+  gap: 4px;
+  padding: 3px;
+  border-radius: 10px;
+  background: var(--surface-muted);
   flex-shrink: 0;
 }
 
@@ -4604,6 +4606,7 @@ code {
 .market-panel .panel-header h2 {
   margin: 0;
   font-size: 0.92rem;
+  font-weight: 500;
   line-height: 1.2;
 }
 
@@ -4639,11 +4642,34 @@ code {
 }
 
 .source-tab {
-  min-height: 36px;
+  min-height: 32px;
   padding: 0 12px;
-  font-size: 0.84rem;
+  border-color: transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: #475569;
+  font-size: 0.8rem;
+  font-weight: 400;
   line-height: 1;
-  border-radius: 999px;
+  box-shadow: none;
+}
+
+.source-tab:hover {
+  border-color: transparent;
+  background: rgba(117, 128, 147, 0.1);
+  color: var(--heading);
+  box-shadow: none;
+}
+
+.source-tab.is-selected,
+.source-tab.is-selected:hover,
+.source-tab.is-selected:active,
+.source-tab.is-selected:focus-visible {
+  border-color: transparent;
+  background: var(--button-primary-soft);
+  color: var(--accent);
+  font-weight: 500;
+  box-shadow: none;
 }
 
 .market-tab__icon {
@@ -4944,6 +4970,23 @@ code {
   flex-wrap: wrap;
   align-items: flex-start;
   gap: 6px;
+}
+
+.marketplace-skill-card__chips {
+  flex-wrap: nowrap;
+  overflow: hidden;
+}
+
+.marketplace-skill-card__author {
+  flex: 1 1 auto;
+}
+
+.marketplace-skill-card__author-text {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .install-card__chip {
@@ -5254,6 +5297,7 @@ code {
 
 .install-card__chip--metric {
   color: var(--heading);
+  flex-shrink: 0;
 }
 
 .install-meta {
@@ -14582,6 +14626,30 @@ button.settings-form-item:disabled {
   box-shadow:
     0 1px 0 rgba(255, 255, 255, 0.035) inset,
     0 5px 14px rgba(0, 0, 0, 0.18);
+}
+
+:root[data-theme="dark"] .source-tab {
+  border-color: transparent;
+  background: transparent;
+  color: #b8b8b8;
+  box-shadow: none;
+}
+
+:root[data-theme="dark"] .source-tab:hover:not(:disabled) {
+  border-color: transparent;
+  background: rgba(255, 255, 255, 0.055);
+  color: var(--heading);
+  box-shadow: none;
+}
+
+:root[data-theme="dark"] .source-tab.is-selected,
+:root[data-theme="dark"] .source-tab.is-selected:hover,
+:root[data-theme="dark"] .source-tab.is-selected:active,
+:root[data-theme="dark"] .source-tab.is-selected:focus-visible {
+  border-color: transparent;
+  background: var(--button-primary-soft);
+  color: var(--accent);
+  box-shadow: none;
 }
 
 :root[data-theme="dark"] .status-badge {

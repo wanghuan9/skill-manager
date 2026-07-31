@@ -220,6 +220,7 @@ pub struct SkillInstanceMetadata {
     #[serde(default)]
     pub path_error: String,
     #[serde(default)]
+    pub content_hash: String,
     pub marketplace_owner: String,
     #[serde(default)]
     pub marketplace_slug: String,
@@ -248,6 +249,13 @@ pub struct MarketplaceSkill {
     #[serde(default)]
     pub skill_path: String,
     #[serde(default)]
+    pub installed: bool,
+    #[serde(default)]
+    pub update_available: bool,
+    #[serde(default)]
+    pub current_version: String,
+    #[serde(default)]
+    pub category_label: String,
     pub marketplace_url: String,
     #[serde(default)]
     pub owner: String,

@@ -178,6 +178,9 @@ export function buildInstalledMarketplaceSkillIds(
   const installedClawhubSkills = installedSkills.filter((skill) => skill.updateDriver === "clawhub");
 
   for (const marketplaceSkill of marketplaceSkills) {
+    if (marketplaceSkill.installed) {
+      installedMarketplaceSkillIds.add(marketplaceSkill.id);
+    }
     if (marketplaceSkill.installDriver === "clawhub") {
       const isInstalled = installedClawhubSkills.some((installedSkill) => {
         const slugMatches = Boolean(marketplaceSkill.slug)
@@ -202,6 +205,9 @@ export function buildInstalledMarketplaceSkillIds(
   }
 
   for (const marketplaceSkill of marketplaceSkills) {
+    if (installedMarketplaceSkillIds.has(marketplaceSkill.id)) {
+      continue;
+    }
     if (marketplaceSkill.installDriver === "clawhub") {
       continue;
     }

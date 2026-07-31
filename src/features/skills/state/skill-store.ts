@@ -8,8 +8,8 @@ export type SkillStatusFilter = "all" | SkillCollabStatus | "disabled";
 export type SkillManagementOwner = "skilldock" | "agent-skills-cli" | "external";
 export type ManagedSkillOwnerFilter = "all" | Exclude<SkillManagementOwner, "external">;
 
-export type SourceType = "github" | "gitlab" | "gitee" | "well-known" | "local";
-export type MarketplaceSourceSite = "skills.sh" | "clawhub";
+export type SourceType = "github" | "gitlab" | "gitee" | "well-known" | "local" | "marketplace";
+export type MarketplaceSourceSite = "skills.sh" | "skillsmp" | "skillhub" | "clawhub";
 export type McpMarketplaceSourceSite = "MCP.Directory";
 export type PluginHostTool = "claude-code" | "cursor" | "codex";
 export type PluginKind = "plugin-repo" | "marketplace-root" | "standalone-assets" | "unknown";
@@ -178,6 +178,7 @@ export type SkillSummary = {
   updateDriver?: "git" | "agent-skills-cli" | "clawhub" | "none";
   skillEntries?: string[];
   pathError?: string;
+  contentHash?: string;
   marketplaceOwner?: string;
   marketplaceSlug?: string;
   marketplaceVersion?: string;
@@ -256,6 +257,10 @@ export type MarketplaceSkill = {
   popularityLabel: string;
   topicLabel?: string;
   avatarUrl?: string | null;
+  installed?: boolean;
+  updateAvailable?: boolean;
+  currentVersion?: string;
+  categoryLabel?: string;
   owner?: string;
   slug?: string;
   version?: string;

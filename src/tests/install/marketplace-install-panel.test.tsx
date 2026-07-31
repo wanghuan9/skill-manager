@@ -330,6 +330,68 @@ test("installs a marketplace skill from the detail modal", async () => {
   expect(installFromMarket).toHaveBeenCalledWith(marketplaceSkillFixtures[0]);
 });
 
+test("loads SkillHub files with the marketplace slug and version", async () => {
+  const skill = {
+    ...marketplaceSkillFixtures[0],
+    id: "skillhub-web-tools-guide",
+    name: "web-tools-guide",
+    sourceSite: "skillhub" as const,
+    sourceType: "marketplace" as const,
+    sourceUrl: "https://skillhub.cn/skills/web-tools-guide",
+    skillPath: "web-tools-guide",
+    currentVersion: "1.0.2",
+    categoryLabel: "信息检索",
+    maintainer: "Tencent Cloud Lighthouse",
+  };
+
+  renderWithI18n(
+    <NotificationProvider>
+      <MarketplaceInstallPanel
+        activeSourceSite="skillhub"
+        sourceTabs={["skills.sh", "skillsmp", "skillhub"]}
+        marketplaceSkills={[skill]}
+        onSourceChange={vi.fn()}
+        searchQuery=""
+        onSearchQueryChange={vi.fn()}
+        searchScope="all"
+        onSearchScopeChange={vi.fn()}
+        isSearching={false}
+        isSearchLoading={false}
+        isInitialLoading={false}
+        isLoadingMore={false}
+        hasMore={false}
+        installedMarketplaceSkillIds={new Set()}
+        onLoadMore={vi.fn()}
+      />
+    </NotificationProvider>,
+  );
+
+  const skillHeading = screen.getByRole("heading", { name: skill.name, level: 3 });
+  const skillCard = skillHeading.closest("article");
+  if (!skillCard) {
+    throw new Error("SkillHub card was not rendered");
+  }
+  expect(within(skillCard).getByText("分类: 信息检索")).toBeInTheDocument();
+  expect(within(skillCard).queryByText("来源: skillhub")).not.toBeInTheDocument();
+  expect(within(skillCard).getByText("作者: Tencent Cloud Lighthouse").parentElement).toHaveClass(
+    "marketplace-skill-card__author",
+  );
+
+  await userEvent.click(skillHeading);
+  const detailDialog = screen.getByRole("dialog", { name: `${skill.name} 详情` });
+
+  await waitFor(() => expect(mockedFetchMarketplaceSkillFileBrowser).toHaveBeenCalledWith({
+    sourceSite: "skillhub",
+    sourceUrl: skill.sourceUrl,
+    skillPath: skill.skillPath,
+    skillName: skill.name,
+    skillId: skill.id,
+    version: skill.currentVersion,
+  }));
+  expect(within(detailDialog).getAllByText("查看商店")).toHaveLength(1);
+  expect(within(detailDialog).queryByText("打开仓库")).not.toBeInTheDocument();
+});
+
 test("prompts signed-out users to connect GitHub when the file tree is rate limited", async () => {
   const reportGithubRateLimit = vi.fn();
   const openGithubSettings = vi.fn();

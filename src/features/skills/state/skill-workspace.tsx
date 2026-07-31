@@ -68,6 +68,10 @@ import {
   dedupeMarketplaceSkills,
   sortMarketplaceSkillsByPopularity,
 } from "@/features/skills/utils/marketplace-skills";
+import {
+  createMarketplaceSourceRecord,
+  MARKETPLACE_SOURCE_SITES,
+} from "@/features/skills/utils/marketplace-sources";
 import type {
   AppLanguage,
   AppLanguageSource,
@@ -110,7 +114,6 @@ const APP_THEME_STORAGE_KEY = "skilldock.settings.theme";
 const APP_SKILL_SOURCE_VIEW_STYLE_STORAGE_KEY = "skilldock.settings.skillSourceViewStyle";
 const FALLBACK_OPEN_TOOL_ID = "finder";
 const MARKETPLACE_PAGE_SIZE = 18;
-const MARKETPLACE_SOURCE_SITES: MarketplaceSourceSite[] = ["skills.sh", "clawhub"];
 const STARTUP_LOAD_DELAY_MS = 0;
 const AUTO_GIT_STATE_REFRESH_INTERVAL_MS = 10 * 60 * 1000;
 const AUTO_GIT_STATE_REFRESH_COOLDOWN_MS = 60 * 1000;
@@ -602,40 +605,26 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
     useState(usesFixtureData);
   const [isMarketplaceLoadingBySource, setIsMarketplaceLoadingBySource] = useState<
     Record<MarketplaceSourceSite, boolean>
-  >({
-    "skills.sh": false,
-    clawhub: false,
-  });
+  >(() => createMarketplaceSourceRecord(() => false));
   const [marketplaceErrorBySource, setMarketplaceErrorBySource] = useState<
     Record<MarketplaceSourceSite, string>
-  >({
-    "skills.sh": "",
-    clawhub: "",
-  });
+  >(() => createMarketplaceSourceRecord(() => ""));
   const [marketplaceSearchError, setMarketplaceSearchError] = useState("");
   const [isSearchLoading, setIsSearchLoading] = useState(false);
   const [installingMarketplaceSkillIds, setInstallingMarketplaceSkillIds] = useState<Set<string>>(new Set());
   const installingMarketplaceSkillIdsRef = useRef(new Set<string>());
-  const marketplaceLoadingBySourceRef = useRef<Record<MarketplaceSourceSite, boolean>>({
-    "skills.sh": false,
-    clawhub: false,
-  });
+  const marketplaceLoadingBySourceRef = useRef<Record<MarketplaceSourceSite, boolean>>(
+    createMarketplaceSourceRecord(() => false),
+  );
   const [marketplacePageBySource, setMarketplacePageBySource] = useState<
     Record<MarketplaceSourceSite, number>
-  >({
-    "skills.sh": 0,
-    clawhub: 0,
-  });
+  >(() => createMarketplaceSourceRecord(() => 0));
   const [hasMoreMarketplaceSkillsBySource, setHasMoreMarketplaceSkillsBySource] = useState<
     Record<MarketplaceSourceSite, boolean>
-  >({
-    "skills.sh": true,
-    clawhub: true,
-  });
-  const marketplaceHasMoreBySourceRef = useRef<Record<MarketplaceSourceSite, boolean>>({
-    "skills.sh": true,
-    clawhub: true,
-  });
+  >(() => createMarketplaceSourceRecord(() => true));
+  const marketplaceHasMoreBySourceRef = useRef<Record<MarketplaceSourceSite, boolean>>(
+    createMarketplaceSourceRecord(() => true),
+  );
   const gitStateRefreshInFlightRef = useRef<Promise<void> | null>(null);
   const startupGitStateRefreshCompletedRef = useRef(usesFixtureData);
   const workspaceMutationVersionRef = useRef(0);
