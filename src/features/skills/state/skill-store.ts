@@ -399,6 +399,7 @@ export type BackupStatus = {
   repositoryUrl: string;
   lastSyncAt: string;
   lastError: string;
+  phase: "disabled" | "enabling" | "backingUp" | "restoring" | "enabled" | "error";
   syncing: boolean;
   pendingConflicts: number;
 };
@@ -406,8 +407,27 @@ export type BackupStatus = {
 export type BackupSyncResult = {
   status: BackupStatus;
   includedSkills: number;
+  includedMcpServers: number;
+  includedPlugins: number;
+  preferencesIncluded: boolean;
   excludedSkills: string[];
+  warnings: string[];
   changed: boolean;
+};
+
+export type CloudBackupNode = {
+  commitId: string;
+  createdAt: string;
+  deviceLabel: string;
+  skillCount: number;
+  mcpCount: number;
+  pluginCount: number;
+};
+
+export type WorkspaceRestorePreview = {
+  added: number;
+  overwritten: number;
+  deleted: number;
 };
 
 export type BackupSkillMetadata = {

@@ -54,6 +54,7 @@ const AGENT_CLI_UP_TO_DATE_TEXT: &str = "Agent CLI Skill 已是最新版本。";
 const SKILL_LIBRARY_REFRESHED_EVENT: &str = "skill-library-refreshed";
 const LOCAL_SKILL_TOOL_STATE_CONCURRENCY: usize = 2;
 const PACKAGE_ID_HASH_LEN: usize = 8;
+const LOCAL_IMPORT_SOURCE_BACKUP_SUFFIX: &str = ".skilldock-import-backup";
 
 fn default_installed_skills() -> Vec<SkillSummary> {
     Vec::new()
@@ -2327,25 +2328,34 @@ fn software_exists(spec: &SoftwareDetectionSpec) -> bool {
             .any(|executable_name| executable_exists(executable_name))
 }
 
+fn detect_tool_installation(
+    config_paths: &[PathBuf],
+    software_spec: &SoftwareDetectionSpec,
+    requires_software_detection: bool,
+) -> bool {
+    if config_paths.is_empty() {
+        return software_exists(software_spec);
+    }
+
+    let has_config = config_paths.iter().any(|path| path.exists());
+    has_config && (!requires_software_detection || software_exists(software_spec))
+}
+
+fn tool_installation_label(installed: bool) -> String {
+    if installed { "已安装" } else { "未安装" }.to_string()
+}
+
+#[cfg(test)]
 fn detect_tool_installation_label(
     config_paths: &[PathBuf],
     software_spec: &SoftwareDetectionSpec,
     requires_software_detection: bool,
 ) -> String {
-    if config_paths.is_empty() {
-        return if software_exists(software_spec) {
-            "已安装".to_string()
-        } else {
-            "未安装".to_string()
-        };
-    }
-
-    let has_config = config_paths.iter().any(|path| path.exists());
-    if has_config && (!requires_software_detection || software_exists(software_spec)) {
-        "已安装".to_string()
-    } else {
-        "未安装".to_string()
-    }
+    tool_installation_label(detect_tool_installation(
+        config_paths,
+        software_spec,
+        requires_software_detection,
+    ))
 }
 
 fn mcp_config_path_for_tool(tool_id: &str, home_path: &Path) -> PathBuf {
@@ -2793,6 +2803,11 @@ fn build_tool_configs() -> Vec<ToolConfig> {
                 let mcp_config_path = mcp_config_path_for_tool(id, &home_path);
                 let supports_mcp = supports_mcp_for_tool(id);
                 let mcp_config_path_recognized = !mcp_config_path.as_os_str().is_empty();
+                let installed = detect_tool_installation(
+                    &config_paths,
+                    &software_spec,
+                    primary_type == "editor",
+                );
 
                 ToolConfig {
                     id: id.into(),
@@ -2801,11 +2816,8 @@ fn build_tool_configs() -> Vec<ToolConfig> {
                     mcp_config_path: mcp_config_path.to_string_lossy().to_string(),
                     supports_mcp,
                     mcp_config_path_recognized,
-                    status_label: detect_tool_installation_label(
-                        &config_paths,
-                        &software_spec,
-                        primary_type == "editor",
-                    ),
+                    status_label: tool_installation_label(installed),
+                    is_installed: installed,
                     is_enabled,
                     primary_type: primary_type.into(),
                     surface_types: surface_types.into_iter().map(|item| item.into()).collect(),
@@ -2844,7 +2856,8 @@ fn build_registered_tool_configs(home_path: &Path) -> Vec<ToolConfig> {
                     tool_adapters::McpAdapterFormat::None
                 ),
                 mcp_config_path_recognized: mcp_config_path.is_some(),
-                status_label: if installed { "已安装" } else { "未安装" }.into(),
+                status_label: tool_installation_label(installed),
+                is_installed: installed,
                 is_enabled: true,
                 primary_type: definition.primary_type.into(),
                 surface_types: definition
@@ -2939,43 +2952,75 @@ fn installed_tool_sync_entries_from_configs(tool_configs: &[ToolConfig]) -> Vec<
         .collect()
 }
 
-fn inspect_skill_tool_status(
+enum SkillToolState {
+    Disabled,
+    Enabled,
+    Synced,
+    NeedsResync,
+}
+
+impl SkillToolState {
+    fn is_enabled(&self) -> bool {
+        !matches!(self, Self::Disabled)
+    }
+
+    fn status_label(&self) -> &'static str {
+        match self {
+            Self::Disabled => "未启用",
+            Self::Enabled => "已启用",
+            Self::Synced => "已同步",
+            Self::NeedsResync => "需要重同步",
+        }
+    }
+}
+
+fn inspect_skill_tool_state(
     skill: &SkillSummary,
     tool_name: &str,
     agent_cli_status: &crate::agent_skills_cli::AgentSkillsCliStatus,
-) -> String {
+) -> SkillToolState {
     let Ok(tool_id) = tool_name_to_id(tool_name) else {
-        return "未启用".into();
+        return SkillToolState::Disabled;
     };
     let Ok(tool_skills_path) = get_tool_skills_path(&tool_id) else {
-        return "未启用".into();
+        return SkillToolState::Disabled;
     };
 
     let symlink_path = PathBuf::from(tool_skills_path).join(&skill.name);
     let Ok(metadata) = fs::symlink_metadata(&symlink_path) else {
-        return "未启用".into();
+        return SkillToolState::Disabled;
     };
     if !metadata.file_type().is_symlink() {
         if metadata.is_dir()
             && agent_cli_reports_tool_installation(agent_cli_status, skill, tool_name)
                 .unwrap_or(false)
         {
-            return "已启用".into();
+            return SkillToolState::Enabled;
         }
-        return "需要重同步".into();
+        return SkillToolState::NeedsResync;
     }
 
     let Ok(target_path) = fs::canonicalize(&symlink_path) else {
-        return "需要重同步".into();
+        return SkillToolState::NeedsResync;
     };
     let Ok(expected_path) = fs::canonicalize(&skill.local_path) else {
-        return "需要重同步".into();
+        return SkillToolState::NeedsResync;
     };
     if target_path != expected_path {
-        return "未启用".into();
+        return SkillToolState::Disabled;
     }
 
-    "已同步".into()
+    SkillToolState::Synced
+}
+
+fn inspect_skill_tool_status(
+    skill: &SkillSummary,
+    tool_name: &str,
+    agent_cli_status: &crate::agent_skills_cli::AgentSkillsCliStatus,
+) -> String {
+    inspect_skill_tool_state(skill, tool_name, agent_cli_status)
+        .status_label()
+        .into()
 }
 
 fn installed_tool_sync_entries_for_skill(
@@ -3467,6 +3512,41 @@ fn is_reserved_workspace_name(name: &str) -> bool {
 
 fn tool_status_is_enabled(status_label: &str) -> bool {
     matches!(status_label, "已同步" | "已启用" | "需要重同步")
+}
+
+pub(crate) fn backup_skill_tool_states(
+    skills: &[&SkillSummary],
+) -> Vec<Vec<(String, String, bool)>> {
+    let tool_configs: Vec<_> = build_tool_configs()
+        .into_iter()
+        .filter(|tool| tool.is_installed && supports_skill_sync_for_tool(&tool.id))
+        .collect();
+    let agent_cli_status = if skills.iter().any(|skill| is_agent_cli_managed_skill(skill)) {
+        crate::agent_skills_cli::global_status()
+    } else {
+        crate::agent_skills_cli::AgentSkillsCliStatus {
+            available: false,
+            global_path: String::new(),
+            entries: Vec::new(),
+            error: "没有需要确认的 Agent CLI Skill。".into(),
+        }
+    };
+    skills
+        .iter()
+        .map(|skill| {
+            tool_configs
+                .iter()
+                .map(|tool| {
+                    let state = inspect_skill_tool_state(skill, &tool.name, &agent_cli_status);
+                    (
+                        tool.id.clone(),
+                        canonical_tool_display_name(&tool.name),
+                        state.is_enabled(),
+                    )
+                })
+                .collect()
+        })
+        .collect()
 }
 
 fn set_skill_tool_enabled_status(
@@ -7761,6 +7841,86 @@ fn collect_local_skill_dirs(
     Ok(skill_dirs)
 }
 
+fn is_direct_tool_skill_source(source_path: &Path, skill_name: &str) -> bool {
+    if source_path.file_name().and_then(|value| value.to_str()) != Some(skill_name) {
+        return false;
+    }
+    let Some(source_parent) = source_path.parent() else {
+        return false;
+    };
+    let resolved_source_parent = source_parent
+        .canonicalize()
+        .unwrap_or_else(|_| source_parent.to_path_buf());
+
+    build_tool_configs().into_iter().any(|tool| {
+        if tool.status_label != "已安装" || !supports_skill_sync_for_tool(&tool.id) {
+            return false;
+        }
+        let tool_skills_path = PathBuf::from(tool.skills_path);
+        tool_skills_path.canonicalize().unwrap_or(tool_skills_path) == resolved_source_parent
+    })
+}
+
+fn stage_import_source_link(
+    source_path: &Path,
+    target_dir: &Path,
+    skill_name: &str,
+) -> Result<Option<PathBuf>, String> {
+    if !is_direct_tool_skill_source(source_path, skill_name) {
+        return Ok(None);
+    }
+    let source_canonical = source_path
+        .canonicalize()
+        .map_err(|error| format!("解析导入来源目录失败: {error}"))?;
+    let target_canonical = target_dir
+        .canonicalize()
+        .map_err(|error| format!("解析托管目录失败: {error}"))?;
+    if source_canonical == target_canonical {
+        return Ok(None);
+    }
+
+    let backup_path =
+        source_path.with_file_name(format!(".{skill_name}{LOCAL_IMPORT_SOURCE_BACKUP_SUFFIX}"));
+    if fs::symlink_metadata(&backup_path).is_ok() {
+        return Err(format!(
+            "导入来源临时备份已存在，请先处理 {}",
+            backup_path.to_string_lossy()
+        ));
+    }
+    fs::rename(source_path, &backup_path)
+        .map_err(|error| format!("暂存原 Skill 目录失败: {error}"))?;
+    let tool_skills_path = source_path
+        .parent()
+        .map(|path| path.to_string_lossy().to_string())
+        .unwrap_or_default();
+    if let Err(error) = create_skill_symlink(
+        target_dir.to_string_lossy().as_ref(),
+        skill_name,
+        &tool_skills_path,
+    ) {
+        let _ = fs::rename(&backup_path, source_path);
+        return Err(error);
+    }
+
+    Ok(Some(backup_path))
+}
+
+fn rollback_import_source_link(source_path: &Path, backup_path: &Path) {
+    let _ = remove_skill_link_entry(source_path);
+    let _ = fs::rename(backup_path, source_path);
+}
+
+fn discard_import_source_backup(backup_path: &Path) {
+    let Ok(metadata) = fs::symlink_metadata(backup_path) else {
+        return;
+    };
+    if metadata.file_type().is_symlink() || metadata.is_file() {
+        let _ = fs::remove_file(backup_path);
+    } else if metadata.is_dir() {
+        let _ = fs::remove_dir_all(backup_path);
+    }
+}
+
 fn copy_local_skill_dir(source_dir: &Path, target_dir: &Path) -> Result<String, String> {
     let source_canonical = source_dir
         .canonicalize()
@@ -7884,44 +8044,57 @@ pub fn import_local_skill(local_path: &str) -> Result<SkillSummary, String> {
         (Ok(source_canonical), Some(Ok(target_canonical))) if source_canonical == target_canonical
     );
     let installed_local_path = copy_local_skill_dir(&source_path, &target_dir)?;
-    cleanup_local_skill_install_on_error(&target_dir, cleanup_on_error, || {
-        let installed_at = now_timestamp_label();
-        let mut installed_skills = load_installed_skills(&default_installed_skills());
-        let installed_skill = SkillSummary {
-            name: skill_name,
-            source_label: "本地导入".into(),
-            source_type: "local".into(),
-            source_url: local_path.into(),
-            description: read_skill_description(&Path::new(&installed_local_path).join("SKILL.md")),
-            local_path: installed_local_path,
-            branch: "local".into(),
-            collab_status: "clean".into(),
-            status_text: format!("本地技能已复制到 {APP_BRAND_NAME} 并纳入统一管理。"),
-            remote_updated_at: String::new(),
-            local_updated_at: installed_at.clone(),
-            last_synced_at: installed_at.clone(),
-            last_checked_at: "刚刚".into(),
-            synced_tool_count: 0,
-            last_editor: "".into(),
-            commit_label: "local-only".into(),
-            git_linked: false,
-            local_change_count: 0,
-            lifecycle_source: String::new(),
-            owner_plugin_id: String::new(),
-            owner_plugin_name: String::new(),
-            instance: Default::default(),
-            tools: vec![],
-        };
+    let mut source_backup = None;
+    let install_result =
+        cleanup_local_skill_install_on_error(&target_dir, cleanup_on_error, || {
+            source_backup = stage_import_source_link(&source_path, &target_dir, &skill_name)?;
+            let installed_at = now_timestamp_label();
+            let mut installed_skills = load_installed_skills(&default_installed_skills());
+            let installed_skill = SkillSummary {
+                name: skill_name,
+                source_label: "本地导入".into(),
+                source_type: "local".into(),
+                source_url: local_path.into(),
+                description: read_skill_description(
+                    &Path::new(&installed_local_path).join("SKILL.md"),
+                ),
+                local_path: installed_local_path,
+                branch: "local".into(),
+                collab_status: "clean".into(),
+                status_text: format!("本地技能已复制到 {APP_BRAND_NAME} 并纳入统一管理。"),
+                remote_updated_at: String::new(),
+                local_updated_at: installed_at.clone(),
+                last_synced_at: installed_at.clone(),
+                last_checked_at: "刚刚".into(),
+                synced_tool_count: 0,
+                last_editor: "".into(),
+                commit_label: "local-only".into(),
+                git_linked: false,
+                local_change_count: 0,
+                lifecycle_source: String::new(),
+                owner_plugin_id: String::new(),
+                owner_plugin_name: String::new(),
+                instance: Default::default(),
+                tools: vec![],
+            };
 
-        let installed_skill = enrich_skill_with_git_state(&normalize_skill_tools(&installed_skill));
-        let installed_skill = apply_skill_install_activation(installed_skill, &installed_skills)?;
-        persist_skill_timestamps(&installed_skill);
-        installed_skills.retain(|skill| skill.name != installed_skill.name);
-        installed_skills.insert(0, installed_skill.clone());
-        save_installed_skills(&installed_skills)?;
+            let installed_skill =
+                enrich_skill_with_git_state(&normalize_skill_tools(&installed_skill));
+            let installed_skill =
+                apply_skill_install_activation(installed_skill, &installed_skills)?;
+            persist_skill_timestamps(&installed_skill);
+            installed_skills.retain(|skill| skill.name != installed_skill.name);
+            installed_skills.insert(0, installed_skill.clone());
+            save_installed_skills(&installed_skills)?;
 
-        Ok(installed_skill)
-    })
+            Ok(installed_skill)
+        });
+    match (&install_result, source_backup) {
+        (Ok(_), Some(backup_path)) => discard_import_source_backup(&backup_path),
+        (Err(_), Some(backup_path)) => rollback_import_source_link(&source_path, &backup_path),
+        _ => {}
+    }
+    install_result
 }
 
 #[tauri::command]
@@ -10029,6 +10202,7 @@ mod tests {
             supports_mcp: true,
             mcp_config_path_recognized: true,
             status_label: "已安装".into(),
+            is_installed: true,
             is_enabled: true,
             primary_type: "cli".into(),
             surface_types: vec!["cli".into()],
@@ -11133,7 +11307,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn local_import_preserves_existing_tool_directory_on_activation_conflict() {
+    fn local_import_replaces_source_tool_directory_with_managed_link() {
         let _guard = TEST_ENV_LOCK
             .lock()
             .unwrap_or_else(|error| error.into_inner());
@@ -11166,12 +11340,19 @@ mod tests {
             managed_skill_dir.to_string_lossy().to_string()
         );
         assert!(managed_skill_dir.join("SKILL.md").is_file());
-        assert!(cursor_skill_dir.is_dir());
-        assert!(!cursor_skill_dir.is_symlink());
+        assert!(cursor_skill_dir.is_symlink());
+        assert_eq!(
+            cursor_skill_dir
+                .canonicalize()
+                .expect("resolve imported tool Skill link"),
+            managed_skill_dir
+                .canonicalize()
+                .expect("resolve managed Skill directory")
+        );
         assert!(imported
             .tools
             .iter()
-            .any(|tool| { tool.name == "Cursor" && tool.status_label == "未启用" }));
+            .any(|tool| { tool.name == "Cursor" && tool.status_label == "已启用" }));
 
         let _ = fs::remove_dir_all(temp_dir);
     }
@@ -12006,6 +12187,7 @@ mod tests {
                 supports_mcp: true,
                 mcp_config_path_recognized: true,
                 status_label: "已安装".into(),
+                is_installed: true,
                 is_enabled: true,
                 primary_type: "agent".into(),
                 surface_types: vec!["agent".into()],
@@ -12545,6 +12727,7 @@ mod tests {
                 supports_mcp: false,
                 mcp_config_path_recognized: false,
                 status_label: "已安装".into(),
+                is_installed: true,
                 is_enabled: true,
                 primary_type: "editor".into(),
                 surface_types: vec!["editor".into()],
@@ -12558,6 +12741,7 @@ mod tests {
                 supports_mcp: false,
                 mcp_config_path_recognized: false,
                 status_label: "已安装".into(),
+                is_installed: true,
                 is_enabled: true,
                 primary_type: "editor".into(),
                 surface_types: vec!["editor".into()],

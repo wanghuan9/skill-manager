@@ -154,10 +154,12 @@ pub async fn connect_github_token(
 
 #[tauri::command]
 pub fn disconnect_github(app_handle: tauri::AppHandle) -> Result<GithubConnection, String> {
-    crate::backup_repository::disconnect_github_backup(app_handle.clone())?;
-    github_credentials::delete_credential()?;
     save_github_connection_metadata(GithubConnectionMetadata::default(), true)?;
+    let credential_cleanup = github_credentials::delete_credential();
+    let backup_cleanup = crate::backup_repository::disconnect_github_backup(app_handle.clone());
     let connection = disconnected_connection("");
     let _ = app_handle.emit(GITHUB_CONNECTION_CHANGED_EVENT, connection.clone());
+    credential_cleanup?;
+    backup_cleanup?;
     Ok(connection)
 }

@@ -31,6 +31,7 @@ import type {
   BackupConflict,
   BackupStatus,
   BackupSyncResult,
+  CloudBackupNode,
   CliToolSummary,
   FailureFeedbackInput,
   FeedbackIssueDraft,
@@ -72,6 +73,7 @@ import type {
   ToolConfig,
   ToolSkillEntry,
   UpdatePreviewSnapshot,
+  WorkspaceRestorePreview,
   WorkspaceSnapshot,
 } from "@/features/skills/state/skill-store";
 import {
@@ -1362,6 +1364,7 @@ const backupStatusFixture: BackupStatus = {
   repositoryUrl: "",
   lastSyncAt: "",
   lastError: "",
+  phase: "disabled",
   syncing: false,
   pendingConflicts: 0,
 };
@@ -1370,7 +1373,7 @@ export async function fetchBackupStatus(): Promise<BackupStatus> {
   return invokeOrFallback("get_backup_status", {}, backupStatusFixture);
 }
 
-export async function enableGithubBackup(): Promise<BackupSyncResult> {
+export async function enableGithubBackup(): Promise<BackupStatus> {
   return invoke("enable_github_backup", {});
 }
 
@@ -1381,12 +1384,40 @@ export async function disconnectGithubBackup(): Promise<BackupStatus> {
   return invoke("disconnect_github_backup", {});
 }
 
-export async function runBackupSync(): Promise<BackupSyncResult> {
+export async function runBackupSync(): Promise<BackupStatus> {
   return invoke("run_backup_sync", {});
 }
 
-export async function syncBackupToLocal(): Promise<BackupSyncResult> {
-  return invoke("sync_backup_to_local", {});
+export async function syncBackupToLocal(
+  commitId: string,
+  backupCurrent: boolean,
+): Promise<BackupStatus> {
+  return invoke("sync_backup_to_local", { commitId, backupCurrent });
+}
+
+export async function listCloudBackupNodes(): Promise<CloudBackupNode[]> {
+  return invokeOrFallback("list_cloud_backup_nodes", {}, []);
+}
+
+export async function restoreCloudBackupNode(commitId: string): Promise<BackupStatus> {
+  return invoke("restore_cloud_backup_node", { commitId });
+}
+
+export async function previewCloudBackupNode(
+  commitId: string,
+): Promise<WorkspaceRestorePreview> {
+  return invoke("preview_cloud_backup_node", { commitId });
+}
+
+export async function subscribeBackupStatusChanges(
+  handler: (status: BackupStatus) => void,
+): Promise<UnlistenFn> {
+  if (shouldUseFixtureData()) {
+    return () => undefined;
+  }
+  return listen<BackupStatus>("backup-status-changed", (event) => {
+    handler(event.payload);
+  });
 }
 
 export async function fetchBackupConflicts(): Promise<BackupConflict[]> {

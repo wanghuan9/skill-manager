@@ -328,6 +328,8 @@ pub struct ToolConfig {
     pub supports_mcp: bool,
     pub mcp_config_path_recognized: bool,
     pub status_label: String,
+    #[serde(default)]
+    pub is_installed: bool,
     pub is_enabled: bool,
     pub primary_type: String,
     pub surface_types: Vec<String>,
@@ -406,6 +408,23 @@ pub struct GithubBackupSettings {
     pub last_error: String,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum BackupPhase {
+    Disabled,
+    Enabling,
+    BackingUp,
+    Restoring,
+    Enabled,
+    Error,
+}
+
+impl Default for BackupPhase {
+    fn default() -> Self {
+        Self::Disabled
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BackupStatus {
@@ -415,6 +434,7 @@ pub struct BackupStatus {
     pub repository_url: String,
     pub last_sync_at: String,
     pub last_error: String,
+    pub phase: BackupPhase,
     pub syncing: bool,
     pub pending_conflicts: usize,
 }

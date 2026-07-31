@@ -88,8 +88,16 @@ pub fn load_credential() -> Option<GithubCredential> {
     credential
 }
 
-pub fn active_token() -> Option<String> {
+pub fn load_active_credential() -> Option<GithubCredential> {
+    let connection = crate::state::load_github_connection_metadata();
+    if connection.username.trim().is_empty() {
+        return None;
+    }
     load_credential()
+}
+
+pub fn active_token() -> Option<String> {
+    load_active_credential()
         .map(|credential| credential.token.trim().to_string())
         .filter(|token| !token.is_empty())
         .or_else(|| {
@@ -131,9 +139,12 @@ fn clear_session_credential() {
 #[cfg(test)]
 mod tests {
     use super::{
-        active_token, clear_session_credential, delete_credential, load_credential,
-        set_test_credential_path, store_credential,
+        active_token, clear_session_credential, delete_credential, load_active_credential,
+        load_credential, set_test_credential_path, store_credential,
     };
+    use crate::models::GithubConnectionMetadata;
+    use crate::state::save_github_connection_metadata;
+    use crate::workspace::with_test_home;
     use std::fs;
 
     #[test]
@@ -147,18 +158,36 @@ mod tests {
         set_test_credential_path(Some(credential_path.clone()));
         clear_session_credential();
 
-        store_credential("  github_pat_example  ", "pat").expect("store credential");
-        assert!(credential_path.is_file());
-        clear_session_credential();
+        with_test_home(&temp_root, || {
+            store_credential("  github_pat_example  ", "pat").expect("store credential");
+            save_github_connection_metadata(
+                GithubConnectionMetadata {
+                    auth_method: "pat".into(),
+                    user_id: Some(42),
+                    username: "octocat".into(),
+                    avatar_url: String::new(),
+                    credential_persisted: true,
+                },
+                true,
+            )
+            .expect("save connected metadata");
+            assert!(credential_path.is_file());
+            clear_session_credential();
 
-        let credential = load_credential().expect("load credential");
-        assert_eq!(credential.token, "github_pat_example");
-        assert_eq!(credential.auth_method, "pat");
-        assert_eq!(active_token().as_deref(), Some("github_pat_example"));
+            let credential = load_credential().expect("load credential");
+            assert_eq!(credential.token, "github_pat_example");
+            assert_eq!(credential.auth_method, "pat");
+            assert_eq!(active_token().as_deref(), Some("github_pat_example"));
 
-        delete_credential().expect("delete credential");
-        clear_session_credential();
-        assert!(load_credential().is_none());
+            save_github_connection_metadata(GithubConnectionMetadata::default(), true)
+                .expect("save disconnected metadata");
+            assert!(load_credential().is_some());
+            assert!(load_active_credential().is_none());
+
+            delete_credential().expect("delete credential");
+            clear_session_credential();
+            assert!(load_credential().is_none());
+        });
         set_test_credential_path(None);
         let _ = fs::remove_dir_all(temp_root);
     }

@@ -44,7 +44,7 @@ afterEach(() => {
   });
 });
 
-test("prompts for a GitHub Token after a rate-limited Agent CLI refresh", async () => {
+test("opens GitHub account settings after a rate-limited Agent CLI refresh", async () => {
   vi.mocked(isTauri).mockReturnValue(true);
   vi.mocked(invoke).mockImplementation(async (command) => {
     switch (command) {
@@ -87,14 +87,12 @@ test("prompts for a GitHub Token after a rate-limited Agent CLI refresh", async 
   expect(screen.getByRole("button", { name: "登录 GitHub" })).toHaveClass(
     "primary-button",
     "settings-github-connect__action",
+    "settings-github-connect__login",
   );
-  expect(screen.getByRole("button", { name: "使用 Personal Access Token" })).toHaveClass(
-    "secondary-button",
-    "settings-github-connect__action",
-  );
+  expect(screen.queryByRole("button", { name: "使用 Personal Access Token" })).not.toBeInTheDocument();
 });
 
-test("shows a compact GitHub device flow and copies its verification code", async () => {
+test("automatically copies the GitHub device code and keeps manual copy available", async () => {
   const user = userEvent.setup();
   const openSpy = vi.spyOn(window, "open").mockImplementation(() => null);
   const clipboardSpy = vi.spyOn(navigator.clipboard, "writeText");
@@ -112,18 +110,52 @@ test("shows a compact GitHub device flow and copies its verification code", asyn
   await user.click(screen.getByRole("button", { name: /设置/ }));
   await user.click(screen.getByRole("button", { name: "登录 GitHub" }));
 
-  const codeButton = await screen.findByRole("button", { name: /045F-820D.*复制/ });
-  expect(screen.getByText("在 GitHub 输入验证码")).toBeInTheDocument();
+  const codeButton = await screen.findByRole("button", { name: /045F-820D.*已复制/ });
+  expect(clipboardSpy).toHaveBeenCalledTimes(1);
+  expect(clipboardSpy).toHaveBeenLastCalledWith("045F-820D");
+  expect(screen.getByText("验证码已复制，请直接粘贴")).toBeInTheDocument();
   expect(screen.getByText("等待 GitHub 授权")).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "登录 GitHub" })).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "使用 Personal Access Token" })).not.toBeInTheDocument();
 
   await user.click(codeButton);
-  expect(clipboardSpy).toHaveBeenCalledWith("045F-820D");
+  expect(clipboardSpy).toHaveBeenCalledTimes(2);
+  expect(clipboardSpy).toHaveBeenLastCalledWith("045F-820D");
   expect(await screen.findByText("已复制")).toBeInTheDocument();
 
   await user.click(screen.getByRole("button", { name: "打开 GitHub" }));
   expect(openSpy).toHaveBeenCalledTimes(2);
+});
+
+test("opens GitHub and preserves manual copy when automatic clipboard access fails", async () => {
+  const user = userEvent.setup();
+  const openSpy = vi.spyOn(window, "open").mockImplementation(() => null);
+  const clipboardSpy = vi.spyOn(navigator.clipboard, "writeText")
+    .mockRejectedValueOnce(new Error("clipboard unavailable"));
+  vi.mocked(invoke).mockResolvedValueOnce({
+    deviceCode: "device-code",
+    userCode: "045F-820D",
+    verificationUri: "https://github.com/login/device",
+    expiresIn: 900,
+    interval: 5,
+  });
+  window.localStorage.clear();
+
+  render(<App />);
+
+  await user.click(screen.getByRole("button", { name: /设置/ }));
+  await user.click(screen.getByRole("button", { name: "登录 GitHub" }));
+
+  const codeButton = await screen.findByRole("button", { name: /045F-820D.*复制/ });
+  expect(clipboardSpy).toHaveBeenCalledTimes(1);
+  expect(screen.getByText("在 GitHub 输入验证码")).toBeInTheDocument();
+  expect(openSpy).toHaveBeenCalledTimes(1);
+  expect(screen.queryByText("复制 GitHub 验证码失败")).not.toBeInTheDocument();
+  expect(screen.queryByText("连接 GitHub 失败")).not.toBeInTheDocument();
+
+  await user.click(codeButton);
+  expect(clipboardSpy).toHaveBeenCalledTimes(2);
+  expect(await screen.findByText("验证码已复制，请直接粘贴")).toBeInTheDocument();
 });
 
 test("runs manual GitHub sync and backup from settings", async () => {
@@ -142,9 +174,11 @@ test("runs manual GitHub sync and backup from settings", async () => {
     repositoryUrl: "https://github.com/octocat/skilldock-backup.git",
     lastSyncAt: "2026-07-29T12:00:00Z",
     lastError: "",
+    phase: "enabled",
     syncing: false,
     pendingConflicts: 0,
   };
+  let previewCallCount = 0;
   vi.mocked(invoke).mockImplementation(async (command) => {
     switch (command) {
       case "list_startup_installed_skills":
@@ -167,14 +201,23 @@ test("runs manual GitHub sync and backup from settings", async () => {
         return backupStatus;
       case "list_backup_conflicts":
         return [];
+      case "list_cloud_backup_nodes":
+        return [{
+          commitId: "0123456789abcdef0123456789abcdef01234567",
+          createdAt: "2026-07-30T07:57:00Z",
+          deviceLabel: "MacBook Pro",
+          skillCount: 21,
+          mcpCount: 3,
+          pluginCount: 2,
+        }];
+      case "preview_cloud_backup_node":
+        previewCallCount += 1;
+        return previewCallCount === 3
+          ? { added: 4, overwritten: 0, deleted: 0 }
+          : { added: 4, overwritten: 18, deleted: 1 };
       case "sync_backup_to_local":
       case "run_backup_sync":
-        return {
-          status: backupStatus,
-          includedSkills: 2,
-          excludedSkills: [],
-          changed: false,
-        };
+        return backupStatus;
       default:
         throw new Error(`Unexpected command: ${command}`);
     }
@@ -184,13 +227,57 @@ test("runs manual GitHub sync and backup from settings", async () => {
   await userEvent.click(screen.getByRole("button", { name: /设置/ }));
 
   expect(await screen.findByRole("heading", { name: "账号与备份" })).toBeInTheDocument();
-  expect(screen.getByRole("switch", { name: "开启备份" })).toBeChecked();
+  expect(screen.getByRole("switch", { name: "云端备份" })).toBeChecked();
 
-  await userEvent.click(screen.getByRole("button", { name: "同步" }));
-  await waitFor(() => expect(invoke).toHaveBeenCalledWith("sync_backup_to_local", {}));
+  expect(screen.getByRole("button", { name: "octocat/skilldock-backup" })).toBeInTheDocument();
 
-  await userEvent.click(screen.getByRole("button", { name: "备份" }));
+  const syncButton = screen.getByRole("button", { name: "同步到本地" });
+  const backupButton = screen.getByRole("button", { name: "备份到云端" });
+  const historyButton = screen.getByRole("button", { name: "历史节点" });
+  expect(syncButton.parentElement).toBe(backupButton.parentElement);
+  expect(syncButton.parentElement).toBe(historyButton.parentElement);
+
+  await userEvent.click(syncButton);
+  expect(await screen.findByRole("dialog", { name: "本机数据将被替换" })).toBeInTheDocument();
+  expect(screen.getByText("最新云端备份将新增 4 项、覆盖 18 项、删除 1 项 SkillDock 数据。"))
+    .toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "备份当前状态并覆盖" }));
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("sync_backup_to_local", {
+    commitId: "0123456789abcdef0123456789abcdef01234567",
+    backupCurrent: true,
+  }));
+
+  await userEvent.click(syncButton);
+  expect(await screen.findByRole("dialog", { name: "本机数据将被替换" })).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "直接覆盖" }));
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("sync_backup_to_local", {
+    commitId: "0123456789abcdef0123456789abcdef01234567",
+    backupCurrent: false,
+  }));
+
+  await userEvent.click(syncButton);
+  await waitFor(() => expect(previewCallCount).toBe(3));
+  expect(screen.queryByRole("dialog", { name: "本机数据将被替换" })).not.toBeInTheDocument();
+  const syncWithoutBackupCalls = vi.mocked(invoke).mock.calls.filter(([command, args]) => {
+    const input = args as { backupCurrent?: boolean } | undefined;
+    return command === "sync_backup_to_local" && input?.backupCurrent === false;
+  });
+  expect(syncWithoutBackupCalls).toHaveLength(2);
+
+  await userEvent.click(backupButton);
   await waitFor(() => expect(invoke).toHaveBeenCalledWith("run_backup_sync", {}));
+
+  await userEvent.click(historyButton);
+  expect(await screen.findByRole("dialog", { name: "云端历史备份节点" })).toBeInTheDocument();
+  expect(await screen.findByText("21 Skills · 3 MCP · 2 插件")).toBeInTheDocument();
+  expect(await screen.findByText("设备：MacBook Pro")).toBeInTheDocument();
+
+  const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+  await userEvent.click(screen.getByRole("button", { name: "从此节点恢复" }));
+  await waitFor(() => expect(confirmSpy).toHaveBeenCalledWith(
+    "将新增 4 项、覆盖 18 项、删除 1 项 SkillDock 托管数据。系统会先备份当前状态，是否继续？",
+  ));
+  expect(invoke).not.toHaveBeenCalledWith("restore_cloud_backup_node", expect.anything());
 });
 
 test("allows selecting default open tool in settings", async () => {
@@ -250,40 +337,17 @@ test("allows selecting default open tool in settings", async () => {
   expect(screen.queryByText("CodeBuddy")).not.toBeInTheDocument();
 });
 
-test("connects and disconnects GitHub with a Personal Access Token", async () => {
+test("keeps the Personal Access Token entry hidden while disconnected", async () => {
   const user = userEvent.setup();
-  const openSpy = vi.spyOn(window, "open").mockImplementation(() => null);
   window.localStorage.clear();
   render(<App />);
 
   await user.click(screen.getByRole("button", { name: /设置/ }));
   expect(screen.getByRole("heading", { name: "账号与备份" })).toBeInTheDocument();
   expect(screen.getByText("未连接")).toBeInTheDocument();
-  await user.click(screen.getByRole("button", { name: "使用 Personal Access Token" }));
-  const tokenInput = screen.getByLabelText("GitHub Token");
-  expect(tokenInput).toHaveAttribute("type", "password");
-  expect(screen.getByText("没有 Token？")).toBeInTheDocument();
-  await user.click(screen.getByRole("button", { name: "前往 GitHub 生成 ↗" }));
-  expect(openSpy).toHaveBeenCalledWith(
-    "https://github.com/settings/tokens/new?description=SkillDock&scopes=repo",
-    "_blank",
-    "noopener,noreferrer",
-  );
-
-  await user.type(tokenInput, "github_pat_example");
-  await user.click(screen.getByRole("button", { name: "显示" }));
-  expect(tokenInput).toHaveAttribute("type", "text");
-  await user.click(screen.getByRole("button", { name: "连接" }));
-
-  expect(await screen.findByText("octocat")).toBeInTheDocument();
-  expect(screen.getByText("已连接")).toBeInTheDocument();
-  expect(githubConnectionFixture.connected).toBe(true);
-  expect(screen.queryByText("没有 Token？")).not.toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: "前往 GitHub 生成 ↗" })).not.toBeInTheDocument();
-
-  await user.click(screen.getByRole("button", { name: "退出连接" }));
-  expect(await screen.findByText("未连接")).toBeInTheDocument();
-  expect(githubConnectionFixture.connected).toBe(false);
+  expect(screen.getByRole("button", { name: "登录 GitHub" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "使用 Personal Access Token" })).not.toBeInTheDocument();
+  expect(screen.queryByLabelText("GitHub Token")).not.toBeInTheDocument();
 });
 
 test("applies the shared card preference without locking individual page layouts", async () => {

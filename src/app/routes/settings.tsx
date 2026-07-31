@@ -33,15 +33,21 @@ import {
   fetchBackupConflicts,
   fetchBackupStatus,
   getRepoCacheSize,
+  listCloudBackupNodes,
   openExternalLink,
+  previewCloudBackupNode,
   resolveBackupConflict,
+  restoreCloudBackupNode,
   runBackupSync,
+  subscribeBackupStatusChanges,
   syncBackupToLocal,
 } from "@/features/skills/api/skill-client";
 import type {
   AppTheme,
   BackupConflict,
   BackupStatus,
+  CloudBackupNode,
+  WorkspaceRestorePreview,
 } from "@/features/skills/state/skill-store";
 import {
   applyGlobalListGridViewPreference,
@@ -50,6 +56,7 @@ import {
 
 const GITHUB_TOKEN_CREATION_URL = "https://github.com/settings/tokens/new?description=SkillDock&scopes=repo";
 const GITHUB_COPY_FEEDBACK_DURATION_MS = 1_500;
+const SHOW_GITHUB_PAT_LOGIN = false;
 
 function formatBackupTimestamp(value: string, language: string) {
   if (!value) {
@@ -239,9 +246,17 @@ export function SettingsRoute() {
   const [githubPollVersion, setGithubPollVersion] = useState(0);
   const [isConnectingGithub, setIsConnectingGithub] = useState(false);
   const [isGithubDeviceCodeCopied, setIsGithubDeviceCodeCopied] = useState(false);
+  const [hasCopiedGithubDeviceCode, setHasCopiedGithubDeviceCode] = useState(false);
   const [backupStatus, setBackupStatus] = useState<BackupStatus | null>(null);
   const [backupConflicts, setBackupConflicts] = useState<BackupConflict[]>([]);
+  const [cloudBackupNodes, setCloudBackupNodes] = useState<CloudBackupNode[]>([]);
+  const [isBackupNodeDialogOpen, setIsBackupNodeDialogOpen] = useState(false);
+  const [isLoadingBackupNodes, setIsLoadingBackupNodes] = useState(false);
   const [activeBackupAction, setActiveBackupAction] = useState("");
+  const [pendingSyncRestore, setPendingSyncRestore] = useState<{
+    commitId: string;
+    preview: WorkspaceRestorePreview;
+  } | null>(null);
   const [currentAppVersion, setCurrentAppVersion] = useState("");
   const [appUpdate, setAppUpdate] = useState<AppUpdateCheckResult | null>(null);
   const [appUpdateStatus, setAppUpdateStatus] = useState<
@@ -277,6 +292,15 @@ export function SettingsRoute() {
         : formatBytes(repoCacheSize);
   const canClearRepoCache = !isClearingCache && repoCacheSize !== null && repoCacheSize > 0;
   const normalizedGithubTokenDraft = githubTokenDraft.trim();
+  const isBackupOperationActive = backupStatus
+    ? ["enabling", "backingUp", "restoring"].includes(backupStatus.phase)
+    : false;
+  const isBackupInteractionBlocked =
+    isBackupOperationActive || Boolean(activeBackupAction) || Boolean(pendingSyncRestore);
+  const backupRepositoryLabel = backupStatus?.repositoryOwner && backupStatus.repositoryName
+    ? `${backupStatus.repositoryOwner}/${backupStatus.repositoryName}`
+    : "";
+  const backupRepositoryPageUrl = backupStatus?.repositoryUrl.replace(/\.git$/u, "") ?? "";
 
   useEffect(() => {
     return () => {
@@ -288,6 +312,7 @@ export function SettingsRoute() {
 
   useEffect(() => {
     let active = true;
+    let unsubscribe: (() => void) | undefined;
     if (!githubConnection.connected) {
       setBackupStatus(null);
       setBackupConflicts([]);
@@ -313,9 +338,21 @@ export function SettingsRoute() {
         fallbackMessage: t("settings.backup.loadFailed"),
       });
     });
+    void subscribeBackupStatusChanges((status) => {
+      if (active) {
+        void updateBackupState(status);
+      }
+    }).then((unlisten) => {
+      if (active) {
+        unsubscribe = unlisten;
+      } else {
+        unlisten();
+      }
+    });
 
     return () => {
       active = false;
+      unsubscribe?.();
     };
   }, [githubConnection.connected, reportFailure, t]);
 
@@ -337,8 +374,8 @@ export function SettingsRoute() {
         const status = await disconnectGithubBackup();
         await updateBackupState(status);
       } else {
-        const result = await enableGithubBackup();
-        await updateBackupState(result.status);
+        const status = await enableGithubBackup();
+        await updateBackupState(status);
       }
     } catch (error) {
       reportFailure(error, {
@@ -356,12 +393,85 @@ export function SettingsRoute() {
     }
     setActiveBackupAction(operation);
     try {
-      const result = operation === "backup" ? await runBackupSync() : await syncBackupToLocal();
-      await updateBackupState(result.status);
+      if (operation === "sync") {
+        const [latestNode] = await listCloudBackupNodes();
+        if (!latestNode) {
+          throw new Error(t("settings.backup.nodesEmpty"));
+        }
+        const preview = await previewCloudBackupNode(latestNode.commitId);
+        if (preview.overwritten > 0 || preview.deleted > 0) {
+          setPendingSyncRestore({ commitId: latestNode.commitId, preview });
+          return;
+        }
+        const status = await syncBackupToLocal(latestNode.commitId, false);
+        await updateBackupState(status);
+        return;
+      }
+      const status = await runBackupSync();
+      await updateBackupState(status);
     } catch (error) {
       reportFailure(error, {
         operation: operation === "backup" ? "run_github_backup" : "sync_github_backup_to_local",
         fallbackMessage: t("settings.backup.operationFailed"),
+      });
+    } finally {
+      setActiveBackupAction("");
+    }
+  }
+
+  async function handleConfirmSyncRestore(backupCurrent: boolean) {
+    if (!pendingSyncRestore || activeBackupAction) {
+      return;
+    }
+    const { commitId } = pendingSyncRestore;
+    setPendingSyncRestore(null);
+    setActiveBackupAction("sync");
+    try {
+      const status = await syncBackupToLocal(commitId, backupCurrent);
+      await updateBackupState(status);
+    } catch (error) {
+      reportFailure(error, {
+        operation: "sync_github_backup_to_local",
+        fallbackMessage: t("settings.backup.operationFailed"),
+      });
+    } finally {
+      setActiveBackupAction("");
+    }
+  }
+
+  async function handleOpenBackupNodes() {
+    setIsBackupNodeDialogOpen(true);
+    setIsLoadingBackupNodes(true);
+    try {
+      setCloudBackupNodes(await listCloudBackupNodes());
+    } catch (error) {
+      reportFailure(error, {
+        operation: "list_cloud_backup_nodes",
+        fallbackMessage: t("settings.backup.nodesLoadFailed"),
+      });
+    } finally {
+      setIsLoadingBackupNodes(false);
+    }
+  }
+
+  async function handleRestoreBackupNode(node: CloudBackupNode) {
+    setActiveBackupAction(node.commitId);
+    try {
+      const preview = await previewCloudBackupNode(node.commitId);
+      if (!window.confirm(t("settings.backup.restoreConfirm", {
+        added: preview.added,
+        overwritten: preview.overwritten,
+        deleted: preview.deleted,
+      }))) {
+        return;
+      }
+      const status = await restoreCloudBackupNode(node.commitId);
+      await updateBackupState(status);
+      setIsBackupNodeDialogOpen(false);
+    } catch (error) {
+      reportFailure(error, {
+        operation: "restore_cloud_backup_node",
+        fallbackMessage: t("settings.backup.restoreFailed"),
       });
     } finally {
       setActiveBackupAction("");
@@ -389,6 +499,29 @@ export function SettingsRoute() {
     }
   }
 
+  async function copyGithubDeviceCode(userCode: string, shouldReportFailure: boolean) {
+    try {
+      await navigator.clipboard.writeText(userCode);
+      setHasCopiedGithubDeviceCode(true);
+      setIsGithubDeviceCodeCopied(true);
+      if (githubCopyFeedbackTimerRef.current !== null) {
+        window.clearTimeout(githubCopyFeedbackTimerRef.current);
+      }
+      githubCopyFeedbackTimerRef.current = window.setTimeout(() => {
+        setIsGithubDeviceCodeCopied(false);
+        githubCopyFeedbackTimerRef.current = null;
+      }, GITHUB_COPY_FEEDBACK_DURATION_MS);
+    } catch (error) {
+      if (!shouldReportFailure) {
+        return;
+      }
+      reportFailure(error, {
+        operation: "copy_github_device_code",
+        fallbackMessage: t("settings.github.copyFailed"),
+      });
+    }
+  }
+
   async function handleStartGithubLogin() {
     if (isConnectingGithub) {
       return;
@@ -400,7 +533,9 @@ export function SettingsRoute() {
       setGithubPollInterval(Math.max(flow.interval, 1) * 1_000);
       setGithubPollVersion(0);
       setIsGithubDeviceCodeCopied(false);
+      setHasCopiedGithubDeviceCode(false);
       setGithubAuthMode("device");
+      await copyGithubDeviceCode(flow.userCode, false);
       await openExternalLink(flow.verificationUri);
     } catch (error) {
       reportFailure(error, {
@@ -416,22 +551,7 @@ export function SettingsRoute() {
     if (!githubDeviceFlow) {
       return;
     }
-    try {
-      await navigator.clipboard.writeText(githubDeviceFlow.userCode);
-      setIsGithubDeviceCodeCopied(true);
-      if (githubCopyFeedbackTimerRef.current !== null) {
-        window.clearTimeout(githubCopyFeedbackTimerRef.current);
-      }
-      githubCopyFeedbackTimerRef.current = window.setTimeout(() => {
-        setIsGithubDeviceCodeCopied(false);
-        githubCopyFeedbackTimerRef.current = null;
-      }, GITHUB_COPY_FEEDBACK_DURATION_MS);
-    } catch (error) {
-      reportFailure(error, {
-        operation: "copy_github_device_code",
-        fallbackMessage: t("settings.github.copyFailed"),
-      });
-    }
+    await copyGithubDeviceCode(githubDeviceFlow.userCode, true);
   }
 
   useEffect(() => {
@@ -1175,7 +1295,11 @@ export function SettingsRoute() {
                   </div>
                   <div className="settings-toggle-control">
                     <span className="settings-toggle-control__state">
-                      {backupStatus?.enabled ? t("settings.toggle.on") : t("settings.toggle.off")}
+                      {backupStatus?.phase === "enabling"
+                        ? t("settings.backup.enabling")
+                        : backupStatus?.enabled
+                          ? t("settings.toggle.on")
+                          : t("settings.toggle.off")}
                     </span>
                     <button
                       type="button"
@@ -1183,7 +1307,7 @@ export function SettingsRoute() {
                       aria-checked={Boolean(backupStatus?.enabled)}
                       aria-label={t("settings.backup.title")}
                       className={`switch-button${backupStatus?.enabled ? " is-enabled" : ""}`}
-                      disabled={!backupStatus || Boolean(activeBackupAction)}
+                      disabled={!backupStatus || isBackupInteractionBlocked}
                       onClick={() => void handleBackupToggle()}
                     >
                       <span className="switch-button__thumb" />
@@ -1191,33 +1315,74 @@ export function SettingsRoute() {
                   </div>
                 </div>
 
-                {backupStatus?.enabled ? (
+                {backupStatus && (
+                  backupStatus.enabled
+                  || backupStatus.phase === "enabling"
+                  || backupStatus.phase === "error"
+                ) ? (
                   <div className="settings-github-backup__content">
-                    <div className="settings-github-backup__status">
-                      <span>{t("settings.backup.lastOperation")}</span>
-                      <strong>{formatBackupTimestamp(backupStatus.lastSyncAt, language)}</strong>
-                    </div>
-                    <div className="settings-github-backup__actions">
-                      <button
-                        type="button"
-                        className="settings-github-backup__action"
-                        disabled={Boolean(activeBackupAction)}
-                        onClick={() => void handleBackupOperation("sync")}
-                      >
-                        {activeBackupAction === "sync"
-                          ? t("settings.backup.syncing")
-                          : t("settings.backup.sync")}
-                      </button>
-                      <button
-                        type="button"
-                        className="settings-github-backup__action"
-                        disabled={Boolean(activeBackupAction)}
-                        onClick={() => void handleBackupOperation("backup")}
-                      >
-                        {activeBackupAction === "backup"
-                          ? t("settings.backup.backingUp")
-                          : t("settings.backup.backup")}
-                      </button>
+                    <div className="settings-github-backup__footer">
+                      <div className="settings-github-backup__meta">
+                        {backupRepositoryLabel ? (
+                          <div className="settings-github-backup__repository">
+                            <span>{t("settings.backup.repository")}</span>
+                            <button
+                              type="button"
+                              className="settings-github-backup__repository-link"
+                              onClick={() => void openExternalLink(backupRepositoryPageUrl)}
+                            >
+                              {backupRepositoryLabel}
+                            </button>
+                          </div>
+                        ) : null}
+                        <div className="settings-github-backup__status">
+                          <span>{t("settings.backup.lastOperation")}</span>
+                          <strong>
+                            {backupStatus.phase === "enabling"
+                              ? t("settings.backup.enabling")
+                              : backupStatus.phase === "error"
+                                ? t("settings.backup.failed")
+                                : t("settings.backup.completed", {
+                                    time: formatBackupTimestamp(
+                                      backupStatus.lastSyncAt,
+                                      language,
+                                    ),
+                                  })}
+                          </strong>
+                        </div>
+                      </div>
+                      {backupStatus.enabled ? (
+                        <div className="settings-github-backup__actions">
+                          <button
+                            type="button"
+                            className="settings-github-backup__action settings-github-backup__action--secondary"
+                            disabled={isBackupInteractionBlocked}
+                            onClick={() => void handleBackupOperation("sync")}
+                          >
+                            {backupStatus.phase === "restoring"
+                              ? t("settings.backup.syncing")
+                              : t("settings.backup.sync")}
+                          </button>
+                          <button
+                            type="button"
+                            className="settings-github-backup__action settings-github-backup__action--primary"
+                            disabled={isBackupInteractionBlocked}
+                            onClick={() => void handleBackupOperation("backup")}
+                          >
+                            {backupStatus.phase === "backingUp"
+                              ? t("settings.backup.backingUp")
+                              : t("settings.backup.backup")}
+                          </button>
+                          <button
+                            type="button"
+                            className="settings-github-backup__action settings-github-backup__action--ghost"
+                            disabled={isBackupInteractionBlocked}
+                            onClick={() => void handleOpenBackupNodes()}
+                          >
+                            {t("settings.backup.nodes")}
+                          </button>
+                        </div>
+                      ) : null}
                     </div>
                     {backupStatus.lastError ? (
                       <div className="settings-github-backup__error">{backupStatus.lastError}</div>
@@ -1281,7 +1446,11 @@ export function SettingsRoute() {
                       </span>
                     </button>
                     <span className="settings-github-device-flow__hint">
-                      {t("settings.github.deviceHint")}
+                      {t(
+                        hasCopiedGithubDeviceCode
+                          ? "settings.github.deviceCopiedHint"
+                          : "settings.github.deviceHint",
+                      )}
                     </span>
                   </div>
                   <span className="settings-github-device-flow__waiting">
@@ -1342,25 +1511,182 @@ export function SettingsRoute() {
                 <div className="settings-github-connect__actions">
                   <button
                     type="button"
-                    className="primary-button primary-button--compact settings-github-connect__action"
+                    className={[
+                      "primary-button primary-button--compact",
+                      "settings-github-connect__action settings-github-connect__login",
+                    ].join(" ")}
                     disabled={isConnectingGithub || githubAuthMode === "device"}
                     onClick={() => void handleStartGithubLogin()}
                   >
+                    <svg
+                      className="settings-github-connect__login-icon"
+                      viewBox="0 0 24 24"
+                      aria-hidden="true"
+                    >
+                      <path d="M12 .7a11.6 11.6 0 0 0-3.7 22.6c.6.1.8-.3.8-.6v-2.2c-3.4.7-4.1-1.4-4.1-1.4-.5-1.4-1.3-1.8-1.3-1.8-1.1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1.1 1.8 2.8 1.3 3.5 1 .1-.8.4-1.3.8-1.6-2.7-.3-5.5-1.4-5.5-5.8 0-1.3.5-2.3 1.2-3.2-.1-.3-.5-1.5.1-3.1 0 0 1-.3 3.2 1.2a11 11 0 0 1 5.8 0c2.2-1.5 3.2-1.2 3.2-1.2.6 1.6.2 2.8.1 3.1.8.9 1.2 1.9 1.2 3.2 0 4.5-2.8 5.5-5.5 5.8.4.4.8 1.1.8 2.2v3.2c0 .3.2.7.8.6A11.6 11.6 0 0 0 12 .7Z" />
+                    </svg>
                     {t(isConnectingGithub ? "settings.github.connecting" : "settings.github.login")}
                   </button>
-                  <button
-                    type="button"
-                    className="secondary-button secondary-button--compact settings-github-connect__action"
-                    onClick={() => setGithubAuthMode("pat")}
-                  >
-                    {t("settings.github.usePat")}
-                  </button>
+                  {SHOW_GITHUB_PAT_LOGIN ? (
+                    <button
+                      type="button"
+                      className="secondary-button secondary-button--compact settings-github-connect__action"
+                      onClick={() => setGithubAuthMode("pat")}
+                    >
+                      {t("settings.github.usePat")}
+                    </button>
+                  ) : null}
                 </div>
               )}
             </div>
           )}
         </div>
       </section>
+      {pendingSyncRestore ? (
+        <div
+          className="skill-card-detail-modal__backdrop"
+          role="presentation"
+          onClick={() => setPendingSyncRestore(null)}
+        >
+          <section
+            className="skill-card-detail-modal settings-backup-restore-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="settings-backup-restore-dialog-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <header className="skill-card-detail-modal__header">
+              <div className="skill-card-detail-modal__identity">
+                <div className="skill-card-detail-modal__copy">
+                  <div className="skill-card-detail-modal__title">
+                    <h3 id="settings-backup-restore-dialog-title">
+                      {t("settings.backup.syncReplaceTitle")}
+                    </h3>
+                  </div>
+                </div>
+              </div>
+              <button
+                type="button"
+                className="skill-card-detail-modal__close"
+                aria-label={t("settings.backup.syncReplaceCancel")}
+                onClick={() => setPendingSyncRestore(null)}
+              >
+                ×
+              </button>
+            </header>
+            <div className="skill-card-detail-modal__body settings-backup-restore-dialog__body">
+              <p>
+                {t("settings.backup.syncReplaceDescription", {
+                  added: pendingSyncRestore.preview.added,
+                  overwritten: pendingSyncRestore.preview.overwritten,
+                  deleted: pendingSyncRestore.preview.deleted,
+                })}
+              </p>
+              <div className="settings-backup-restore-dialog__actions">
+                <button
+                  type="button"
+                  className="secondary-button secondary-button--compact"
+                  onClick={() => setPendingSyncRestore(null)}
+                >
+                  {t("settings.backup.syncReplaceCancel")}
+                </button>
+                <button
+                  type="button"
+                  className="secondary-button secondary-button--compact settings-backup-restore-dialog__overwrite"
+                  onClick={() => void handleConfirmSyncRestore(false)}
+                >
+                  {t("settings.backup.syncReplaceOverwrite")}
+                </button>
+                <button
+                  type="button"
+                  className="primary-button primary-button--compact"
+                  onClick={() => void handleConfirmSyncRestore(true)}
+                >
+                  {t("settings.backup.syncReplaceBackup")}
+                </button>
+              </div>
+            </div>
+          </section>
+        </div>
+      ) : null}
+      {isBackupNodeDialogOpen ? (
+        <div
+          className="skill-card-detail-modal__backdrop"
+          role="presentation"
+          onClick={() => setIsBackupNodeDialogOpen(false)}
+        >
+          <section
+            className="skill-card-detail-modal settings-backup-node-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="settings-backup-node-dialog-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <header className="skill-card-detail-modal__header">
+              <div className="skill-card-detail-modal__identity">
+                <div className="skill-card-detail-modal__copy">
+                  <div className="skill-card-detail-modal__title">
+                    <h3 id="settings-backup-node-dialog-title">
+                      {t("settings.backup.nodesTitle")}
+                    </h3>
+                  </div>
+                  <p>{t("settings.backup.nodesDescription")}</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                className="skill-card-detail-modal__close"
+                aria-label={t("settings.backup.nodesClose")}
+                onClick={() => setIsBackupNodeDialogOpen(false)}
+              >
+                ×
+              </button>
+            </header>
+            <div className="skill-card-detail-modal__body settings-backup-node-dialog__body">
+              {isLoadingBackupNodes ? (
+                <p className="settings-backup-node-dialog__empty">
+                  {t("settings.backup.nodesLoading")}
+                </p>
+              ) : cloudBackupNodes.length === 0 ? (
+                <p className="settings-backup-node-dialog__empty">
+                  {t("settings.backup.nodesEmpty")}
+                </p>
+              ) : (
+                <div className="settings-backup-node-dialog__list">
+                  {cloudBackupNodes.map((node) => (
+                    <article className="settings-backup-node-dialog__item" key={node.commitId}>
+                      <div className="settings-backup-node-dialog__node-copy">
+                        <strong>{formatBackupTimestamp(node.createdAt, language)}</strong>
+                        <span>
+                          {t("settings.backup.nodeCounts", {
+                            skills: node.skillCount,
+                            mcp: node.mcpCount,
+                            plugins: node.pluginCount,
+                          })}
+                        </span>
+                        <span>
+                          {t("settings.backup.nodeDevice", { device: node.deviceLabel })}
+                        </span>
+                      </div>
+                      <div className="settings-backup-node-dialog__node-actions">
+                        <span>{t("settings.backup.cloudOnly")}</span>
+                        <button
+                          type="button"
+                          className="secondary-button secondary-button--compact"
+                          disabled={Boolean(activeBackupAction)}
+                          onClick={() => void handleRestoreBackupNode(node)}
+                        >
+                          {t("settings.backup.restoreNode")}
+                        </button>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              )}
+            </div>
+          </section>
+        </div>
+      ) : null}
     </div>
   );
 }

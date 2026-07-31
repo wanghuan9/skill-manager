@@ -4,9 +4,18 @@ use std::path::{Path, PathBuf};
 
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::backup_repository::{git, git_success};
 use crate::backup_snapshot::{read_library_snapshot, BackupLibrary, BackupSkillMetadata};
+
+const PORTABLE_MERGE_PATHS: [&str; 5] = [
+    ".skilldock/preferences.json",
+    ".skilldock/mcp-servers.json",
+    ".skilldock/plugin-targets.json",
+    "plugins",
+    "cursor-disabled",
+];
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -27,7 +36,7 @@ pub struct BackupConflictFile {
     pub conflicts: Vec<BackupConflict>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 enum ObjectSource {
     Local,
     Remote,
@@ -36,6 +45,11 @@ enum ObjectSource {
 #[derive(Clone)]
 struct MergedObject {
     metadata: BackupSkillMetadata,
+    source: ObjectSource,
+}
+
+struct PortablePathSelection {
+    relative_path: &'static str,
     source: ObjectSource,
 }
 
@@ -79,6 +93,16 @@ fn materialize_commit(
         repository: repository.to_path_buf(),
         path,
     })
+}
+
+pub(crate) fn with_materialized_commit<T>(
+    repository: &Path,
+    commit: &str,
+    label: &str,
+    operation: impl FnOnce(&Path) -> Result<T, String>,
+) -> Result<T, String> {
+    let worktree = materialize_commit(repository, commit, label)?;
+    operation(&worktree.path)
 }
 
 fn index_library(library: BackupLibrary) -> BTreeMap<String, BackupSkillMetadata> {
@@ -158,6 +182,66 @@ fn read_existing_conflicts(repository: &Path) -> BackupConflictFile {
         .ok()
         .and_then(|contents| serde_json::from_str(&contents).ok())
         .unwrap_or_default()
+}
+
+fn hash_path_entry(root: &Path, path: &Path, hasher: &mut Sha256) -> Result<(), String> {
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|error| format!("读取便携合并路径失败 {}: {error}", path.display()))?;
+    if metadata.file_type().is_symlink() {
+        return Ok(());
+    }
+    let relative = path.strip_prefix(root).unwrap_or(path);
+    hasher.update(relative.to_string_lossy().as_bytes());
+    hasher.update([0]);
+    if metadata.is_dir() {
+        let mut entries = fs::read_dir(path)
+            .map_err(|error| format!("读取便携合并目录失败 {}: {error}", path.display()))?
+            .filter_map(Result::ok)
+            .collect::<Vec<_>>();
+        entries.sort_by_key(|entry| entry.file_name());
+        for entry in entries {
+            hash_path_entry(root, &entry.path(), hasher)?;
+        }
+    } else if metadata.is_file() {
+        hasher.update(
+            fs::read(path)
+                .map_err(|error| format!("读取便携合并文件失败 {}: {error}", path.display()))?,
+        );
+    }
+    Ok(())
+}
+
+fn portable_path_hash(root: &Path, relative_path: &str) -> Result<Option<String>, String> {
+    let path = root.join(relative_path);
+    if !path.exists() {
+        return Ok(None);
+    }
+    let mut hasher = Sha256::new();
+    hash_path_entry(&path, &path, &mut hasher)?;
+    Ok(Some(format!("{:x}", hasher.finalize())))
+}
+
+fn select_portable_path_source(
+    base: Option<&Path>,
+    local: &Path,
+    remote: &Path,
+    relative_path: &'static str,
+) -> Result<PortablePathSelection, String> {
+    let base_hash = base
+        .map(|root| portable_path_hash(root, relative_path))
+        .transpose()?
+        .flatten();
+    let local_hash = portable_path_hash(local, relative_path)?;
+    let remote_hash = portable_path_hash(remote, relative_path)?;
+    let source = if local_hash == base_hash && remote_hash != base_hash {
+        ObjectSource::Remote
+    } else {
+        ObjectSource::Local
+    };
+    Ok(PortablePathSelection {
+        relative_path,
+        source,
+    })
 }
 
 fn index_conflicts(conflicts: BackupConflictFile) -> BTreeMap<String, BackupConflict> {
@@ -243,6 +327,7 @@ fn apply_merge_plan(
     remote_path: &Path,
     objects: Vec<MergedObject>,
     conflicts: BackupConflictFile,
+    portable_paths: Vec<PortablePathSelection>,
 ) -> Result<(), String> {
     let staging = repository
         .parent()
@@ -253,6 +338,20 @@ fn apply_merge_plan(
     let metadata_dir = staging.join(".skilldock/skills");
     fs::create_dir_all(&skills_dir).map_err(|error| format!("创建合并结果失败: {error}"))?;
     fs::create_dir_all(&metadata_dir).map_err(|error| format!("创建合并元数据失败: {error}"))?;
+    fs::create_dir_all(staging.join("plugins"))
+        .map_err(|error| format!("创建插件合并结果失败: {error}"))?;
+    fs::create_dir_all(staging.join("cursor-disabled"))
+        .map_err(|error| format!("创建 Cursor 插件合并结果失败: {error}"))?;
+    for selection in portable_paths {
+        let source_root = match selection.source {
+            ObjectSource::Local => repository,
+            ObjectSource::Remote => remote_path,
+        };
+        let source = source_root.join(selection.relative_path);
+        if source.exists() {
+            copy_tree(&source, &staging.join(selection.relative_path))?;
+        }
+    }
     let mut library = BackupLibrary {
         schema_version: 1,
         skills: Vec::new(),
@@ -292,6 +391,11 @@ fn apply_merge_plan(
     .map_err(|error| format!("写入备份冲突失败: {error}"))?;
     replace_directory(&skills_dir, &repository.join("skills"))?;
     replace_directory(&staging.join(".skilldock"), &repository.join(".skilldock"))?;
+    replace_directory(&staging.join("plugins"), &repository.join("plugins"))?;
+    replace_directory(
+        &staging.join("cursor-disabled"),
+        &repository.join("cursor-disabled"),
+    )?;
     let _ = fs::remove_dir_all(staging);
     Ok(())
 }
@@ -311,6 +415,17 @@ pub fn merge_remote_branch(repository: &Path) -> Result<(), String> {
         Some(worktree) => index_library(read_library_snapshot(&worktree.path)?),
         None => BTreeMap::new(),
     };
+    let portable_paths = PORTABLE_MERGE_PATHS
+        .into_iter()
+        .map(|relative_path| {
+            select_portable_path_source(
+                base.as_ref().map(|worktree| worktree.path.as_path()),
+                repository,
+                &remote.path,
+                relative_path,
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     let ids = local_skills
         .keys()
         .chain(remote_skills.keys())
@@ -385,7 +500,13 @@ pub fn merge_remote_branch(repository: &Path) -> Result<(), String> {
         ],
         None,
     )?;
-    if let Err(error) = apply_merge_plan(repository, &remote.path, objects, conflict_file) {
+    if let Err(error) = apply_merge_plan(
+        repository,
+        &remote.path,
+        objects,
+        conflict_file,
+        portable_paths,
+    ) {
         let _ = git(repository, &["merge", "--abort"], None);
         return Err(error);
     }
@@ -574,6 +695,7 @@ mod tests {
             description: String::new(),
             tools: BTreeMap::new(),
             content_hash: content_hash.into(),
+            ..Default::default()
         }
     }
 

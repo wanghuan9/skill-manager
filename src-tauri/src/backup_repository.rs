@@ -6,46 +6,106 @@ use std::sync::{Mutex, OnceLock};
 
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
+use tauri::Emitter;
 
 use crate::backup_merge::BackupConflict;
 use crate::backup_snapshot::{
-    apply_library_snapshot, apply_library_snapshot_preserving, backup_repo_path, backup_root,
-    read_library_snapshot, write_current_library_snapshot,
+    apply_library_snapshot, apply_library_snapshot_preserving, apply_library_snapshot_replace,
+    apply_portable_workspace_snapshot, backup_repo_path, backup_root, preview_workspace_restore,
+    read_library_snapshot, write_current_library_snapshot, BackupSnapshotManifest,
+    BackupSnapshotReport, WorkspaceRestorePreview,
 };
 use crate::github_api;
 use crate::github_credentials;
-use crate::models::{BackupStatus, GithubBackupSettings};
+use crate::models::{BackupPhase, BackupStatus, GithubBackupSettings};
 use crate::state::{load_github_backup_settings, save_github_backup_settings};
 
 const DEFAULT_BACKUP_REPOSITORY_NAME: &str = "skilldock-backup";
 const ASKPASS_USERNAME_ENV: &str = "SKILLDOCK_ASKPASS_USERNAME";
 const ASKPASS_PASSWORD_ENV: &str = "SKILLDOCK_ASKPASS_PASSWORD";
 const BACKUP_REMOTE_CONFIG_KEY: &str = "skilldock.remoteUrl";
+const BACKUP_STATUS_CHANGED_EVENT: &str = "backup-status-changed";
 const ASKPASS_SCRIPT: &str = "#!/bin/sh\ncase \"$1\" in\n  *[Uu]sername*) printf '%s\\n' \"${SKILLDOCK_ASKPASS_USERNAME}\" ;;\n  *) printf '%s\\n' \"${SKILLDOCK_ASKPASS_PASSWORD}\" ;;\nesac\n";
 
 static BACKUP_SYNC_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 static BACKUP_SYNCING: AtomicBool = AtomicBool::new(false);
+static BACKUP_OPERATION_PHASE: OnceLock<Mutex<Option<BackupPhase>>> = OnceLock::new();
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BackupSyncResult {
     pub status: BackupStatus,
     pub included_skills: usize,
+    pub included_mcp_servers: usize,
+    pub included_plugins: usize,
+    pub preferences_included: bool,
     pub excluded_skills: Vec<String>,
+    pub warnings: Vec<String>,
     pub changed: bool,
 }
 
-#[derive(Clone, Copy)]
-enum BackupOperation {
-    Backup,
-    SyncToLocal,
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CloudBackupNode {
+    pub commit_id: String,
+    pub created_at: String,
+    pub device_label: String,
+    pub skill_count: usize,
+    pub mcp_count: usize,
+    pub plugin_count: usize,
+}
+
+#[derive(Default)]
+struct BackupOperationReport {
+    included_skills: usize,
+    included_mcp_servers: usize,
+    included_plugins: usize,
+    preferences_included: bool,
+    excluded_skills: Vec<String>,
+    warnings: Vec<String>,
 }
 
 fn sync_lock() -> &'static Mutex<()> {
     BACKUP_SYNC_LOCK.get_or_init(|| Mutex::new(()))
 }
 
+fn operation_phase_lock() -> &'static Mutex<Option<BackupPhase>> {
+    BACKUP_OPERATION_PHASE.get_or_init(|| Mutex::new(None))
+}
+
+fn current_operation_phase() -> Option<BackupPhase> {
+    operation_phase_lock().lock().ok().and_then(|phase| *phase)
+}
+
+fn begin_operation(phase: BackupPhase) -> Result<(), String> {
+    let mut current = operation_phase_lock()
+        .lock()
+        .map_err(|_| "备份任务状态锁不可用".to_string())?;
+    if current.is_some() {
+        return Err("已有备份操作正在后台执行".to_string());
+    }
+    *current = Some(phase);
+    BACKUP_SYNCING.store(true, Ordering::SeqCst);
+    Ok(())
+}
+
+fn finish_operation() {
+    if let Ok(mut current) = operation_phase_lock().lock() {
+        *current = None;
+    }
+    BACKUP_SYNCING.store(false, Ordering::SeqCst);
+}
+
 fn status_from_settings(settings: GithubBackupSettings) -> BackupStatus {
+    let phase = current_operation_phase().unwrap_or_else(|| {
+        if !settings.last_error.trim().is_empty() {
+            BackupPhase::Error
+        } else if settings.enabled {
+            BackupPhase::Enabled
+        } else {
+            BackupPhase::Disabled
+        }
+    });
     BackupStatus {
         enabled: settings.enabled,
         repository_owner: settings.repository_owner,
@@ -53,6 +113,7 @@ fn status_from_settings(settings: GithubBackupSettings) -> BackupStatus {
         repository_url: settings.repository_url,
         last_sync_at: settings.last_sync_at,
         last_error: settings.last_error,
+        phase,
         syncing: BACKUP_SYNCING.load(Ordering::SeqCst),
         pending_conflicts: pending_conflict_count(),
     }
@@ -199,11 +260,24 @@ fn archive_repository_for_different_remote(
 }
 
 fn commit_snapshot(repo_path: &Path) -> Result<bool, String> {
+    commit_snapshot_with_message(repo_path, "SkillDock backup", false)
+}
+
+fn commit_snapshot_with_message(
+    repo_path: &Path,
+    message: &str,
+    allow_empty: bool,
+) -> Result<bool, String> {
     git(repo_path, &["add", "--all"], None)?;
-    if git_success(repo_path, &["diff", "--cached", "--quiet"]) {
+    if !allow_empty && git_success(repo_path, &["diff", "--cached", "--quiet"]) {
         return Ok(false);
     }
-    git(repo_path, &["commit", "-m", "SkillDock backup"], None)?;
+    let mut arguments = vec!["commit"];
+    if allow_empty {
+        arguments.push("--allow-empty");
+    }
+    arguments.extend(["-m", message]);
+    git(repo_path, &arguments, None)?;
     Ok(true)
 }
 
@@ -288,42 +362,204 @@ fn apply_and_refresh_library(
     Ok(read_library_snapshot(repo_path)?.skills.len())
 }
 
-fn run_backup_operation_blocking(
-    app_handle: tauri::AppHandle,
-    operation: BackupOperation,
-) -> Result<BackupSyncResult, String> {
+fn upload_current_snapshot(repo_path: &Path, token: &str) -> Result<BackupOperationReport, String> {
+    let report = write_current_library_snapshot(repo_path)?;
+    let _ = commit_snapshot(repo_path)?;
+    reconcile_remote(repo_path, token)?;
+    push_branch_with_retry(repo_path, token)?;
+    Ok(operation_report_from_snapshot(report))
+}
+
+fn parse_cloud_node(
+    repo_path: &Path,
+    commit_id: &str,
+    commit_created_at: &str,
+) -> Result<CloudBackupNode, String> {
+    let manifest = git(
+        repo_path,
+        &["show", &format!("{commit_id}:.skilldock/snapshot.json")],
+        None,
+    )
+    .ok()
+    .and_then(|payload| serde_json::from_str::<BackupSnapshotManifest>(&payload).ok());
+    if let Some(manifest) = manifest {
+        return Ok(CloudBackupNode {
+            commit_id: commit_id.to_string(),
+            created_at: manifest.created_at,
+            device_label: manifest.device_label,
+            skill_count: manifest.skill_count,
+            mcp_count: manifest.mcp_count,
+            plugin_count: manifest.plugin_count,
+        });
+    }
+    let library = git(
+        repo_path,
+        &["show", &format!("{commit_id}:.skilldock/library.json")],
+        None,
+    )
+    .ok()
+    .and_then(|payload| {
+        serde_json::from_str::<crate::backup_snapshot::BackupLibrary>(&payload).ok()
+    })
+    .unwrap_or_default();
+    Ok(CloudBackupNode {
+        commit_id: commit_id.to_string(),
+        created_at: commit_created_at.to_string(),
+        device_label: "未知设备".to_string(),
+        skill_count: library.skills.len(),
+        mcp_count: 0,
+        plugin_count: 0,
+    })
+}
+
+fn list_cloud_backup_nodes_blocking() -> Result<Vec<CloudBackupNode>, String> {
     let _guard = sync_lock()
         .lock()
         .map_err(|_| "备份同步锁不可用".to_string())?;
-    BACKUP_SYNCING.store(true, Ordering::SeqCst);
-    let result = run_backup_operation_locked(&app_handle, operation);
-    BACKUP_SYNCING.store(false, Ordering::SeqCst);
-    result
+    let settings = load_github_backup_settings();
+    if !settings.enabled {
+        return Err("尚未启用 GitHub 备份".to_string());
+    }
+    let credential = github_credentials::load_active_credential()
+        .ok_or_else(|| "GitHub 凭据不可用，请重新连接".to_string())?;
+    let repo_path = backup_repo_path()?;
+    ensure_local_repository(&repo_path, &settings.repository_url)?;
+    reconcile_remote(&repo_path, &credential.token)?;
+    if !remote_branch_exists(&repo_path) {
+        return Ok(Vec::new());
+    }
+    let history = git(
+        &repo_path,
+        &["log", "--max-count=5", "--format=%H%x09%cI", "origin/main"],
+        None,
+    )?;
+    history
+        .lines()
+        .filter_map(|line| line.split_once('\t'))
+        .map(|(commit_id, created_at)| parse_cloud_node(&repo_path, commit_id, created_at))
+        .collect()
 }
 
-fn run_backup_operation_locked(
-    app_handle: &tauri::AppHandle,
-    operation: BackupOperation,
-) -> Result<BackupSyncResult, String> {
+fn validate_cloud_commit(repo_path: &Path, commit_id: &str) -> Result<(), String> {
+    if commit_id.len() != 40
+        || !commit_id
+            .chars()
+            .all(|character| character.is_ascii_hexdigit())
+    {
+        return Err("备份节点标识无效".to_string());
+    }
+    if !git_success(
+        repo_path,
+        &["merge-base", "--is-ancestor", commit_id, "origin/main"],
+    ) {
+        return Err("备份节点不属于当前云端备份历史".to_string());
+    }
+    Ok(())
+}
+
+fn preview_cloud_backup_node_blocking(
+    commit_id: String,
+) -> Result<WorkspaceRestorePreview, String> {
+    let _guard = sync_lock()
+        .lock()
+        .map_err(|_| "备份同步锁不可用".to_string())?;
+    let settings = load_github_backup_settings();
+    if !settings.enabled {
+        return Err("尚未启用 GitHub 备份".to_string());
+    }
+    let credential = github_credentials::load_active_credential()
+        .ok_or_else(|| "GitHub 凭据不可用，请重新连接".to_string())?;
+    let repo_path = backup_repo_path()?;
+    ensure_local_repository(&repo_path, &settings.repository_url)?;
+    reconcile_remote(&repo_path, &credential.token)?;
+    validate_cloud_commit(&repo_path, &commit_id)?;
+    crate::backup_merge::with_materialized_commit(
+        &repo_path,
+        &commit_id,
+        "preview",
+        preview_workspace_restore,
+    )
+}
+
+fn create_before_restore_node(repo_path: &Path, token: &str) -> Result<(), String> {
+    reconcile_remote(repo_path, token)?;
+    write_current_library_snapshot(repo_path)?;
+    commit_snapshot_with_message(repo_path, "SkillDock before restore", true)?;
+    push_branch_with_retry(repo_path, token)
+}
+
+fn restore_cloud_node_blocking(
+    app_handle: tauri::AppHandle,
+    commit_id: String,
+    backup_current: bool,
+) -> Result<(), String> {
+    let _guard = sync_lock()
+        .lock()
+        .map_err(|_| "备份同步锁不可用".to_string())?;
     let mut settings = load_github_backup_settings();
     if !settings.enabled {
         return Err("尚未启用 GitHub 备份".to_string());
     }
-    let credential = github_credentials::load_credential()
+    let credential = github_credentials::load_active_credential()
+        .ok_or_else(|| "GitHub 凭据不可用，请重新连接".to_string())?;
+    let repo_path = backup_repo_path()?;
+    ensure_local_repository(&repo_path, &settings.repository_url)?;
+    if backup_current {
+        create_before_restore_node(&repo_path, &credential.token)?;
+    }
+    reconcile_remote(&repo_path, &credential.token)?;
+    validate_cloud_commit(&repo_path, &commit_id)?;
+
+    crate::backup_merge::with_materialized_commit(
+        &repo_path,
+        &commit_id,
+        "restore",
+        |snapshot_path| {
+            let installed_skills = apply_library_snapshot_replace(snapshot_path)?;
+            crate::commands::refresh_backup_library(&app_handle, &installed_skills)?;
+            apply_portable_workspace_snapshot(snapshot_path)?;
+            Ok(())
+        },
+    )?;
+
+    write_current_library_snapshot(&repo_path)?;
+    let message = format!("SkillDock restore {}", &commit_id[..8]);
+    commit_snapshot_with_message(&repo_path, &message, true)?;
+    push_branch_with_retry(&repo_path, &credential.token)?;
+    settings.last_sync_at = Utc::now().to_rfc3339();
+    settings.last_error.clear();
+    save_github_backup_settings(settings)
+}
+
+fn operation_report_from_snapshot(report: BackupSnapshotReport) -> BackupOperationReport {
+    BackupOperationReport {
+        included_skills: report.included_skills,
+        included_mcp_servers: report.included_mcp_servers,
+        included_plugins: report.included_plugins,
+        preferences_included: report.preferences_included,
+        excluded_skills: report.excluded_skills,
+        warnings: report.warnings,
+    }
+}
+
+fn run_backup_operation_blocking() -> Result<BackupSyncResult, String> {
+    let _guard = sync_lock()
+        .lock()
+        .map_err(|_| "备份同步锁不可用".to_string())?;
+    run_backup_operation_locked()
+}
+
+fn run_backup_operation_locked() -> Result<BackupSyncResult, String> {
+    let mut settings = load_github_backup_settings();
+    if !settings.enabled {
+        return Err("尚未启用 GitHub 备份".to_string());
+    }
+    let credential = github_credentials::load_active_credential()
         .ok_or_else(|| "GitHub 凭据不可用，请重新连接".to_string())?;
     let repo_path = backup_repo_path()?;
     ensure_local_repository(&repo_path, &settings.repository_url)?;
     let starting_commit = git(&repo_path, &["rev-parse", "HEAD"], None).ok();
-    let report = write_current_library_snapshot(&repo_path)?;
-    let _ = commit_snapshot(&repo_path)?;
-    reconcile_remote(&repo_path, &credential.token)?;
-    let mut included_skills =
-        apply_and_refresh_library(app_handle, &repo_path, &report.preserved_backup_ids)?;
-    if matches!(operation, BackupOperation::Backup) {
-        push_branch_with_retry(&repo_path, &credential.token)?;
-        included_skills =
-            apply_and_refresh_library(app_handle, &repo_path, &report.preserved_backup_ids)?;
-    }
+    let report = upload_current_snapshot(&repo_path, &credential.token)?;
     let ending_commit = git(&repo_path, &["rev-parse", "HEAD"], None)?;
     let changed = starting_commit.as_deref() != Some(ending_commit.as_str());
     settings.last_sync_at = Utc::now().to_rfc3339();
@@ -331,8 +567,12 @@ fn run_backup_operation_locked(
     save_github_backup_settings(settings.clone())?;
     Ok(BackupSyncResult {
         status: status_from_settings(settings),
-        included_skills,
+        included_skills: report.included_skills,
+        included_mcp_servers: report.included_mcp_servers,
+        included_plugins: report.included_plugins,
+        preferences_included: report.preferences_included,
         excluded_skills: report.excluded_skills,
+        warnings: report.warnings,
         changed,
     })
 }
@@ -343,79 +583,186 @@ fn record_sync_error(error: &str) {
     let _ = save_github_backup_settings(settings);
 }
 
+fn emit_backup_status(app_handle: &tauri::AppHandle) -> BackupStatus {
+    let status = status_from_settings(load_github_backup_settings());
+    let _ = app_handle.emit(BACKUP_STATUS_CHANGED_EVENT, status.clone());
+    status
+}
+
 #[tauri::command]
 pub fn get_backup_status() -> BackupStatus {
     status_from_settings(load_github_backup_settings())
 }
 
 #[tauri::command]
-pub async fn enable_github_backup(
+pub async fn list_cloud_backup_nodes() -> Result<Vec<CloudBackupNode>, String> {
+    tauri::async_runtime::spawn_blocking(list_cloud_backup_nodes_blocking)
+        .await
+        .map_err(|error| format!("读取云端备份节点失败: {error}"))?
+}
+
+#[tauri::command]
+pub async fn preview_cloud_backup_node(
+    commit_id: String,
+) -> Result<WorkspaceRestorePreview, String> {
+    tauri::async_runtime::spawn_blocking(move || preview_cloud_backup_node_blocking(commit_id))
+        .await
+        .map_err(|error| format!("预览云端备份节点失败: {error}"))?
+}
+
+#[tauri::command]
+pub fn restore_cloud_backup_node(
     app_handle: tauri::AppHandle,
-) -> Result<BackupSyncResult, String> {
-    let credential =
-        github_credentials::load_credential().ok_or_else(|| "请先连接 GitHub".to_string())?;
-    let client = github_api::http_client()?;
-    let repository = github_api::ensure_private_backup_repository(
-        &client,
-        &credential.token,
-        DEFAULT_BACKUP_REPOSITORY_NAME,
-    )
-    .await?;
-    let previous_settings = load_github_backup_settings();
-    let mut settings = previous_settings.clone();
-    settings.enabled = true;
-    settings.repository_owner = repository.owner;
-    settings.repository_name = repository.name;
-    settings.repository_url = repository.clone_url;
-    save_github_backup_settings(settings)?;
-    let sync_app_handle = app_handle.clone();
-    let result = tauri::async_runtime::spawn_blocking(move || {
-        run_backup_operation_blocking(sync_app_handle, BackupOperation::Backup)
-    })
-    .await
-    .map_err(|error| format!("启动备份失败: {error}"))?;
-    match result {
-        Ok(sync_result) => Ok(sync_result),
-        Err(error) => {
-            save_github_backup_settings(previous_settings.clone())?;
-            Err(error)
-        }
+    commit_id: String,
+) -> Result<BackupStatus, String> {
+    start_cloud_restore(app_handle, commit_id, true)
+}
+
+fn start_cloud_restore(
+    app_handle: tauri::AppHandle,
+    commit_id: String,
+    backup_current: bool,
+) -> Result<BackupStatus, String> {
+    if !load_github_backup_settings().enabled {
+        return Err("尚未启用 GitHub 备份".to_string());
     }
-}
-
-#[tauri::command]
-pub async fn run_backup_sync(app_handle: tauri::AppHandle) -> Result<BackupSyncResult, String> {
-    run_backup_command(app_handle, BackupOperation::Backup).await
-}
-
-#[tauri::command]
-pub async fn sync_backup_to_local(
-    app_handle: tauri::AppHandle,
-) -> Result<BackupSyncResult, String> {
-    run_backup_command(app_handle, BackupOperation::SyncToLocal).await
-}
-
-async fn run_backup_command(
-    app_handle: tauri::AppHandle,
-    operation: BackupOperation,
-) -> Result<BackupSyncResult, String> {
-    let operation_app_handle = app_handle.clone();
-    let result = tauri::async_runtime::spawn_blocking(move || {
-        run_backup_operation_blocking(operation_app_handle, operation)
-    })
-    .await
-    .map_err(|error| format!("启动备份操作失败: {error}"))?;
-    match result {
-        Ok(sync_result) => Ok(sync_result),
-        Err(error) => {
+    github_credentials::load_active_credential()
+        .ok_or_else(|| "GitHub 凭据不可用，请重新连接".to_string())?;
+    begin_operation(BackupPhase::Restoring)?;
+    let mut settings = load_github_backup_settings();
+    settings.last_error.clear();
+    if let Err(error) = save_github_backup_settings(settings) {
+        finish_operation();
+        return Err(error);
+    }
+    let initial_status = emit_backup_status(&app_handle);
+    let restore_app_handle = app_handle.clone();
+    tauri::async_runtime::spawn(async move {
+        let result = tauri::async_runtime::spawn_blocking(move || {
+            restore_cloud_node_blocking(restore_app_handle, commit_id, backup_current)
+        })
+        .await
+        .map_err(|error| format!("启动云端恢复失败: {error}"))
+        .and_then(|result| result);
+        if let Err(error) = result {
             record_sync_error(&error);
-            Err(error)
         }
+        finish_operation();
+        emit_backup_status(&app_handle);
+    });
+    Ok(initial_status)
+}
+
+#[tauri::command]
+pub async fn enable_github_backup(app_handle: tauri::AppHandle) -> Result<BackupStatus, String> {
+    let credential = github_credentials::load_active_credential()
+        .ok_or_else(|| "请先连接 GitHub".to_string())?;
+    begin_operation(BackupPhase::Enabling)?;
+    let mut initial_settings = load_github_backup_settings();
+    initial_settings.last_error.clear();
+    if let Err(error) = save_github_backup_settings(initial_settings) {
+        finish_operation();
+        return Err(error);
     }
+    let initial_status = emit_backup_status(&app_handle);
+
+    tauri::async_runtime::spawn(async move {
+        let result = async {
+            let client = github_api::http_client()?;
+            let repository = github_api::ensure_private_backup_repository(
+                &client,
+                &credential.token,
+                DEFAULT_BACKUP_REPOSITORY_NAME,
+            )
+            .await?;
+            let repository_owner = repository.owner;
+            let repository_name = repository.name;
+            let repository_url = repository.clone_url;
+            let blocking_url = repository_url.clone();
+            let token = credential.token;
+            tauri::async_runtime::spawn_blocking(move || {
+                let _guard = sync_lock()
+                    .lock()
+                    .map_err(|_| "备份同步锁不可用".to_string())?;
+                let repo_path = backup_repo_path()?;
+                ensure_local_repository(&repo_path, &blocking_url)?;
+                upload_current_snapshot(&repo_path, &token)
+            })
+            .await
+            .map_err(|error| format!("启动首次备份失败: {error}"))??;
+            Ok::<_, String>((repository_owner, repository_name, repository_url))
+        }
+        .await;
+
+        let mut settings = load_github_backup_settings();
+        match result {
+            Ok((owner, name, url)) => {
+                settings.enabled = true;
+                settings.repository_owner = owner;
+                settings.repository_name = name;
+                settings.repository_url = url;
+                settings.last_sync_at = Utc::now().to_rfc3339();
+                settings.last_error.clear();
+            }
+            Err(error) => {
+                settings.enabled = false;
+                settings.last_error = error;
+            }
+        }
+        let _ = save_github_backup_settings(settings);
+        finish_operation();
+        emit_backup_status(&app_handle);
+    });
+    Ok(initial_status)
+}
+
+#[tauri::command]
+pub fn run_backup_sync(app_handle: tauri::AppHandle) -> Result<BackupStatus, String> {
+    run_backup_command(app_handle)
+}
+
+#[tauri::command]
+pub fn sync_backup_to_local(
+    app_handle: tauri::AppHandle,
+    commit_id: String,
+    backup_current: bool,
+) -> Result<BackupStatus, String> {
+    start_cloud_restore(app_handle, commit_id, backup_current)
+}
+
+fn run_backup_command(app_handle: tauri::AppHandle) -> Result<BackupStatus, String> {
+    if !load_github_backup_settings().enabled {
+        return Err("尚未启用 GitHub 备份".to_string());
+    }
+    github_credentials::load_active_credential()
+        .ok_or_else(|| "GitHub 凭据不可用，请重新连接".to_string())?;
+    begin_operation(BackupPhase::BackingUp)?;
+    let mut settings = load_github_backup_settings();
+    settings.last_error.clear();
+    if let Err(error) = save_github_backup_settings(settings) {
+        finish_operation();
+        return Err(error);
+    }
+    let initial_status = emit_backup_status(&app_handle);
+    tauri::async_runtime::spawn(async move {
+        let result = tauri::async_runtime::spawn_blocking(run_backup_operation_blocking)
+            .await
+            .map_err(|error| format!("启动备份操作失败: {error}"))
+            .and_then(|result| result);
+        if let Err(error) = result {
+            record_sync_error(&error);
+        }
+        finish_operation();
+        emit_backup_status(&app_handle);
+    });
+    Ok(initial_status)
 }
 
 #[tauri::command]
 pub fn disconnect_github_backup(_app_handle: tauri::AppHandle) -> Result<BackupStatus, String> {
+    if current_operation_phase().is_some() {
+        return Err("备份操作正在后台执行，暂时不能关闭".to_string());
+    }
     let mut settings = load_github_backup_settings();
     settings.enabled = false;
     settings.last_error.clear();
@@ -442,7 +789,7 @@ fn resolve_backup_conflict_blocking(
         if !settings.enabled {
             return Err("尚未启用 GitHub 备份".to_string());
         }
-        let credential = github_credentials::load_credential()
+        let credential = github_credentials::load_active_credential()
             .ok_or_else(|| "GitHub 凭据不可用，请重新连接".to_string())?;
         let repo_path = backup_repo_path()?;
         crate::backup_merge::resolve_conflict(&repo_path, &conflict_id, &resolution)?;
@@ -456,7 +803,11 @@ fn resolve_backup_conflict_blocking(
         Ok(BackupSyncResult {
             status: status_from_settings(settings),
             included_skills,
+            included_mcp_servers: 0,
+            included_plugins: 0,
+            preferences_included: false,
             excluded_skills: Vec::new(),
+            warnings: Vec::new(),
             changed,
         })
     })();
@@ -511,6 +862,7 @@ mod tests {
             description: String::new(),
             tools: BTreeMap::new(),
             content_hash: format!("hash-{backup_id}"),
+            ..Default::default()
         }
     }
 

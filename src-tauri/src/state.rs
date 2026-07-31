@@ -34,6 +34,7 @@ const APP_LANGUAGE_SOURCE_USER: &str = "user";
 const APP_THEME_LIGHT: &str = "light";
 const APP_THEME_DARK: &str = "dark";
 const APP_THEME_SYSTEM: &str = "system";
+const PORTABLE_PREFERENCES_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Clone, Debug, Deserialize, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -64,6 +65,48 @@ struct SettingsPersistence {
     github_backup: GithubBackupSettings,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PortablePreferences {
+    pub schema_version: u32,
+    pub agent_skills_compatibility_enabled: bool,
+    pub default_open_tool_id: String,
+    pub skill_install_activation: String,
+    pub mcp_install_activation: String,
+    pub skill_source_view_style: String,
+    pub language: String,
+    pub language_source: String,
+    pub theme: String,
+}
+
+fn portable_preferences_from_persistence(persistence: &SettingsPersistence) -> PortablePreferences {
+    let compatibility_enabled = persistence
+        .agent_skills_compatibility_enabled
+        .unwrap_or(false)
+        || normalize_skill_library_provider(&persistence.skill_library_provider)
+            == SKILL_LIBRARY_PROVIDER_AGENT_SKILLS;
+    PortablePreferences {
+        schema_version: PORTABLE_PREFERENCES_SCHEMA_VERSION,
+        agent_skills_compatibility_enabled: compatibility_enabled,
+        default_open_tool_id: persistence.default_open_tool_id.trim().to_string(),
+        skill_install_activation: normalize_skill_install_activation(
+            &persistence.skill_install_activation,
+        )
+        .to_string(),
+        mcp_install_activation: normalize_mcp_install_activation(
+            &persistence.mcp_install_activation,
+        )
+        .to_string(),
+        skill_source_view_style: normalize_skill_source_view_style(
+            &persistence.skill_source_view_style,
+        )
+        .to_string(),
+        language: normalize_app_language(&persistence.language).to_string(),
+        language_source: normalize_app_language_source(&persistence.language_source).to_string(),
+        theme: normalize_app_theme(&persistence.theme).to_string(),
+    }
+}
+
 fn load_settings_persistence() -> SettingsPersistence {
     settings_file_candidates()
         .into_iter()
@@ -88,6 +131,17 @@ fn save_settings_persistence(persistence: &SettingsPersistence) -> Result<(), St
 }
 
 pub fn load_installed_skills(default_skills: &[SkillSummary]) -> Vec<SkillSummary> {
+    load_installed_skills_internal(default_skills, true)
+}
+
+pub fn load_installed_skills_read_only(default_skills: &[SkillSummary]) -> Vec<SkillSummary> {
+    load_installed_skills_internal(default_skills, false)
+}
+
+fn load_installed_skills_internal(
+    default_skills: &[SkillSummary],
+    persist_repairs: bool,
+) -> Vec<SkillSummary> {
     let loaded_state = workspace_state_candidates()
         .into_iter()
         .find_map(|state_file| {
@@ -113,14 +167,21 @@ pub fn load_installed_skills(default_skills: &[SkillSummary]) -> Vec<SkillSummar
         .filter(is_skill_local_path_valid)
         .map(hydrate_skill_description)
         .collect::<Vec<_>>();
-    if loaded_from_legacy
-        || filtered_skills.len() != original_count
-        || filtered_skills
-            .iter()
-            .zip(original_paths.iter())
-            .any(|(current, original)| current.local_path != *original)
+    if persist_repairs
+        && (loaded_from_legacy
+            || filtered_skills.len() != original_count
+            || filtered_skills
+                .iter()
+                .zip(original_paths.iter())
+                .any(|(current, original)| current.local_path != *original))
     {
         let _ = save_installed_skills(&filtered_skills);
+    }
+    if !persist_repairs {
+        return filtered_skills
+            .into_iter()
+            .map(hydrate_skill_instance_metadata)
+            .collect();
     }
 
     let mut skills = merge_agent_skill_entries(filtered_skills);
@@ -470,6 +531,49 @@ pub fn load_app_settings() -> AppSettings {
         language_source: normalize_app_language_source(&persisted.language_source).to_string(),
         theme: normalize_app_theme(&persisted.theme).to_string(),
     }
+}
+
+pub fn export_portable_preferences() -> PortablePreferences {
+    portable_preferences_from_persistence(&load_settings_persistence())
+}
+
+pub fn apply_portable_preferences(
+    input: &PortablePreferences,
+    overwrite: bool,
+) -> Result<bool, String> {
+    if input.schema_version != PORTABLE_PREFERENCES_SCHEMA_VERSION {
+        return Err(format!("不支持的便携偏好版本: {}", input.schema_version));
+    }
+
+    let mut persistence = load_settings_persistence();
+    let current = portable_preferences_from_persistence(&persistence);
+    let defaults = portable_preferences_from_persistence(&SettingsPersistence::default());
+    if !overwrite && current != defaults && current != *input {
+        return Ok(false);
+    }
+    if current == *input {
+        return Ok(false);
+    }
+
+    persistence.skill_library_provider = if input.agent_skills_compatibility_enabled {
+        SKILL_LIBRARY_PROVIDER_AGENT_SKILLS
+    } else {
+        SKILL_LIBRARY_PROVIDER_SKILLDOCK
+    }
+    .to_string();
+    persistence.agent_skills_compatibility_enabled = Some(input.agent_skills_compatibility_enabled);
+    persistence.default_open_tool_id = input.default_open_tool_id.trim().to_string();
+    persistence.skill_install_activation =
+        normalize_skill_install_activation(&input.skill_install_activation).to_string();
+    persistence.mcp_install_activation =
+        normalize_mcp_install_activation(&input.mcp_install_activation).to_string();
+    persistence.skill_source_view_style =
+        normalize_skill_source_view_style(&input.skill_source_view_style).to_string();
+    persistence.language = normalize_app_language(&input.language).to_string();
+    persistence.language_source = normalize_app_language_source(&input.language_source).to_string();
+    persistence.theme = normalize_app_theme(&input.theme).to_string();
+    save_settings_persistence(&persistence)?;
+    Ok(true)
 }
 
 pub fn load_legacy_github_token() -> String {
@@ -990,10 +1094,11 @@ mod tests {
     use crate::workspace::TEST_ENV_LOCK;
 
     use super::{
-        hydrate_skill_description, load_app_settings, load_github_connection_metadata,
-        load_installed_skills, load_legacy_github_token, normalize_app_theme,
-        normalize_skill_source_view_style, save_app_settings, save_github_connection_metadata,
-        save_installed_skills, scan_local_skill_candidates,
+        apply_portable_preferences, export_portable_preferences, hydrate_skill_description,
+        load_app_settings, load_github_connection_metadata, load_installed_skills,
+        load_legacy_github_token, normalize_app_theme, normalize_skill_source_view_style,
+        save_app_settings, save_github_connection_metadata, save_installed_skills,
+        scan_local_skill_candidates,
     };
 
     fn with_temp_home<F>(run: F)
@@ -1149,6 +1254,61 @@ mod tests {
         assert_eq!(normalize_app_theme("dark"), "dark");
         assert_eq!(normalize_app_theme("system"), "system");
         assert_eq!(normalize_app_theme(""), "system");
+    }
+
+    #[test]
+    fn portable_preferences_only_include_allowed_fields() {
+        with_temp_home(|_| {
+            save_github_connection_metadata(
+                GithubConnectionMetadata {
+                    auth_method: "oauth".into(),
+                    user_id: Some(42),
+                    username: "octocat".into(),
+                    avatar_url: "https://example.com/avatar.png".into(),
+                    credential_persisted: true,
+                },
+                true,
+            )
+            .expect("save GitHub metadata");
+            let payload = serde_json::to_string(&export_portable_preferences())
+                .expect("serialize portable preferences");
+
+            assert!(!payload.contains("github"));
+            assert!(!payload.contains("storagePath"));
+            assert!(!payload.contains("skillLibraryPath"));
+            assert!(!payload.contains("octocat"));
+        });
+    }
+
+    #[test]
+    fn portable_preferences_restore_is_conservative_unless_overwrite_is_requested() {
+        with_temp_home(|_| {
+            let mut settings = load_app_settings();
+            settings.theme = "dark".into();
+            save_app_settings(settings).expect("save local settings");
+            save_github_connection_metadata(
+                GithubConnectionMetadata {
+                    auth_method: "oauth".into(),
+                    user_id: Some(42),
+                    username: "octocat".into(),
+                    avatar_url: String::new(),
+                    credential_persisted: true,
+                },
+                true,
+            )
+            .expect("save GitHub metadata");
+
+            let mut portable = export_portable_preferences();
+            portable.theme = "light".into();
+            assert!(!apply_portable_preferences(&portable, false)
+                .expect("skip different local preferences"));
+            assert_eq!(load_app_settings().theme, "dark");
+
+            assert!(apply_portable_preferences(&portable, true)
+                .expect("overwrite portable preferences"));
+            assert_eq!(load_app_settings().theme, "light");
+            assert_eq!(load_github_connection_metadata().username, "octocat");
+        });
     }
 
     #[test]
