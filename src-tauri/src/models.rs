@@ -409,6 +409,8 @@ pub struct GithubConnection {
 #[serde(rename_all = "camelCase")]
 pub struct GithubBackupSettings {
     pub enabled: bool,
+    #[serde(default)]
+    pub account_user_id: Option<u64>,
     pub repository_owner: String,
     pub repository_name: String,
     pub repository_url: String,
@@ -445,6 +447,10 @@ pub struct BackupStatus {
     pub phase: BackupPhase,
     pub syncing: bool,
     pub pending_conflicts: usize,
+    #[serde(default)]
+    pub progress_stage: String,
+    #[serde(default)]
+    pub progress_percent: u8,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

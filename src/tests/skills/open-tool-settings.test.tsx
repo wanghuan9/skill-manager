@@ -1,6 +1,7 @@
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { invoke, isTauri } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { vi } from "vitest";
 import { App } from "@/app/App";
 import { requestOpenGithubSettings } from "@/app/github-settings-navigation";
@@ -186,12 +187,21 @@ test("runs manual GitHub sync and backup from settings", async () => {
     repositoryOwner: "octocat",
     repositoryName: "skilldock-backup",
     repositoryUrl: "https://github.com/octocat/skilldock-backup.git",
-    lastSyncAt: "2026-07-29T12:00:00Z",
+    lastSyncAt: "",
     lastError: "",
     phase: "enabled",
     syncing: false,
     pendingConflicts: 0,
+    progressStage: "",
+    progressPercent: 0,
   };
+  let backupStatusListener: ((event: { payload: typeof backupStatus }) => void) | undefined;
+  vi.mocked(listen).mockImplementation(async (event, handler) => {
+    if (event === "backup-status-changed") {
+      backupStatusListener = handler as typeof backupStatusListener;
+    }
+    return () => undefined;
+  });
   vi.mocked(invoke).mockImplementation(async (command) => {
     switch (command) {
       case "list_startup_installed_skills":
@@ -250,8 +260,44 @@ test("runs manual GitHub sync and backup from settings", async () => {
   expect(screen.getByRole("switch", { name: "云端备份" })).toBeChecked();
 
   expect(screen.getByRole("button", { name: "octocat/skilldock-backup" })).toBeInTheDocument();
+  expect(screen.getByText("尚未备份")).toBeInTheDocument();
 
-  const syncButton = screen.getByRole("button", { name: "同步到本地" });
+  await waitFor(() => expect(backupStatusListener).toBeDefined());
+  act(() => {
+    backupStatusListener?.({
+      payload: {
+        ...backupStatus,
+        phase: "backingUp",
+        syncing: true,
+        progressStage: "uploading",
+        progressPercent: 68,
+      },
+    });
+  });
+  expect(await screen.findByText("正在上传 Git 对象 · 68%"))
+    .toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "备份中 68%" })).toBeDisabled();
+
+  act(() => {
+    backupStatusListener?.({
+      payload: {
+        ...backupStatus,
+        phase: "restoring",
+        syncing: true,
+        progressStage: "restoring",
+        progressPercent: 72,
+      },
+    });
+  });
+  expect(await screen.findByText("正在恢复本地文件 · 72%"))
+    .toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "同步中 72%" })).toBeDisabled();
+
+  act(() => {
+    backupStatusListener?.({ payload: backupStatus });
+  });
+
+  const syncButton = await screen.findByRole("button", { name: "同步到本地" });
   const backupButton = screen.getByRole("button", { name: "备份到云端" });
   const historyButton = screen.getByRole("button", { name: "历史节点" });
   expect(syncButton.parentElement).toBe(backupButton.parentElement);

@@ -9015,6 +9015,22 @@ button.settings-form-item:disabled {
   font-weight: 450;
 }
 
+.settings-github-backup__status.is-active strong {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: color-mix(in srgb, var(--accent) 78%, var(--heading));
+}
+
+.settings-github-backup__status.is-active strong::before {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent);
+  content: "";
+}
+
 .settings-github-backup__actions {
   display: flex;
   flex: 0 0 auto;
@@ -9045,9 +9061,14 @@ button.settings-form-item:disabled {
 }
 
 .settings-github-backup__action--primary {
+  min-width: 108px;
   border-color: color-mix(in srgb, var(--accent) 24%, var(--line));
   background: color-mix(in srgb, var(--accent) 9%, var(--surface-strong));
   color: color-mix(in srgb, var(--accent) 84%, var(--heading));
+}
+
+.settings-github-backup__action--secondary {
+  min-width: 108px;
 }
 
 .settings-github-backup__action--ghost {

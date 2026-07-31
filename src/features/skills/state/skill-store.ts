@@ -407,6 +407,8 @@ export type BackupStatus = {
   phase: "disabled" | "enabling" | "backingUp" | "restoring" | "enabled" | "error";
   syncing: boolean;
   pendingConflicts: number;
+  progressStage: string;
+  progressPercent: number;
 };
 
 export type BackupSyncResult = {

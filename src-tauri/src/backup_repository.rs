@@ -1,8 +1,11 @@
 use std::fs;
+use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
-use std::process::{Command, Output};
+use std::process::{Child, Command, Output, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{mpsc, Mutex, OnceLock};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -10,27 +13,41 @@ use tauri::Emitter;
 
 use crate::backup_merge::BackupConflict;
 use crate::backup_snapshot::{
-    apply_library_snapshot, apply_library_snapshot_preserving, apply_library_snapshot_replace,
-    apply_portable_workspace_snapshot, backup_repo_path, backup_root,
-    current_workspace_has_backup_data, preview_workspace_restore, read_library_snapshot,
-    write_current_library_snapshot, BackupSnapshotManifest, BackupSnapshotReport,
+    apply_library_snapshot, apply_library_snapshot_preserving,
+    apply_library_snapshot_replace_with_progress, apply_portable_workspace_snapshot,
+    backup_repo_path, backup_root, current_workspace_has_backup_data, preview_workspace_restore,
+    read_library_snapshot, write_current_library_snapshot,
+    write_current_library_snapshot_with_progress, BackupSnapshotManifest, BackupSnapshotReport,
     WorkspaceRestorePreview,
 };
 use crate::github_api;
 use crate::github_credentials;
 use crate::models::{BackupPhase, BackupStatus, GithubBackupSettings};
-use crate::state::{load_github_backup_settings, save_github_backup_settings};
+use crate::state::{
+    load_github_backup_settings, load_github_connection_metadata, save_github_backup_settings,
+};
 
 const DEFAULT_BACKUP_REPOSITORY_NAME: &str = "skilldock-backup";
 const ASKPASS_USERNAME_ENV: &str = "SKILLDOCK_ASKPASS_USERNAME";
 const ASKPASS_PASSWORD_ENV: &str = "SKILLDOCK_ASKPASS_PASSWORD";
 const BACKUP_REMOTE_CONFIG_KEY: &str = "skilldock.remoteUrl";
 const BACKUP_STATUS_CHANGED_EVENT: &str = "backup-status-changed";
+const GIT_TRANSFER_IDLE_TIMEOUT: Duration = Duration::from_secs(120);
+const GIT_PROGRESS_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const ASKPASS_SCRIPT: &str = "#!/bin/sh\ncase \"$1\" in\n  *[Uu]sername*) printf '%s\\n' \"${SKILLDOCK_ASKPASS_USERNAME}\" ;;\n  *) printf '%s\\n' \"${SKILLDOCK_ASKPASS_PASSWORD}\" ;;\nesac\n";
 
 static BACKUP_SYNC_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 static BACKUP_SYNCING: AtomicBool = AtomicBool::new(false);
 static BACKUP_OPERATION_PHASE: OnceLock<Mutex<Option<BackupPhase>>> = OnceLock::new();
+static BACKUP_OPERATION_PROGRESS: OnceLock<Mutex<BackupOperationProgress>> = OnceLock::new();
+
+#[derive(Clone, Debug, Default)]
+struct BackupOperationProgress {
+    stage: String,
+    percent: u8,
+}
+
+type OperationProgressCallback<'a> = dyn Fn(&str, u8) + 'a;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -74,6 +91,44 @@ fn operation_phase_lock() -> &'static Mutex<Option<BackupPhase>> {
     BACKUP_OPERATION_PHASE.get_or_init(|| Mutex::new(None))
 }
 
+fn operation_progress_lock() -> &'static Mutex<BackupOperationProgress> {
+    BACKUP_OPERATION_PROGRESS.get_or_init(|| Mutex::new(BackupOperationProgress::default()))
+}
+
+fn current_operation_progress() -> BackupOperationProgress {
+    operation_progress_lock()
+        .lock()
+        .map(|progress| progress.clone())
+        .unwrap_or_default()
+}
+
+fn advance_operation_progress(
+    progress: &mut BackupOperationProgress,
+    stage: &str,
+    percent: u8,
+) -> bool {
+    let next_percent = progress.percent.max(percent.min(100));
+    if progress.stage == stage && progress.percent == next_percent {
+        return false;
+    }
+    progress.stage = stage.to_string();
+    progress.percent = next_percent;
+    true
+}
+
+fn set_operation_progress(stage: &str, percent: u8) -> bool {
+    if let Ok(mut progress) = operation_progress_lock().lock() {
+        return advance_operation_progress(&mut progress, stage, percent);
+    }
+    false
+}
+
+fn clear_operation_progress() {
+    if let Ok(mut progress) = operation_progress_lock().lock() {
+        *progress = BackupOperationProgress::default();
+    }
+}
+
 fn current_operation_phase() -> Option<BackupPhase> {
     operation_phase_lock().lock().ok().and_then(|phase| *phase)
 }
@@ -87,6 +142,10 @@ fn begin_operation(phase: BackupPhase) -> Result<(), String> {
     }
     *current = Some(phase);
     BACKUP_SYNCING.store(true, Ordering::SeqCst);
+    clear_operation_progress();
+    if matches!(phase, BackupPhase::BackingUp | BackupPhase::Restoring) {
+        let _ = set_operation_progress("preparing", 0);
+    }
     Ok(())
 }
 
@@ -95,6 +154,7 @@ fn finish_operation() {
         *current = None;
     }
     BACKUP_SYNCING.store(false, Ordering::SeqCst);
+    clear_operation_progress();
 }
 
 fn status_from_settings(settings: GithubBackupSettings) -> BackupStatus {
@@ -107,6 +167,7 @@ fn status_from_settings(settings: GithubBackupSettings) -> BackupStatus {
             BackupPhase::Disabled
         }
     });
+    let progress = current_operation_progress();
     BackupStatus {
         enabled: settings.enabled,
         repository_owner: settings.repository_owner,
@@ -117,7 +178,43 @@ fn status_from_settings(settings: GithubBackupSettings) -> BackupStatus {
         phase,
         syncing: BACKUP_SYNCING.load(Ordering::SeqCst),
         pending_conflicts: pending_conflict_count(),
+        progress_stage: progress.stage,
+        progress_percent: progress.percent,
     }
+}
+
+fn reconcile_backup_settings_for_account(
+    mut settings: GithubBackupSettings,
+    user_id: u64,
+    username: &str,
+) -> GithubBackupSettings {
+    if !settings.enabled || settings.account_user_id == Some(user_id) {
+        return settings;
+    }
+    if settings.account_user_id.is_none()
+        && settings
+            .repository_owner
+            .trim()
+            .eq_ignore_ascii_case(username.trim())
+    {
+        settings.account_user_id = Some(user_id);
+        return settings;
+    }
+
+    settings.enabled = false;
+    settings.account_user_id = None;
+    settings.repository_owner.clear();
+    settings.repository_name.clear();
+    settings.repository_url.clear();
+    settings.last_sync_at.clear();
+    settings.last_error.clear();
+    settings
+}
+
+pub fn reconcile_backup_preference_after_login(user_id: u64, username: &str) -> Result<(), String> {
+    let settings = load_github_backup_settings();
+    let reconciled = reconcile_backup_settings_for_account(settings, user_id, username);
+    save_github_backup_settings(reconciled)
 }
 
 fn pending_conflict_count() -> usize {
@@ -155,7 +252,7 @@ fn ensure_askpass_script() -> Result<std::path::PathBuf, String> {
     Ok(path)
 }
 
-fn git_output(repo_path: &Path, args: &[&str], token: Option<&str>) -> Result<Output, String> {
+fn git_command(repo_path: &Path, args: &[&str], token: Option<&str>) -> Result<Command, String> {
     let mut command = Command::new("git");
     command.current_dir(repo_path).args(args);
     command.env("GIT_TERMINAL_PROMPT", "0");
@@ -167,9 +264,144 @@ fn git_output(repo_path: &Path, args: &[&str], token: Option<&str>) -> Result<Ou
     }
     #[cfg(windows)]
     crate::library::configure_hidden_subprocess(&mut command);
-    command
+    Ok(command)
+}
+
+fn git_output(repo_path: &Path, args: &[&str], token: Option<&str>) -> Result<Output, String> {
+    git_command(repo_path, args, token)?
         .output()
         .map_err(|error| format!("执行 Git 备份命令失败: {error}"))
+}
+
+fn parse_git_progress_percent(line: &str) -> Option<u8> {
+    let percent_marker = line.find('%')?;
+    line[..percent_marker]
+        .split_whitespace()
+        .last()?
+        .parse::<u8>()
+        .ok()
+        .filter(|percent| *percent <= 100)
+}
+
+fn map_progress_percent(percent: u8, start: u8, end: u8) -> u8 {
+    let range = u16::from(end.saturating_sub(start));
+    let offset = u16::from(percent.min(100)) * range / 100;
+    start.saturating_add(offset as u8)
+}
+
+fn map_item_progress(completed: usize, total: usize, start: u8, end: u8) -> u8 {
+    if total == 0 {
+        return end;
+    }
+    let percent = completed.saturating_mul(100) / total;
+    map_progress_percent(percent.min(100) as u8, start, end)
+}
+
+fn git_with_progress(
+    repo_path: &Path,
+    args: &[&str],
+    token: Option<&str>,
+    on_progress: &dyn Fn(&str),
+) -> Result<String, String> {
+    let mut command = git_command(repo_path, args, token)?;
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("执行 Git 备份命令失败: {error}"))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "读取 Git 标准输出失败".to_string())?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| "读取 Git 进度输出失败".to_string())?;
+
+    let stdout_thread = thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let _ = BufReader::new(stdout).read_to_end(&mut bytes);
+        bytes
+    });
+    let (progress_sender, progress_receiver) = mpsc::channel::<String>();
+    let stderr_thread = thread::spawn(move || {
+        let mut collected = String::new();
+        for chunk in BufReader::new(stderr).split(b'\r').filter_map(Result::ok) {
+            let text = String::from_utf8_lossy(&chunk);
+            for line in text.lines().filter(|line| !line.trim().is_empty()) {
+                collected.push_str(line);
+                collected.push('\n');
+                let _ = progress_sender.send(line.to_string());
+            }
+        }
+        collected
+    });
+
+    let mut last_activity = Instant::now();
+    let status = loop {
+        while let Ok(line) = progress_receiver.try_recv() {
+            last_activity = Instant::now();
+            on_progress(&line);
+        }
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if last_activity.elapsed() >= GIT_TRANSFER_IDLE_TIMEOUT => {
+                terminate_git_process_tree(&mut child);
+                let _ = stdout_thread.join();
+                let _ = stderr_thread.join();
+                return Err("GitHub 传输长时间没有进度，请检查网络后重试".to_string());
+            }
+            Ok(None) => thread::sleep(GIT_PROGRESS_POLL_INTERVAL),
+            Err(error) => {
+                terminate_git_process_tree(&mut child);
+                let _ = stdout_thread.join();
+                let _ = stderr_thread.join();
+                return Err(format!("等待 Git 备份命令失败: {error}"));
+            }
+        }
+    };
+    while let Ok(line) = progress_receiver.try_recv() {
+        on_progress(&line);
+    }
+    let stdout = stdout_thread.join().unwrap_or_default();
+    let stderr = stderr_thread.join().unwrap_or_default();
+    if status.success() {
+        return Ok(String::from_utf8_lossy(&stdout).trim().to_string());
+    }
+    let message = stderr.trim();
+    Err(if message.is_empty() {
+        format!("Git 备份命令失败: {}", args.join(" "))
+    } else {
+        message.to_string()
+    })
+}
+
+fn terminate_git_process_tree(child: &mut Child) {
+    #[cfg(unix)]
+    {
+        let process_group = format!("-{}", child.id());
+        let status = Command::new("kill")
+            .args(["-TERM", process_group.as_str()])
+            .status();
+        if !status.is_ok_and(|status| status.success()) {
+            let _ = child.kill();
+        }
+    }
+    #[cfg(windows)]
+    {
+        let process_id = child.id().to_string();
+        let mut command = Command::new("taskkill");
+        command.args(["/PID", process_id.as_str(), "/T", "/F"]);
+        crate::library::configure_hidden_subprocess(&mut command);
+        if !command.status().is_ok_and(|status| status.success()) {
+            let _ = child.kill();
+        }
+    }
+    let _ = child.wait();
 }
 
 pub(crate) fn git(repo_path: &Path, args: &[&str], token: Option<&str>) -> Result<String, String> {
@@ -295,11 +527,29 @@ fn remote_branch_exists(repo_path: &Path) -> bool {
 }
 
 fn reconcile_remote(repo_path: &Path, token: &str) -> Result<(), String> {
-    let fetch_result = git(
-        repo_path,
-        &["fetch", "--prune", "--tags", "origin", "main"],
-        Some(token),
-    );
+    reconcile_remote_with_progress(repo_path, token, None, "", 0, 0)
+}
+
+fn reconcile_remote_with_progress(
+    repo_path: &Path,
+    token: &str,
+    progress: Option<&OperationProgressCallback<'_>>,
+    stage: &str,
+    start: u8,
+    end: u8,
+) -> Result<(), String> {
+    let fetch_args = ["fetch", "--progress", "--prune", "--tags", "origin", "main"];
+    let fetch_result = if let Some(report) = progress {
+        git_with_progress(repo_path, &fetch_args, Some(token), &|line| {
+            if line.contains("Receiving objects") {
+                if let Some(percent) = parse_git_progress_percent(line) {
+                    report(stage, map_progress_percent(percent, start, end));
+                }
+            }
+        })
+    } else {
+        git(repo_path, &fetch_args, Some(token))
+    };
     if let Err(error) = fetch_result {
         if error.contains("couldn't find remote ref")
             || error.contains("does not appear to be a git repository")
@@ -339,13 +589,36 @@ fn retryable_push_error(error: &str) -> bool {
 }
 
 fn push_branch_with_retry(repo_path: &Path, token: &str) -> Result<(), String> {
+    push_branch_with_retry_progress(repo_path, token, None, "", 0, 0)
+}
+
+fn push_branch_with_retry_progress(
+    repo_path: &Path,
+    token: &str,
+    progress: Option<&OperationProgressCallback<'_>>,
+    stage: &str,
+    start: u8,
+    end: u8,
+) -> Result<(), String> {
     let mut last_error = String::new();
     for attempt in 0..3 {
-        match git(repo_path, &["push", "origin", "HEAD:main"], Some(token)) {
+        let push_args = ["push", "--progress", "origin", "HEAD:main"];
+        let push_result = if let Some(report) = progress {
+            git_with_progress(repo_path, &push_args, Some(token), &|line| {
+                if line.contains("Writing objects") {
+                    if let Some(percent) = parse_git_progress_percent(line) {
+                        report(stage, map_progress_percent(percent, start, end));
+                    }
+                }
+            })
+        } else {
+            git(repo_path, &push_args, Some(token))
+        };
+        match push_result {
             Ok(_) => return Ok(()),
             Err(error) if attempt < 2 && retryable_push_error(&error) => {
                 last_error = error;
-                reconcile_remote(repo_path, token)?;
+                reconcile_remote_with_progress(repo_path, token, progress, stage, start, end)?;
             }
             Err(error) => return Err(error),
         }
@@ -367,14 +640,40 @@ fn apply_and_refresh_library(
     Ok(read_library_snapshot(repo_path)?.skills.len())
 }
 
+#[cfg(test)]
 fn upload_current_snapshot(repo_path: &Path, token: &str) -> Result<BackupOperationReport, String> {
-    reconcile_remote(repo_path, token)?;
+    upload_current_snapshot_with_progress(repo_path, token, None)
+}
+
+fn upload_current_snapshot_with_progress(
+    repo_path: &Path,
+    token: &str,
+    progress: Option<&OperationProgressCallback<'_>>,
+) -> Result<BackupOperationReport, String> {
+    if let Some(report) = progress {
+        report("preparing", 3);
+    }
+    reconcile_remote_with_progress(repo_path, token, progress, "preparing", 3, 10)?;
     if !current_workspace_has_backup_data()? && remote_snapshot_has_data(repo_path)? {
         return Err("本机暂无可备份数据，未覆盖云端备份".to_string());
     }
-    let report = write_current_library_snapshot(repo_path)?;
+    if let Some(report) = progress {
+        report("collecting", 12);
+    }
+    let snapshot_progress = |completed: usize, total: usize| {
+        if let Some(progress) = progress {
+            progress("collecting", map_item_progress(completed, total, 12, 58));
+        }
+    };
+    let report = write_current_library_snapshot_with_progress(repo_path, Some(&snapshot_progress))?;
+    if let Some(progress) = progress {
+        progress("committing", 60);
+    }
     let _ = commit_snapshot(repo_path)?;
-    push_branch_with_retry(repo_path, token)?;
+    if let Some(progress) = progress {
+        progress("uploading", 70);
+    }
+    push_branch_with_retry_progress(repo_path, token, progress, "uploading", 70, 99)?;
     Ok(operation_report_from_snapshot(report))
 }
 
@@ -443,13 +742,6 @@ fn latest_nonempty_cloud_commit(repo_path: &Path) -> Result<Option<String>, Stri
 
 fn latest_restore_commit(repo_path: &Path) -> Result<String, String> {
     latest_nonempty_cloud_commit(repo_path)?.ok_or_else(|| "还没有可用的云端备份节点".to_string())
-}
-
-fn should_create_initial_backup(repo_path: &Path) -> Result<bool, String> {
-    if remote_branch_exists(repo_path) {
-        return Ok(false);
-    }
-    current_workspace_has_backup_data()
 }
 
 fn list_cloud_backup_nodes_blocking() -> Result<Vec<CloudBackupNode>, String> {
@@ -542,37 +834,69 @@ fn restore_cloud_node_blocking(
     }
     let credential = github_credentials::load_active_credential()
         .ok_or_else(|| "GitHub 凭据不可用，请重新连接".to_string())?;
+    let progress = |stage: &str, percent: u8| {
+        update_operation_progress(&app_handle, stage, percent);
+    };
+    progress("preparing", 3);
     let repo_path = backup_repo_path()?;
     ensure_local_repository(&repo_path, &settings.repository_url)?;
     if backup_current {
+        progress("preserving", 10);
         create_before_restore_node(&repo_path, &credential.token)?;
     }
-    reconcile_remote(&repo_path, &credential.token)?;
+    progress("downloading", 12);
+    reconcile_remote_with_progress(
+        &repo_path,
+        &credential.token,
+        Some(&progress),
+        "downloading",
+        12,
+        35,
+    )?;
     let effective_commit_id = match commit_id {
         Some(commit_id) => commit_id,
         None => latest_restore_commit(&repo_path)?,
     };
     validate_cloud_commit(&repo_path, &effective_commit_id)?;
 
+    progress("restoring", 50);
     crate::backup_merge::with_materialized_commit(
         &repo_path,
         &effective_commit_id,
         "restore",
         |snapshot_path| {
-            let installed_skills = apply_library_snapshot_replace(snapshot_path)?;
+            let restore_progress = |completed: usize, total: usize| {
+                progress("restoring", map_item_progress(completed, total, 50, 84));
+            };
+            let installed_skills = apply_library_snapshot_replace_with_progress(
+                snapshot_path,
+                Some(&restore_progress),
+            )?;
+            progress("refreshing", 86);
             crate::commands::refresh_backup_library(&app_handle, &installed_skills)?;
+            progress("restoring", 92);
             apply_portable_workspace_snapshot(snapshot_path)?;
             Ok(())
         },
     )?;
 
+    progress("finalizing", 94);
     write_current_library_snapshot(&repo_path)?;
     let message = format!("SkillDock restore {}", &effective_commit_id[..8]);
     commit_snapshot_with_message(&repo_path, &message, true)?;
-    push_branch_with_retry(&repo_path, &credential.token)?;
+    push_branch_with_retry_progress(
+        &repo_path,
+        &credential.token,
+        Some(&progress),
+        "finalizing",
+        95,
+        99,
+    )?;
     settings.last_sync_at = Utc::now().to_rfc3339();
     settings.last_error.clear();
-    save_github_backup_settings(settings)
+    save_github_backup_settings(settings)?;
+    progress("completed", 100);
+    Ok(())
 }
 
 fn operation_report_from_snapshot(report: BackupSnapshotReport) -> BackupOperationReport {
@@ -586,14 +910,14 @@ fn operation_report_from_snapshot(report: BackupSnapshotReport) -> BackupOperati
     }
 }
 
-fn run_backup_operation_blocking() -> Result<BackupSyncResult, String> {
+fn run_backup_operation_blocking(app_handle: tauri::AppHandle) -> Result<BackupSyncResult, String> {
     let _guard = sync_lock()
         .lock()
         .map_err(|_| "备份同步锁不可用".to_string())?;
-    run_backup_operation_locked()
+    run_backup_operation_locked(&app_handle)
 }
 
-fn run_backup_operation_locked() -> Result<BackupSyncResult, String> {
+fn run_backup_operation_locked(app_handle: &tauri::AppHandle) -> Result<BackupSyncResult, String> {
     let mut settings = load_github_backup_settings();
     if !settings.enabled {
         return Err("尚未启用 GitHub 备份".to_string());
@@ -601,14 +925,20 @@ fn run_backup_operation_locked() -> Result<BackupSyncResult, String> {
     let credential = github_credentials::load_active_credential()
         .ok_or_else(|| "GitHub 凭据不可用，请重新连接".to_string())?;
     let repo_path = backup_repo_path()?;
+    update_operation_progress(app_handle, "preparing", 1);
     ensure_local_repository(&repo_path, &settings.repository_url)?;
     let starting_commit = git(&repo_path, &["rev-parse", "HEAD"], None).ok();
-    let report = upload_current_snapshot(&repo_path, &credential.token)?;
+    let progress = |stage: &str, percent: u8| {
+        update_operation_progress(app_handle, stage, percent);
+    };
+    let report =
+        upload_current_snapshot_with_progress(&repo_path, &credential.token, Some(&progress))?;
     let ending_commit = git(&repo_path, &["rev-parse", "HEAD"], None)?;
     let changed = starting_commit.as_deref() != Some(ending_commit.as_str());
     settings.last_sync_at = Utc::now().to_rfc3339();
     settings.last_error.clear();
     save_github_backup_settings(settings.clone())?;
+    update_operation_progress(app_handle, "completed", 100);
     Ok(BackupSyncResult {
         status: status_from_settings(settings),
         included_skills: report.included_skills,
@@ -631,6 +961,12 @@ fn emit_backup_status(app_handle: &tauri::AppHandle) -> BackupStatus {
     let status = status_from_settings(load_github_backup_settings());
     let _ = app_handle.emit(BACKUP_STATUS_CHANGED_EVENT, status.clone());
     status
+}
+
+fn update_operation_progress(app_handle: &tauri::AppHandle, stage: &str, percent: u8) {
+    if set_operation_progress(stage, percent) {
+        emit_backup_status(app_handle);
+    }
 }
 
 #[tauri::command]
@@ -701,6 +1037,10 @@ fn start_cloud_restore(
 pub async fn enable_github_backup(app_handle: tauri::AppHandle) -> Result<BackupStatus, String> {
     let credential = github_credentials::load_active_credential()
         .ok_or_else(|| "请先连接 GitHub".to_string())?;
+    let connection = load_github_connection_metadata();
+    let account_user_id = connection
+        .user_id
+        .ok_or_else(|| "GitHub 账号信息不完整，请重新连接".to_string())?;
     begin_operation(BackupPhase::Enabling)?;
     let mut initial_settings = load_github_backup_settings();
     initial_settings.last_error.clear();
@@ -722,37 +1062,18 @@ pub async fn enable_github_backup(app_handle: tauri::AppHandle) -> Result<Backup
             let repository_owner = repository.owner;
             let repository_name = repository.name;
             let repository_url = repository.clone_url;
-            let blocking_url = repository_url.clone();
-            let token = credential.token;
-            let uploaded = tauri::async_runtime::spawn_blocking(move || {
-                let _guard = sync_lock()
-                    .lock()
-                    .map_err(|_| "备份同步锁不可用".to_string())?;
-                let repo_path = backup_repo_path()?;
-                ensure_local_repository(&repo_path, &blocking_url)?;
-                reconcile_remote(&repo_path, &token)?;
-                if !should_create_initial_backup(&repo_path)? {
-                    return Ok::<bool, String>(false);
-                }
-                upload_current_snapshot(&repo_path, &token)?;
-                Ok::<bool, String>(true)
-            })
-            .await
-            .map_err(|error| format!("启动首次备份失败: {error}"))??;
-            Ok::<_, String>((repository_owner, repository_name, repository_url, uploaded))
+            Ok::<_, String>((repository_owner, repository_name, repository_url))
         }
         .await;
 
         let mut settings = load_github_backup_settings();
         match result {
-            Ok((owner, name, url, uploaded)) => {
+            Ok((owner, name, url)) => {
                 settings.enabled = true;
+                settings.account_user_id = Some(account_user_id);
                 settings.repository_owner = owner;
                 settings.repository_name = name;
                 settings.repository_url = url;
-                if uploaded {
-                    settings.last_sync_at = Utc::now().to_rfc3339();
-                }
                 settings.last_error.clear();
             }
             Err(error) => {
@@ -792,10 +1113,13 @@ fn run_backup_command(app_handle: tauri::AppHandle) -> Result<BackupStatus, Stri
     }
     let initial_status = emit_backup_status(&app_handle);
     tauri::async_runtime::spawn(async move {
-        let result = tauri::async_runtime::spawn_blocking(run_backup_operation_blocking)
-            .await
-            .map_err(|error| format!("启动备份操作失败: {error}"))
-            .and_then(|result| result);
+        let backup_app_handle = app_handle.clone();
+        let result = tauri::async_runtime::spawn_blocking(move || {
+            run_backup_operation_blocking(backup_app_handle)
+        })
+        .await
+        .map_err(|error| format!("启动备份操作失败: {error}"))
+        .and_then(|result| result);
         if let Err(error) = result {
             record_sync_error(&error);
         }
@@ -886,10 +1210,11 @@ pub async fn resolve_backup_conflict(
 #[cfg(test)]
 mod tests {
     use super::{
-        cloud_node_has_data, commit_snapshot, ensure_local_repository, git,
-        latest_nonempty_cloud_commit, latest_restore_commit, parse_cloud_node,
-        push_branch_with_retry, reconcile_remote, remote_snapshot_has_data,
-        should_create_initial_backup, status_from_settings, upload_current_snapshot,
+        advance_operation_progress, cloud_node_has_data, commit_snapshot, ensure_local_repository,
+        git, latest_nonempty_cloud_commit, latest_restore_commit, map_item_progress,
+        map_progress_percent, parse_cloud_node, parse_git_progress_percent, push_branch_with_retry,
+        reconcile_backup_settings_for_account, reconcile_remote, remote_snapshot_has_data,
+        status_from_settings, upload_current_snapshot, BackupOperationProgress,
     };
     use crate::backup_snapshot::{BackupLibrary, BackupSkillMetadata};
     use crate::models::GithubBackupSettings;
@@ -987,6 +1312,118 @@ mod tests {
         assert!(!status.enabled);
         assert!(!status.syncing);
         assert_eq!(status.pending_conflicts, 0);
+    }
+
+    #[test]
+    fn advances_operation_progress_without_regressing_percent() {
+        let mut progress = BackupOperationProgress::default();
+
+        assert!(advance_operation_progress(&mut progress, "uploading", 68));
+        assert!(!advance_operation_progress(&mut progress, "uploading", 42));
+
+        assert_eq!(progress.stage, "uploading");
+        assert_eq!(progress.percent, 68);
+    }
+
+    #[test]
+    fn parses_and_maps_git_transfer_progress() {
+        assert_eq!(
+            parse_git_progress_percent("Writing objects:  68% (34/50)"),
+            Some(68)
+        );
+        assert_eq!(
+            parse_git_progress_percent("remote: Resolving deltas: 100%"),
+            Some(100)
+        );
+        assert_eq!(
+            parse_git_progress_percent("To https://github.com/example/repo.git"),
+            None
+        );
+        assert_eq!(map_progress_percent(50, 70, 99), 84);
+        assert_eq!(map_progress_percent(100, 10, 35), 35);
+        assert_eq!(map_item_progress(2, 4, 12, 58), 35);
+        assert_eq!(map_item_progress(0, 0, 12, 58), 58);
+    }
+
+    #[test]
+    fn preserves_enabled_backup_for_the_same_github_account() {
+        let settings = GithubBackupSettings {
+            enabled: true,
+            account_user_id: Some(42),
+            repository_owner: "octocat".into(),
+            repository_name: "skilldock-backup".into(),
+            repository_url: "https://github.com/octocat/skilldock-backup.git".into(),
+            last_sync_at: "2026-07-31T00:00:00Z".into(),
+            last_error: String::new(),
+        };
+
+        let reconciled = reconcile_backup_settings_for_account(settings, 42, "octocat");
+
+        assert!(reconciled.enabled);
+        assert_eq!(reconciled.account_user_id, Some(42));
+        assert_eq!(reconciled.repository_owner, "octocat");
+        assert_eq!(reconciled.repository_name, "skilldock-backup");
+    }
+
+    #[test]
+    fn disables_old_backup_binding_for_a_different_github_account() {
+        let settings = GithubBackupSettings {
+            enabled: true,
+            account_user_id: Some(42),
+            repository_owner: "octocat".into(),
+            repository_name: "skilldock-backup".into(),
+            repository_url: "https://github.com/octocat/skilldock-backup.git".into(),
+            last_sync_at: "2026-07-31T00:00:00Z".into(),
+            last_error: "old error".into(),
+        };
+
+        let reconciled = reconcile_backup_settings_for_account(settings, 84, "hubot");
+
+        assert!(!reconciled.enabled);
+        assert_eq!(reconciled.account_user_id, None);
+        assert!(reconciled.repository_owner.is_empty());
+        assert!(reconciled.repository_name.is_empty());
+        assert!(reconciled.repository_url.is_empty());
+        assert!(reconciled.last_sync_at.is_empty());
+        assert!(reconciled.last_error.is_empty());
+    }
+
+    #[test]
+    fn adopts_a_legacy_backup_binding_when_the_owner_matches() {
+        let settings = GithubBackupSettings {
+            enabled: true,
+            account_user_id: None,
+            repository_owner: "OctoCat".into(),
+            repository_name: "skilldock-backup".into(),
+            repository_url: "https://github.com/OctoCat/skilldock-backup.git".into(),
+            last_sync_at: String::new(),
+            last_error: String::new(),
+        };
+
+        let reconciled = reconcile_backup_settings_for_account(settings, 42, "octocat");
+
+        assert!(reconciled.enabled);
+        assert_eq!(reconciled.account_user_id, Some(42));
+        assert_eq!(reconciled.repository_owner, "OctoCat");
+    }
+
+    #[test]
+    fn rejects_a_legacy_backup_binding_when_the_owner_differs() {
+        let settings = GithubBackupSettings {
+            enabled: true,
+            account_user_id: None,
+            repository_owner: "octocat".into(),
+            repository_name: "skilldock-backup".into(),
+            repository_url: "https://github.com/octocat/skilldock-backup.git".into(),
+            last_sync_at: String::new(),
+            last_error: String::new(),
+        };
+
+        let reconciled = reconcile_backup_settings_for_account(settings, 84, "hubot");
+
+        assert!(!reconciled.enabled);
+        assert_eq!(reconciled.account_user_id, None);
+        assert!(reconciled.repository_owner.is_empty());
     }
 
     #[test]
@@ -1163,7 +1600,6 @@ mod tests {
             ensure_local_repository(&local, &remote_url).expect("initialize local backup");
             reconcile_remote(&local, "").expect("fetch cloud history");
 
-            assert!(!should_create_initial_backup(&local).expect("inspect enable policy"));
             let error = match upload_current_snapshot(&local, "") {
                 Ok(_) => panic!("empty upload should be rejected"),
                 Err(error) => error,

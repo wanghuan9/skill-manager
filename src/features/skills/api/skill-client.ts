@@ -1369,6 +1369,8 @@ const backupStatusFixture: BackupStatus = {
   phase: "disabled",
   syncing: false,
   pendingConflicts: 0,
+  progressStage: "",
+  progressPercent: 0,
 };
 
 export async function fetchBackupStatus(): Promise<BackupStatus> {

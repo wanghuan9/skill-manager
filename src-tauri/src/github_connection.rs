@@ -70,6 +70,12 @@ async fn connect_with_token(token: &str, auth_method: &str) -> Result<GithubConn
     github_credentials::store_credential(token, auth_method)?;
     let metadata = metadata_from_profile(profile, auth_method, true);
     save_github_connection_metadata(metadata.clone(), true)?;
+    if let Some(user_id) = metadata.user_id {
+        crate::backup_repository::reconcile_backup_preference_after_login(
+            user_id,
+            &metadata.username,
+        )?;
+    }
     Ok(connected_connection(metadata, true, ""))
 }
 
@@ -83,6 +89,12 @@ async fn migrate_legacy_token() -> Result<Option<GithubConnection>, String> {
     github_credentials::store_credential(&legacy_token, AUTH_METHOD_PAT)?;
     let metadata = metadata_from_profile(profile, AUTH_METHOD_PAT, true);
     save_github_connection_metadata(metadata.clone(), true)?;
+    if let Some(user_id) = metadata.user_id {
+        crate::backup_repository::reconcile_backup_preference_after_login(
+            user_id,
+            &metadata.username,
+        )?;
+    }
     Ok(Some(connected_connection(metadata, true, "")))
 }
 
@@ -156,10 +168,8 @@ pub async fn connect_github_token(
 pub fn disconnect_github(app_handle: tauri::AppHandle) -> Result<GithubConnection, String> {
     save_github_connection_metadata(GithubConnectionMetadata::default(), true)?;
     let credential_cleanup = github_credentials::delete_credential();
-    let backup_cleanup = crate::backup_repository::disconnect_github_backup(app_handle.clone());
     let connection = disconnected_connection("");
     let _ = app_handle.emit(GITHUB_CONNECTION_CHANGED_EVENT, connection.clone());
     credential_cleanup?;
-    backup_cleanup?;
     Ok(connection)
 }

@@ -31,6 +31,8 @@ const SNAPSHOT_MANIFEST_SCHEMA_VERSION: u32 = 1;
 const SKILL_FILESYSTEM_SCHEMA_VERSION: u32 = 1;
 const MAX_SKILL_BYTES: u64 = 100 * 1024 * 1024;
 const MAX_SKILL_FILESYSTEM_BYTES: u64 = 500 * 1024 * 1024;
+
+pub type SnapshotProgressCallback<'a> = dyn Fn(usize, usize) + 'a;
 const EXCLUDED_DIRECTORY_NAMES: [&str; 5] = [".git", "node_modules", "target", ".cache", "tmp"];
 const EXCLUDED_FILE_NAMES: [&str; 4] = [
     ".DS_Store",
@@ -518,19 +520,48 @@ fn write_skill_filesystem_snapshot(
     staging_root: &Path,
     skill_paths: BTreeMap<String, String>,
     warnings: &mut Vec<String>,
+    progress: Option<&SnapshotProgressCallback<'_>>,
 ) -> Result<(), String> {
     let target = staging_root.join(SKILL_FILESYSTEM_DIRECTORY_NAME);
     let mut total_bytes = 0;
     if managed_root.is_dir() {
-        copy_skill_filesystem_entry(
-            managed_root,
-            managed_root,
-            &target,
-            Path::new(""),
-            false,
-            &mut total_bytes,
-            warnings,
-        )?;
+        fs::create_dir_all(&target)
+            .map_err(|error| format!("创建 Skill 文件系统快照失败: {error}"))?;
+        let mut entries = fs::read_dir(managed_root)
+            .map_err(|error| format!("读取 Skill 文件系统失败: {error}"))?
+            .filter_map(Result::ok)
+            .collect::<Vec<_>>();
+        entries.sort_by_key(|entry| entry.file_name());
+        let entry_count = entries.len();
+        for (index, entry) in entries.into_iter().enumerate() {
+            let name = entry.file_name();
+            let name_text = name.to_string_lossy();
+            if name_text == ENCODED_GIT_DIRECTORY_NAME {
+                return Err(format!(
+                    "Skill 目录包含备份保留名称 {}，无法安全备份",
+                    ENCODED_GIT_DIRECTORY_NAME
+                ));
+            }
+            let child_source = entry.path();
+            let child_inside_git = name_text == ".git";
+            let child_target = if child_inside_git {
+                target.join(ENCODED_GIT_DIRECTORY_NAME)
+            } else {
+                target.join(&name)
+            };
+            copy_skill_filesystem_entry(
+                managed_root,
+                &child_source,
+                &child_target,
+                Path::new(&name),
+                child_inside_git,
+                &mut total_bytes,
+                warnings,
+            )?;
+            if let Some(report) = progress {
+                report(index + 1, entry_count);
+            }
+        }
     } else {
         fs::create_dir_all(&target)
             .map_err(|error| format!("创建空 Skill 文件系统快照失败: {error}"))?;
@@ -752,6 +783,13 @@ fn write_snapshot_manifest(
 }
 
 pub fn write_current_library_snapshot(repo_path: &Path) -> Result<BackupSnapshotReport, String> {
+    write_current_library_snapshot_with_progress(repo_path, None)
+}
+
+pub fn write_current_library_snapshot_with_progress(
+    repo_path: &Path,
+    progress: Option<&SnapshotProgressCallback<'_>>,
+) -> Result<BackupSnapshotReport, String> {
     let skills = load_installed_skills_read_only(&[]);
     let previous_skills = read_library_snapshot(repo_path)
         .unwrap_or_default()
@@ -913,6 +951,7 @@ pub fn write_current_library_snapshot(repo_path: &Path) -> Result<BackupSnapshot
         &staging_root,
         skill_paths,
         &mut report.warnings,
+        progress,
     )?;
     report.preferences_included = write_portable_preferences(&staging_root)?;
     report.included_mcp_servers = write_portable_mcp_state(&staging_root)?;
@@ -1294,7 +1333,10 @@ fn copy_restored_skill_filesystem_entry(
     Ok(())
 }
 
-fn apply_skill_filesystem_snapshot_replace(repo_path: &Path) -> Result<Vec<SkillSummary>, String> {
+fn apply_skill_filesystem_snapshot_replace(
+    repo_path: &Path,
+    progress: Option<&SnapshotProgressCallback<'_>>,
+) -> Result<Vec<SkillSummary>, String> {
     let manifest_path = repo_path
         .join(".skilldock")
         .join(SKILL_FILESYSTEM_MANIFEST_FILE_NAME);
@@ -1333,12 +1375,31 @@ fn apply_skill_filesystem_snapshot_replace(repo_path: &Path) -> Result<Vec<Skill
         .map_err(|error| format!("创建 Skill 恢复暂存区失败: {error}"))?;
     fs::create_dir_all(&operation_rollback)
         .map_err(|error| format!("创建 Skill 恢复回滚区失败: {error}"))?;
-    copy_restored_skill_filesystem_entry(
-        &snapshot_root,
-        &snapshot_root,
-        &staged_root,
-        Path::new(""),
-    )?;
+    fs::create_dir_all(&staged_root)
+        .map_err(|error| format!("创建 Skill 恢复暂存目录失败: {error}"))?;
+    let mut entries = fs::read_dir(&snapshot_root)
+        .map_err(|error| format!("读取 Skill 恢复快照目录失败: {error}"))?
+        .filter_map(Result::ok)
+        .collect::<Vec<_>>();
+    entries.sort_by_key(|entry| entry.file_name());
+    let entry_count = entries.len();
+    for (index, entry) in entries.into_iter().enumerate() {
+        let name = entry.file_name();
+        let restored_name = if name.to_string_lossy() == ENCODED_GIT_DIRECTORY_NAME {
+            ".git".into()
+        } else {
+            name.clone()
+        };
+        copy_restored_skill_filesystem_entry(
+            &snapshot_root,
+            &entry.path(),
+            &staged_root.join(restored_name),
+            Path::new(&name),
+        )?;
+        if let Some(report) = progress {
+            report(index + 1, entry_count);
+        }
+    }
 
     let mut restored = Vec::new();
     for metadata in &library.skills {
@@ -1386,13 +1447,21 @@ fn apply_skill_filesystem_snapshot_replace(repo_path: &Path) -> Result<Vec<Skill
     Ok(next_skills)
 }
 
+#[cfg(test)]
 pub fn apply_library_snapshot_replace(repo_path: &Path) -> Result<Vec<SkillSummary>, String> {
+    apply_library_snapshot_replace_with_progress(repo_path, None)
+}
+
+pub fn apply_library_snapshot_replace_with_progress(
+    repo_path: &Path,
+    progress: Option<&SnapshotProgressCallback<'_>>,
+) -> Result<Vec<SkillSummary>, String> {
     if repo_path
         .join(".skilldock")
         .join(SKILL_FILESYSTEM_MANIFEST_FILE_NAME)
         .is_file()
     {
-        return apply_skill_filesystem_snapshot_replace(repo_path);
+        return apply_skill_filesystem_snapshot_replace(repo_path, progress);
     }
     let library = read_library_snapshot(repo_path)?;
     let managed_root = managed_skill_library_root()?;
@@ -1433,13 +1502,17 @@ pub fn apply_library_snapshot_replace(repo_path: &Path) -> Result<Vec<SkillSumma
     fs::create_dir_all(&rollback_root).map_err(|error| format!("创建恢复回滚区失败: {error}"))?;
 
     let mut restored = Vec::new();
-    for metadata in &library.skills {
+    let skill_count = library.skills.len();
+    for (index, metadata) in library.skills.iter().enumerate() {
         restored.push(stage_exact_skill(
             repo_path,
             metadata,
             &staging_root,
             &mut occupied_directories,
         )?);
+        if let Some(report) = progress {
+            report(index + 1, skill_count);
+        }
     }
 
     let managed_top_level = current_skills

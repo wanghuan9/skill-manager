@@ -295,6 +295,37 @@ export function SettingsRoute() {
     ? `${backupStatus.repositoryOwner}/${backupStatus.repositoryName}`
     : "";
   const backupRepositoryPageUrl = backupStatus?.repositoryUrl.replace(/\.git$/u, "") ?? "";
+  const isBackupTransferActive = backupStatus
+    ? ["backingUp", "restoring"].includes(backupStatus.phase)
+    : false;
+  const backupProgressPercent = Math.min(100, Math.max(0, backupStatus?.progressPercent ?? 0));
+  const backupProgressStageLabel = (() => {
+    switch (backupStatus?.progressStage) {
+      case "preparing":
+        return t("settings.backup.progress.preparing");
+      case "collecting":
+        return t("settings.backup.progress.collecting");
+      case "committing":
+        return t("settings.backup.progress.committing");
+      case "uploading":
+        return t("settings.backup.progress.uploading");
+      case "downloading":
+        return t("settings.backup.progress.downloading");
+      case "preserving":
+        return t("settings.backup.progress.preserving");
+      case "restoring":
+        return t("settings.backup.progress.restoring");
+      case "refreshing":
+        return t("settings.backup.progress.refreshing");
+      case "finalizing":
+        return t("settings.backup.progress.finalizing");
+      case "completed":
+        return t("settings.backup.progress.completed");
+      default:
+        return t("settings.backup.progress.unknown");
+    }
+  })();
+  const backupProgressLabel = `${backupProgressStageLabel} · ${backupProgressPercent}%`;
 
   useEffect(() => {
     return () => {
@@ -1300,19 +1331,25 @@ export function SettingsRoute() {
                             </button>
                           </div>
                         ) : null}
-                        <div className="settings-github-backup__status">
+                        <div
+                          className={`settings-github-backup__status${isBackupTransferActive ? " is-active" : ""}`}
+                        >
                           <span>{t("settings.backup.lastOperation")}</span>
                           <strong>
                             {backupStatus.phase === "enabling"
                               ? t("settings.backup.enabling")
+                              : isBackupTransferActive
+                                ? backupProgressLabel
                               : backupStatus.phase === "error"
                                 ? t("settings.backup.failed")
-                                : t("settings.backup.completed", {
-                                    time: formatBackupTimestamp(
-                                      backupStatus.lastSyncAt,
-                                      language,
-                                    ),
-                                  })}
+                                : backupStatus.lastSyncAt
+                                  ? t("settings.backup.completed", {
+                                      time: formatBackupTimestamp(
+                                        backupStatus.lastSyncAt,
+                                        language,
+                                      ),
+                                    })
+                                  : t("settings.backup.notBackedUp")}
                           </strong>
                         </div>
                       </div>
@@ -1325,7 +1362,9 @@ export function SettingsRoute() {
                             onClick={() => void handleBackupOperation("sync")}
                           >
                             {backupStatus.phase === "restoring"
-                              ? t("settings.backup.syncing")
+                              ? t("settings.backup.syncing", {
+                                  percent: backupProgressPercent,
+                                })
                               : t("settings.backup.sync")}
                           </button>
                           <button
@@ -1335,7 +1374,9 @@ export function SettingsRoute() {
                             onClick={() => void handleBackupOperation("backup")}
                           >
                             {backupStatus.phase === "backingUp"
-                              ? t("settings.backup.backingUp")
+                              ? t("settings.backup.backingUp", {
+                                  percent: backupProgressPercent,
+                                })
                               : t("settings.backup.backup")}
                           </button>
                           <button
