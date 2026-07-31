@@ -202,14 +202,24 @@ test("runs manual GitHub sync and backup from settings", async () => {
       case "list_backup_conflicts":
         return [];
       case "list_cloud_backup_nodes":
-        return [{
-          commitId: "0123456789abcdef0123456789abcdef01234567",
-          createdAt: "2026-07-30T07:57:00Z",
-          deviceLabel: "MacBook Pro",
-          skillCount: 21,
-          mcpCount: 3,
-          pluginCount: 2,
-        }];
+        return [
+          {
+            commitId: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            createdAt: "2026-07-31T02:44:00Z",
+            deviceLabel: "MacBook Pro",
+            skillCount: 0,
+            mcpCount: 0,
+            pluginCount: 0,
+          },
+          {
+            commitId: "0123456789abcdef0123456789abcdef01234567",
+            createdAt: "2026-07-30T07:57:00Z",
+            deviceLabel: "MacBook Pro",
+            skillCount: 21,
+            mcpCount: 3,
+            pluginCount: 2,
+          },
+        ];
       case "preview_cloud_backup_node":
         previewCallCount += 1;
         return previewCallCount === 3
@@ -270,10 +280,10 @@ test("runs manual GitHub sync and backup from settings", async () => {
   await userEvent.click(historyButton);
   expect(await screen.findByRole("dialog", { name: "云端历史备份节点" })).toBeInTheDocument();
   expect(await screen.findByText("21 Skills · 3 MCP · 2 插件")).toBeInTheDocument();
-  expect(await screen.findByText("设备：MacBook Pro")).toBeInTheDocument();
+  expect(await screen.findAllByText("设备：MacBook Pro")).toHaveLength(2);
 
   const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
-  await userEvent.click(screen.getByRole("button", { name: "从此节点恢复" }));
+  await userEvent.click(screen.getAllByRole("button", { name: "从此节点恢复" })[1]);
   await waitFor(() => expect(confirmSpy).toHaveBeenCalledWith(
     "将新增 4 项、覆盖 18 项、删除 1 项 SkillDock 托管数据。系统会先备份当前状态，是否继续？",
   ));

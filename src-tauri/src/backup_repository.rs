@@ -11,9 +11,10 @@ use tauri::Emitter;
 use crate::backup_merge::BackupConflict;
 use crate::backup_snapshot::{
     apply_library_snapshot, apply_library_snapshot_preserving, apply_library_snapshot_replace,
-    apply_portable_workspace_snapshot, backup_repo_path, backup_root, preview_workspace_restore,
-    read_library_snapshot, write_current_library_snapshot, BackupSnapshotManifest,
-    BackupSnapshotReport, WorkspaceRestorePreview,
+    apply_portable_workspace_snapshot, backup_repo_path, backup_root,
+    current_workspace_has_backup_data, preview_workspace_restore, read_library_snapshot,
+    write_current_library_snapshot, BackupSnapshotManifest, BackupSnapshotReport,
+    WorkspaceRestorePreview,
 };
 use crate::github_api;
 use crate::github_credentials;
@@ -310,6 +311,10 @@ fn reconcile_remote(repo_path: &Path, token: &str) -> Result<(), String> {
     if !remote_branch_exists(repo_path) {
         return Ok(());
     }
+    if !git_success(repo_path, &["rev-parse", "--verify", "HEAD"]) {
+        git(repo_path, &["checkout", "-B", "main", "origin/main"], None)?;
+        return Ok(());
+    }
     if git_success(
         repo_path,
         &["merge-base", "--is-ancestor", "origin/main", "HEAD"],
@@ -363,9 +368,12 @@ fn apply_and_refresh_library(
 }
 
 fn upload_current_snapshot(repo_path: &Path, token: &str) -> Result<BackupOperationReport, String> {
+    reconcile_remote(repo_path, token)?;
+    if !current_workspace_has_backup_data()? && remote_snapshot_has_data(repo_path)? {
+        return Err("本机暂无可备份数据，未覆盖云端备份".to_string());
+    }
     let report = write_current_library_snapshot(repo_path)?;
     let _ = commit_snapshot(repo_path)?;
-    reconcile_remote(repo_path, token)?;
     push_branch_with_retry(repo_path, token)?;
     Ok(operation_report_from_snapshot(report))
 }
@@ -410,6 +418,34 @@ fn parse_cloud_node(
         mcp_count: 0,
         plugin_count: 0,
     })
+}
+
+fn cloud_node_has_data(node: &CloudBackupNode) -> bool {
+    node.skill_count > 0 || node.mcp_count > 0 || node.plugin_count > 0
+}
+
+fn remote_snapshot_has_data(repo_path: &Path) -> Result<bool, String> {
+    latest_nonempty_cloud_commit(repo_path).map(|commit| commit.is_some())
+}
+
+fn latest_nonempty_cloud_commit(repo_path: &Path) -> Result<Option<String>, String> {
+    if !remote_branch_exists(repo_path) {
+        return Ok(None);
+    }
+    let history = git(repo_path, &["log", "--format=%H", "origin/main"], None)?;
+    for commit_id in history.lines() {
+        if cloud_node_has_data(&parse_cloud_node(repo_path, commit_id, "")?) {
+            return Ok(Some(commit_id.to_string()));
+        }
+    }
+    Ok(None)
+}
+
+fn should_create_initial_backup(repo_path: &Path) -> Result<bool, String> {
+    if remote_branch_exists(repo_path) {
+        return Ok(false);
+    }
+    current_workspace_has_backup_data()
 }
 
 fn list_cloud_backup_nodes_blocking() -> Result<Vec<CloudBackupNode>, String> {
@@ -509,10 +545,17 @@ fn restore_cloud_node_blocking(
     }
     reconcile_remote(&repo_path, &credential.token)?;
     validate_cloud_commit(&repo_path, &commit_id)?;
+    let effective_commit_id = if !backup_current
+        && !cloud_node_has_data(&parse_cloud_node(&repo_path, &commit_id, "")?)
+    {
+        latest_nonempty_cloud_commit(&repo_path)?.unwrap_or(commit_id)
+    } else {
+        commit_id
+    };
 
     crate::backup_merge::with_materialized_commit(
         &repo_path,
-        &commit_id,
+        &effective_commit_id,
         "restore",
         |snapshot_path| {
             let installed_skills = apply_library_snapshot_replace(snapshot_path)?;
@@ -523,7 +566,7 @@ fn restore_cloud_node_blocking(
     )?;
 
     write_current_library_snapshot(&repo_path)?;
-    let message = format!("SkillDock restore {}", &commit_id[..8]);
+    let message = format!("SkillDock restore {}", &effective_commit_id[..8]);
     commit_snapshot_with_message(&repo_path, &message, true)?;
     push_branch_with_retry(&repo_path, &credential.token)?;
     settings.last_sync_at = Utc::now().to_rfc3339();
@@ -680,28 +723,35 @@ pub async fn enable_github_backup(app_handle: tauri::AppHandle) -> Result<Backup
             let repository_url = repository.clone_url;
             let blocking_url = repository_url.clone();
             let token = credential.token;
-            tauri::async_runtime::spawn_blocking(move || {
+            let uploaded = tauri::async_runtime::spawn_blocking(move || {
                 let _guard = sync_lock()
                     .lock()
                     .map_err(|_| "备份同步锁不可用".to_string())?;
                 let repo_path = backup_repo_path()?;
                 ensure_local_repository(&repo_path, &blocking_url)?;
-                upload_current_snapshot(&repo_path, &token)
+                reconcile_remote(&repo_path, &token)?;
+                if !should_create_initial_backup(&repo_path)? {
+                    return Ok::<bool, String>(false);
+                }
+                upload_current_snapshot(&repo_path, &token)?;
+                Ok::<bool, String>(true)
             })
             .await
             .map_err(|error| format!("启动首次备份失败: {error}"))??;
-            Ok::<_, String>((repository_owner, repository_name, repository_url))
+            Ok::<_, String>((repository_owner, repository_name, repository_url, uploaded))
         }
         .await;
 
         let mut settings = load_github_backup_settings();
         match result {
-            Ok((owner, name, url)) => {
+            Ok((owner, name, url, uploaded)) => {
                 settings.enabled = true;
                 settings.repository_owner = owner;
                 settings.repository_name = name;
                 settings.repository_url = url;
-                settings.last_sync_at = Utc::now().to_rfc3339();
+                if uploaded {
+                    settings.last_sync_at = Utc::now().to_rfc3339();
+                }
                 settings.last_error.clear();
             }
             Err(error) => {
@@ -839,11 +889,14 @@ pub async fn resolve_backup_conflict(
 #[cfg(test)]
 mod tests {
     use super::{
-        commit_snapshot, ensure_local_repository, git, push_branch_with_retry, reconcile_remote,
-        status_from_settings,
+        cloud_node_has_data, commit_snapshot, ensure_local_repository, git,
+        latest_nonempty_cloud_commit, parse_cloud_node, push_branch_with_retry, reconcile_remote,
+        remote_snapshot_has_data, should_create_initial_backup, status_from_settings,
+        upload_current_snapshot,
     };
     use crate::backup_snapshot::{BackupLibrary, BackupSkillMetadata};
     use crate::models::GithubBackupSettings;
+    use crate::workspace::with_test_home;
     use std::collections::BTreeMap;
     use std::fs;
     use std::path::Path;
@@ -893,6 +946,42 @@ mod tests {
             serde_json::to_string_pretty(&library).expect("serialize library"),
         )
         .expect("write library");
+    }
+
+    fn write_snapshot_manifest(
+        repository: &Path,
+        skill_count: usize,
+        mcp_count: usize,
+        plugin_count: usize,
+    ) {
+        fs::create_dir_all(repository.join(".skilldock")).expect("create snapshot metadata");
+        fs::write(
+            repository.join(".skilldock/snapshot.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "schemaVersion": 1,
+                "createdAt": "2026-07-31T00:00:00Z",
+                "deviceLabel": "Test Mac",
+                "skillCount": skill_count,
+                "mcpCount": mcp_count,
+                "pluginCount": plugin_count
+            }))
+            .expect("serialize snapshot manifest"),
+        )
+        .expect("write snapshot manifest");
+    }
+
+    fn initialize_bare_repository(path: &Path) {
+        let status = Command::new("git")
+            .args([
+                "init",
+                "--bare",
+                "--initial-branch",
+                "main",
+                path.to_string_lossy().as_ref(),
+            ])
+            .status()
+            .expect("initialize bare repository");
+        assert!(status.success());
     }
 
     #[test]
@@ -1010,5 +1099,76 @@ mod tests {
         assert!(device_b.join("skills/skill-a/SKILL.md").is_file());
         assert!(device_b.join("skills/skill-b/SKILL.md").is_file());
         let _ = fs::remove_dir_all(temp_root);
+    }
+
+    #[test]
+    fn selects_latest_nonempty_node_behind_accidental_empty_node() {
+        let temp_root = std::env::temp_dir().join(format!(
+            "skilldock-backup-node-selection-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        let remote = temp_root.join("remote.git");
+        let device = temp_root.join("device");
+        fs::create_dir_all(&temp_root).expect("create test root");
+        initialize_bare_repository(&remote);
+        let remote_url = remote.to_string_lossy().to_string();
+        ensure_local_repository(&device, &remote_url).expect("initialize device");
+
+        write_library(&device, &[metadata("skill-a", "Skill A")]);
+        write_snapshot_manifest(&device, 1, 0, 0);
+        commit_snapshot(&device).expect("commit nonempty node");
+        let nonempty_commit = git(&device, &["rev-parse", "HEAD"], None).expect("read commit");
+        push_branch_with_retry(&device, "").expect("push nonempty node");
+
+        write_library(&device, &[]);
+        write_snapshot_manifest(&device, 0, 0, 0);
+        commit_snapshot(&device).expect("commit empty node");
+        let empty_commit = git(&device, &["rev-parse", "HEAD"], None).expect("read empty commit");
+        push_branch_with_retry(&device, "").expect("push empty node");
+        reconcile_remote(&device, "").expect("refresh remote branch");
+
+        assert!(!cloud_node_has_data(
+            &parse_cloud_node(&device, &empty_commit, "").expect("parse empty node")
+        ));
+        assert_eq!(
+            latest_nonempty_cloud_commit(&device).expect("select nonempty node"),
+            Some(nonempty_commit)
+        );
+        assert!(remote_snapshot_has_data(&device).expect("inspect cloud history"));
+        let _ = fs::remove_dir_all(temp_root);
+    }
+
+    #[test]
+    fn empty_local_workspace_cannot_overwrite_nonempty_cloud_history() {
+        let temp_home = std::env::temp_dir().join(format!(
+            "skilldock-empty-upload-home-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&temp_home).expect("create temp home");
+        with_test_home(&temp_home, || {
+            let remote = temp_home.join("remote.git");
+            let seed = temp_home.join("seed");
+            let local = temp_home.join(".skilldock/backup/repo");
+            initialize_bare_repository(&remote);
+            let remote_url = remote.to_string_lossy().to_string();
+            ensure_local_repository(&seed, &remote_url).expect("initialize seed");
+            write_library(&seed, &[metadata("skill-a", "Skill A")]);
+            write_snapshot_manifest(&seed, 1, 0, 0);
+            commit_snapshot(&seed).expect("commit seed");
+            push_branch_with_retry(&seed, "").expect("push seed");
+
+            ensure_local_repository(&local, &remote_url).expect("initialize local backup");
+            reconcile_remote(&local, "").expect("fetch cloud history");
+
+            assert!(!should_create_initial_backup(&local).expect("inspect enable policy"));
+            let error = match upload_current_snapshot(&local, "") {
+                Ok(_) => panic!("empty upload should be rejected"),
+                Err(error) => error,
+            };
+            assert_eq!(error, "本机暂无可备份数据，未覆盖云端备份");
+        });
+        let _ = fs::remove_dir_all(temp_home);
     }
 }

@@ -9,10 +9,11 @@ use sha2::{Digest, Sha256};
 use crate::backup_repository::{git, git_success};
 use crate::backup_snapshot::{read_library_snapshot, BackupLibrary, BackupSkillMetadata};
 
-const PORTABLE_MERGE_PATHS: [&str; 5] = [
+const PORTABLE_MERGE_PATHS: [&str; 6] = [
     ".skilldock/preferences.json",
     ".skilldock/mcp-servers.json",
     ".skilldock/plugin-targets.json",
+    "skill-filesystem",
     "plugins",
     "cursor-disabled",
 ];
@@ -351,6 +352,12 @@ fn apply_merge_plan(
         if source.exists() {
             copy_tree(&source, &staging.join(selection.relative_path))?;
         }
+        if selection.relative_path == "skill-filesystem" {
+            let manifest = source_root.join(".skilldock/skill-filesystem.json");
+            if manifest.is_file() {
+                copy_tree(&manifest, &staging.join(".skilldock/skill-filesystem.json"))?;
+            }
+        }
     }
     let mut library = BackupLibrary {
         schema_version: 1,
@@ -396,6 +403,18 @@ fn apply_merge_plan(
         &staging.join("cursor-disabled"),
         &repository.join("cursor-disabled"),
     )?;
+    let staged_skill_filesystem = staging.join("skill-filesystem");
+    let repository_skill_filesystem = repository.join("skill-filesystem");
+    if staged_skill_filesystem.is_dir() {
+        replace_directory(&staged_skill_filesystem, &repository_skill_filesystem)?;
+    } else if repository_skill_filesystem.exists() {
+        fs::remove_dir_all(&repository_skill_filesystem).map_err(|error| {
+            format!(
+                "清理旧 Skill 文件系统快照失败 {}: {error}",
+                repository_skill_filesystem.display()
+            )
+        })?;
+    }
     let _ = fs::remove_dir_all(staging);
     Ok(())
 }

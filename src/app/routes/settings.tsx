@@ -394,7 +394,10 @@ export function SettingsRoute() {
     setActiveBackupAction(operation);
     try {
       if (operation === "sync") {
-        const [latestNode] = await listCloudBackupNodes();
+        const nodes = await listCloudBackupNodes();
+        const latestNode = nodes.find((node) => (
+          node.skillCount > 0 || node.mcpCount > 0 || node.pluginCount > 0
+        )) ?? nodes[0];
         if (!latestNode) {
           throw new Error(t("settings.backup.nodesEmpty"));
         }

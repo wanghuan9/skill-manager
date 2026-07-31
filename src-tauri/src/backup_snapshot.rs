@@ -23,9 +23,14 @@ const BACKUP_SCHEMA_VERSION: u32 = 2;
 const PORTABLE_MCP_FILE_NAME: &str = "mcp-servers.json";
 const PORTABLE_PREFERENCES_FILE_NAME: &str = "preferences.json";
 const PORTABLE_PLUGIN_TARGETS_FILE_NAME: &str = "plugin-targets.json";
+const SKILL_FILESYSTEM_MANIFEST_FILE_NAME: &str = "skill-filesystem.json";
+const SKILL_FILESYSTEM_DIRECTORY_NAME: &str = "skill-filesystem";
+const ENCODED_GIT_DIRECTORY_NAME: &str = ".skilldock-git";
 const PORTABLE_PLUGIN_SCHEMA_VERSION: u32 = 1;
 const SNAPSHOT_MANIFEST_SCHEMA_VERSION: u32 = 1;
+const SKILL_FILESYSTEM_SCHEMA_VERSION: u32 = 1;
 const MAX_SKILL_BYTES: u64 = 100 * 1024 * 1024;
+const MAX_SKILL_FILESYSTEM_BYTES: u64 = 500 * 1024 * 1024;
 const EXCLUDED_DIRECTORY_NAMES: [&str; 5] = [".git", "node_modules", "target", ".cache", "tmp"];
 const EXCLUDED_FILE_NAMES: [&str; 4] = [
     ".DS_Store",
@@ -69,6 +74,13 @@ pub struct BackupSkillMetadata {
 pub struct BackupLibrary {
     pub schema_version: u32,
     pub skills: Vec<BackupSkillMetadata>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BackupSkillFilesystemManifest {
+    schema_version: u32,
+    skill_paths: BTreeMap<String, String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -312,6 +324,232 @@ fn sanitize_repository_url(value: &str) -> String {
     parsed.to_string()
 }
 
+fn sanitize_git_config(contents: &str) -> String {
+    let mut section = String::new();
+    let mut lines = Vec::new();
+    for line in contents.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') && trimmed.ends_with(']') {
+            section = trimmed.to_ascii_lowercase();
+            lines.push(line.to_string());
+            continue;
+        }
+        let Some((key, value)) = trimmed.split_once('=') else {
+            lines.push(line.to_string());
+            continue;
+        };
+        let normalized_key = key.trim().to_ascii_lowercase();
+        let sensitive_key = [
+            "authorization",
+            "credential",
+            "extraheader",
+            "oauth",
+            "password",
+            "token",
+        ]
+        .iter()
+        .any(|pattern| normalized_key.contains(pattern));
+        let machine_local_include = section.starts_with("[include") && normalized_key == "path";
+        if sensitive_key || section.starts_with("[credential") || machine_local_include {
+            continue;
+        }
+        if matches!(normalized_key.as_str(), "url" | "pushurl") {
+            let sanitized = sanitize_repository_url(value);
+            if !sanitized.is_empty() {
+                let indentation = line.len() - line.trim_start().len();
+                lines.push(format!(
+                    "{}{} = {}",
+                    " ".repeat(indentation),
+                    key.trim(),
+                    sanitized
+                ));
+            }
+            continue;
+        }
+        lines.push(line.to_string());
+    }
+    let mut sanitized = lines.join("\n");
+    if contents.ends_with('\n') {
+        sanitized.push('\n');
+    }
+    sanitized
+}
+
+fn copy_safe_symlink(
+    source_root: &Path,
+    source: &Path,
+    target: &Path,
+    relative_path: &Path,
+    warnings: &mut Vec<String>,
+) -> Result<(), String> {
+    let link_target = fs::read_link(source)
+        .map_err(|error| format!("读取 Skill 符号链接失败 {}: {error}", source.display()))?;
+    let resolved = source
+        .parent()
+        .unwrap_or(source_root)
+        .join(&link_target)
+        .canonicalize()
+        .ok();
+    let canonical_root = source_root.canonicalize().ok();
+    if link_target.is_absolute()
+        || !matches!(
+            (resolved.as_ref(), canonical_root.as_ref()),
+            (Some(path), Some(root)) if path.starts_with(root)
+        )
+    {
+        warnings.push(format!(
+            "已跳过指向 Skill 目录外的符号链接: {}",
+            relative_path.display()
+        ));
+        return Ok(());
+    }
+    if let Some(parent) = target.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|error| format!("创建 Skill 符号链接目录失败: {error}"))?;
+    }
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(&link_target, target)
+            .map_err(|error| format!("备份 Skill 符号链接失败 {}: {error}", target.display()))?;
+    }
+    #[cfg(windows)]
+    {
+        let resolved = resolved.expect("validated symlink target");
+        let result = if resolved.is_dir() {
+            std::os::windows::fs::symlink_dir(&link_target, target)
+        } else {
+            std::os::windows::fs::symlink_file(&link_target, target)
+        };
+        result.map_err(|error| format!("备份 Skill 符号链接失败 {}: {error}", target.display()))?;
+    }
+    Ok(())
+}
+
+fn copy_skill_filesystem_entry(
+    source_root: &Path,
+    source: &Path,
+    target: &Path,
+    relative_path: &Path,
+    inside_git: bool,
+    total_bytes: &mut u64,
+    warnings: &mut Vec<String>,
+) -> Result<(), String> {
+    let metadata = fs::symlink_metadata(source)
+        .map_err(|error| format!("读取 Skill 文件系统失败 {}: {error}", source.display()))?;
+    if metadata.file_type().is_symlink() {
+        return copy_safe_symlink(source_root, source, target, relative_path, warnings);
+    }
+    if metadata.is_dir() {
+        if !inside_git && should_exclude(relative_path, true) {
+            return Ok(());
+        }
+        fs::create_dir_all(target)
+            .map_err(|error| format!("创建 Skill 文件系统快照目录失败: {error}"))?;
+        let mut entries = fs::read_dir(source)
+            .map_err(|error| format!("读取 Skill 文件系统目录失败 {}: {error}", source.display()))?
+            .filter_map(Result::ok)
+            .collect::<Vec<_>>();
+        entries.sort_by_key(|entry| entry.file_name());
+        for entry in entries {
+            let name = entry.file_name();
+            let name_text = name.to_string_lossy();
+            if name_text == ENCODED_GIT_DIRECTORY_NAME {
+                return Err(format!(
+                    "Skill 目录包含备份保留名称 {}，无法安全备份",
+                    ENCODED_GIT_DIRECTORY_NAME
+                ));
+            }
+            let child_source = entry.path();
+            let child_relative = relative_path.join(&name);
+            let child_inside_git = inside_git || name_text == ".git";
+            let child_target = if name_text == ".git" {
+                if !child_source.is_dir() {
+                    return Err(format!(
+                        "暂不支持 Git worktree 形式的 .git 文件: {}",
+                        child_relative.display()
+                    ));
+                }
+                target.join(ENCODED_GIT_DIRECTORY_NAME)
+            } else {
+                target.join(&name)
+            };
+            copy_skill_filesystem_entry(
+                source_root,
+                &child_source,
+                &child_target,
+                &child_relative,
+                child_inside_git,
+                total_bytes,
+                warnings,
+            )?;
+        }
+        return Ok(());
+    }
+    if !metadata.is_file() || (!inside_git && should_exclude(relative_path, false)) {
+        return Ok(());
+    }
+    *total_bytes = total_bytes.saturating_add(metadata.len());
+    if *total_bytes > MAX_SKILL_FILESYSTEM_BYTES {
+        return Err("Skill 文件系统超过 500 MB 备份上限".to_string());
+    }
+    if let Some(parent) = target.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|error| format!("创建 Skill 文件系统快照目录失败: {error}"))?;
+    }
+    if inside_git
+        && matches!(
+            source.file_name().and_then(|name| name.to_str()),
+            Some("config" | "config.worktree")
+        )
+    {
+        let contents = fs::read_to_string(source)
+            .map_err(|error| format!("读取 Git 配置失败 {}: {error}", source.display()))?;
+        fs::write(target, sanitize_git_config(&contents))
+            .map_err(|error| format!("写入脱敏 Git 配置失败 {}: {error}", target.display()))?;
+        return Ok(());
+    }
+    fs::copy(source, target)
+        .map(|_| ())
+        .map_err(|error| format!("复制 Skill 文件系统失败 {}: {error}", source.display()))
+}
+
+fn write_skill_filesystem_snapshot(
+    managed_root: &Path,
+    staging_root: &Path,
+    skill_paths: BTreeMap<String, String>,
+    warnings: &mut Vec<String>,
+) -> Result<(), String> {
+    let target = staging_root.join(SKILL_FILESYSTEM_DIRECTORY_NAME);
+    let mut total_bytes = 0;
+    if managed_root.is_dir() {
+        copy_skill_filesystem_entry(
+            managed_root,
+            managed_root,
+            &target,
+            Path::new(""),
+            false,
+            &mut total_bytes,
+            warnings,
+        )?;
+    } else {
+        fs::create_dir_all(&target)
+            .map_err(|error| format!("创建空 Skill 文件系统快照失败: {error}"))?;
+    }
+    let manifest = BackupSkillFilesystemManifest {
+        schema_version: SKILL_FILESYSTEM_SCHEMA_VERSION,
+        skill_paths,
+    };
+    let payload = serde_json::to_string_pretty(&manifest)
+        .map_err(|error| format!("序列化 Skill 文件系统清单失败: {error}"))?;
+    fs::write(
+        staging_root
+            .join(".skilldock")
+            .join(SKILL_FILESYSTEM_MANIFEST_FILE_NAME),
+        payload,
+    )
+    .map_err(|error| format!("写入 Skill 文件系统清单失败: {error}"))
+}
+
 fn git_snapshot_metadata(
     skill: &SkillSummary,
     skill_path: &Path,
@@ -338,11 +576,8 @@ fn git_snapshot_metadata(
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| sanitize_repository_url(&skill.source_url));
     let head = run_git(&root, &["rev-parse", "HEAD"])?;
-    if requires_git && (repository_url.is_empty() || head.is_empty()) {
-        return Err(format!(
-            "Git Skill {} 缺少可恢复的远端地址或 HEAD",
-            skill.name
-        ));
+    if requires_git && head.is_empty() {
+        return Err(format!("Git Skill {} 缺少可恢复的 HEAD", skill.name));
     }
     Ok(GitSnapshotMetadata {
         repository_url,
@@ -544,6 +779,7 @@ pub fn write_current_library_snapshot(repo_path: &Path) -> Result<BackupSnapshot
         .map_err(|error| format!("创建备份元数据暂存区失败: {error}"))?;
 
     let mut report = BackupSnapshotReport::default();
+    let mut skill_paths = BTreeMap::new();
     let mut library = BackupLibrary {
         schema_version: BACKUP_SCHEMA_VERSION,
         skills: Vec::new(),
@@ -556,6 +792,14 @@ pub fn write_current_library_snapshot(repo_path: &Path) -> Result<BackupSnapshot
         } else {
             skill.instance.backup_id.clone()
         };
+        let relative_path = source
+            .strip_prefix(&managed_root)
+            .map_err(|_| format!("Skill 不在托管目录中: {}", source.display()))?;
+        validate_relative_path(relative_path)?;
+        skill_paths.insert(
+            backup_id.clone(),
+            relative_path.to_string_lossy().replace('\\', "/"),
+        );
         let git = match git_snapshot_metadata(skill, &source) {
             Ok(metadata) => metadata,
             Err(error) => {
@@ -664,6 +908,12 @@ pub fn write_current_library_snapshot(repo_path: &Path) -> Result<BackupSnapshot
         library_payload,
     )
     .map_err(|error| format!("写入 Skill 库备份失败: {error}"))?;
+    write_skill_filesystem_snapshot(
+        &managed_root,
+        &staging_root,
+        skill_paths,
+        &mut report.warnings,
+    )?;
     report.preferences_included = write_portable_preferences(&staging_root)?;
     report.included_mcp_servers = write_portable_mcp_state(&staging_root)?;
     report.included_plugins = write_portable_plugins(&staging_root)?;
@@ -672,6 +922,10 @@ pub fn write_current_library_snapshot(repo_path: &Path) -> Result<BackupSnapshot
 
     fs::create_dir_all(repo_path).map_err(|error| format!("创建备份仓库目录失败: {error}"))?;
     replace_directory(&staging_skills, &repo_path.join("skills"))?;
+    replace_directory(
+        &staging_root.join(SKILL_FILESYSTEM_DIRECTORY_NAME),
+        &repo_path.join(SKILL_FILESYSTEM_DIRECTORY_NAME),
+    )?;
     replace_directory(
         &staging_root.join(".skilldock"),
         &repo_path.join(".skilldock"),
@@ -683,6 +937,19 @@ pub fn write_current_library_snapshot(repo_path: &Path) -> Result<BackupSnapshot
     )?;
     let _ = fs::remove_dir_all(staging_root);
     Ok(report)
+}
+
+pub fn current_workspace_has_backup_data() -> Result<bool, String> {
+    let managed_root = managed_skill_library_root()?;
+    let has_skill_files = managed_root.is_dir()
+        && fs::read_dir(&managed_root)
+            .map_err(|error| format!("读取本机 Skill 目录失败: {error}"))?
+            .next()
+            .is_some();
+    if has_skill_files || !export_portable_mcp_state()?.servers.is_empty() {
+        return Ok(true);
+    }
+    Ok(!collect_portable_plugin_sources()?.is_empty())
 }
 
 pub fn read_library_snapshot(repo_path: &Path) -> Result<BackupLibrary, String> {
@@ -884,6 +1151,15 @@ fn restored_skill(
     restored_name: &str,
     local_path: &Path,
 ) -> SkillSummary {
+    restored_skill_with_git_state(metadata, restored_name, local_path, metadata.git_linked)
+}
+
+fn restored_skill_with_git_state(
+    metadata: &BackupSkillMetadata,
+    restored_name: &str,
+    local_path: &Path,
+    git_linked: bool,
+) -> SkillSummary {
     SkillSummary {
         name: restored_name.to_string(),
         source_label: metadata.source_type.clone(),
@@ -913,7 +1189,7 @@ fn restored_skill(
         },
         last_editor: String::new(),
         commit_label: String::new(),
-        git_linked: metadata.git_linked,
+        git_linked,
         local_change_count: metadata.local_change_count,
         lifecycle_source: String::new(),
         owner_plugin_id: String::new(),
@@ -945,52 +1221,6 @@ fn restored_skill(
     }
 }
 
-fn repository_directory_name(metadata: &BackupSkillMetadata) -> String {
-    let candidate = metadata
-        .repository_url
-        .trim_end_matches('/')
-        .rsplit(['/', ':'])
-        .next()
-        .unwrap_or_default()
-        .trim_end_matches(".git");
-    let sanitized = candidate
-        .chars()
-        .map(|character| {
-            if character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.') {
-                character
-            } else {
-                '-'
-            }
-        })
-        .collect::<String>();
-    if sanitized.trim_matches(['-', '.']).is_empty() {
-        metadata.directory_name.clone()
-    } else {
-        sanitized
-    }
-}
-
-fn clear_directory_except_git(path: &Path) -> Result<(), String> {
-    let entries = fs::read_dir(path)
-        .map_err(|error| format!("读取 Git 恢复目录失败 {}: {error}", path.display()))?;
-    for entry in entries.filter_map(Result::ok) {
-        if entry.file_name() == ".git" {
-            continue;
-        }
-        let entry_path = entry.path();
-        if entry_path.is_dir() {
-            fs::remove_dir_all(&entry_path).map_err(|error| {
-                format!("清理 Git 恢复目录失败 {}: {error}", entry_path.display())
-            })?;
-        } else {
-            fs::remove_file(&entry_path).map_err(|error| {
-                format!("清理 Git 恢复文件失败 {}: {error}", entry_path.display())
-            })?;
-        }
-    }
-    Ok(())
-}
-
 fn stage_exact_skill(
     repo_path: &Path,
     metadata: &BackupSkillMetadata,
@@ -1001,67 +1231,169 @@ fn stage_exact_skill(
     if !snapshot_path.join("SKILL.md").is_file() {
         return Err(format!("备份 Skill {} 缺少 SKILL.md", metadata.name));
     }
-    if !requires_git_restore(metadata) {
-        let directory_name = unique_directory_name(&metadata.directory_name, occupied_directories);
-        let staged_path = staging_root.join(&directory_name);
-        copy_skill_tree(&snapshot_path, &staged_path)?;
-        return Ok(restored_skill(
-            metadata,
-            &metadata.name,
-            &managed_skill_library_root()?.join(directory_name),
-        ));
-    }
-
-    if metadata.repository_url.trim().is_empty()
-        || metadata.git_head.len() < 7
-        || metadata.git_head.len() > 64
-        || !metadata
-            .git_head
-            .chars()
-            .all(|character| character.is_ascii_hexdigit())
-    {
-        return Err(format!("Git Skill {} 的恢复元数据不完整", metadata.name));
-    }
-    let relative_path = Path::new(&metadata.repository_relative_path);
-    validate_relative_path(relative_path)?;
-    let directory_name =
-        unique_directory_name(&repository_directory_name(metadata), occupied_directories);
-    let staged_repository = staging_root.join(&directory_name);
-    let output = Command::new("git")
-        .args(["clone", "--no-checkout", &metadata.repository_url])
-        .arg(&staged_repository)
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .output()
-        .map_err(|error| format!("启动 Git Skill 克隆失败: {error}"))?;
-    if !output.status.success() {
-        return Err(format!(
-            "恢复 Git Skill {} 失败: {}",
-            metadata.name,
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
-    }
-    run_git(
-        &staged_repository,
-        &["checkout", "--detach", &metadata.git_head],
-    )?;
-    let staged_skill = staged_repository.join(relative_path);
-    if relative_path.as_os_str().is_empty() {
-        clear_directory_except_git(&staged_repository)?;
-    } else if staged_skill.exists() {
-        fs::remove_dir_all(&staged_skill)
-            .map_err(|error| format!("清理 Git Skill 恢复目标失败: {error}"))?;
-    }
-    copy_skill_tree(&snapshot_path, &staged_skill)?;
-    Ok(restored_skill(
+    let directory_name = unique_directory_name(&metadata.directory_name, occupied_directories);
+    let staged_path = staging_root.join(&directory_name);
+    copy_skill_tree(&snapshot_path, &staged_path)?;
+    Ok(restored_skill_with_git_state(
         metadata,
         &metadata.name,
-        &managed_skill_library_root()?
-            .join(directory_name)
-            .join(relative_path),
+        &managed_skill_library_root()?.join(directory_name),
+        false,
     ))
 }
 
+fn copy_restored_skill_filesystem_entry(
+    snapshot_root: &Path,
+    source: &Path,
+    target: &Path,
+    relative_path: &Path,
+) -> Result<(), String> {
+    let metadata = fs::symlink_metadata(source)
+        .map_err(|error| format!("读取 Skill 文件系统快照失败 {}: {error}", source.display()))?;
+    if metadata.file_type().is_symlink() {
+        let mut warnings = Vec::new();
+        copy_safe_symlink(snapshot_root, source, target, relative_path, &mut warnings)?;
+        if warnings.is_empty() {
+            return Ok(());
+        }
+        return Err(warnings.join("；"));
+    }
+    if metadata.is_dir() {
+        fs::create_dir_all(target)
+            .map_err(|error| format!("创建 Skill 恢复暂存目录失败: {error}"))?;
+        let mut entries = fs::read_dir(source)
+            .map_err(|error| format!("读取 Skill 恢复快照目录失败: {error}"))?
+            .filter_map(Result::ok)
+            .collect::<Vec<_>>();
+        entries.sort_by_key(|entry| entry.file_name());
+        for entry in entries {
+            let name = entry.file_name();
+            let name_text = name.to_string_lossy();
+            if name_text == ".git" {
+                return Err("Skill 文件系统快照包含未编码的 .git 目录".to_string());
+            }
+            let restored_name = if name_text == ENCODED_GIT_DIRECTORY_NAME {
+                ".git".into()
+            } else {
+                name.clone()
+            };
+            copy_restored_skill_filesystem_entry(
+                snapshot_root,
+                &entry.path(),
+                &target.join(restored_name),
+                &relative_path.join(name),
+            )?;
+        }
+        return Ok(());
+    }
+    if metadata.is_file() {
+        fs::copy(source, target)
+            .map(|_| ())
+            .map_err(|error| format!("复制 Skill 恢复文件失败 {}: {error}", source.display()))?;
+    }
+    Ok(())
+}
+
+fn apply_skill_filesystem_snapshot_replace(repo_path: &Path) -> Result<Vec<SkillSummary>, String> {
+    let manifest_path = repo_path
+        .join(".skilldock")
+        .join(SKILL_FILESYSTEM_MANIFEST_FILE_NAME);
+    let manifest = fs::read_to_string(&manifest_path)
+        .map_err(|error| format!("读取 Skill 文件系统清单失败: {error}"))
+        .and_then(|payload| {
+            serde_json::from_str::<BackupSkillFilesystemManifest>(&payload)
+                .map_err(|error| format!("解析 Skill 文件系统清单失败: {error}"))
+        })?;
+    if manifest.schema_version != SKILL_FILESYSTEM_SCHEMA_VERSION {
+        return Err(format!(
+            "不支持的 Skill 文件系统快照版本: {}",
+            manifest.schema_version
+        ));
+    }
+    let snapshot_root = repo_path.join(SKILL_FILESYSTEM_DIRECTORY_NAME);
+    if !snapshot_root.is_dir() {
+        return Err("Skill 文件系统快照目录缺失".to_string());
+    }
+    let library = read_library_snapshot(repo_path)?;
+    let managed_root = managed_skill_library_root()?;
+    let current_skills = load_installed_skills(&[]);
+    let preserved_skills = current_skills
+        .iter()
+        .filter(|skill| !Path::new(&skill.local_path).starts_with(&managed_root))
+        .cloned()
+        .collect::<Vec<_>>();
+    let operation_id = uuid::Uuid::new_v4().to_string();
+    let operation_staging = backup_root()?.join("staging").join(&operation_id);
+    let operation_rollback = backup_root()?.join("rollback").join(&operation_id);
+    let staged_root = operation_staging.join("skills");
+    let rollback_root = operation_rollback.join("skills");
+    let _staging_guard = TemporaryDirectoryGuard::new(operation_staging.clone());
+    let _rollback_guard = TemporaryDirectoryGuard::new(operation_rollback.clone());
+    fs::create_dir_all(&operation_staging)
+        .map_err(|error| format!("创建 Skill 恢复暂存区失败: {error}"))?;
+    fs::create_dir_all(&operation_rollback)
+        .map_err(|error| format!("创建 Skill 恢复回滚区失败: {error}"))?;
+    copy_restored_skill_filesystem_entry(
+        &snapshot_root,
+        &snapshot_root,
+        &staged_root,
+        Path::new(""),
+    )?;
+
+    let mut restored = Vec::new();
+    for metadata in &library.skills {
+        let relative_path = manifest
+            .skill_paths
+            .get(&metadata.backup_id)
+            .ok_or_else(|| format!("Skill {} 缺少文件系统路径", metadata.name))?;
+        let relative_path = Path::new(relative_path);
+        validate_relative_path(relative_path)?;
+        if !staged_root.join(relative_path).join("SKILL.md").is_file() {
+            return Err(format!("Skill {} 的文件系统快照不完整", metadata.name));
+        }
+        restored.push(restored_skill(
+            metadata,
+            &metadata.name,
+            &managed_root.join(relative_path),
+        ));
+    }
+
+    if let Some(parent) = managed_root.parent() {
+        fs::create_dir_all(parent).map_err(|error| format!("创建 Skill 托管目录失败: {error}"))?;
+    }
+    let had_managed_root = managed_root.exists();
+    if had_managed_root {
+        fs::rename(&managed_root, &rollback_root)
+            .map_err(|error| format!("暂存本机 Skill 目录失败: {error}"))?;
+    }
+    if let Err(error) = fs::rename(&staged_root, &managed_root) {
+        if had_managed_root {
+            let _ = fs::rename(&rollback_root, &managed_root);
+        }
+        return Err(format!("应用 Skill 文件系统快照失败: {error}"));
+    }
+
+    let mut next_skills = preserved_skills;
+    next_skills.extend(restored);
+    if let Err(error) = save_installed_skills(&next_skills) {
+        let _ = fs::remove_dir_all(&managed_root);
+        if had_managed_root {
+            let _ = fs::rename(&rollback_root, &managed_root);
+        }
+        let _ = save_installed_skills(&current_skills);
+        return Err(error);
+    }
+    Ok(next_skills)
+}
+
 pub fn apply_library_snapshot_replace(repo_path: &Path) -> Result<Vec<SkillSummary>, String> {
+    if repo_path
+        .join(".skilldock")
+        .join(SKILL_FILESYSTEM_MANIFEST_FILE_NAME)
+        .is_file()
+    {
+        return apply_skill_filesystem_snapshot_replace(repo_path);
+    }
     let library = read_library_snapshot(repo_path)?;
     let managed_root = managed_skill_library_root()?;
     fs::create_dir_all(&managed_root).map_err(|error| {
@@ -1352,9 +1684,11 @@ fn copy_skill_tree(source: &Path, target: &Path) -> Result<(), String> {
 mod tests {
     use super::{
         apply_library_snapshot, apply_library_snapshot_replace, copy_skill,
-        deterministic_backup_id, read_library_snapshot, requires_git_restore,
-        sanitize_repository_url, should_exclude, write_current_library_snapshot, BackupLibrary,
-        BackupSkillMetadata,
+        current_workspace_has_backup_data, deterministic_backup_id, read_library_snapshot,
+        requires_git_restore, sanitize_repository_url, should_exclude,
+        write_current_library_snapshot, BackupLibrary, BackupSkillMetadata,
+        ENCODED_GIT_DIRECTORY_NAME, SKILL_FILESYSTEM_DIRECTORY_NAME,
+        SKILL_FILESYSTEM_MANIFEST_FILE_NAME,
     };
     use crate::models::{SkillInstanceMetadata, SkillSummary};
     use crate::state::{load_installed_skills, save_installed_skills};
@@ -1690,6 +2024,141 @@ mod tests {
     }
 
     #[test]
+    fn filesystem_snapshot_preserves_git_state_without_credentials() {
+        with_temp_home(|home| {
+            let skill_path = home.join(".skilldock/skills/git-state");
+            fs::create_dir_all(&skill_path).expect("create git Skill");
+            fs::write(skill_path.join("SKILL.md"), "# Original").expect("write Skill");
+            run_git(&skill_path, &["init", "-b", "feature/local-state"]);
+            run_git(&skill_path, &["config", "user.name", "SkillDock Test"]);
+            run_git(
+                &skill_path,
+                &["config", "user.email", "skilldock@example.invalid"],
+            );
+            run_git(&skill_path, &["add", "SKILL.md"]);
+            run_git(&skill_path, &["commit", "-m", "initial"]);
+            run_git(
+                &skill_path,
+                &[
+                    "remote",
+                    "add",
+                    "origin",
+                    "https://user:secret@github.com/example/git-state.git?token=value",
+                ],
+            );
+            fs::write(skill_path.join("staged.txt"), "staged").expect("write staged file");
+            run_git(&skill_path, &["add", "staged.txt"]);
+            fs::write(skill_path.join("SKILL.md"), "# Unstaged").expect("write unstaged change");
+            fs::write(skill_path.join("untracked.txt"), "untracked").expect("write untracked file");
+
+            let mut skill = test_skill(&skill_path);
+            skill.source_type = "github".into();
+            skill.source_url = "https://github.com/example/git-state".into();
+            skill.branch = "feature/local-state".into();
+            skill.git_linked = true;
+            skill.local_change_count = 3;
+            skill.instance.backup_id = "git-state-id".into();
+            skill.instance.update_driver = "git".into();
+            save_installed_skills(&[skill]).expect("save git Skill state");
+
+            let repo = home.join(".skilldock/backup/repo");
+            write_current_library_snapshot(&repo).expect("write filesystem snapshot");
+
+            let snapshot_skill = repo.join(SKILL_FILESYSTEM_DIRECTORY_NAME).join("git-state");
+            assert!(snapshot_skill
+                .join(ENCODED_GIT_DIRECTORY_NAME)
+                .join("HEAD")
+                .is_file());
+            assert!(!snapshot_skill.join(".git").exists());
+            assert!(snapshot_skill.join("staged.txt").is_file());
+            assert!(snapshot_skill.join("untracked.txt").is_file());
+            let config = fs::read_to_string(
+                snapshot_skill
+                    .join(ENCODED_GIT_DIRECTORY_NAME)
+                    .join("config"),
+            )
+            .expect("read sanitized config");
+            assert!(config.contains("https://github.com/example/git-state.git"));
+            assert!(!config.contains("secret"));
+            assert!(!config.contains("token=value"));
+            let manifest = fs::read_to_string(
+                repo.join(".skilldock")
+                    .join(SKILL_FILESYSTEM_MANIFEST_FILE_NAME),
+            )
+            .expect("read filesystem manifest");
+            assert!(manifest.contains("\"git-state-id\": \"git-state\""));
+            assert!(current_workspace_has_backup_data().expect("inspect local data"));
+        });
+    }
+
+    #[test]
+    fn filesystem_restore_round_trip_preserves_git_state() {
+        with_temp_home(|home| {
+            let skill_path = home.join(".skilldock/skills/git-round-trip");
+            fs::create_dir_all(&skill_path).expect("create git Skill");
+            fs::write(skill_path.join("SKILL.md"), "# Original").expect("write Skill");
+            run_git(&skill_path, &["init", "-b", "feature/restore"]);
+            run_git(&skill_path, &["config", "user.name", "SkillDock Test"]);
+            run_git(
+                &skill_path,
+                &["config", "user.email", "skilldock@example.invalid"],
+            );
+            run_git(&skill_path, &["add", "SKILL.md"]);
+            run_git(&skill_path, &["commit", "-m", "initial"]);
+            run_git(
+                &skill_path,
+                &[
+                    "remote",
+                    "add",
+                    "origin",
+                    "https://user:secret@github.com/example/round-trip.git",
+                ],
+            );
+            fs::write(skill_path.join("staged.txt"), "staged").expect("write staged file");
+            run_git(&skill_path, &["add", "staged.txt"]);
+            fs::write(skill_path.join("SKILL.md"), "# Unstaged").expect("write unstaged change");
+            fs::write(skill_path.join("untracked.txt"), "untracked").expect("write untracked file");
+            let expected_head = run_git(&skill_path, &["rev-parse", "HEAD"]);
+            let expected_status = run_git(&skill_path, &["status", "--porcelain=v1"]);
+
+            let mut skill = test_skill(&skill_path);
+            skill.source_type = "github".into();
+            skill.source_url = "https://github.com/example/round-trip".into();
+            skill.branch = "feature/restore".into();
+            skill.git_linked = true;
+            skill.local_change_count = 3;
+            skill.instance.backup_id = "round-trip-id".into();
+            skill.instance.update_driver = "git".into();
+            save_installed_skills(&[skill]).expect("save git Skill state");
+
+            let repo = home.join(".skilldock/backup/repo");
+            write_current_library_snapshot(&repo).expect("write filesystem snapshot");
+            fs::remove_dir_all(home.join(".skilldock/skills")).expect("remove local Skill root");
+            save_installed_skills(&[]).expect("clear local Skill state");
+
+            let restored =
+                apply_library_snapshot_replace(&repo).expect("restore filesystem snapshot");
+
+            assert_eq!(restored.len(), 1);
+            assert!(restored[0].git_linked);
+            assert_eq!(restored[0].local_path, skill_path.to_string_lossy());
+            assert_eq!(run_git(&skill_path, &["rev-parse", "HEAD"]), expected_head);
+            assert_eq!(
+                run_git(&skill_path, &["branch", "--show-current"]),
+                "feature/restore"
+            );
+            assert_eq!(
+                run_git(&skill_path, &["status", "--porcelain=v1"]),
+                expected_status
+            );
+            assert_eq!(
+                run_git(&skill_path, &["remote", "get-url", "origin"]),
+                "https://github.com/example/round-trip.git"
+            );
+        });
+    }
+
+    #[test]
     fn restore_failure_never_removes_preexisting_conflict_directory() {
         with_temp_home(|home| {
             let managed_root = home.join(".skilldock/skills");
@@ -2002,6 +2471,50 @@ mod tests {
             assert!(installed
                 .iter()
                 .any(|skill| skill.instance.backup_id == "new-id"));
+        });
+    }
+
+    #[test]
+    fn legacy_filesystem_restore_uses_snapshot_without_clone() {
+        with_temp_home(|home| {
+            save_installed_skills(&[]).expect("save empty state");
+            let repo = home.join(".skilldock/backup/repo");
+            let snapshot_skill = repo.join("skills/legacy-git-id");
+            fs::create_dir_all(&snapshot_skill).expect("create legacy git snapshot");
+            fs::write(snapshot_skill.join("SKILL.md"), "# Offline Legacy")
+                .expect("write legacy git snapshot");
+            fs::create_dir_all(repo.join(".skilldock")).expect("create metadata directory");
+            fs::write(
+                repo.join(".skilldock/library.json"),
+                serde_json::to_vec(&BackupLibrary {
+                    schema_version: 2,
+                    skills: vec![BackupSkillMetadata {
+                        schema_version: 2,
+                        backup_id: "legacy-git-id".into(),
+                        name: "legacy-git".into(),
+                        directory_name: "legacy-git".into(),
+                        source_type: "github".into(),
+                        source_url: "https://127.0.0.1:9/unreachable/repository".into(),
+                        repository_url: "https://127.0.0.1:9/unreachable/repository.git".into(),
+                        git_head: "0123456789abcdef0123456789abcdef01234567".into(),
+                        update_driver: "git".into(),
+                        git_linked: true,
+                        tools: BTreeMap::new(),
+                        content_hash: "legacy-hash".into(),
+                        ..Default::default()
+                    }],
+                })
+                .expect("serialize legacy library"),
+            )
+            .expect("write legacy library");
+
+            let restored =
+                apply_library_snapshot_replace(&repo).expect("restore legacy snapshot offline");
+
+            assert_eq!(restored.len(), 1);
+            assert!(!restored[0].git_linked);
+            assert!(home.join(".skilldock/skills/legacy-git/SKILL.md").is_file());
+            assert!(!home.join(".skilldock/skills/legacy-git/.git").exists());
         });
     }
 }
