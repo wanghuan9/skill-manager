@@ -47,7 +47,6 @@ import type {
   BackupConflict,
   BackupStatus,
   CloudBackupNode,
-  WorkspaceRestorePreview,
 } from "@/features/skills/state/skill-store";
 import {
   applyGlobalListGridViewPreference,
@@ -253,10 +252,6 @@ export function SettingsRoute() {
   const [isBackupNodeDialogOpen, setIsBackupNodeDialogOpen] = useState(false);
   const [isLoadingBackupNodes, setIsLoadingBackupNodes] = useState(false);
   const [activeBackupAction, setActiveBackupAction] = useState("");
-  const [pendingSyncRestore, setPendingSyncRestore] = useState<{
-    commitId: string;
-    preview: WorkspaceRestorePreview;
-  } | null>(null);
   const [currentAppVersion, setCurrentAppVersion] = useState("");
   const [appUpdate, setAppUpdate] = useState<AppUpdateCheckResult | null>(null);
   const [appUpdateStatus, setAppUpdateStatus] = useState<
@@ -295,8 +290,7 @@ export function SettingsRoute() {
   const isBackupOperationActive = backupStatus
     ? ["enabling", "backingUp", "restoring"].includes(backupStatus.phase)
     : false;
-  const isBackupInteractionBlocked =
-    isBackupOperationActive || Boolean(activeBackupAction) || Boolean(pendingSyncRestore);
+  const isBackupInteractionBlocked = isBackupOperationActive || Boolean(activeBackupAction);
   const backupRepositoryLabel = backupStatus?.repositoryOwner && backupStatus.repositoryName
     ? `${backupStatus.repositoryOwner}/${backupStatus.repositoryName}`
     : "";
@@ -394,19 +388,7 @@ export function SettingsRoute() {
     setActiveBackupAction(operation);
     try {
       if (operation === "sync") {
-        const nodes = await listCloudBackupNodes();
-        const latestNode = nodes.find((node) => (
-          node.skillCount > 0 || node.mcpCount > 0 || node.pluginCount > 0
-        )) ?? nodes[0];
-        if (!latestNode) {
-          throw new Error(t("settings.backup.nodesEmpty"));
-        }
-        const preview = await previewCloudBackupNode(latestNode.commitId);
-        if (preview.overwritten > 0 || preview.deleted > 0) {
-          setPendingSyncRestore({ commitId: latestNode.commitId, preview });
-          return;
-        }
-        const status = await syncBackupToLocal(latestNode.commitId, false);
+        const status = await syncBackupToLocal();
         await updateBackupState(status);
         return;
       }
@@ -415,26 +397,6 @@ export function SettingsRoute() {
     } catch (error) {
       reportFailure(error, {
         operation: operation === "backup" ? "run_github_backup" : "sync_github_backup_to_local",
-        fallbackMessage: t("settings.backup.operationFailed"),
-      });
-    } finally {
-      setActiveBackupAction("");
-    }
-  }
-
-  async function handleConfirmSyncRestore(backupCurrent: boolean) {
-    if (!pendingSyncRestore || activeBackupAction) {
-      return;
-    }
-    const { commitId } = pendingSyncRestore;
-    setPendingSyncRestore(null);
-    setActiveBackupAction("sync");
-    try {
-      const status = await syncBackupToLocal(commitId, backupCurrent);
-      await updateBackupState(status);
-    } catch (error) {
-      reportFailure(error, {
-        operation: "sync_github_backup_to_local",
         fallbackMessage: t("settings.backup.operationFailed"),
       });
     } finally {
@@ -1545,73 +1507,6 @@ export function SettingsRoute() {
           )}
         </div>
       </section>
-      {pendingSyncRestore ? (
-        <div
-          className="skill-card-detail-modal__backdrop"
-          role="presentation"
-          onClick={() => setPendingSyncRestore(null)}
-        >
-          <section
-            className="skill-card-detail-modal settings-backup-restore-dialog"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="settings-backup-restore-dialog-title"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <header className="skill-card-detail-modal__header">
-              <div className="skill-card-detail-modal__identity">
-                <div className="skill-card-detail-modal__copy">
-                  <div className="skill-card-detail-modal__title">
-                    <h3 id="settings-backup-restore-dialog-title">
-                      {t("settings.backup.syncReplaceTitle")}
-                    </h3>
-                  </div>
-                </div>
-              </div>
-              <button
-                type="button"
-                className="skill-card-detail-modal__close"
-                aria-label={t("settings.backup.syncReplaceCancel")}
-                onClick={() => setPendingSyncRestore(null)}
-              >
-                ×
-              </button>
-            </header>
-            <div className="skill-card-detail-modal__body settings-backup-restore-dialog__body">
-              <p>
-                {t("settings.backup.syncReplaceDescription", {
-                  added: pendingSyncRestore.preview.added,
-                  overwritten: pendingSyncRestore.preview.overwritten,
-                  deleted: pendingSyncRestore.preview.deleted,
-                })}
-              </p>
-              <div className="settings-backup-restore-dialog__actions">
-                <button
-                  type="button"
-                  className="secondary-button secondary-button--compact"
-                  onClick={() => setPendingSyncRestore(null)}
-                >
-                  {t("settings.backup.syncReplaceCancel")}
-                </button>
-                <button
-                  type="button"
-                  className="secondary-button secondary-button--compact settings-backup-restore-dialog__overwrite"
-                  onClick={() => void handleConfirmSyncRestore(false)}
-                >
-                  {t("settings.backup.syncReplaceOverwrite")}
-                </button>
-                <button
-                  type="button"
-                  className="primary-button primary-button--compact"
-                  onClick={() => void handleConfirmSyncRestore(true)}
-                >
-                  {t("settings.backup.syncReplaceBackup")}
-                </button>
-              </div>
-            </div>
-          </section>
-        </div>
-      ) : null}
       {isBackupNodeDialogOpen ? (
         <div
           className="skill-card-detail-modal__backdrop"

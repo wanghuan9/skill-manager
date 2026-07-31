@@ -178,7 +178,6 @@ test("runs manual GitHub sync and backup from settings", async () => {
     syncing: false,
     pendingConflicts: 0,
   };
-  let previewCallCount = 0;
   vi.mocked(invoke).mockImplementation(async (command) => {
     switch (command) {
       case "list_startup_installed_skills":
@@ -221,10 +220,7 @@ test("runs manual GitHub sync and backup from settings", async () => {
           },
         ];
       case "preview_cloud_backup_node":
-        previewCallCount += 1;
-        return previewCallCount === 3
-          ? { added: 4, overwritten: 0, deleted: 0 }
-          : { added: 4, overwritten: 18, deleted: 1 };
+        return { added: 4, overwritten: 18, deleted: 1 };
       case "sync_backup_to_local":
       case "run_backup_sync":
         return backupStatus;
@@ -248,31 +244,9 @@ test("runs manual GitHub sync and backup from settings", async () => {
   expect(syncButton.parentElement).toBe(historyButton.parentElement);
 
   await userEvent.click(syncButton);
-  expect(await screen.findByRole("dialog", { name: "本机数据将被替换" })).toBeInTheDocument();
-  expect(screen.getByText("最新云端备份将新增 4 项、覆盖 18 项、删除 1 项 SkillDock 数据。"))
-    .toBeInTheDocument();
-  await userEvent.click(screen.getByRole("button", { name: "备份当前状态并覆盖" }));
-  await waitFor(() => expect(invoke).toHaveBeenCalledWith("sync_backup_to_local", {
-    commitId: "0123456789abcdef0123456789abcdef01234567",
-    backupCurrent: true,
-  }));
-
-  await userEvent.click(syncButton);
-  expect(await screen.findByRole("dialog", { name: "本机数据将被替换" })).toBeInTheDocument();
-  await userEvent.click(screen.getByRole("button", { name: "直接覆盖" }));
-  await waitFor(() => expect(invoke).toHaveBeenCalledWith("sync_backup_to_local", {
-    commitId: "0123456789abcdef0123456789abcdef01234567",
-    backupCurrent: false,
-  }));
-
-  await userEvent.click(syncButton);
-  await waitFor(() => expect(previewCallCount).toBe(3));
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("sync_backup_to_local", {}));
   expect(screen.queryByRole("dialog", { name: "本机数据将被替换" })).not.toBeInTheDocument();
-  const syncWithoutBackupCalls = vi.mocked(invoke).mock.calls.filter(([command, args]) => {
-    const input = args as { backupCurrent?: boolean } | undefined;
-    return command === "sync_backup_to_local" && input?.backupCurrent === false;
-  });
-  expect(syncWithoutBackupCalls).toHaveLength(2);
+  expect(invoke).not.toHaveBeenCalledWith("preview_cloud_backup_node", expect.anything());
 
   await userEvent.click(backupButton);
   await waitFor(() => expect(invoke).toHaveBeenCalledWith("run_backup_sync", {}));

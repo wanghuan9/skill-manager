@@ -441,6 +441,10 @@ fn latest_nonempty_cloud_commit(repo_path: &Path) -> Result<Option<String>, Stri
     Ok(None)
 }
 
+fn latest_restore_commit(repo_path: &Path) -> Result<String, String> {
+    latest_nonempty_cloud_commit(repo_path)?.ok_or_else(|| "还没有可用的云端备份节点".to_string())
+}
+
 fn should_create_initial_backup(repo_path: &Path) -> Result<bool, String> {
     if remote_branch_exists(repo_path) {
         return Ok(false);
@@ -526,7 +530,7 @@ fn create_before_restore_node(repo_path: &Path, token: &str) -> Result<(), Strin
 
 fn restore_cloud_node_blocking(
     app_handle: tauri::AppHandle,
-    commit_id: String,
+    commit_id: Option<String>,
     backup_current: bool,
 ) -> Result<(), String> {
     let _guard = sync_lock()
@@ -544,14 +548,11 @@ fn restore_cloud_node_blocking(
         create_before_restore_node(&repo_path, &credential.token)?;
     }
     reconcile_remote(&repo_path, &credential.token)?;
-    validate_cloud_commit(&repo_path, &commit_id)?;
-    let effective_commit_id = if !backup_current
-        && !cloud_node_has_data(&parse_cloud_node(&repo_path, &commit_id, "")?)
-    {
-        latest_nonempty_cloud_commit(&repo_path)?.unwrap_or(commit_id)
-    } else {
-        commit_id
+    let effective_commit_id = match commit_id {
+        Some(commit_id) => commit_id,
+        None => latest_restore_commit(&repo_path)?,
     };
+    validate_cloud_commit(&repo_path, &effective_commit_id)?;
 
     crate::backup_merge::with_materialized_commit(
         &repo_path,
@@ -658,12 +659,12 @@ pub fn restore_cloud_backup_node(
     app_handle: tauri::AppHandle,
     commit_id: String,
 ) -> Result<BackupStatus, String> {
-    start_cloud_restore(app_handle, commit_id, true)
+    start_cloud_restore(app_handle, Some(commit_id), true)
 }
 
 fn start_cloud_restore(
     app_handle: tauri::AppHandle,
-    commit_id: String,
+    commit_id: Option<String>,
     backup_current: bool,
 ) -> Result<BackupStatus, String> {
     if !load_github_backup_settings().enabled {
@@ -772,12 +773,8 @@ pub fn run_backup_sync(app_handle: tauri::AppHandle) -> Result<BackupStatus, Str
 }
 
 #[tauri::command]
-pub fn sync_backup_to_local(
-    app_handle: tauri::AppHandle,
-    commit_id: String,
-    backup_current: bool,
-) -> Result<BackupStatus, String> {
-    start_cloud_restore(app_handle, commit_id, backup_current)
+pub fn sync_backup_to_local(app_handle: tauri::AppHandle) -> Result<BackupStatus, String> {
+    start_cloud_restore(app_handle, None, false)
 }
 
 fn run_backup_command(app_handle: tauri::AppHandle) -> Result<BackupStatus, String> {
@@ -890,9 +887,9 @@ pub async fn resolve_backup_conflict(
 mod tests {
     use super::{
         cloud_node_has_data, commit_snapshot, ensure_local_repository, git,
-        latest_nonempty_cloud_commit, parse_cloud_node, push_branch_with_retry, reconcile_remote,
-        remote_snapshot_has_data, should_create_initial_backup, status_from_settings,
-        upload_current_snapshot,
+        latest_nonempty_cloud_commit, latest_restore_commit, parse_cloud_node,
+        push_branch_with_retry, reconcile_remote, remote_snapshot_has_data,
+        should_create_initial_backup, status_from_settings, upload_current_snapshot,
     };
     use crate::backup_snapshot::{BackupLibrary, BackupSkillMetadata};
     use crate::models::GithubBackupSettings;
@@ -1133,7 +1130,11 @@ mod tests {
         ));
         assert_eq!(
             latest_nonempty_cloud_commit(&device).expect("select nonempty node"),
-            Some(nonempty_commit)
+            Some(nonempty_commit.clone())
+        );
+        assert_eq!(
+            latest_restore_commit(&device).expect("select restore node"),
+            nonempty_commit
         );
         assert!(remote_snapshot_has_data(&device).expect("inspect cloud history"));
         let _ = fs::remove_dir_all(temp_root);

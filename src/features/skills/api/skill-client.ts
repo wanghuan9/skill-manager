@@ -1388,11 +1388,8 @@ export async function runBackupSync(): Promise<BackupStatus> {
   return invoke("run_backup_sync", {});
 }
 
-export async function syncBackupToLocal(
-  commitId: string,
-  backupCurrent: boolean,
-): Promise<BackupStatus> {
-  return invoke("sync_backup_to_local", { commitId, backupCurrent });
+export async function syncBackupToLocal(): Promise<BackupStatus> {
+  return invoke("sync_backup_to_local", {});
 }
 
 export async function listCloudBackupNodes(): Promise<CloudBackupNode[]> {

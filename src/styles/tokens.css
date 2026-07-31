@@ -9026,40 +9026,6 @@ button.settings-form-item:disabled {
   width: min(680px, calc(100vw - 40px));
 }
 
-.settings-backup-restore-dialog {
-  width: min(540px, calc(100vw - 40px));
-}
-
-.settings-backup-restore-dialog__body {
-  display: grid;
-  gap: 20px;
-}
-
-.settings-backup-restore-dialog__body p {
-  margin: 0;
-  color: var(--muted);
-  font-size: 0.84rem;
-  line-height: 1.65;
-}
-
-.settings-backup-restore-dialog__actions {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 8px;
-}
-
-.settings-backup-restore-dialog__overwrite {
-  border-color: color-mix(in srgb, #dc2626 18%, var(--line));
-  color: color-mix(in srgb, #dc2626 72%, var(--heading));
-}
-
-.settings-backup-restore-dialog__overwrite:hover:not(:disabled) {
-  border-color: color-mix(in srgb, #dc2626 34%, var(--line));
-  background: color-mix(in srgb, #dc2626 6%, var(--surface-strong));
-  color: color-mix(in srgb, #dc2626 84%, var(--heading));
-}
-
 .settings-backup-node-dialog .skill-card-detail-modal__title h3 {
   font-size: 0.96rem;
   font-weight: 500;
