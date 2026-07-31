@@ -564,7 +564,7 @@ code {
   min-width: 0;
   color: var(--heading);
   font-size: 0.8rem;
-  font-weight: 400;
+  font-weight: 460;
   line-height: 1.35;
   white-space: nowrap;
   overflow: hidden;
@@ -599,7 +599,7 @@ code {
   background: rgba(59, 130, 246, 0.08);
   color: var(--accent);
   font-size: 0.75rem;
-  font-weight: 400;
+  font-weight: 500;
   cursor: pointer;
   transition:
     background-color var(--motion-fast) var(--ease-standard),
