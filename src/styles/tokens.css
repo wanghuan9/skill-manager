@@ -5185,16 +5185,6 @@ code {
   grid-template-rows: auto minmax(0, 1fr);
 }
 
-.marketplace-skill-file-dialog__basic-notice {
-  margin: 0;
-  padding: 8px 12px;
-  border-bottom: 1px solid rgba(245, 158, 11, 0.24);
-  background: rgba(245, 158, 11, 0.1);
-  color: #92400e;
-  font-size: 0.76rem;
-  line-height: 1.4;
-}
-
 .marketplace-skill-file-dialog__state {
   grid-row: 1 / -1;
   min-height: 0;
@@ -5209,6 +5199,33 @@ code {
   color: #6b7280;
   font-size: 0.84rem;
   text-align: center;
+}
+
+.marketplace-skill-file-dialog__state-action {
+  min-height: 30px;
+  padding: 5px 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--line) 70%);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface) 92%);
+  color: color-mix(in srgb, var(--accent) 76%, var(--heading) 24%);
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+  transition:
+    border-color 140ms ease,
+    background 140ms ease,
+    transform 140ms ease;
+}
+
+.marketplace-skill-file-dialog__state-action:hover {
+  border-color: color-mix(in srgb, var(--accent) 48%, var(--line) 52%);
+  background: color-mix(in srgb, var(--accent) 13%, var(--surface) 87%);
+  transform: translateY(-1px);
+}
+
+.marketplace-skill-file-dialog__state-action:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  outline-offset: 2px;
 }
 
 .skill-detail-modal__content {
@@ -14781,12 +14798,6 @@ button.settings-form-item:disabled {
   border-color: #464646;
   background: rgba(31, 31, 31, 0.8);
   color: #c4c4c4;
-}
-
-:root[data-theme="dark"] .marketplace-skill-file-dialog__basic-notice {
-  border-bottom-color: rgba(255, 194, 26, 0.2);
-  background: rgba(255, 194, 26, 0.09);
-  color: #f6d675;
 }
 
 :root[data-theme="dark"] .mcp-server-card__tool-chip {

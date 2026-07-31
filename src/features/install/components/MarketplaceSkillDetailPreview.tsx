@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { isGithubRateLimitError } from "@/app/errors";
+import { requestOpenGithubSettings } from "@/app/github-settings-navigation";
 import { useTranslate } from "@/app/i18n";
 import {
   fetchMarketplaceSkillFileBrowser,
@@ -69,12 +70,14 @@ function previewErrorMessage(error: unknown, fallback: string) {
 
 export function MarketplaceSkillDetailPreview({ skill }: MarketplaceSkillDetailPreviewProps) {
   const { t } = useTranslate();
-  const { reportGithubRateLimit } = useSkillWorkspace();
+  const { githubConnection, reportGithubRateLimit } = useSkillWorkspace();
+  const isGithubConnected = githubConnection.connected;
   const [entries, setEntries] = useState<SkillFileBrowserSnapshot["entries"]>([]);
-  const [previewMode, setPreviewMode] = useState<SkillFileBrowserSnapshot["previewMode"]>("full");
   const [selectedPath, setSelectedPath] = useState("");
   const [content, setContent] = useState("");
   const [isTreeLoading, setIsTreeLoading] = useState(true);
+  const [isTreeRateLimited, setIsTreeRateLimited] = useState(false);
+  const [retryVersion, setRetryVersion] = useState(0);
   const [isContentLoading, setIsContentLoading] = useState(false);
   const [treeErrorMessage, setTreeErrorMessage] = useState("");
   const [contentErrorMessage, setContentErrorMessage] = useState("");
@@ -108,10 +111,6 @@ export function MarketplaceSkillDetailPreview({ skill }: MarketplaceSkillDetailP
         throw new Error(t("install.market.detail.filesUnavailable"));
       }
       setEntries(snapshot.entries);
-      setPreviewMode(snapshot.previewMode);
-      if (snapshot.previewMode === "basic") {
-        reportGithubRateLimit();
-      }
       setSelectedPath(snapshot.initialFilePath);
       setCollapsedDirectories(
         buildInitialCollapsedDirectories(snapshot.entries, snapshot.initialFilePath),
@@ -119,11 +118,11 @@ export function MarketplaceSkillDetailPreview({ skill }: MarketplaceSkillDetailP
     }
 
     setEntries([]);
-    setPreviewMode("full");
     setSelectedPath("");
     setContent("");
     setTreeErrorMessage("");
     setContentErrorMessage("");
+    setIsTreeRateLimited(false);
     setIsTreeLoading(true);
 
     if (cachedSnapshot) {
@@ -166,7 +165,9 @@ export function MarketplaceSkillDetailPreview({ skill }: MarketplaceSkillDetailP
         if (!active) {
           return;
         }
-        if (isGithubRateLimitError(error)) {
+        const isRateLimited = isGithubRateLimitError(error);
+        setIsTreeRateLimited(isRateLimited);
+        if (isRateLimited) {
           reportGithubRateLimit();
         }
         setTreeErrorMessage(
@@ -182,7 +183,7 @@ export function MarketplaceSkillDetailPreview({ skill }: MarketplaceSkillDetailP
     return () => {
       active = false;
     };
-  }, [reportGithubRateLimit, skill, t]);
+  }, [reportGithubRateLimit, retryVersion, skill, t]);
 
   useEffect(() => {
     if (!selectedPath) {
@@ -262,6 +263,14 @@ export function MarketplaceSkillDetailPreview({ skill }: MarketplaceSkillDetailP
     }));
   }
 
+  function handleRateLimitAction() {
+    if (isGithubConnected) {
+      setRetryVersion((current) => current + 1);
+      return;
+    }
+    requestOpenGithubSettings();
+  }
+
   return (
     <div className="skill-file-dialog__body">
       <SkillFileTreeSidebar
@@ -280,15 +289,31 @@ export function MarketplaceSkillDetailPreview({ skill }: MarketplaceSkillDetailP
         ) : treeErrorMessage ? (
           <article className="marketplace-skill-file-dialog__state">
             <h4>{t("install.market.detail.intro")}</h4>
-            <p className="dialog-warning">{treeErrorMessage}</p>
+            <p className={isTreeRateLimited ? "dialog-warning" : undefined}>
+              {isTreeRateLimited
+                ? t(
+                    isGithubConnected
+                      ? "install.market.detail.rateLimitedLoggedIn"
+                      : "install.market.detail.rateLimitedLoggedOut",
+                  )
+                : treeErrorMessage}
+            </p>
+            {isTreeRateLimited ? (
+              <button
+                className="marketplace-skill-file-dialog__state-action"
+                type="button"
+                onClick={handleRateLimitAction}
+              >
+                {t(
+                  isGithubConnected
+                    ? "install.market.detail.retry"
+                    : "install.market.detail.loginGithub",
+                )}
+              </button>
+            ) : null}
           </article>
         ) : (
           <>
-            {previewMode === "basic" ? (
-              <p className="marketplace-skill-file-dialog__basic-notice">
-                {t("install.market.detail.basicPreview")}
-              </p>
-            ) : null}
             <SkillFileContentSurface
               selectedPath={selectedPath}
               content={content}

@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useEffect,
   useLayoutEffect,
   useRef,
@@ -21,6 +22,7 @@ import { SettingsRoute } from "@/app/routes/settings";
 import { AboutRoute } from "@/app/routes/about";
 import { PluginsRoute } from "@/app/routes/plugins";
 import { AppI18nProvider, tx, useTranslate } from "@/app/i18n";
+import { subscribeOpenGithubSettings } from "@/app/github-settings-navigation";
 import { NotificationProvider, useNotifications } from "@/app/notifications";
 import { useFailureReporter } from "@/app/failure-feedback";
 import { FailureTracker } from "@/app/failure-tracker";
@@ -611,6 +613,20 @@ function AppContent() {
   const compatibilityPromptCheckStartedRef = useRef(false);
   const lastGithubRateLimitPromptAtRef = useRef(0);
 
+  const openGithubSettings = useCallback(() => {
+    setActiveRoute("settings");
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        document.getElementById("settings-github-api")?.scrollIntoView?.({
+          behavior: "smooth",
+          block: "center",
+        });
+      });
+    });
+  }, []);
+
+  useEffect(() => subscribeOpenGithubSettings(openGithubSettings), [openGithubSettings]);
+
   useEffect(() => {
     if (activeRoute !== "skills" || activeSkillsSection !== "skills") {
       setIsSkillBatchSelecting(false);
@@ -681,19 +697,15 @@ function AppContent() {
       message: t("notifications.githubRateLimited"),
       tone: "info",
       actionLabel: t("notifications.configureGithubToken"),
-      onAction: () => {
-        setActiveRoute("settings");
-        window.requestAnimationFrame(() => {
-          window.requestAnimationFrame(() => {
-            document.getElementById("settings-github-api")?.scrollIntoView?.({
-              behavior: "smooth",
-              block: "center",
-            });
-          });
-        });
-      },
+      onAction: openGithubSettings,
     });
-  }, [githubConnection.connected, githubRateLimitNoticeVersion, notify, t]);
+  }, [
+    githubConnection.connected,
+    githubRateLimitNoticeVersion,
+    notify,
+    openGithubSettings,
+    t,
+  ]);
 
   const hasShownSkillUpdateNotificationRef = useRef(false);
   const activeDefinition =

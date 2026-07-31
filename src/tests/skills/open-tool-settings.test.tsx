@@ -1,8 +1,9 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { vi } from "vitest";
 import { App } from "@/app/App";
+import { requestOpenGithubSettings } from "@/app/github-settings-navigation";
 import { alignExpandedRowIntoView } from "@/app/utils/align-expanded-row";
 import * as appUpdateClient from "@/features/app-update/app-update-client";
 import {
@@ -90,6 +91,19 @@ test("opens GitHub account settings after a rate-limited Agent CLI refresh", asy
     "settings-github-connect__login",
   );
   expect(screen.queryByRole("button", { name: "使用 Personal Access Token" })).not.toBeInTheDocument();
+});
+
+test("opens GitHub account settings when the marketplace requests login", async () => {
+  Object.defineProperty(Element.prototype, "scrollIntoView", {
+    configurable: true,
+    value: vi.fn(),
+  });
+
+  render(<App />);
+  act(() => requestOpenGithubSettings());
+
+  expect(await screen.findByRole("heading", { name: "账号与备份" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "登录 GitHub" })).toBeInTheDocument();
 });
 
 test("automatically copies the GitHub device code and keeps manual copy available", async () => {

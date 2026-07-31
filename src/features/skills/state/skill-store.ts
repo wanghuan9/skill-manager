@@ -233,7 +233,7 @@ export type SkillFileBrowserSnapshot = {
   rootName: string;
   entries: SkillFileEntry[];
   initialFilePath: string | null;
-  previewMode: "full" | "basic";
+  previewMode: "full";
 };
 
 export type SkillFileDocument = {

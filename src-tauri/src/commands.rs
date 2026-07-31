@@ -174,10 +174,7 @@ const MARKETPLACE_SKILL_ROOT_CACHE_LIMIT: usize = 64;
 const MARKETPLACE_GITHUB_TREE_CACHE_TTL: Duration = Duration::from_secs(10 * 60);
 const MARKETPLACE_GITHUB_TREE_CACHE_LIMIT: usize = 64;
 const MARKETPLACE_PREVIEW_MODE_FULL: &str = "full";
-const MARKETPLACE_PREVIEW_MODE_BASIC: &str = "basic";
 const GITHUB_RATE_LIMIT_ERROR: &str = "GitHub API 请求受限，请稍后重试";
-const GITHUB_BASIC_PREVIEW_FILE_NAMES: [&str; 4] =
-    ["SKILL.md", "README.md", "skill.md", "readme.md"];
 static SKILLS_SH_DESCRIPTION_CACHE: OnceLock<HashMap<String, String>> = OnceLock::new();
 static SKILLS_SH_LIVE_DESCRIPTION_CACHE: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
 static SKILLS_SH_HOMEPAGE_CACHE: OnceLock<Mutex<Option<Vec<SkillsShSkill>>>> = OnceLock::new();
@@ -981,56 +978,6 @@ fn build_marketplace_skill_browser_snapshot(
         initial_file_path,
         preview_mode: preview_mode.to_string(),
     })
-}
-
-async fn fetch_marketplace_basic_preview(
-    client: &Client,
-    source: &GitHubMarketplaceSource,
-    skill_path: &str,
-    skill_name: &str,
-    original_rate_limit_error: String,
-) -> Result<SkillFileBrowserSnapshot, String> {
-    let cache_key = marketplace_skill_root_cache_key(source, skill_path);
-    let mut root_paths = marketplace_skill_path_candidates(skill_path)?;
-    if let Some(cached_root) = cached_marketplace_skill_root(&cache_key) {
-        if !root_paths.contains(&cached_root) {
-            root_paths.insert(0, cached_root);
-        }
-    }
-
-    for root_path in root_paths {
-        let mut entries = vec![SkillFileEntry {
-            path: String::new(),
-            name: skill_name.to_string(),
-            entry_type: "directory".into(),
-            depth: 0,
-        }];
-        for file_name in GITHUB_BASIC_PREVIEW_FILE_NAMES {
-            if fetch_marketplace_skill_file_document(client, source, &root_path, file_name)
-                .await
-                .is_ok()
-            {
-                entries.push(SkillFileEntry {
-                    path: file_name.to_string(),
-                    name: file_name.to_string(),
-                    entry_type: "file".into(),
-                    depth: 1,
-                });
-            }
-        }
-        if entries.len() <= 1 {
-            continue;
-        }
-
-        cache_marketplace_skill_root(cache_key, root_path);
-        return build_marketplace_skill_browser_snapshot(
-            skill_name.to_string(),
-            entries,
-            MARKETPLACE_PREVIEW_MODE_BASIC,
-        );
-    }
-
-    Err(original_rate_limit_error)
 }
 
 fn skills_sh_marketplace_id(source: &str, skill_id: &str) -> String {
@@ -6424,16 +6371,7 @@ pub async fn get_marketplace_skill_file_browser(
                 MARKETPLACE_PREVIEW_MODE_FULL,
             );
         }
-        Err(MarketplaceGitHubApiError::RateLimited(error)) => {
-            return fetch_marketplace_basic_preview(
-                &client,
-                &source,
-                &skill_path,
-                &skill_name,
-                error,
-            )
-            .await;
-        }
+        Err(MarketplaceGitHubApiError::RateLimited(error)) => return Err(error),
         Err(MarketplaceGitHubApiError::Other(error)) => error,
     };
 
@@ -6463,16 +6401,7 @@ pub async fn get_marketplace_skill_file_browser(
                 );
             }
             Ok(_) => {}
-            Err(MarketplaceGitHubApiError::RateLimited(error)) => {
-                return fetch_marketplace_basic_preview(
-                    &client,
-                    &source,
-                    &skill_path,
-                    &skill_name,
-                    error,
-                )
-                .await;
-            }
+            Err(MarketplaceGitHubApiError::RateLimited(error)) => return Err(error),
             Err(MarketplaceGitHubApiError::Other(error)) => last_error = error,
         }
     }
@@ -6493,16 +6422,7 @@ pub async fn get_marketplace_skill_file_browser(
     .await
     {
         Ok(entries) => entries,
-        Err(MarketplaceGitHubApiError::RateLimited(error)) => {
-            return fetch_marketplace_basic_preview(
-                &client,
-                &source,
-                &skill_path,
-                &skill_name,
-                error,
-            )
-            .await;
-        }
+        Err(MarketplaceGitHubApiError::RateLimited(error)) => return Err(error),
         Err(MarketplaceGitHubApiError::Other(error)) => return Err(error),
     };
     cache_marketplace_skill_root(cache_key, discovered_root);
