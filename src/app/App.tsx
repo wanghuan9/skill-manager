@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useEffect,
   useLayoutEffect,
   useRef,
@@ -21,6 +22,7 @@ import { SettingsRoute } from "@/app/routes/settings";
 import { AboutRoute } from "@/app/routes/about";
 import { PluginsRoute } from "@/app/routes/plugins";
 import { AppI18nProvider, tx, useTranslate } from "@/app/i18n";
+import { subscribeOpenGithubSettings } from "@/app/github-settings-navigation";
 import { NotificationProvider, useNotifications } from "@/app/notifications";
 import { useFailureReporter } from "@/app/failure-feedback";
 import { FailureTracker } from "@/app/failure-tracker";
@@ -80,6 +82,7 @@ type RouteErrorBoundaryState = {
 };
 
 const ROUTE_LOCAL_ALIGN_COOLDOWN_MS = 10_000;
+const GITHUB_RATE_LIMIT_NOTICE_COOLDOWN_MS = 10_000;
 const AGENT_SKILLS_COMPATIBILITY_PROMPT_COUNT_KEY = "skilldock.agentSkillsCompatibilityPromptCount";
 const AGENT_SKILLS_COMPATIBILITY_PROMPT_MAX_COUNT = 5;
 
@@ -212,7 +215,6 @@ function NavRouteIcon(props: { route: RouteKey }) {
       </svg>
     );
   }
-
   if (route === "plugins") {
     return (
       <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -554,6 +556,8 @@ function AppContent() {
   const {
     alignLocalWorkspaceState,
     appSettings,
+    githubConnection,
+    githubRateLimitNoticeVersion,
     installedSkills,
     isStartupGitStateRefreshComplete,
     didStartupGitStateRefreshSucceed,
@@ -607,6 +611,21 @@ function AppContent() {
   const routeLocalAlignInFlightRef = useRef(false);
   const lastRouteLocalAlignRef = useRef<{ key: string; timestamp: number } | null>(null);
   const compatibilityPromptCheckStartedRef = useRef(false);
+  const lastGithubRateLimitPromptAtRef = useRef(0);
+
+  const openGithubSettings = useCallback(() => {
+    setActiveRoute("settings");
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        document.getElementById("settings-github-api")?.scrollIntoView?.({
+          behavior: "smooth",
+          block: "center",
+        });
+      });
+    });
+  }, []);
+
+  useEffect(() => subscribeOpenGithubSettings(openGithubSettings), [openGithubSettings]);
 
   useEffect(() => {
     if (activeRoute !== "skills" || activeSkillsSection !== "skills") {
@@ -658,6 +677,33 @@ function AppContent() {
     appSettings.storagePath,
     notify,
     setSkillLibraryProvider,
+    t,
+  ]);
+
+  useEffect(() => {
+    if (
+      githubRateLimitNoticeVersion === 0
+      || githubConnection.connected
+    ) {
+      return;
+    }
+
+    const now = Date.now();
+    if (now - lastGithubRateLimitPromptAtRef.current < GITHUB_RATE_LIMIT_NOTICE_COOLDOWN_MS) {
+      return;
+    }
+    lastGithubRateLimitPromptAtRef.current = now;
+    notify({
+      message: t("notifications.githubRateLimited"),
+      tone: "info",
+      actionLabel: t("notifications.configureGithubToken"),
+      onAction: openGithubSettings,
+    });
+  }, [
+    githubConnection.connected,
+    githubRateLimitNoticeVersion,
+    notify,
+    openGithubSettings,
     t,
   ]);
 

@@ -171,6 +171,7 @@ export type SkillSummary = {
   lifecycleSource?: PluginLifecycleSource;
   ownerPluginId?: string;
   ownerPluginName?: string;
+  backupId?: string;
   entryPath?: string;
   canonicalPath?: string;
   managementOwner?: SkillManagementOwner;
@@ -233,6 +234,7 @@ export type SkillFileBrowserSnapshot = {
   rootName: string;
   entries: SkillFileEntry[];
   initialFilePath: string | null;
+  previewMode: "full";
 };
 
 export type SkillFileDocument = {
@@ -370,6 +372,95 @@ export type AppSettings = {
   language: AppLanguage;
   languageSource: AppLanguageSource;
   theme: AppTheme;
+};
+
+export type GithubConnection = {
+  connected: boolean;
+  authMethod: string;
+  userId: number | null;
+  username: string;
+  avatarUrl: string;
+  credentialPersisted: boolean;
+  warning: string;
+};
+
+export type GithubDeviceFlowStart = {
+  deviceCode: string;
+  userCode: string;
+  verificationUri: string;
+  expiresIn: number;
+  interval: number;
+};
+
+export type GithubDevicePollResult = {
+  status: "pending" | "slowDown" | "authorized";
+  connection: GithubConnection | null;
+};
+
+export type BackupStatus = {
+  enabled: boolean;
+  repositoryOwner: string;
+  repositoryName: string;
+  repositoryUrl: string;
+  lastSyncAt: string;
+  lastOperation: "" | "backup" | "restore";
+  lastError: string;
+  phase: "disabled" | "enabling" | "backingUp" | "restoring" | "enabled" | "error";
+  syncing: boolean;
+  pendingConflicts: number;
+  progressStage: string;
+  progressPercent: number;
+};
+
+export type BackupSyncResult = {
+  status: BackupStatus;
+  includedSkills: number;
+  includedMcpServers: number;
+  includedPlugins: number;
+  preferencesIncluded: boolean;
+  excludedSkills: string[];
+  warnings: string[];
+  changed: boolean;
+};
+
+export type CloudBackupNode = {
+  commitId: string;
+  createdAt: string;
+  deviceLabel: string;
+  skillCount: number;
+  mcpCount: number;
+  pluginCount: number;
+};
+
+export type WorkspaceRestorePreview = {
+  added: number;
+  overwritten: number;
+  deleted: number;
+};
+
+export type BackupSkillMetadata = {
+  schemaVersion: number;
+  backupId: string;
+  name: string;
+  directoryName: string;
+  sourceType: string;
+  sourceUrl: string;
+  branch: string;
+  updateDriver: string;
+  description: string;
+  tools: Record<string, boolean>;
+  contentHash: string;
+};
+
+export type BackupConflict = {
+  conflictId: string;
+  backupId: string;
+  skillName: string;
+  createdAt: string;
+  localCommit: string;
+  remoteCommit: string;
+  local: BackupSkillMetadata | null;
+  remote: BackupSkillMetadata | null;
 };
 
 export type AgentSkillsCliStatus = {

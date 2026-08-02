@@ -33,13 +33,16 @@ beforeEach(() => {
   mockedFetchMarketplaceSkillDetail.mockImplementation(async (skill) => skill);
   mockedUseSkillWorkspace.mockReturnValue({
     language: "zh-CN",
+    githubConnection: { connected: false },
     installingMarketplaceSkillIds: new Set(),
     installFromMarket: vi.fn(),
+    reportGithubRateLimit: vi.fn(),
   } as unknown as ReturnType<typeof useSkillWorkspace>);
   mockedFetchMarketplaceSkillFileBrowser.mockResolvedValue({
     skillName: marketplaceSkillFixtures[0].name,
     rootName: marketplaceSkillFixtures[0].name,
     initialFilePath: "SKILL.md",
+    previewMode: "full",
     entries: [
       { path: "", name: marketplaceSkillFixtures[0].name, entryType: "directory", depth: 0 },
       { path: "reference", name: "reference", entryType: "directory", depth: 1 },
@@ -290,6 +293,7 @@ test("installs a marketplace skill from the detail modal", async () => {
   const installFromMarket = vi.fn().mockResolvedValue(undefined);
   mockedUseSkillWorkspace.mockReturnValue({
     language: "zh-CN",
+    githubConnection: { connected: false },
     installingMarketplaceSkillIds: new Set(),
     installFromMarket,
   } as unknown as ReturnType<typeof useSkillWorkspace>);
@@ -388,8 +392,23 @@ test("loads SkillHub files with the marketplace slug and version", async () => {
   expect(within(detailDialog).queryByText("打开仓库")).not.toBeInTheDocument();
 });
 
-test("shows a compact error state when the remote tree is unavailable", async () => {
-  const skill = marketplaceSkillFixtures[1];
+test("prompts signed-out users to connect GitHub when the file tree is rate limited", async () => {
+  const reportGithubRateLimit = vi.fn();
+  const openGithubSettings = vi.fn();
+  window.addEventListener("skilldock:open-github-settings", openGithubSettings);
+  mockedUseSkillWorkspace.mockReturnValue({
+    language: "zh-CN",
+    githubConnection: { connected: false },
+    installingMarketplaceSkillIds: new Set(),
+    installFromMarket: vi.fn(),
+    reportGithubRateLimit,
+  } as unknown as ReturnType<typeof useSkillWorkspace>);
+  const skill = {
+    ...marketplaceSkillFixtures[0],
+    id: "rate-limited-signed-out",
+    name: "rate-limited-signed-out",
+    sourceUrl: "https://github.com/example/rate-limited-signed-out",
+  };
   mockedFetchMarketplaceSkillFileBrowser.mockRejectedValue("GitHub API 请求受限，请稍后重试");
 
   renderWithI18n(
@@ -417,7 +436,158 @@ test("shows a compact error state when the remote tree is unavailable", async ()
   await userEvent.click(screen.getByRole("heading", { name: skill.name, level: 3 }));
   const detailDialog = screen.getByRole("dialog", { name: `${skill.name} 详情` });
 
+  expect(
+    await within(detailDialog).findByText("GitHub API 请求受限，登录 GitHub 可提高请求额度"),
+  ).toBeInTheDocument();
+  expect(within(detailDialog).queryByText(/仅展示/)).not.toBeInTheDocument();
+  await userEvent.click(within(detailDialog).getByRole("button", { name: "登录 GitHub" }));
+
+  expect(openGithubSettings).toHaveBeenCalledTimes(1);
+  expect(reportGithubRateLimit).toHaveBeenCalledTimes(1);
+  window.removeEventListener("skilldock:open-github-settings", openGithubSettings);
+});
+
+test("lets connected users retry the complete file tree after a rate limit", async () => {
+  const reportGithubRateLimit = vi.fn();
+  mockedUseSkillWorkspace.mockReturnValue({
+    language: "zh-CN",
+    githubConnection: { connected: true },
+    installingMarketplaceSkillIds: new Set(),
+    installFromMarket: vi.fn(),
+    reportGithubRateLimit,
+  } as unknown as ReturnType<typeof useSkillWorkspace>);
+  const skill = {
+    ...marketplaceSkillFixtures[0],
+    id: "rate-limited-connected",
+    name: "rate-limited-connected",
+    sourceUrl: "https://github.com/example/rate-limited-connected",
+  };
+  mockedFetchMarketplaceSkillFileBrowser
+    .mockRejectedValueOnce("GitHub API 请求受限，请稍后重试")
+    .mockResolvedValueOnce({
+      skillName: skill.name,
+      rootName: skill.name,
+      initialFilePath: "SKILL.md",
+      previewMode: "full",
+      entries: [
+        { path: "", name: skill.name, entryType: "directory", depth: 0 },
+        { path: "SKILL.md", name: "SKILL.md", entryType: "file", depth: 1 },
+      ],
+    });
+
+  renderWithI18n(
+    <NotificationProvider>
+      <MarketplaceInstallPanel
+        activeSourceSite="skills.sh"
+        sourceTabs={["skills.sh", "clawhub"]}
+        marketplaceSkills={[skill]}
+        onSourceChange={vi.fn()}
+        searchQuery=""
+        onSearchQueryChange={vi.fn()}
+        searchScope="all"
+        onSearchScopeChange={vi.fn()}
+        isSearching={false}
+        isSearchLoading={false}
+        isInitialLoading={false}
+        isLoadingMore={false}
+        hasMore={false}
+        installedMarketplaceSkillIds={new Set()}
+        onLoadMore={vi.fn()}
+      />
+    </NotificationProvider>,
+  );
+
+  await userEvent.click(screen.getByRole("heading", { name: skill.name, level: 3 }));
+  const detailDialog = screen.getByRole("dialog", { name: `${skill.name} 详情` });
+
+  expect(
+    await within(detailDialog).findByText("GitHub API 配额已用尽，请稍后重试"),
+  ).toBeInTheDocument();
+  await userEvent.click(within(detailDialog).getByRole("button", { name: "重新加载" }));
+
+  expect(mockedFetchMarketplaceSkillFileBrowser).toHaveBeenCalledTimes(2);
+  expect(await within(detailDialog).findByText("默认说明")).toBeInTheDocument();
+  expect(reportGithubRateLimit).toHaveBeenCalledTimes(1);
+});
+
+test("reports a GitHub rate limit when marketplace file content fails", async () => {
+  const skill = {
+    ...marketplaceSkillFixtures[0],
+    id: "rate-limited-content",
+    name: "rate-limited-content",
+    sourceUrl: "https://github.com/example/rate-limited-content",
+  };
+  const reportGithubRateLimit = vi.fn();
+  mockedUseSkillWorkspace.mockReturnValue({
+    language: "zh-CN",
+    githubConnection: { connected: false },
+    installingMarketplaceSkillIds: new Set(),
+    installFromMarket: vi.fn(),
+    reportGithubRateLimit,
+  } as unknown as ReturnType<typeof useSkillWorkspace>);
+  mockedFetchMarketplaceSkillFileContent.mockRejectedValue("GitHub API request limit reached");
+
+  renderWithI18n(
+    <NotificationProvider>
+      <MarketplaceInstallPanel
+        activeSourceSite="skills.sh"
+        sourceTabs={["skills.sh", "clawhub"]}
+        marketplaceSkills={[skill]}
+        onSourceChange={vi.fn()}
+        searchQuery=""
+        onSearchQueryChange={vi.fn()}
+        searchScope="all"
+        onSearchScopeChange={vi.fn()}
+        isSearching={false}
+        isSearchLoading={false}
+        isInitialLoading={false}
+        isLoadingMore={false}
+        hasMore={false}
+        installedMarketplaceSkillIds={new Set()}
+        onLoadMore={vi.fn()}
+      />
+    </NotificationProvider>,
+  );
+
+  await userEvent.click(screen.getByRole("heading", { name: skill.name, level: 3 }));
+  const detailDialog = screen.getByRole("dialog", { name: `${skill.name} 详情` });
+
+  expect(await within(detailDialog).findByText("GitHub API request limit reached")).toBeInTheDocument();
+  expect(reportGithubRateLimit).toHaveBeenCalledTimes(1);
+});
+
+test("shows a compact error state when the remote tree is unavailable", async () => {
+  const skill = marketplaceSkillFixtures[1];
+  mockedFetchMarketplaceSkillFileBrowser.mockRejectedValue("读取 GitHub 文件树失败: HTTP 404 Not Found");
+
+  renderWithI18n(
+    <NotificationProvider>
+      <MarketplaceInstallPanel
+        activeSourceSite="skills.sh"
+        sourceTabs={["skills.sh", "clawhub"]}
+        marketplaceSkills={[skill]}
+        onSourceChange={vi.fn()}
+        searchQuery=""
+        onSearchQueryChange={vi.fn()}
+        searchScope="all"
+        onSearchScopeChange={vi.fn()}
+        isSearching={false}
+        isSearchLoading={false}
+        isInitialLoading={false}
+        isLoadingMore={false}
+        hasMore={false}
+        installedMarketplaceSkillIds={new Set()}
+        onLoadMore={vi.fn()}
+      />
+    </NotificationProvider>,
+  );
+
+  await userEvent.click(screen.getByRole("heading", { name: skill.name, level: 3 }));
+  const detailDialog = screen.getByRole("dialog", { name: `${skill.name} 详情` });
+
   expect(await within(detailDialog).findByRole("heading", { name: "Skill 介绍" })).toBeInTheDocument();
-  expect(within(detailDialog).getByText("GitHub API 请求受限，请稍后重试")).toBeInTheDocument();
+  expect(
+    within(detailDialog).getByText("读取 GitHub 文件树失败: HTTP 404 Not Found"),
+  ).toBeInTheDocument();
   expect(within(detailDialog).queryByText("暂时无法读取 Skill 文件。")).not.toBeInTheDocument();
 });

@@ -46,6 +46,11 @@ function ActiveSkillMarker({ skillName }: { skillName: string }) {
   return null;
 }
 
+function GithubRateLimitProbe() {
+  const { githubRateLimitNoticeVersion } = useSkillWorkspace();
+  return <span data-testid="github-rate-limit-version">{githubRateLimitNoticeVersion}</span>;
+}
+
 function renderSkillFileDialog(
   skillName = "drawio-diagram",
   initialMode: "changes" | "files" | "updates" = "files",
@@ -68,6 +73,7 @@ function renderSkillFileDialogForSkill(
     <SkillWorkspaceProvider>
       <AppI18nProvider>
         <NotificationProvider>
+          <GithubRateLimitProbe />
           <SkillFileDialog skill={skill} isOpen initialMode={initialMode} onClose={onClose} />
         </NotificationProvider>
       </AppI18nProvider>
@@ -106,6 +112,7 @@ beforeEach(() => {
           skillName: "drawio-diagram",
           rootName: "drawio-diagram",
           initialFilePath: "SKILL.md",
+          previewMode: "full",
           entries: [
             { path: "", name: "drawio-diagram", entryType: "directory", depth: 0 },
             { path: "reference", name: "reference", entryType: "directory", depth: 1 },
@@ -447,6 +454,26 @@ test("loads update contents on demand and keeps the remote diff read-only", asyn
   expect(screen.queryByRole("button", { name: "回退此变更块" })).not.toBeInTheDocument();
 });
 
+test("reports GitHub rate limits while loading the update diff preview", async () => {
+  const defaultInvoke = mockedInvoke.getMockImplementation();
+  if (!defaultInvoke) {
+    throw new Error("missing default invoke mock");
+  }
+  mockedInvoke.mockImplementation((command, args) => {
+    if (command === "get_update_preview_snapshot") {
+      return Promise.reject("GitHub API request limit reached");
+    }
+    return defaultInvoke(command, args);
+  });
+
+  renderSkillFileDialog("excalidraw-diagram", "updates");
+
+  expect(await screen.findByText("GitHub API request limit reached")).toBeInTheDocument();
+  await waitFor(() => {
+    expect(screen.getByTestId("github-rate-limit-version")).toHaveTextContent("1");
+  });
+});
+
 test("cancels a requested local change revert without calling the backend", async () => {
   renderSkillFileDialog();
 
@@ -682,6 +709,7 @@ test("finishes saving immediately and refreshes only the edited skill in backgro
           rootName: skill.name,
           entries: [{ path: "SKILL.md", name: "SKILL.md", entryType: "file", depth: 0 }],
           initialFilePath: "SKILL.md",
+          previewMode: "full",
         };
       case "get_skill_file_content":
         return {

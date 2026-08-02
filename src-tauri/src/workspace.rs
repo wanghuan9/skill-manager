@@ -1,3 +1,5 @@
+#[cfg(test)]
+use std::cell::RefCell;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -20,6 +22,11 @@ const CONFLICT_SUFFIX: &str = ".migrated-from-skillm";
 #[cfg(test)]
 pub static TEST_ENV_LOCK: Mutex<()> = Mutex::new(());
 
+#[cfg(test)]
+thread_local! {
+    static TEST_HOME_OVERRIDE: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
+}
+
 pub fn home_dir() -> Result<PathBuf, String> {
     home_dir_option().ok_or_else(|| "无法读取用户主目录（HOME/USERPROFILE）".to_string())
 }
@@ -29,10 +36,31 @@ pub fn home_dir_option() -> Option<PathBuf> {
 }
 
 pub fn home_dir_from_env() -> Option<PathBuf> {
+    #[cfg(test)]
+    if let Some(path) = TEST_HOME_OVERRIDE.with(|value| value.borrow().clone()) {
+        return Some(path);
+    }
     env::var_os("HOME")
         .filter(|value| !value.is_empty())
         .or_else(|| env::var_os("USERPROFILE").filter(|value| !value.is_empty()))
         .map(PathBuf::from)
+}
+
+#[cfg(test)]
+pub fn with_test_home<T>(path: &Path, run: impl FnOnce() -> T) -> T {
+    struct OverrideGuard(Option<PathBuf>);
+
+    impl Drop for OverrideGuard {
+        fn drop(&mut self) {
+            TEST_HOME_OVERRIDE.with(|value| {
+                value.replace(self.0.take());
+            });
+        }
+    }
+
+    let previous = TEST_HOME_OVERRIDE.with(|value| value.replace(Some(path.to_path_buf())));
+    let _guard = OverrideGuard(previous);
+    run()
 }
 
 #[allow(dead_code)]

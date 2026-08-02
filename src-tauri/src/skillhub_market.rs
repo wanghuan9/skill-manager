@@ -432,6 +432,7 @@ fn install_skill_package(
         owner_plugin_id: String::new(),
         owner_plugin_name: String::new(),
         instance: SkillInstanceMetadata {
+            backup_id: String::new(),
             entry_path: local_path.clone(),
             canonical_path: local_path.clone(),
             management_owner: "skilldock".into(),

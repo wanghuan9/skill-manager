@@ -3,6 +3,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useTranslate } from "@/app/i18n";
 import { useFailureReporter } from "@/app/failure-feedback";
+import { isGithubRateLimitError, normalizeErrorMessage } from "@/app/errors";
 import { waitForNextPaint } from "@/app/utils/wait-for-next-paint";
 import { HighlightedCode, SkillCodePreview } from "@/features/skills/components/SkillCodePreview";
 import { SkillFileTreeIcon, TreeChevronIcon } from "@/features/skills/components/SkillFileTreeIcons";
@@ -643,6 +644,7 @@ export function SkillFileDialog({
     loadToolSkillFileBrowser,
     loadToolSkillFileContent,
     markSkillAsActive,
+    reportGithubRateLimit,
     refreshSkillLocalGitState,
     revertSkillChange,
     saveSkillFileContent,
@@ -902,7 +904,10 @@ export function SkillFileDialog({
         setHasLoadedUpdates(true);
       } catch (error) {
         if (active) {
-          setErrorMessage(error instanceof Error ? error.message : t("skill.updates.error.load"));
+          if (isGithubRateLimitError(error)) {
+            reportGithubRateLimit();
+          }
+          setErrorMessage(normalizeErrorMessage(error, t("skill.updates.error.load")));
           setUpdateFiles([]);
         }
       } finally {
@@ -922,6 +927,7 @@ export function SkillFileDialog({
     isOpen,
     loadSkillUpdatePreview,
     panelMode,
+    reportGithubRateLimit,
     skillPath,
     skill.name,
     t,

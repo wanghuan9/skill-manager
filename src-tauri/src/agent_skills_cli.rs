@@ -19,6 +19,10 @@ use crate::{
 
 const CLI_COMMAND: &str = "skills";
 const NPX_COMMAND: &str = "npx";
+const GITHUB_TOKEN_ENV: &str = "GITHUB_TOKEN";
+const GITHUB_RATE_LIMIT_OUTPUT: &str = "github api request limit reached";
+const FAILED_FETCH_TREE_OUTPUT: &str = "failed to fetch tree";
+const FAILED_CHECK_SKILLS_OUTPUT: &str = "failed to check skills";
 const WELL_KNOWN_SOURCE_TYPE: &str = "well-known";
 const UPDATE_PREVIEW_CACHE_DIR: &str = "agent-cli-update-preview";
 const UPDATE_PREVIEW_CACHE_PREFIX: &str = "preview-";
@@ -51,6 +55,7 @@ pub struct GlobalSkillLock {
 pub struct AgentSkillUpdateCheck {
     pub checked_names: BTreeSet<String>,
     pub updated_names: BTreeSet<String>,
+    pub github_rate_limited: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -195,6 +200,7 @@ pub fn cleanup_update_preview_cache() {
 pub fn preview_global_skill_update(
     skill_name: &str,
     skill_path: &Path,
+    github_token: &str,
 ) -> Result<UpdatePreviewSnapshot, String> {
     validate_skill_name(skill_name)?;
     let lock_contents = read_global_skill_lock_contents()?;
@@ -225,7 +231,7 @@ pub fn preview_global_skill_update(
         &lock_contents,
         &before_root,
     )?;
-    run_preview_update(&preview_home, skill_name, lock_entry)?;
+    run_preview_update(&preview_home, skill_name, lock_entry, github_token)?;
     let updated_skill_path = preview_home.join(".agents/skills").join(skill_name);
     let after_skill_path = updated_skill_path
         .canonicalize()
@@ -519,6 +525,7 @@ fn run_preview_update(
     preview_home: &Path,
     skill_name: &str,
     lock_entry: &GlobalSkillLockEntry,
+    github_token: &str,
 ) -> Result<(), String> {
     let program = find_cli_program_for_operation()
         .ok_or_else(|| "未检测到 skills 命令，无法预览 Agent CLI Skill 更新。".to_string())?;
@@ -541,12 +548,8 @@ fn run_preview_update(
         ]
     };
     let arg_refs = args.iter().map(String::as_str).collect::<Vec<_>>();
-    let output = run_with_program_in_home(&program, &arg_refs, preview_home)?;
-    if output.status.success() {
-        Ok(())
-    } else {
-        Err(command_error(&output))
-    }
+    let output = run_with_program_in_home(&program, &arg_refs, preview_home, github_token)?;
+    validate_update_command_output(&output)
 }
 
 fn collect_preview_files(root: &Path) -> Result<PreviewFiles, String> {
@@ -750,6 +753,7 @@ fn normalize_preview_diff(
 
 pub fn detect_global_updates(
     skill_paths: &BTreeMap<String, PathBuf>,
+    github_token: &str,
 ) -> Result<AgentSkillUpdateCheck, String> {
     if skill_paths.is_empty() {
         return Ok(AgentSkillUpdateCheck::default());
@@ -758,10 +762,15 @@ pub fn detect_global_updates(
     let lock_contents = fs::read_to_string(&lock_path)
         .map_err(|error| format!("读取 Agent Skills CLI 锁文件失败: {error}"))?;
     let lock = parse_global_skill_lock(&lock_contents)?;
-    let mut check = detect_cli_managed_updates(&lock_contents, &lock).unwrap_or_else(|error| {
-        log::warn!("Agent Skills CLI update check failed: {error}");
-        AgentSkillUpdateCheck::default()
-    });
+    let mut check =
+        detect_cli_managed_updates(&lock_contents, &lock, github_token).unwrap_or_else(|error| {
+            let github_rate_limited = is_github_rate_limit_error(&error);
+            log::warn!("Agent Skills CLI update check failed: {error}");
+            AgentSkillUpdateCheck {
+                github_rate_limited,
+                ..AgentSkillUpdateCheck::default()
+            }
+        });
     check
         .checked_names
         .retain(|name| skill_paths.contains_key(name));
@@ -774,6 +783,7 @@ pub fn detect_global_updates(
 fn detect_cli_managed_updates(
     lock_contents: &str,
     original_lock: &GlobalSkillLock,
+    github_token: &str,
 ) -> Result<AgentSkillUpdateCheck, String> {
     let checked_names = original_lock
         .skills
@@ -792,13 +802,14 @@ fn detect_cli_managed_updates(
         return Ok(AgentSkillUpdateCheck::default());
     }
     let temp_home = create_update_check_home(lock_contents)?;
-    let result = run_update_check_in_home(&temp_home).and_then(|_| {
+    let result = run_update_check_in_home(&temp_home, github_token).and_then(|_| {
         let refreshed_contents = fs::read_to_string(temp_home.join(".agents/.skill-lock.json"))
             .map_err(|error| format!("读取临时 Agent Skills CLI 锁文件失败: {error}"))?;
         let refreshed_lock = parse_global_skill_lock(&refreshed_contents)?;
         Ok(AgentSkillUpdateCheck {
             checked_names,
             updated_names: changed_global_skill_names(original_lock, &refreshed_lock),
+            github_rate_limited: false,
         })
     });
     let _ = fs::remove_dir_all(&temp_home);
@@ -822,14 +833,43 @@ fn create_update_check_home(lock_contents: &str) -> Result<PathBuf, String> {
     Ok(temp_home)
 }
 
-fn run_update_check_in_home(temp_home: &Path) -> Result<(), String> {
+fn run_update_check_in_home(temp_home: &Path, github_token: &str) -> Result<(), String> {
     let program = find_cli_program_for_operation()
         .ok_or_else(|| "未检测到 skills 命令，无法检查 Agent CLI Skill 更新。".to_string())?;
-    let output = run_with_program_in_home(&program, &["update", "-g", "-y"], temp_home)?;
+    let output =
+        run_with_program_in_home(&program, &["update", "-g", "-y"], temp_home, github_token)?;
+    validate_update_command_output(&output)
+}
+
+fn validate_update_command_output(output: &Output) -> Result<(), String> {
+    let output_text = command_output_text(output);
+    if is_github_rate_limit_error(&output_text) {
+        return Err("GitHub API request limit reached".into());
+    }
+    if has_agent_cli_source_check_failure(&output_text) {
+        return Err("Agent Skills CLI 未能完成远程 Skill 检查".into());
+    }
     if output.status.success() {
         return Ok(());
     }
-    Err(command_error(&output))
+    Err(command_error(output))
+}
+
+fn command_output_text(output: &Output) -> String {
+    format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    )
+}
+
+fn is_github_rate_limit_error(message: &str) -> bool {
+    message.to_lowercase().contains(GITHUB_RATE_LIMIT_OUTPUT)
+}
+
+fn has_agent_cli_source_check_failure(message: &str) -> bool {
+    let normalized = message.to_lowercase();
+    normalized.contains(FAILED_FETCH_TREE_OUTPUT) || normalized.contains(FAILED_CHECK_SKILLS_OUTPUT)
 }
 
 pub fn global_status() -> AgentSkillsCliStatus {
@@ -993,10 +1033,15 @@ fn run_with_program_in_home(
     program: &CliProgram,
     args: &[&str],
     task_home: &Path,
+    github_token: &str,
 ) -> Result<Output, String> {
     let mut command = cli_command(&program.program)?;
     command.args(&program.prefix_args).args(args);
     command.env("HOME", task_home).env("USERPROFILE", task_home);
+    let github_token = github_token.trim();
+    if !github_token.is_empty() {
+        command.env(GITHUB_TOKEN_ENV, github_token);
+    }
     command
         .output()
         .map_err(|error| format!("执行 skills 命令失败: {error}"))
@@ -1069,9 +1114,10 @@ mod tests {
     use super::{
         changed_global_skill_names, confirms_global_agent_installation, detect_global_updates,
         global_status, is_global_skill_path, parse_global_skill_list_json, parse_global_skill_lock,
-        remove_global_skill, resolve_skill_entry_path, AgentSkillsCliStatus, CliSkillEntry,
+        remove_global_skill, resolve_skill_entry_path, AgentSkillUpdateCheck, AgentSkillsCliStatus,
+        CliSkillEntry,
     };
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, BTreeSet};
     use std::env;
     use std::fs;
     use std::io::{Read, Write};
@@ -1251,7 +1297,7 @@ exit 0
     #[test]
     fn skips_global_update_detection_without_agent_skills() {
         assert_eq!(
-            detect_global_updates(&BTreeMap::new()),
+            detect_global_updates(&BTreeMap::new(), ""),
             Ok(Default::default())
         );
     }
@@ -1316,7 +1362,8 @@ exit 0
             env::set_var("HOME", &temp_home);
         }
 
-        let check = detect_global_updates(&BTreeMap::from([("lark-okr".to_string(), skill_dir)]));
+        let check =
+            detect_global_updates(&BTreeMap::from([("lark-okr".to_string(), skill_dir)]), "");
 
         let _ = stop_tx.send(());
         server.join().expect("stop test server");
@@ -1328,6 +1375,99 @@ exit 0
 
         assert!(request_rx.try_recv().is_err());
         assert_eq!(check, Ok(Default::default()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn treats_rate_limited_update_output_as_failure_and_injects_token() {
+        let _guard = crate::workspace::TEST_ENV_LOCK.lock().expect("env lock");
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("read test time")
+            .as_nanos();
+        let temp_home = env::temp_dir().join(format!(
+            "skilldock-agent-rate-limit-test-{}-{timestamp}",
+            std::process::id()
+        ));
+        let fake_bin = temp_home.join("bin");
+        let skill_dir = temp_home.join(".agents/skills/demo");
+        let fake_skills = fake_bin.join("skills");
+        let token_file = temp_home.join("received-token");
+        fs::create_dir_all(&fake_bin).expect("create fake executable path");
+        fs::create_dir_all(&skill_dir).expect("create Agent CLI skill path");
+        fs::write(
+            temp_home.join(".agents/.skill-lock.json"),
+            r#"{"version":3,"skills":{"demo":{"sourceType":"github","sourceUrl":"https://github.com/example/demo","skillPath":"skills/demo/SKILL.md","skillFolderHash":"before"}}}"#,
+        )
+        .expect("write Agent CLI lock");
+        fs::write(
+            &fake_skills,
+            r#"#!/bin/sh
+if [ "$1" = "--version" ]; then
+  exit 0
+fi
+if [ "$1" = "update" ]; then
+  printf '%s' "$GITHUB_TOKEN" > "$SKILL_TEST_TOKEN_FILE"
+  printf '%s\n' 'GitHub API request limit reached'
+  printf '%s\n' 'Failed to fetch tree for Fission-AI/OpenSpec'
+  printf '%s\n' 'All global skills are up to date'
+  exit 0
+fi
+exit 1
+"#,
+        )
+        .expect("write fake skills executable");
+        fs::set_permissions(&fake_skills, fs::Permissions::from_mode(0o755))
+            .expect("make fake skills executable");
+
+        let original_home = env::var_os("HOME");
+        let original_path = env::var_os("PATH");
+        let original_token_file = env::var_os("SKILL_TEST_TOKEN_FILE");
+        let next_path = original_path
+            .as_ref()
+            .map(|path| {
+                let mut paths = env::split_paths(path).collect::<Vec<_>>();
+                paths.insert(0, fake_bin.clone());
+                env::join_paths(paths).expect("join fake executable path")
+            })
+            .unwrap_or_else(|| fake_bin.into_os_string());
+        unsafe {
+            env::set_var("HOME", &temp_home);
+            env::set_var("PATH", next_path);
+            env::set_var("SKILL_TEST_TOKEN_FILE", &token_file);
+        }
+
+        let result = detect_global_updates(
+            &BTreeMap::from([("demo".to_string(), skill_dir)]),
+            "  github_pat_test  ",
+        );
+
+        match original_home {
+            Some(value) => unsafe { env::set_var("HOME", value) },
+            None => unsafe { env::remove_var("HOME") },
+        }
+        match original_path {
+            Some(value) => unsafe { env::set_var("PATH", value) },
+            None => unsafe { env::remove_var("PATH") },
+        }
+        match original_token_file {
+            Some(value) => unsafe { env::set_var("SKILL_TEST_TOKEN_FILE", value) },
+            None => unsafe { env::remove_var("SKILL_TEST_TOKEN_FILE") },
+        }
+
+        assert_eq!(
+            fs::read_to_string(&token_file).expect("read injected token"),
+            "github_pat_test"
+        );
+        assert_eq!(
+            result,
+            Ok(AgentSkillUpdateCheck {
+                checked_names: BTreeSet::new(),
+                updated_names: BTreeSet::new(),
+                github_rate_limited: true,
+            })
+        );
+        let _ = fs::remove_dir_all(temp_home);
     }
 
     #[cfg(unix)]
@@ -1468,6 +1608,7 @@ exit 1
         let fake_bin = temp_home.join("bin");
         let skill_dir = temp_home.join(".agents/skills/demo");
         let fake_skills = fake_bin.join("skills");
+        let token_file = temp_home.join("received-token");
         fs::create_dir_all(&fake_bin).expect("create fake executable path");
         fs::create_dir_all(&skill_dir).expect("create real Agent CLI skill");
         fs::write(skill_dir.join("SKILL.md"), "before\n").expect("write real skill");
@@ -1485,6 +1626,7 @@ if [ "$1" = "--version" ]; then
 fi
 if [ "$1" = "update" ]; then
   printf 'x' >> "$SKILL_TEST_COUNTER"
+  printf '%s' "$GITHUB_TOKEN" > "$SKILL_TEST_TOKEN_FILE"
   printf 'after\n' > "$HOME/.agents/skills/demo/SKILL.md"
   printf 'added\n' > "$HOME/.agents/skills/demo/add.md"
   rm "$HOME/.agents/skills/demo/remove.md"
@@ -1500,6 +1642,7 @@ exit 1
         let original_home = env::var_os("HOME");
         let original_path = env::var_os("PATH");
         let original_counter = env::var_os("SKILL_TEST_COUNTER");
+        let original_token_file = env::var_os("SKILL_TEST_TOKEN_FILE");
         let counter_path = temp_home.join("update-invocations");
         let next_path = original_path
             .as_ref()
@@ -1513,13 +1656,16 @@ exit 1
             env::set_var("HOME", &temp_home);
             env::set_var("PATH", next_path);
             env::set_var("SKILL_TEST_COUNTER", &counter_path);
+            env::set_var("SKILL_TEST_TOKEN_FILE", &token_file);
         }
 
-        let preview = super::preview_global_skill_update("demo", &skill_dir);
-        let cached_preview = super::preview_global_skill_update("demo", &skill_dir);
+        let preview = super::preview_global_skill_update("demo", &skill_dir, "github_pat_preview");
+        let cached_preview =
+            super::preview_global_skill_update("demo", &skill_dir, "github_pat_preview");
         fs::write(skill_dir.join("local-change.md"), "changed\n")
             .expect("write local cache invalidation file");
-        let invalidated_preview = super::preview_global_skill_update("demo", &skill_dir);
+        let invalidated_preview =
+            super::preview_global_skill_update("demo", &skill_dir, "github_pat_preview");
 
         match original_home {
             Some(value) => unsafe { env::set_var("HOME", value) },
@@ -1532,6 +1678,10 @@ exit 1
         match original_counter {
             Some(value) => unsafe { env::set_var("SKILL_TEST_COUNTER", value) },
             None => unsafe { env::remove_var("SKILL_TEST_COUNTER") },
+        }
+        match original_token_file {
+            Some(value) => unsafe { env::set_var("SKILL_TEST_TOKEN_FILE", value) },
+            None => unsafe { env::remove_var("SKILL_TEST_TOKEN_FILE") },
         }
 
         let preview = preview.expect("preview Agent CLI update");
@@ -1573,6 +1723,10 @@ exit 1
             fs::read_to_string(temp_home.join("update-invocations"))
                 .expect("read update invocation count"),
             "xx"
+        );
+        assert_eq!(
+            fs::read_to_string(token_file).expect("read preview GitHub token"),
+            "github_pat_preview"
         );
         assert_eq!(
             fs::read_to_string(skill_dir.join("SKILL.md")).expect("read real skill"),

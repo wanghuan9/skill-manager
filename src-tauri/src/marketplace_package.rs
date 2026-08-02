@@ -100,6 +100,7 @@ pub(crate) fn file_browser_from_paths(
         root_name: skill_name.to_string(),
         entries,
         initial_file_path: Some("SKILL.md".into()),
+        preview_mode: "full".into(),
     })
 }
 

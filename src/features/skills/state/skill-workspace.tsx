@@ -12,11 +12,14 @@ import {
 import { BusinessError, normalizeErrorMessage } from "@/app/errors";
 import {
   detectPreferredAppLanguage,
+  connectGithubToken as connectGithubTokenRequest,
+  disconnectGithub as disconnectGithubRequest,
   fetchAppSettings,
   deleteSkill,
   deleteToolSkill,
   discoverLocalInstallSkills,
   fetchGitAccount,
+  fetchGithubConnection,
   fetchGitStates,
   fetchLocalSkillCandidates,
   fetchMarketplaceSkillsByPage,
@@ -40,6 +43,7 @@ import {
   openSkillInEditor,
   openPathInFinder,
   openSkillRepository,
+  pollGithubDeviceFlow as pollGithubDeviceFlowRequest,
   refreshLocalGitState,
   revertSkillChange as revertSkillChangeRequest,
   saveSkillFileContent,
@@ -48,12 +52,18 @@ import {
   shouldUseFixtureData,
   subscribeSkillLibraryChanges,
   subscribeSkillLibraryRefreshes,
+  subscribeGithubConnectionChanges,
+  startGithubDeviceFlow as startGithubDeviceFlowRequest,
   toggleSkillTool,
   updateAppSettings,
   updateSkill,
 } from "@/features/skills/api/skill-client";
 import { waitForNextPaint } from "@/app/utils/wait-for-next-paint";
-import { appSettingsFixture, workspaceSnapshotFixture } from "@/features/skills/state/skill-fixtures";
+import {
+  appSettingsFixture,
+  githubConnectionFixture,
+  workspaceSnapshotFixture,
+} from "@/features/skills/state/skill-fixtures";
 import {
   dedupeMarketplaceSkills,
   sortMarketplaceSkillsByPopularity,
@@ -70,6 +80,9 @@ import type {
   SkillLibraryProvider,
   GitAccountSummary,
   GitChangeFile,
+  GithubConnection,
+  GithubDeviceFlowStart,
+  GithubDevicePollResult,
   InstallActivationMode,
   LocalSkillCandidate,
   LocalInstallSkillCandidate,
@@ -214,9 +227,16 @@ type SkillWorkspaceContextValue = {
   defaultOpenToolId: string;
   setDefaultOpenToolId: (toolId: string) => Promise<void>;
   appSettings: AppSettings;
+  githubConnection: GithubConnection;
+  githubRateLimitNoticeVersion: number;
+  reportGithubRateLimit: () => void;
   language: AppLanguage;
   setLanguage: (language: AppLanguage) => Promise<void>;
   setTheme: (theme: AppTheme) => Promise<void>;
+  startGithubDeviceFlow: (backupScope?: boolean) => Promise<GithubDeviceFlowStart>;
+  pollGithubDeviceFlow: (deviceCode: string) => Promise<GithubDevicePollResult>;
+  connectGithubToken: (token: string) => Promise<GithubConnection>;
+  disconnectGithub: () => Promise<void>;
   setSkillLibraryProvider: (provider: SkillLibraryProvider) => Promise<void>;
   setSkillInstallActivation: (mode: InstallActivationMode) => Promise<void>;
   setMcpInstallActivation: (mode: InstallActivationMode) => Promise<void>;
@@ -575,6 +595,9 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
           theme: readStoredAppTheme(),
         },
   );
+  const [githubConnection, setGithubConnection] = useState<GithubConnection>(
+    githubConnectionFixture,
+  );
   const [isLoading, setIsLoading] = useState(!usesFixtureData && startupCache === null);
   const [isStartupGitStateRefreshComplete, setIsStartupGitStateRefreshComplete] =
     useState(usesFixtureData);
@@ -609,6 +632,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
   const lastLocalWorkspaceAlignAtRef = useRef(0);
   const [isWorkspaceRefreshing, setIsWorkspaceRefreshing] = useState(false);
   const [isUpdatingAllSkills, setIsUpdatingAllSkills] = useState(false);
+  const [githubRateLimitNoticeVersion, setGithubRateLimitNoticeVersion] = useState(0);
   const updateAllSkillsInFlightRef = useRef<Promise<void> | null>(null);
   const visibleGitStateRefreshInFlightRef = useRef<Promise<void> | null>(null);
   const localWorkspaceAlignInFlightRef = useRef<Promise<void> | null>(null);
@@ -619,6 +643,9 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
   const defaultOpenToolId = appSettings.defaultOpenToolId;
   const language = appSettings.language;
   const skillSourceViewStyle = appSettings.skillSourceViewStyle ?? "select";
+  const reportGithubRateLimit = useCallback(() => {
+    setGithubRateLimitNoticeVersion((current) => current + 1);
+  }, []);
 
   useEffect(() => {
     installedSkillsRef.current = installedSkills;
@@ -696,6 +723,29 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       ...appSettings,
       theme,
     });
+  }
+
+  async function handleStartGithubDeviceFlow(backupScope = false) {
+    return startGithubDeviceFlowRequest(backupScope);
+  }
+
+  async function handlePollGithubDeviceFlow(deviceCode: string) {
+    const result = await pollGithubDeviceFlowRequest(deviceCode);
+    if (result.connection) {
+      setGithubConnection(result.connection);
+    }
+    return result;
+  }
+
+  async function handleConnectGithubToken(token: string) {
+    const connection = await connectGithubTokenRequest(token);
+    setGithubConnection(connection);
+    return connection;
+  }
+
+  async function handleDisconnectGithub() {
+    const connection = await disconnectGithubRequest();
+    setGithubConnection(connection);
   }
 
   async function handleSetSkillLibraryProvider(provider: SkillLibraryProvider) {
@@ -784,6 +834,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
     toolSkills?: ToolSkillEntry[];
     account?: GitAccountSummary | null;
     settings?: AppSettings;
+    githubConnection?: GithubConnection;
   }) {
     if (input.candidates) {
       setLocalCandidates(input.candidates);
@@ -800,16 +851,20 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
     if (input.settings) {
       setAppSettings(input.settings);
     }
+    if (input.githubConnection) {
+      setGithubConnection(input.githubConnection);
+    }
   }
 
   async function loadWorkspaceCore() {
-    const [skills, candidates, tools, toolSkills, account, settings] = await Promise.all([
+    const [skills, candidates, tools, toolSkills, account, settings, connection] = await Promise.all([
       fetchStartupInstalledSkills(),
       fetchLocalSkillCandidates(),
       fetchToolConfigs(),
       fetchToolSkillEntries().catch(() => []),
       fetchGitAccount(),
       fetchAppSettings(),
+      fetchGithubConnection().catch(() => githubConnectionFixture),
     ]);
 
     return {
@@ -819,6 +874,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       toolSkills,
       account,
       settings,
+      connection,
     };
   }
 
@@ -862,6 +918,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
           toolSkills: workspace.toolSkills,
           account: workspace.account,
           settings: resolvedSettings,
+          githubConnection: workspace.connection,
         });
       } finally {
         localWorkspaceAlignInFlightRef.current = null;
@@ -915,6 +972,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
         toolSkills: workspace.toolSkills,
         account: workspace.account,
         settings: resolvedSettings,
+        githubConnection: workspace.connection,
       });
       void refreshGitStatesInBackground(undefined, {
         showRefreshing: false,
@@ -954,11 +1012,14 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
     let nextRefreshPromise: Promise<void> | null = null;
     nextRefreshPromise = (async () => {
       try {
-        const skillsWithGitState = await fetchGitStates();
+        const gitStateResult = await fetchGitStates();
         if (!shouldApply() || refreshMutationVersion !== workspaceMutationVersionRef.current) {
           return;
         }
-        setInstalledSkills(skillsWithGitState);
+        setInstalledSkills(gitStateResult.skills);
+        if (gitStateResult.githubRateLimited) {
+          reportGithubRateLimit();
+        }
         if (!startupGitStateRefreshCompletedRef.current) {
           setDidStartupGitStateRefreshSucceed(true);
         }
@@ -1092,6 +1153,33 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       window.clearInterval(intervalId);
       window.removeEventListener("focus", refreshGitStatesIfNeeded);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [usesFixtureData]);
+
+  useEffect(() => {
+    if (usesFixtureData) {
+      return;
+    }
+
+    let active = true;
+    let unlisten: (() => void) | null = null;
+    void subscribeGithubConnectionChanges((connection) => {
+      if (active) {
+        setGithubConnection(connection);
+      }
+    }).then((cleanup) => {
+      if (!active) {
+        releaseEventListener(cleanup);
+        return;
+      }
+      unlisten = cleanup;
+    }).catch((error) => {
+      console.error("Failed to subscribe to GitHub connection changes:", error);
+    });
+
+    return () => {
+      active = false;
+      releaseEventListener(unlisten);
     };
   }, [usesFixtureData]);
 
@@ -1709,9 +1797,16 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       defaultOpenToolId,
       setDefaultOpenToolId: handleSetDefaultOpenToolId,
       appSettings,
+      githubConnection,
+      githubRateLimitNoticeVersion,
+      reportGithubRateLimit,
       language,
       setLanguage: handleSetLanguage,
       setTheme: handleSetTheme,
+      startGithubDeviceFlow: handleStartGithubDeviceFlow,
+      pollGithubDeviceFlow: handlePollGithubDeviceFlow,
+      connectGithubToken: handleConnectGithubToken,
+      disconnectGithub: handleDisconnectGithub,
       setSkillLibraryProvider: handleSetSkillLibraryProvider,
       setSkillInstallActivation: handleSetSkillInstallActivation,
       setMcpInstallActivation: handleSetMcpInstallActivation,
@@ -1721,6 +1816,8 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
     }),
     [
       appSettings,
+      githubConnection,
+      githubRateLimitNoticeVersion,
       language,
       defaultOpenToolId,
       gitAccount,
@@ -1738,6 +1835,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       localCandidates,
       marketplacePageBySource,
       marketplaceSkills,
+      reportGithubRateLimit,
       refreshToolSkillEntries,
       toolConfigs,
       toolSkillEntries,

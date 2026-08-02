@@ -272,6 +272,26 @@ struct SharedPluginPackage {
     plugin_root: PathBuf,
 }
 
+#[derive(Clone, Debug)]
+pub struct PortablePluginSource {
+    pub package_id: String,
+    pub directory_name: String,
+    pub source_root: PathBuf,
+    pub host_tools: Vec<String>,
+    pub cursor_was_disabled: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PortablePluginTarget {
+    pub schema_version: u32,
+    pub package_id: String,
+    pub directory_name: String,
+    pub host_tools: Vec<String>,
+    pub cursor_was_disabled: bool,
+    pub content_hash: String,
+}
+
 #[derive(Debug, Default)]
 struct PluginGitState {
     branch: String,
@@ -479,6 +499,129 @@ pub async fn refresh_local_plugin_state(
 
 fn list_installed_plugins_blocking() -> Result<Vec<PluginSummary>, String> {
     list_installed_plugins_blocking_with_mode(PluginScanMode::Refresh)
+}
+
+fn portable_plugin_directory_name(path: &Path) -> Option<String> {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_string)
+}
+
+fn insert_portable_plugin_directories(
+    sources: &mut BTreeMap<PathBuf, PortablePluginSource>,
+    root: &Path,
+    cursor_was_disabled: bool,
+) {
+    let Ok(entries) = fs::read_dir(root) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let source_root = entry.path();
+        if !source_root.is_dir() {
+            continue;
+        }
+        let Some(directory_name) = portable_plugin_directory_name(&source_root) else {
+            continue;
+        };
+        sources
+            .entry(source_root.clone())
+            .or_insert_with(|| PortablePluginSource {
+                package_id: directory_name.clone(),
+                directory_name,
+                source_root,
+                host_tools: if cursor_was_disabled {
+                    vec!["cursor".to_string()]
+                } else {
+                    Vec::new()
+                },
+                cursor_was_disabled,
+            });
+    }
+}
+
+pub fn collect_portable_plugin_sources() -> Result<Vec<PortablePluginSource>, String> {
+    let home_dir = workspace::home_dir()?;
+    let managed_root = workspace::managed_workspace_root()?.join(PLUGIN_PACKAGE_DIR);
+    let disabled_root = cursor_disabled_plugins_root(&home_dir);
+    let mut sources = BTreeMap::new();
+    insert_portable_plugin_directories(&mut sources, &managed_root, false);
+    insert_portable_plugin_directories(&mut sources, &disabled_root, true);
+
+    if let Ok(plugins) = list_installed_plugins_blocking_with_mode(PluginScanMode::Local) {
+        for plugin in plugins {
+            let path = Path::new(&plugin.root_path);
+            let source_root = managed_plugin_package_root_for_path(path).or_else(|| {
+                path.strip_prefix(&disabled_root)
+                    .ok()
+                    .and_then(|relative| relative.components().next())
+                    .map(|component| disabled_root.join(component.as_os_str()))
+            });
+            let Some(source_root) = source_root else {
+                continue;
+            };
+            let Some(source) = sources.get_mut(&source_root) else {
+                continue;
+            };
+            source.host_tools.push(plugin.host_tool);
+            source.host_tools.extend(plugin.related_host_tools);
+        }
+    }
+
+    let mut result = sources.into_values().collect::<Vec<_>>();
+    for source in &mut result {
+        source.host_tools.sort();
+        source.host_tools.dedup();
+    }
+    result.sort_by(|left, right| {
+        left.cursor_was_disabled
+            .cmp(&right.cursor_was_disabled)
+            .then(left.directory_name.cmp(&right.directory_name))
+    });
+    Ok(result)
+}
+
+pub fn align_portable_plugin_targets(
+    targets: &[PortablePluginTarget],
+) -> Result<Vec<String>, String> {
+    let home_dir = workspace::home_dir()?;
+    let managed_root = workspace::managed_workspace_root()?.join(PLUGIN_PACKAGE_DIR);
+    let disabled_root = cursor_disabled_plugins_root(&home_dir);
+    let mut warnings = Vec::new();
+    for target in targets {
+        let package_root = if target.cursor_was_disabled {
+            disabled_root.join(&target.directory_name)
+        } else {
+            managed_root.join(&target.directory_name)
+        };
+        if !package_root.is_dir() {
+            warnings.push(format!("插件文件不存在，跳过启用: {}", target.package_id));
+            continue;
+        }
+        let probe = probe_plugin_root(&package_root, None);
+        let source_root = PathBuf::from(&probe.plugin_root);
+        for host_tool in &target.host_tools {
+            let result = if target.cursor_was_disabled && host_tool == "cursor" {
+                set_cursor_plugin_enabled(&probe.plugin_root, true).map(|_| source_root.clone())
+            } else {
+                install_plugin_probe_for_host(
+                    &home_dir,
+                    &source_root,
+                    &package_root,
+                    &probe,
+                    host_tool,
+                )
+            };
+            if let Err(error) = result {
+                warnings.push(format!(
+                    "{} 未能启用到 {}: {error}",
+                    target.package_id, host_tool
+                ));
+            }
+        }
+    }
+    Ok(warnings)
 }
 
 fn list_installed_plugins_blocking_with_mode(

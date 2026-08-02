@@ -4,7 +4,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-use crate::models::{AppSettings, SkillInstanceMetadata, SkillSummary, WorkspacePersistence};
+use crate::models::{
+    AppSettings, GithubBackupSettings, GithubConnectionMetadata, SkillInstanceMetadata,
+    SkillSummary, WorkspacePersistence,
+};
 use crate::workspace::{
     display_path_value, home_dir_option, managed_skill_library_root, managed_workspace_root_option,
     normalize_skill_library_provider, normalize_workspace_path, remove_legacy_workspace_file,
@@ -31,6 +34,7 @@ const APP_LANGUAGE_SOURCE_USER: &str = "user";
 const APP_THEME_LIGHT: &str = "light";
 const APP_THEME_DARK: &str = "dark";
 const APP_THEME_SYSTEM: &str = "system";
+const PORTABLE_PREFERENCES_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Clone, Debug, Deserialize, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -53,9 +57,91 @@ struct SettingsPersistence {
     language_source: String,
     #[serde(default)]
     theme: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    github_token: String,
+    #[serde(default)]
+    github_connection: GithubConnectionMetadata,
+    #[serde(default)]
+    github_backup: GithubBackupSettings,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PortablePreferences {
+    pub schema_version: u32,
+    pub agent_skills_compatibility_enabled: bool,
+    pub default_open_tool_id: String,
+    pub skill_install_activation: String,
+    pub mcp_install_activation: String,
+    pub skill_source_view_style: String,
+    pub language: String,
+    pub language_source: String,
+    pub theme: String,
+}
+
+fn portable_preferences_from_persistence(persistence: &SettingsPersistence) -> PortablePreferences {
+    let compatibility_enabled = persistence
+        .agent_skills_compatibility_enabled
+        .unwrap_or(false)
+        || normalize_skill_library_provider(&persistence.skill_library_provider)
+            == SKILL_LIBRARY_PROVIDER_AGENT_SKILLS;
+    PortablePreferences {
+        schema_version: PORTABLE_PREFERENCES_SCHEMA_VERSION,
+        agent_skills_compatibility_enabled: compatibility_enabled,
+        default_open_tool_id: persistence.default_open_tool_id.trim().to_string(),
+        skill_install_activation: normalize_skill_install_activation(
+            &persistence.skill_install_activation,
+        )
+        .to_string(),
+        mcp_install_activation: normalize_mcp_install_activation(
+            &persistence.mcp_install_activation,
+        )
+        .to_string(),
+        skill_source_view_style: normalize_skill_source_view_style(
+            &persistence.skill_source_view_style,
+        )
+        .to_string(),
+        language: normalize_app_language(&persistence.language).to_string(),
+        language_source: normalize_app_language_source(&persistence.language_source).to_string(),
+        theme: normalize_app_theme(&persistence.theme).to_string(),
+    }
+}
+
+fn load_settings_persistence() -> SettingsPersistence {
+    settings_file_candidates()
+        .into_iter()
+        .find_map(|path| fs::read_to_string(path).ok())
+        .and_then(|content| serde_json::from_str::<SettingsPersistence>(&content).ok())
+        .unwrap_or_default()
+}
+
+fn save_settings_persistence(persistence: &SettingsPersistence) -> Result<(), String> {
+    let settings_file =
+        settings_file_path().ok_or_else(|| "无法定位用户目录，不能保存设置".to_string())?;
+    let parent_dir = settings_file
+        .parent()
+        .ok_or_else(|| "设置文件目录无效".to_string())?;
+    fs::create_dir_all(parent_dir).map_err(|error| format!("创建设置目录失败: {error}"))?;
+    let payload = serde_json::to_string_pretty(persistence)
+        .map_err(|error| format!("序列化设置失败: {error}"))?;
+    atomic_write_workspace_file(&settings_file, &payload)
+        .map_err(|error| format!("写入设置文件失败: {error}"))?;
+    remove_legacy_workspace_file(SETTINGS_FILE_NAME);
+    Ok(())
 }
 
 pub fn load_installed_skills(default_skills: &[SkillSummary]) -> Vec<SkillSummary> {
+    load_installed_skills_internal(default_skills, true)
+}
+
+pub fn load_installed_skills_read_only(default_skills: &[SkillSummary]) -> Vec<SkillSummary> {
+    load_installed_skills_internal(default_skills, false)
+}
+
+fn load_installed_skills_internal(
+    default_skills: &[SkillSummary],
+    persist_repairs: bool,
+) -> Vec<SkillSummary> {
     let loaded_state = workspace_state_candidates()
         .into_iter()
         .find_map(|state_file| {
@@ -81,14 +167,21 @@ pub fn load_installed_skills(default_skills: &[SkillSummary]) -> Vec<SkillSummar
         .filter(is_skill_local_path_valid)
         .map(hydrate_skill_description)
         .collect::<Vec<_>>();
-    if loaded_from_legacy
-        || filtered_skills.len() != original_count
-        || filtered_skills
-            .iter()
-            .zip(original_paths.iter())
-            .any(|(current, original)| current.local_path != *original)
+    if persist_repairs
+        && (loaded_from_legacy
+            || filtered_skills.len() != original_count
+            || filtered_skills
+                .iter()
+                .zip(original_paths.iter())
+                .any(|(current, original)| current.local_path != *original))
     {
         let _ = save_installed_skills(&filtered_skills);
+    }
+    if !persist_repairs {
+        return filtered_skills
+            .into_iter()
+            .map(hydrate_skill_instance_metadata)
+            .collect();
     }
 
     let mut skills = merge_agent_skill_entries(filtered_skills);
@@ -274,6 +367,7 @@ fn build_agent_skill_summary(
         owner_plugin_id: String::new(),
         owner_plugin_name: String::new(),
         instance: SkillInstanceMetadata {
+            backup_id: String::new(),
             entry_path: entry_path.to_string_lossy().to_string(),
             canonical_path: canonical_path
                 .map(|path| path.to_string_lossy().to_string())
@@ -398,11 +492,7 @@ pub fn load_app_settings() -> AppSettings {
         .map(|path| path.to_string_lossy().to_string())
         .unwrap_or_default();
 
-    let persisted = settings_file_candidates()
-        .into_iter()
-        .find_map(|path| fs::read_to_string(path).ok())
-        .and_then(|content| serde_json::from_str::<SettingsPersistence>(&content).ok())
-        .unwrap_or_default();
+    let persisted = load_settings_persistence();
 
     let legacy_agent_skills_enabled =
         normalize_skill_library_provider(&persisted.skill_library_provider)
@@ -444,6 +534,79 @@ pub fn load_app_settings() -> AppSettings {
     }
 }
 
+pub fn export_portable_preferences() -> PortablePreferences {
+    portable_preferences_from_persistence(&load_settings_persistence())
+}
+
+pub fn apply_portable_preferences(
+    input: &PortablePreferences,
+    overwrite: bool,
+) -> Result<bool, String> {
+    if input.schema_version != PORTABLE_PREFERENCES_SCHEMA_VERSION {
+        return Err(format!("不支持的便携偏好版本: {}", input.schema_version));
+    }
+
+    let mut persistence = load_settings_persistence();
+    let current = portable_preferences_from_persistence(&persistence);
+    let defaults = portable_preferences_from_persistence(&SettingsPersistence::default());
+    if !overwrite && current != defaults && current != *input {
+        return Ok(false);
+    }
+    if current == *input {
+        return Ok(false);
+    }
+
+    persistence.skill_library_provider = if input.agent_skills_compatibility_enabled {
+        SKILL_LIBRARY_PROVIDER_AGENT_SKILLS
+    } else {
+        SKILL_LIBRARY_PROVIDER_SKILLDOCK
+    }
+    .to_string();
+    persistence.agent_skills_compatibility_enabled = Some(input.agent_skills_compatibility_enabled);
+    persistence.default_open_tool_id = input.default_open_tool_id.trim().to_string();
+    persistence.skill_install_activation =
+        normalize_skill_install_activation(&input.skill_install_activation).to_string();
+    persistence.mcp_install_activation =
+        normalize_mcp_install_activation(&input.mcp_install_activation).to_string();
+    persistence.skill_source_view_style =
+        normalize_skill_source_view_style(&input.skill_source_view_style).to_string();
+    persistence.language = normalize_app_language(&input.language).to_string();
+    persistence.language_source = normalize_app_language_source(&input.language_source).to_string();
+    persistence.theme = normalize_app_theme(&input.theme).to_string();
+    save_settings_persistence(&persistence)?;
+    Ok(true)
+}
+
+pub fn load_legacy_github_token() -> String {
+    load_settings_persistence().github_token.trim().to_string()
+}
+
+pub fn load_github_connection_metadata() -> GithubConnectionMetadata {
+    load_settings_persistence().github_connection
+}
+
+pub fn save_github_connection_metadata(
+    metadata: GithubConnectionMetadata,
+    clear_legacy_token: bool,
+) -> Result<(), String> {
+    let mut persistence = load_settings_persistence();
+    persistence.github_connection = metadata;
+    if clear_legacy_token {
+        persistence.github_token.clear();
+    }
+    save_settings_persistence(&persistence)
+}
+
+pub fn load_github_backup_settings() -> GithubBackupSettings {
+    load_settings_persistence().github_backup
+}
+
+pub fn save_github_backup_settings(settings: GithubBackupSettings) -> Result<(), String> {
+    let mut persistence = load_settings_persistence();
+    persistence.github_backup = settings;
+    save_settings_persistence(&persistence)
+}
+
 pub fn save_app_settings(input: AppSettings) -> Result<AppSettings, String> {
     let settings_file =
         settings_file_path().ok_or_else(|| "无法定位用户目录，不能保存设置".to_string())?;
@@ -483,6 +646,7 @@ pub fn save_app_settings(input: AppSettings) -> Result<AppSettings, String> {
         language_source: normalize_app_language_source(&input.language_source).to_string(),
         theme: normalize_app_theme(&input.theme).to_string(),
     };
+    let existing = load_settings_persistence();
     let persistence = SettingsPersistence {
         skill_library_provider: normalized.skill_library_provider.clone(),
         agent_skills_compatibility_enabled: normalized
@@ -495,14 +659,14 @@ pub fn save_app_settings(input: AppSettings) -> Result<AppSettings, String> {
         language: normalized.language.clone(),
         language_source: normalized.language_source.clone(),
         theme: normalized.theme.clone(),
+        github_token: existing.github_token.trim().to_string(),
+        github_connection: existing.github_connection,
+        github_backup: existing.github_backup,
     };
-    let payload = serde_json::to_string_pretty(&persistence)
-        .map_err(|error| format!("序列化设置失败: {error}"))?;
 
     fs::create_dir_all(&normalized.skill_library_path)
         .map_err(|error| format!("创建 Skill 托管目录失败: {error}"))?;
-    fs::write(&settings_file, payload).map_err(|error| format!("写入设置文件失败: {error}"))?;
-    remove_legacy_workspace_file(SETTINGS_FILE_NAME);
+    save_settings_persistence(&persistence)?;
     Ok(normalized)
 }
 
@@ -925,14 +1089,16 @@ mod tests {
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use crate::models::SkillSummary;
     use crate::models::ToolSyncStatus;
     use crate::models::WorkspacePersistence;
+    use crate::models::{GithubConnectionMetadata, SkillSummary};
     use crate::workspace::TEST_ENV_LOCK;
 
     use super::{
-        hydrate_skill_description, load_app_settings, load_installed_skills, normalize_app_theme,
-        normalize_skill_source_view_style, save_app_settings, save_installed_skills,
+        apply_portable_preferences, export_portable_preferences, hydrate_skill_description,
+        load_app_settings, load_github_connection_metadata, load_installed_skills,
+        load_legacy_github_token, normalize_app_theme, normalize_skill_source_view_style,
+        save_app_settings, save_github_connection_metadata, save_installed_skills,
         scan_local_skill_candidates,
     };
 
@@ -1092,6 +1258,61 @@ mod tests {
     }
 
     #[test]
+    fn portable_preferences_only_include_allowed_fields() {
+        with_temp_home(|_| {
+            save_github_connection_metadata(
+                GithubConnectionMetadata {
+                    auth_method: "oauth".into(),
+                    user_id: Some(42),
+                    username: "octocat".into(),
+                    avatar_url: "https://example.com/avatar.png".into(),
+                    credential_persisted: true,
+                },
+                true,
+            )
+            .expect("save GitHub metadata");
+            let payload = serde_json::to_string(&export_portable_preferences())
+                .expect("serialize portable preferences");
+
+            assert!(!payload.contains("github"));
+            assert!(!payload.contains("storagePath"));
+            assert!(!payload.contains("skillLibraryPath"));
+            assert!(!payload.contains("octocat"));
+        });
+    }
+
+    #[test]
+    fn portable_preferences_restore_is_conservative_unless_overwrite_is_requested() {
+        with_temp_home(|_| {
+            let mut settings = load_app_settings();
+            settings.theme = "dark".into();
+            save_app_settings(settings).expect("save local settings");
+            save_github_connection_metadata(
+                GithubConnectionMetadata {
+                    auth_method: "oauth".into(),
+                    user_id: Some(42),
+                    username: "octocat".into(),
+                    avatar_url: String::new(),
+                    credential_persisted: true,
+                },
+                true,
+            )
+            .expect("save GitHub metadata");
+
+            let mut portable = export_portable_preferences();
+            portable.theme = "light".into();
+            assert!(!apply_portable_preferences(&portable, false)
+                .expect("skip different local preferences"));
+            assert_eq!(load_app_settings().theme, "dark");
+
+            assert!(apply_portable_preferences(&portable, true)
+                .expect("overwrite portable preferences"));
+            assert_eq!(load_app_settings().theme, "light");
+            assert_eq!(load_github_connection_metadata().username, "octocat");
+        });
+    }
+
+    #[test]
     fn loads_legacy_settings_with_skilldock_provider() {
         with_temp_home(|temp_home| {
             let workspace_root = temp_home.join(".skilldock");
@@ -1144,6 +1365,43 @@ mod tests {
 
             assert!(!saved.agent_skills_compatibility_configured);
             assert!(!content.contains("agentSkillsCompatibilityEnabled"));
+        });
+    }
+
+    #[test]
+    fn preserves_legacy_github_token_until_connection_metadata_is_saved() {
+        with_temp_home(|temp_home| {
+            let workspace_root = temp_home.join(".skilldock");
+            fs::create_dir_all(&workspace_root).expect("create workspace");
+            let settings_path = workspace_root.join("settings.json");
+            fs::write(
+                &settings_path,
+                "{\"theme\":\"dark\",\"githubToken\":\"  github_pat_example  \"}",
+            )
+            .expect("write legacy settings");
+
+            let mut settings = load_app_settings();
+            assert_eq!(load_legacy_github_token(), "github_pat_example");
+            settings.theme = "light".into();
+            save_app_settings(settings).expect("save ordinary settings");
+            let content = fs::read_to_string(&settings_path).expect("read saved settings");
+            assert!(content.contains("\"githubToken\": \"github_pat_example\""));
+
+            save_github_connection_metadata(
+                GithubConnectionMetadata {
+                    auth_method: "pat".into(),
+                    user_id: Some(42),
+                    username: "octocat".into(),
+                    avatar_url: "https://example.com/avatar.png".into(),
+                    credential_persisted: true,
+                },
+                true,
+            )
+            .expect("save GitHub connection metadata");
+            let migrated_content =
+                fs::read_to_string(settings_path).expect("read migrated settings");
+            assert!(!migrated_content.contains("githubToken"));
+            assert_eq!(load_github_connection_metadata().username, "octocat");
         });
     }
 

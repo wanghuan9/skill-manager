@@ -74,6 +74,12 @@ function RefreshProbe() {
   );
 }
 
+function GithubRateLimitProbe() {
+  const { githubRateLimitNoticeVersion } = useSkillWorkspace();
+
+  return <span data-testid="github-rate-limit-version">{githubRateLimitNoticeVersion}</span>;
+}
+
 function RouteSwitchRefreshProbe() {
   const [showsSkillsPage, setShowsSkillsPage] = useState(true);
 
@@ -1011,6 +1017,43 @@ test("uses full marketplace pages to determine whether SkillHub has more results
   fireEvent.click(screen.getByRole("button", { name: "加载更多 SkillHub" }));
   await waitFor(() => {
     expect(screen.getByTestId("skillhub-has-more").textContent).toBe("done");
+  });
+});
+
+test("reports a GitHub rate limit returned by the Agent CLI refresh", async () => {
+  mockedInvoke.mockImplementation(async (command) => {
+    switch (command) {
+      case "list_startup_installed_skills":
+        return installedSkillFixtures;
+      case "refresh_git_states":
+        return {
+          skills: installedSkillFixtures,
+          githubRateLimited: true,
+        };
+      case "list_local_skill_candidates":
+        return localSkillFixtures;
+      case "list_tool_configs":
+        return toolConfigFixtures;
+      case "list_tool_skill_entries":
+        return [];
+      case "get_git_account_summary":
+        return gitAccountFixture;
+      case "get_app_settings":
+      case "update_app_settings":
+        return appSettingsFixture;
+      default:
+        throw new Error(`Unexpected command: ${command}`);
+    }
+  });
+
+  render(
+    <SkillWorkspaceProvider>
+      <GithubRateLimitProbe />
+    </SkillWorkspaceProvider>,
+  );
+
+  await waitFor(() => {
+    expect(screen.getByTestId("github-rate-limit-version")).toHaveTextContent("1");
   });
 });
 

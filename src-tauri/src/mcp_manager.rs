@@ -55,6 +55,17 @@ const APP_ROO_CODE: &str = "roo-code";
 const APP_TRAE: &str = "trae";
 const APP_TRAE_CN: &str = "trae-cn";
 const APP_ZENCODER: &str = "zencoder";
+const PORTABLE_MCP_SCHEMA_VERSION: u32 = 1;
+const SENSITIVE_ARGUMENT_NAMES: [&str; 8] = [
+    "api-key",
+    "apikey",
+    "authorization",
+    "password",
+    "secret",
+    "token",
+    "access-token",
+    "auth-token",
+];
 #[cfg(test)]
 const APP_OMP: &str = "omp";
 #[cfg(test)]
@@ -113,7 +124,7 @@ pub struct McpServerToolStatus {
     pub is_enabled: bool,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct McpServerRecord {
     pub id: String,
@@ -142,6 +153,22 @@ pub struct McpServerRecord {
     pub owner_plugin_id: String,
     #[serde(default)]
     pub owner_plugin_name: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PortableMcpSecretRequirement {
+    pub server_id: String,
+    pub env_keys: Vec<String>,
+    pub header_keys: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PortableMcpState {
+    pub schema_version: u32,
+    pub servers: Vec<McpServerRecord>,
+    pub required_secrets: Vec<PortableMcpSecretRequirement>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -4392,6 +4419,304 @@ fn write_text_value(path: &Path, value: &str) -> Result<(), String> {
     fs::rename(&temp_path, path).map_err(|error| format!("替换配置文件失败: {error}"))
 }
 
+fn sanitized_portable_url(value: &str) -> String {
+    let Ok(mut parsed) = url::Url::parse(value.trim()) else {
+        return String::new();
+    };
+    let _ = parsed.set_username("");
+    let _ = parsed.set_password(None);
+    parsed.set_query(None);
+    parsed.set_fragment(None);
+    parsed.to_string()
+}
+
+fn is_sensitive_name(value: &str) -> bool {
+    let normalized = value
+        .trim()
+        .trim_start_matches('-')
+        .split('=')
+        .next()
+        .unwrap_or_default()
+        .to_ascii_lowercase()
+        .replace('_', "-");
+    SENSITIVE_ARGUMENT_NAMES
+        .iter()
+        .any(|name| normalized == *name || normalized.ends_with(&format!("-{name}")))
+}
+
+fn sanitize_portable_arguments(value: &Value) -> Value {
+    let Some(arguments) = value.as_array() else {
+        return Value::Array(Vec::new());
+    };
+    let mut sanitized = Vec::new();
+    let mut skip_next = false;
+    for argument in arguments {
+        if skip_next {
+            skip_next = false;
+            continue;
+        }
+        let Some(text) = argument.as_str() else {
+            sanitized.push(sanitize_portable_server_value(argument, None));
+            continue;
+        };
+        if is_sensitive_name(text) {
+            skip_next = !text.contains('=');
+            continue;
+        }
+        sanitized.push(Value::String(text.to_string()));
+    }
+    Value::Array(sanitized)
+}
+
+fn collect_secret_keys(value: &Value) -> Vec<String> {
+    let mut keys = value
+        .as_object()
+        .map(|object| object.keys().cloned().collect::<Vec<_>>())
+        .unwrap_or_default();
+    keys.sort();
+    keys
+}
+
+fn sanitize_portable_server_value(
+    value: &Value,
+    requirement: Option<&mut PortableMcpSecretRequirement>,
+) -> Value {
+    if let Some(items) = value.as_array() {
+        let mut requirement = requirement;
+        return Value::Array(
+            items
+                .iter()
+                .map(|item| sanitize_portable_server_value(item, requirement.as_deref_mut()))
+                .collect(),
+        );
+    }
+    let Some(object) = value.as_object() else {
+        return value.clone();
+    };
+    let mut sanitized = Map::new();
+    let mut requirement = requirement;
+    for (key, child) in object {
+        let normalized_key = key.to_ascii_lowercase().replace('_', "-");
+        if normalized_key == "env" || normalized_key == "headers" {
+            if let Some(requirement) = requirement.as_deref_mut() {
+                let keys = collect_secret_keys(child);
+                if normalized_key == "env" {
+                    requirement.env_keys.extend(keys);
+                } else {
+                    requirement.header_keys.extend(keys);
+                }
+            }
+            continue;
+        }
+        if is_sensitive_name(&normalized_key) {
+            continue;
+        }
+        if normalized_key == "cwd"
+            && child
+                .as_str()
+                .map(|path| Path::new(path).is_absolute())
+                .unwrap_or(false)
+        {
+            continue;
+        }
+        if normalized_key == "command" {
+            let command = child.as_str().unwrap_or_default();
+            let portable_command = if Path::new(command).is_absolute() {
+                Path::new(command)
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or_default()
+            } else {
+                command
+            };
+            sanitized.insert(key.clone(), Value::String(portable_command.to_string()));
+            continue;
+        }
+        if normalized_key == "args" {
+            sanitized.insert(key.clone(), sanitize_portable_arguments(child));
+            continue;
+        }
+        if normalized_key.contains("url") {
+            let portable_url = child
+                .as_str()
+                .map(sanitized_portable_url)
+                .unwrap_or_default();
+            sanitized.insert(key.clone(), Value::String(portable_url));
+            continue;
+        }
+        sanitized.insert(
+            key.clone(),
+            sanitize_portable_server_value(child, requirement.as_deref_mut()),
+        );
+    }
+    Value::Object(sanitized)
+}
+
+pub fn export_portable_mcp_state() -> Result<PortableMcpState, String> {
+    let mut requirements = Vec::new();
+    let servers = load_mcp_records()?
+        .into_iter()
+        .map(|mut record| {
+            let mut requirement = PortableMcpSecretRequirement {
+                server_id: record.id.clone(),
+                ..Default::default()
+            };
+            record.server = sanitize_portable_server_value(&record.server, Some(&mut requirement));
+            record.source_url = sanitized_portable_url(&record.source_url);
+            record.tools_discovery_error.clear();
+            requirement.env_keys.sort();
+            requirement.env_keys.dedup();
+            requirement.header_keys.sort();
+            requirement.header_keys.dedup();
+            if !requirement.env_keys.is_empty() || !requirement.header_keys.is_empty() {
+                requirements.push(requirement);
+            }
+            record
+        })
+        .collect::<Vec<_>>();
+    Ok(PortableMcpState {
+        schema_version: PORTABLE_MCP_SCHEMA_VERSION,
+        servers,
+        required_secrets: requirements,
+    })
+}
+
+fn sensitive_argument_tokens(value: &Value) -> Vec<Value> {
+    let Some(arguments) = value.as_array() else {
+        return Vec::new();
+    };
+    let mut result = Vec::new();
+    let mut index = 0;
+    while index < arguments.len() {
+        let Some(text) = arguments[index].as_str() else {
+            index += 1;
+            continue;
+        };
+        if is_sensitive_name(text) {
+            result.push(arguments[index].clone());
+            if !text.contains('=') && index + 1 < arguments.len() {
+                result.push(arguments[index + 1].clone());
+                index += 1;
+            }
+        }
+        index += 1;
+    }
+    result
+}
+
+fn preserve_local_mcp_exclusions(
+    portable: &Value,
+    current: &Value,
+    requirement: Option<&PortableMcpSecretRequirement>,
+) -> Value {
+    let (Some(portable_object), Some(current_object)) = (portable.as_object(), current.as_object())
+    else {
+        return portable.clone();
+    };
+    let mut restored = portable_object.clone();
+    for (key, current_value) in current_object {
+        let normalized_key = key.to_ascii_lowercase().replace('_', "-");
+        if normalized_key == "env" || normalized_key == "headers" {
+            let allowed_keys = if normalized_key == "env" {
+                requirement.map(|value| value.env_keys.as_slice())
+            } else {
+                requirement.map(|value| value.header_keys.as_slice())
+            }
+            .unwrap_or_default();
+            let preserved = current_value
+                .as_object()
+                .map(|values| {
+                    values
+                        .iter()
+                        .filter(|(name, _)| allowed_keys.contains(name))
+                        .map(|(name, value)| (name.clone(), value.clone()))
+                        .collect::<Map<_, _>>()
+                })
+                .unwrap_or_default();
+            if !preserved.is_empty() {
+                restored.insert(key.clone(), Value::Object(preserved));
+            }
+            continue;
+        }
+        if is_sensitive_name(&normalized_key) {
+            restored.insert(key.clone(), current_value.clone());
+            continue;
+        }
+        if normalized_key == "cwd"
+            && current_value
+                .as_str()
+                .is_some_and(|path| Path::new(path).is_absolute())
+        {
+            restored.insert(key.clone(), current_value.clone());
+            continue;
+        }
+        let Some(portable_value) = portable_object.get(key) else {
+            continue;
+        };
+        if normalized_key == "command"
+            && current_value
+                .as_str()
+                .is_some_and(|path| Path::new(path).is_absolute())
+        {
+            restored.insert(key.clone(), current_value.clone());
+        } else if normalized_key == "args" {
+            let mut arguments = portable_value.as_array().cloned().unwrap_or_default();
+            arguments.extend(sensitive_argument_tokens(current_value));
+            restored.insert(key.clone(), Value::Array(arguments));
+        } else if normalized_key.contains("url")
+            && current_value.as_str().is_some_and(|value| {
+                sanitized_portable_url(value) == portable_value.as_str().unwrap_or_default()
+            })
+        {
+            restored.insert(key.clone(), current_value.clone());
+        } else if portable_value.is_object() && current_value.is_object() {
+            restored.insert(
+                key.clone(),
+                preserve_local_mcp_exclusions(portable_value, current_value, requirement),
+            );
+        }
+    }
+    Value::Object(restored)
+}
+
+pub fn apply_portable_mcp_state(input: &PortableMcpState, overwrite: bool) -> Result<bool, String> {
+    if input.schema_version != PORTABLE_MCP_SCHEMA_VERSION {
+        return Err(format!("不支持的便携 MCP 版本: {}", input.schema_version));
+    }
+    let current = export_portable_mcp_state()?;
+    if current == *input {
+        return Ok(false);
+    }
+    if !overwrite && !current.servers.is_empty() {
+        return Ok(false);
+    }
+    let current_records = load_mcp_records()?;
+    let records = input
+        .servers
+        .iter()
+        .cloned()
+        .map(|mut record| {
+            if let Some(current_record) = current_records
+                .iter()
+                .find(|current_record| current_record.id == record.id)
+            {
+                let requirement = input
+                    .required_secrets
+                    .iter()
+                    .find(|requirement| requirement.server_id == record.id);
+                record.server = preserve_local_mcp_exclusions(
+                    &record.server,
+                    &current_record.server,
+                    requirement,
+                );
+            }
+            normalize_record(record)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    save_mcp_records(&records)?;
+    Ok(true)
+}
+
 fn load_mcp_records() -> Result<Vec<McpServerRecord>, String> {
     let Some(content) = load_mcp_state_content() else {
         return Ok(Vec::new());
@@ -5418,6 +5743,118 @@ fn base64_url_decode(value: &str) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn portable_mcp_sanitizer_removes_secrets_urls_and_machine_paths() {
+        let input = json!({
+            "type": "stdio",
+            "command": "/usr/local/bin/npx",
+            "cwd": "/Users/example/private",
+            "args": [
+                "-y",
+                "demo-mcp",
+                "--api-key=secret-token",
+                "--password",
+                "password-value",
+                "--safe",
+                "visible"
+            ],
+            "env": {
+                "API_TOKEN": "env-secret"
+            },
+            "headers": {
+                "Authorization": "Bearer abc"
+            },
+            "url": "https://user:pass@example.com/mcp?token=query-secret#fragment"
+        });
+        let mut requirement = PortableMcpSecretRequirement {
+            server_id: "demo".into(),
+            ..Default::default()
+        };
+        let sanitized = sanitize_portable_server_value(&input, Some(&mut requirement));
+        let payload = serde_json::to_string(&sanitized).expect("serialize sanitized MCP");
+
+        for secret in [
+            "secret-token",
+            "password-value",
+            "env-secret",
+            "Bearer abc",
+            "query-secret",
+            "/Users/example/private",
+            "user:pass",
+        ] {
+            assert!(!payload.contains(secret));
+        }
+        assert_eq!(
+            sanitized.get("command").and_then(Value::as_str),
+            Some("npx")
+        );
+        assert_eq!(requirement.env_keys, vec!["API_TOKEN"]);
+        assert_eq!(requirement.header_keys, vec!["Authorization"]);
+        assert_eq!(
+            sanitized.get("url").and_then(Value::as_str),
+            Some("https://example.com/mcp")
+        );
+        assert_eq!(
+            sanitized.get("args"),
+            Some(&json!(["-y", "demo-mcp", "--safe", "visible"]))
+        );
+    }
+
+    #[test]
+    fn mcp_restore_preserves_local_secrets_and_machine_paths() {
+        let current = json!({
+            "command": "/opt/homebrew/bin/npx",
+            "cwd": "/Users/example/project",
+            "args": ["demo-mcp", "--token", "local-token"],
+            "env": {
+                "API_TOKEN": "local-env-secret",
+                "UNRELATED": "do-not-restore"
+            },
+            "headers": {
+                "Authorization": "Bearer local-secret"
+            },
+            "url": "https://user:pass@example.com/mcp?token=local"
+        });
+        let portable = sanitize_portable_server_value(&current, None);
+        let restored = preserve_local_mcp_exclusions(
+            &portable,
+            &current,
+            Some(&PortableMcpSecretRequirement {
+                server_id: "demo".into(),
+                env_keys: vec!["API_TOKEN".into()],
+                header_keys: vec!["Authorization".into()],
+            }),
+        );
+
+        assert_eq!(
+            restored.get("command").and_then(Value::as_str),
+            Some("/opt/homebrew/bin/npx")
+        );
+        assert_eq!(
+            restored.get("cwd").and_then(Value::as_str),
+            Some("/Users/example/project")
+        );
+        assert_eq!(
+            restored.get("args"),
+            Some(&json!(["demo-mcp", "--token", "local-token"]))
+        );
+        assert_eq!(
+            restored.pointer("/env/API_TOKEN").and_then(Value::as_str),
+            Some("local-env-secret")
+        );
+        assert!(restored.pointer("/env/UNRELATED").is_none());
+        assert_eq!(
+            restored
+                .pointer("/headers/Authorization")
+                .and_then(Value::as_str),
+            Some("Bearer local-secret")
+        );
+        assert_eq!(
+            restored.get("url").and_then(Value::as_str),
+            Some("https://user:pass@example.com/mcp?token=local")
+        );
+    }
 
     #[test]
     fn registered_json_object_adapter_round_trips_omp_config() {
