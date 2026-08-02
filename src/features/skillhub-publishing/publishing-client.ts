@@ -14,6 +14,7 @@ export type SkillHubPublishableSkill = {
   name: string;
   description: string;
   localPath: string;
+  managementOwner?: string;
   sourceLabel?: string;
   sourceType?: string;
   sourceUrl?: string;
@@ -43,6 +44,7 @@ export type SkillHubPublishableSkillsSnapshot = {
 
 export type SkillHubPublishInput = {
   skillName: string;
+  localPath: string;
   remoteSkillId?: string;
   expectedRemoteVersion?: string;
   changelog?: string;

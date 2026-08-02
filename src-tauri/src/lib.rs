@@ -9,6 +9,7 @@ mod mcp_manager;
 mod models;
 mod plugin_manager;
 mod plugin_watcher;
+mod publishing_rules;
 mod skill_watcher;
 mod skillhub_market;
 mod skillhub_publishing;

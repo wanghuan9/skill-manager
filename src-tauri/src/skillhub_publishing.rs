@@ -9,7 +9,7 @@ use reqwest::multipart::{Form, Part};
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 
-use crate::models::{GitChangeFile, UpdatePreviewSnapshot};
+use crate::models::{GitChangeFile, SkillSummary, UpdatePreviewSnapshot};
 use crate::workspace;
 
 const API_BASE_URL: &str = "https://api.skillhub.cn";
@@ -75,6 +75,7 @@ pub(crate) struct SkillHubPublishableSkill {
     name: String,
     description: String,
     local_path: String,
+    management_owner: String,
     source_label: String,
     source_type: String,
     source_url: String,
@@ -108,6 +109,8 @@ pub(crate) struct SkillHubPublishableSkillsSnapshot {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SkillHubPublishInput {
     skill_name: String,
+    #[serde(default)]
+    local_path: String,
     #[serde(default)]
     remote_skill_id: String,
     #[serde(default)]
@@ -357,34 +360,50 @@ pub(crate) async fn publish_skillhub_skill(
 ) -> Result<SkillHubPublishResult, String> {
     validate_publish_input(&input)?;
     let credential = load_credential()?.ok_or_else(|| "请先登录 SkillHub。".to_string())?;
-    let skill_path = resolve_publishable_skill_path(&input.skill_name)?;
+    let (skill, skill_path) = resolve_publishable_skill_path(&input.skill_name, &input.local_path)?;
     let files = collect_skill_files(&skill_path)?;
     let content_hash = crate::marketplace_package::directory_content_hash(&skill_path)?;
     let mut publish_state = load_publish_state();
-    let previous = publish_state
-        .skills
-        .get(&skill_path.to_string_lossy().to_string())
-        .cloned();
-    if !input.remote_skill_id.trim().is_empty()
-        && previous.as_ref().map(|state| state.slug.as_str()) != Some(input.remote_skill_id.trim())
-    {
+    let local_path = skill_path.to_string_lossy().to_string();
+    let previous = publish_state.skills.get(&local_path).cloned();
+    let pending = publish_state.pending_skills.get(&local_path).cloned();
+    let source_remote = resolve_skillhub_market_source_remote(
+        &skill,
+        &local_path,
+        previous.as_ref(),
+        pending.as_ref(),
+        &credential,
+    )
+    .await?;
+    let dashboard_remote = resolve_dashboard_publish_remote(
+        &input,
+        previous.as_ref(),
+        pending.as_ref(),
+        source_remote.as_ref(),
+        &credential,
+    )
+    .await?;
+    let (expected_slug, expected_version) = resolve_publish_baseline(
+        &input.skill_name,
+        pending.as_ref(),
+        previous.as_ref(),
+        source_remote.as_ref(),
+        dashboard_remote.as_ref(),
+    );
+    if !input.remote_skill_id.trim().is_empty() && input.remote_skill_id.trim() != expected_slug {
         return Err("SkillHub 发布目标已变化，请刷新后重试。".to_string());
     }
     if !input.expected_remote_version.trim().is_empty()
-        && previous.as_ref().map(|state| state.version.as_str())
-            != Some(input.expected_remote_version.trim())
+        && input.expected_remote_version.trim() != expected_version
     {
         return Err("SkillHub 发布版本已变化，请刷新后重试。".to_string());
     }
-    let slug = previous
-        .as_ref()
-        .map(|state| state.slug.clone())
-        .filter(|slug| !slug.is_empty())
-        .unwrap_or_else(|| normalize_slug(&input.skill_name));
-    let version = previous
-        .as_ref()
-        .map(|state| next_patch_version(&state.version))
-        .unwrap_or_else(|| INITIAL_VERSION.to_string());
+    let slug = expected_slug;
+    let version = if expected_version.is_empty() {
+        INITIAL_VERSION.to_string()
+    } else {
+        next_patch_version(&expected_version)
+    };
     let description = skill_description_for_publish(&skill_path, &input.skill_name)?;
     let payload = SkillHubPublishPayload {
         slug: slug.clone(),
@@ -419,7 +438,7 @@ pub(crate) async fn publish_skillhub_skill(
         return Err(format!("SkillHub 发布失败（HTTP {}）。", response.status()));
     }
     publish_state.pending_skills.insert(
-        skill_path.to_string_lossy().to_string(),
+        local_path,
         PendingSkillState {
             slug: slug.clone(),
             version: version.clone(),
@@ -506,42 +525,54 @@ fn save_credential(credential: &SkillHubCredential) -> Result<(), String> {
     Ok(())
 }
 
-fn resolve_publishable_skill_path(skill_name: &str) -> Result<PathBuf, String> {
+fn resolve_publishable_skill_path(
+    skill_name: &str,
+    requested_local_path: &str,
+) -> Result<(SkillSummary, PathBuf), String> {
     let skill_name = skill_name.trim();
     if skill_name.is_empty() {
         return Err("请选择要发布的 Skill。".to_string());
     }
     let skill = crate::state::load_installed_skills(&crate::commands::default_installed_skills())
         .into_iter()
-        .find(|skill| skill.name == skill_name && skill.instance.management_owner == "skilldock")
-        .ok_or_else(|| "只能发布由 SkillDock 托管的 Skill。".to_string())?;
-    managed_skill_path(&skill.local_path)
+        .find(|skill| skill.name == skill_name && local_path_matches(skill, requested_local_path))
+        .ok_or_else(|| "未找到可发布的托管 Skill，请刷新后重试。".to_string())?;
+    let skill_path = managed_skill_path(&skill)?;
+    Ok((skill, skill_path))
 }
 
 fn resolve_requested_publishable_skill_path(
     skill_name: &str,
     local_path: &str,
 ) -> Result<PathBuf, String> {
-    let skill_path = resolve_publishable_skill_path(skill_name)?;
-    let requested_path = PathBuf::from(local_path)
-        .canonicalize()
-        .map_err(|error| format!("解析本地 Skill 目录失败: {error}"))?;
-    if skill_path != requested_path {
-        return Err("发布更新预览的本地 Skill 路径不匹配，请刷新后重试。".to_string());
-    }
+    let (_, skill_path) = resolve_publishable_skill_path(skill_name, local_path)?;
     Ok(skill_path)
 }
 
-fn managed_skill_path(local_path: &str) -> Result<PathBuf, String> {
-    let root = workspace::managed_skill_library_root()?;
-    let root = root
-        .canonicalize()
-        .map_err(|_| "SkillDock 托管目录不可用。".to_string())?;
-    let path = Path::new(local_path)
+fn local_path_matches(skill: &SkillSummary, requested_local_path: &str) -> bool {
+    if requested_local_path.trim().is_empty() {
+        return true;
+    }
+    let Ok(requested_path) = Path::new(requested_local_path).canonicalize() else {
+        return false;
+    };
+    let Ok(skill_path) = Path::new(&skill.local_path).canonicalize() else {
+        return false;
+    };
+    skill_path == requested_path
+}
+
+fn managed_skill_path(skill: &SkillSummary) -> Result<PathBuf, String> {
+    if !crate::publishing_rules::supports_publishing_management_owner(
+        &skill.instance.management_owner,
+    ) {
+        return Err("只能发布由 SkillDock 或 Agent Skills CLI 托管的 Skill。".to_string());
+    }
+    let path = Path::new(&skill.local_path)
         .canonicalize()
         .map_err(|_| "本地 Skill 目录不可用。".to_string())?;
-    if !path.starts_with(&root) || !path.join("SKILL.md").is_file() {
-        return Err("只能发布由 SkillDock 托管且包含 SKILL.md 的 Skill。".to_string());
+    if !path.join("SKILL.md").is_file() {
+        return Err("只能发布包含 SKILL.md 的托管 Skill。".to_string());
     }
     Ok(path)
 }
@@ -550,7 +581,123 @@ fn validate_publish_input(input: &SkillHubPublishInput) -> Result<(), String> {
     if input.skill_name.trim().is_empty() {
         return Err("请选择要发布的 Skill。".to_string());
     }
+    if input.local_path.trim().is_empty() {
+        return Err("本地 Skill 路径缺失，请刷新后重试。".to_string());
+    }
     Ok(())
+}
+
+async fn resolve_skillhub_market_source_remote(
+    skill: &SkillSummary,
+    local_path: &str,
+    published: Option<&PublishedSkillState>,
+    pending: Option<&PendingSkillState>,
+    credential: &SkillHubCredential,
+) -> Result<Option<RemoteSkillHubSkill>, String> {
+    let installed_from_skillhub = crate::skillhub_market::is_installed_skillhub_skill(skill);
+    if !installed_from_skillhub {
+        return Ok(None);
+    }
+    let has_local_publish_binding = published.is_some() || pending.is_some();
+    let source_slug = crate::skillhub_market::installed_skillhub_slug(skill);
+    let remote_skills = match fetch_remote_published_skills(credential).await {
+        Ok(remote_skills) => remote_skills,
+        Err(_) if has_local_publish_binding => Vec::new(),
+        Err(RemoteSkillHubFetchError::AuthorizationRequired) => {
+            return Err("请重新登录 SkillHub。".to_string());
+        }
+        Err(RemoteSkillHubFetchError::Request(message)) => return Err(message),
+    };
+    let source_remote = source_slug.and_then(|slug| {
+        remote_skills
+            .into_iter()
+            .find(|remote| remote.slug.eq_ignore_ascii_case(&slug))
+    });
+    let has_remote_ownership = source_remote.is_some();
+    if !crate::publishing_rules::can_publish_managed_skill(
+        &skill.instance.management_owner,
+        true,
+        has_remote_ownership,
+        has_local_publish_binding,
+    ) {
+        return Err(format!(
+            "从 SkillHub 安装的 Skill 仅允许原作者发布：{}。",
+            local_path
+        ));
+    }
+    Ok(source_remote)
+}
+
+async fn resolve_dashboard_publish_remote(
+    input: &SkillHubPublishInput,
+    published: Option<&PublishedSkillState>,
+    pending: Option<&PendingSkillState>,
+    source_remote: Option<&RemoteSkillHubSkill>,
+    credential: &SkillHubCredential,
+) -> Result<Option<RemoteSkillHubSkill>, String> {
+    if published.is_some() || pending.is_some() || source_remote.is_some() {
+        return Ok(None);
+    }
+    let requested_slug = input.remote_skill_id.trim();
+    if requested_slug.is_empty() || requested_slug != normalize_slug(&input.skill_name) {
+        return Ok(None);
+    }
+    let remote_skills =
+        fetch_remote_published_skills(credential)
+            .await
+            .map_err(|error| match error {
+                RemoteSkillHubFetchError::AuthorizationRequired => {
+                    "请重新登录 SkillHub。".to_string()
+                }
+                RemoteSkillHubFetchError::Request(message) => message,
+            })?;
+    let remote = remote_skills
+        .into_iter()
+        .find(|skill| skill.slug.eq_ignore_ascii_case(requested_slug));
+    if remote.is_none() {
+        return Err("SkillHub 发布目标已变化，请刷新后重试。".to_string());
+    }
+    Ok(remote)
+}
+
+fn resolve_publish_baseline(
+    skill_name: &str,
+    pending: Option<&PendingSkillState>,
+    published: Option<&PublishedSkillState>,
+    source_remote: Option<&RemoteSkillHubSkill>,
+    dashboard_remote: Option<&RemoteSkillHubSkill>,
+) -> (String, String) {
+    let remote = source_remote.or(dashboard_remote);
+    let slug = pending
+        .map(|state| state.slug.clone())
+        .or_else(|| published.map(|state| state.slug.clone()))
+        .or_else(|| remote.map(|state| state.slug.clone()))
+        .unwrap_or_else(|| normalize_slug(skill_name));
+    let version = pending
+        .map(|state| state.version.clone())
+        .or_else(|| published.map(|state| state.version.clone()))
+        .or_else(|| remote.map(|state| state.current_version.clone()))
+        .unwrap_or_default();
+    (slug, version)
+}
+
+fn is_skillhub_publishable_skill(
+    skill: &SkillSummary,
+    local_path: &str,
+    remote_by_slug: &HashMap<String, RemoteSkillHubSkill>,
+    publish_state: &SkillHubPublishState,
+) -> bool {
+    let installed_from_skillhub = crate::skillhub_market::is_installed_skillhub_skill(skill);
+    let has_remote_ownership = crate::skillhub_market::installed_skillhub_slug(skill)
+        .is_some_and(|slug| remote_by_slug.contains_key(&slug.to_lowercase()));
+    let has_local_publish_binding = publish_state.skills.contains_key(local_path)
+        || publish_state.pending_skills.contains_key(local_path);
+    crate::publishing_rules::can_publish_managed_skill(
+        &skill.instance.management_owner,
+        installed_from_skillhub,
+        has_remote_ownership,
+        has_local_publish_binding,
+    )
 }
 
 fn build_publishable_skills(
@@ -566,10 +713,7 @@ fn build_publishable_skills(
     let mut publishable_skills = Vec::new();
     let mut did_reconcile_state = false;
     for skill in skills {
-        if skill.instance.management_owner != "skilldock" {
-            continue;
-        }
-        let path = match managed_skill_path(&skill.local_path) {
+        let path = match managed_skill_path(&skill) {
             Ok(path) => path,
             Err(_) => continue,
         };
@@ -582,10 +726,16 @@ fn build_publishable_skills(
         let local_path = path.to_string_lossy().to_string();
         let published = publish_state.skills.get(&local_path).cloned();
         let pending = publish_state.pending_skills.get(&local_path).cloned();
+        if !is_skillhub_publishable_skill(&skill, &local_path, &remote_by_slug, &publish_state) {
+            continue;
+        }
+        let owned_marketplace_slug = crate::skillhub_market::installed_skillhub_slug(&skill)
+            .filter(|slug| remote_by_slug.contains_key(&slug.to_lowercase()));
         let slug = pending
             .as_ref()
             .map(|state| state.slug.clone())
             .or_else(|| published.as_ref().map(|state| state.slug.clone()))
+            .or(owned_marketplace_slug)
             .unwrap_or_else(|| normalize_slug(&skill.name));
         let remote = remote_by_slug.get(&slug.to_lowercase()).cloned();
 
@@ -642,6 +792,7 @@ fn build_publishable_skills(
             name: skill.name,
             description: skill.description,
             local_path,
+            management_owner: skill.instance.management_owner,
             source_label: skill.source_label,
             source_type: skill.source_type,
             source_url: skill.source_url,
@@ -1312,7 +1463,7 @@ mod tests {
 
     use super::{
         build_skillhub_publish_update_changes, disconnected_status, next_patch_version,
-        normalize_slug, remote_skill_from_value, resolve_publish_status,
+        normalize_slug, remote_skill_from_value, resolve_publish_baseline, resolve_publish_status,
         write_publish_update_content, PendingSkillState, PublishedSkillState, RemoteSkillHubSkill,
     };
 
@@ -1335,6 +1486,21 @@ mod tests {
     fn publish_version_and_slug_are_normalized() {
         assert_eq!(normalize_slug("Skill Creator"), "skill-creator");
         assert_eq!(next_patch_version("1.2.9"), "1.2.10");
+    }
+
+    #[test]
+    fn uses_dashboard_version_when_the_local_publish_binding_is_missing() {
+        let remote = RemoteSkillHubSkill {
+            slug: "xhs-wechat-plugin-promo".to_string(),
+            current_version: "1.0.1".to_string(),
+            ..RemoteSkillHubSkill::default()
+        };
+
+        let (slug, version) =
+            resolve_publish_baseline("xhs-wechat-plugin-promo", None, None, None, Some(&remote));
+
+        assert_eq!(slug, "xhs-wechat-plugin-promo");
+        assert_eq!(version, "1.0.1");
     }
 
     #[test]

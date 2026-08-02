@@ -37,7 +37,6 @@ import {
 import { SkillFileDialog } from "@/features/skills/components/SkillFileDialog";
 import { formatSkillDescription } from "@/features/skills/utils/skill-description";
 import { getMonogramLabel } from "@/features/skills/utils/monogram";
-import { formatSkillSourceLabel } from "@/features/skills/utils/skill-source";
 import { formatSkillUpdatedAt, parseSkillTimestamp } from "@/features/skills/utils/skill-time";
 
 type PublishStatusFilter = "all" | PublishStatus;
@@ -120,6 +119,26 @@ function matchesStatusFilter(status: PublishStatus, filter: PublishStatusFilter)
     return status === "published" || status === "update-available";
   }
   return status === filter;
+}
+
+function getPublishManagementOwnerLabel(managementOwner?: string) {
+  if (managementOwner === "agent-skills-cli") {
+    return "Agent CLI";
+  }
+  if (managementOwner === "external") {
+    return "外部";
+  }
+  return "SkillDock";
+}
+
+function getPublishSourceMethodLabel(skill: PublishableSkill) {
+  if (skill.sourceType === "well-known" || skill.sourceType === "marketplace") {
+    return "远程";
+  }
+  if (skill.gitLinked || (skill.sourceType && skill.sourceType !== "local")) {
+    return "Git";
+  }
+  return "本地";
 }
 
 function getPublishSortTimestamp(skill: PublishableSkill) {
@@ -715,6 +734,11 @@ function PublishSkillRow(props: {
                 <div className="skill-card__title-row">
                   <h3>{skill.name}</h3>
                   {hasMarketLink ? <PublishMarketLink skillName={skill.name} onOpen={props.onOpenMarket} /> : null}
+                  {!isGridLayout ? (
+                    <span className="status-badge tone-neutral skill-card__owner-badge">
+                      {getPublishManagementOwnerLabel(skill.managementOwner)}
+                    </span>
+                  ) : null}
                   <span className={`status-badge tone-${tone}${isGridLayout ? " skill-card__grid-status" : ""}`}>
                     {STATUS_LABELS[skill.publishStatus]}
                   </span>
@@ -739,7 +763,20 @@ function PublishSkillRow(props: {
             </button>
           </div>
         </div>
-        {props.expanded && !isGridLayout ? <PublishSkillDetails skill={skill} onPreview={props.onPreview} /> : null}
+        {isGridLayout ? (
+          <span className="skill-card__grid-source-label">
+            <span className="skill-card__grid-source-text">
+              {getPublishSourceMethodLabel(skill)} · {getPublishManagementOwnerLabel(skill.managementOwner)}
+            </span>
+          </span>
+        ) : null}
+        {props.expanded && !isGridLayout ? (
+          <PublishSkillDetails
+            skill={skill}
+            onPreview={props.onPreview}
+            onOpenDirectory={props.onOpenDirectory}
+          />
+        ) : null}
       </article>
       {props.expanded && isGridLayout ? createPortal(
         <PublishSkillDetailModal
@@ -819,7 +856,11 @@ function PublishSkillDetailModal(props: {
             </button>
           </div>
         </header>
-        <PublishSkillDetails skill={props.skill} isModal />
+        <PublishSkillDetails
+          skill={props.skill}
+          isModal
+          onOpenDirectory={props.onOpenDirectory}
+        />
       </section>
     </div>
   );
@@ -829,17 +870,15 @@ function PublishSkillDetails({
   skill,
   isModal = false,
   onPreview,
+  onOpenDirectory,
 }: {
   skill: PublishableSkill;
   isModal?: boolean;
   onPreview?: () => void;
+  onOpenDirectory?: () => void;
 }) {
-  const sourceValue = skill.sourceUrl || skill.localPath;
-  const sourceLabel = formatSkillSourceLabel(skill.sourceLabel || skill.sourceType || "本地", {
-    sourceType: skill.sourceType,
-    sourceUrl: sourceValue,
-  });
-  const showGitBadge = Boolean(skill.gitLinked) && skill.sourceType !== "marketplace";
+  const sourceValue = skill.sourceUrl;
+  const sourceLabel = getPublishSourceMethodLabel(skill);
   const description = formatSkillDescription(skill.description) || "暂无简介";
   const localUpdatedAt = formatSkillUpdatedAt(skill.localUpdatedAt) || "未获取";
   const hasStoreRecord = Boolean(skill.remoteSkillId);
@@ -858,19 +897,35 @@ function PublishSkillDetails({
         </div>
         <dl className="detail-grid detail-grid--single"><div><dt>简介</dt><dd>{description}</dd></div></dl>
         <dl className="detail-grid detail-grid--source">
-          <div><dt>来源类型</dt><dd>{sourceLabel}</dd></div>
+          <div><dt>来源方式</dt><dd>{sourceLabel}</dd></div>
+          {sourceValue ? (
+            <div>
+              <dt>来源地址</dt>
+              <dd className="detail-grid__source-value">
+                {isHttpUrl(sourceValue) ? (
+                  <a className="detail-grid__source-link detail-grid__single-line" data-tooltip={sourceValue} href={sourceValue} onClick={(event) => {
+                    event.preventDefault();
+                    void openExternalLink(sourceValue);
+                  }}>
+                    {sourceValue}
+                  </a>
+                ) : <span className="detail-grid__single-line" data-tooltip={sourceValue}>{sourceValue}</span>}
+              </dd>
+            </div>
+          ) : null}
+          <div className={sourceValue ? undefined : "detail-grid__new-row"}>
+            <dt>托管方</dt>
+            <dd>{getPublishManagementOwnerLabel(skill.managementOwner)}</dd>
+          </div>
           <div>
-            <dt>来源</dt>
-            <dd className="detail-grid__source-value">
-              {isHttpUrl(sourceValue) ? (
-                <a className="detail-grid__source-link detail-grid__single-line" data-tooltip={sourceValue} href={sourceValue} onClick={(event) => {
-                  event.preventDefault();
-                  void openExternalLink(sourceValue);
-                }}>
-                  {sourceValue}
-                </a>
-              ) : <span className="detail-grid__single-line" data-tooltip={sourceValue}>{sourceValue}</span>}
-              {showGitBadge ? <span className="detail-git-badge is-linked">git</span> : null}
+            <dt>托管目录</dt>
+            <dd className="skill-source-card__directory-value">
+              <span className="skill-source-card__directory-path detail-grid__single-line" data-tooltip={skill.localPath}>{skill.localPath}</span>
+              {onOpenDirectory ? (
+                <button className="skill-card__icon-button skill-source-card__directory-open-button" type="button" onClick={onOpenDirectory} aria-label={`打开目录 ${skill.name}`} data-tooltip="打开目录">
+                  <OpenFolderIcon />
+                </button>
+              ) : null}
             </dd>
           </div>
         </dl>
@@ -1147,6 +1202,7 @@ export function PublishingWorkbench({ adapter, renderAuthentication }: Publishin
     try {
       const publishedSkill = await adapter.publishSkill({
         skillName: skill.name,
+        localPath: skill.localPath,
         remoteSkillId: skill.remoteSkillId,
         expectedRemoteVersion: skill.remoteVersion || undefined,
         changelog,

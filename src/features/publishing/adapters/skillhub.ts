@@ -95,6 +95,7 @@ function writeCachedSkillHubSnapshot(snapshot: PublishableSkillSnapshot) {
 
 async function publishSkillHub(input: {
   skillName: string;
+  localPath: string;
   remoteSkillId?: string;
   expectedRemoteVersion?: string;
   changelog?: string;
@@ -153,6 +154,7 @@ export const skillHubPublishingAdapter: PublishingPlatformAdapter = {
     }
     await publishSkillHub({
       skillName: importedSkill.name,
+      localPath: importedSkill.localPath,
       remoteSkillId: importedSkill.remoteSkillId || undefined,
       expectedRemoteVersion: importedSkill.remoteVersion || undefined,
     });

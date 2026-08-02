@@ -41,6 +41,7 @@ export type PublishableSkill = {
   name: string;
   description: string;
   localPath: string;
+  managementOwner?: string;
   sourceLabel?: string;
   sourceType?: string;
   sourceUrl?: string;
@@ -72,6 +73,7 @@ export type PublishableSkillSnapshot = {
 
 export type PublishSkillInput = {
   skillName: string;
+  localPath: string;
   remoteSkillId?: string;
   expectedRemoteVersion?: string;
   changelog?: string;

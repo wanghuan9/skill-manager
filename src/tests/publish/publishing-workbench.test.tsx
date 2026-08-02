@@ -83,11 +83,30 @@ test("uses the shared internal workbench layout for first publish", async () => 
 
   await waitFor(() => expect(adapter.publishSkill).toHaveBeenCalledWith({
     skillName: "shared-workbench",
+    localPath: "/tmp/shared-workbench",
     remoteSkillId: undefined,
     expectedRemoteVersion: undefined,
     changelog: "",
   }));
   expect(await screen.findByText("已发布")).toBeInTheDocument();
+});
+
+test("shows the Skill source and management owner like the Skills page", async () => {
+  const adapter = createAdapter();
+  adapter.fetchSkills = vi.fn().mockResolvedValue({
+    skills: [{
+      ...SKILL,
+      sourceType: "github",
+      gitLinked: true,
+      managementOwner: "agent-skills-cli",
+    }],
+    authorizationRequired: false,
+  });
+  render(<PublishingWorkbench adapter={adapter} />);
+
+  expect(await screen.findByText("Agent CLI")).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "skills.view.grid" }));
+  expect(await screen.findByText("Git · Agent CLI")).toBeInTheDocument();
 });
 
 test("reuses the internal managed switcher and preview-file action", async () => {
