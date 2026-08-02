@@ -2024,16 +2024,30 @@ test("marks already installed repo skills as unavailable", async () => {
   expect(screen.getByRole("button", { name: /service-observer/i })).not.toBeDisabled();
 });
 
-test("searches marketplace skills across all supported sources", async () => {
+test("searches marketplace skills across visible sources only", async () => {
+  const fetchMarketplaceSkillsByPageSpy = vi.spyOn(skillClient, "fetchMarketplaceSkillsByPage");
+
   render(<App />);
   await clickNavInstall();
 
   expect(screen.getByRole("button", { name: "全部" })).toHaveAttribute("aria-pressed", "true");
   const searchInput = screen.getByRole("searchbox", { name: "搜索 skill" });
-  await userEvent.type(searchInput, "guardian");
+  await userEvent.type(searchInput, "i");
 
-  expect(await screen.findByText("release-guardian")).toBeInTheDocument();
-  expect(screen.getByText("repo-guardian")).toBeInTheDocument();
+  expect(await screen.findByText("workflow-critic")).toBeInTheDocument();
+  expect(screen.getByText("design-system-reviewer")).toBeInTheDocument();
+  expect(screen.queryByText("release-guardian")).not.toBeInTheDocument();
+  expect(screen.queryByText("repo-guardian")).not.toBeInTheDocument();
+  await waitFor(() => {
+    expect(
+      fetchMarketplaceSkillsByPageSpy.mock.calls
+        .map(([input]) => input)
+        .filter((input) => input.query === "i")
+        .map((input) => input.sourceSite),
+    ).toEqual(["skills.sh", "skillsmp", "skillhub"]);
+  });
+
+  fetchMarketplaceSkillsByPageSpy.mockRestore();
 });
 
 test("searches marketplace skills only in the active source when current scope is selected", async () => {
@@ -2073,9 +2087,7 @@ test("sorts marketplace search results by popularity across sources", async () =
   await waitFor(() => {
     expect(screen.getAllByRole("heading", { level: 3 }).map((item) => item.textContent)).toEqual([
       "workflow-critic",
-      "release-guardian",
       "design-system-reviewer",
-      "repo-guardian",
     ]);
   });
 });
