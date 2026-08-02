@@ -389,6 +389,7 @@ fn looks_sensitive_text(value: &str) -> bool {
     let lower = trimmed.to_ascii_lowercase();
     lower.starts_with("bearer ")
         || lower.starts_with("sk-")
+        || lower.starts_with("skh_")
         || lower.contains("token=")
         || lower.contains("api_key=")
         || lower.contains("apikey=")

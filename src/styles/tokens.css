@@ -8317,6 +8317,470 @@ code {
   gap: 16px;
 }
 
+.skillhub-publish-page {
+  display: grid;
+  gap: 14px;
+  max-width: 900px;
+}
+
+.skillhub-publish-card {
+  display: grid;
+  gap: 16px;
+}
+
+.skillhub-publish-card--connected {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.skillhub-publish-card h2 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.skillhub-publish-card p {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.6;
+}
+
+.skillhub-publish-form {
+  display: grid;
+  gap: 12px;
+}
+
+.skillhub-auth-flow {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.skillhub-auth-step {
+  display: grid;
+  align-content: start;
+  gap: 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-muted);
+  padding: 16px;
+}
+
+.skillhub-auth-step--generate {
+  border-color: color-mix(in srgb, var(--accent) 32%, var(--line));
+  background: color-mix(in srgb, var(--accent) 7%, var(--surface-muted));
+}
+
+.skillhub-auth-step__copy {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.skillhub-auth-step__number {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #ffffff;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.skillhub-auth-step h3 {
+  margin: 1px 0 0;
+  color: var(--heading);
+  font-size: 0.92rem;
+}
+
+.skillhub-auth-step__copy p {
+  margin: 4px 0 0;
+}
+
+.skillhub-auth-step__copy code {
+  color: var(--heading);
+  font-family: var(--font-mono);
+}
+
+.skillhub-auth-step__button {
+  width: 100%;
+  min-height: 38px;
+  justify-content: center;
+}
+
+.skillhub-publish-form label {
+  display: grid;
+  gap: 6px;
+  color: var(--heading);
+  font-size: 0.78rem;
+  font-weight: 500;
+}
+
+.skillhub-publish-form input,
+.skillhub-publish-form select,
+.skillhub-publish-form textarea {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-muted);
+  color: var(--heading);
+  font: inherit;
+  padding: 8px 10px;
+}
+
+.skillhub-publish-form textarea {
+  resize: vertical;
+  line-height: 1.5;
+}
+
+.skillhub-publish-form__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.skillhub-publish-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.skillhub-publish-page__message {
+  margin: 0;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  padding: 9px 12px;
+  font-size: 0.8rem;
+}
+
+.skillhub-publish-page__message.is-error {
+  border-color: rgba(220, 38, 38, 0.25);
+  background: rgba(220, 38, 38, 0.08);
+  color: #b42318;
+}
+
+.skillhub-publish-page__message.is-success {
+  border-color: rgba(22, 163, 74, 0.25);
+  background: rgba(22, 163, 74, 0.08);
+  color: #15803d;
+}
+
+.publish-page {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-height: 0;
+}
+
+.publish-toolbar__filter {
+  flex-basis: 112px;
+}
+
+.publish-page__error {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 0 0 auto;
+}
+
+.publish-page__error p {
+  flex: 1;
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.publish-page__summary {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.publish-skill-list {
+  display: grid;
+  gap: 8px;
+  padding-top: 4px;
+}
+
+.publish-skill-list.is-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.publish-skill-row {
+  display: grid;
+  align-content: center;
+  min-height: 68px;
+  padding: 10px 14px;
+  border-color: var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.publish-skill-row:hover,
+.publish-skill-row:focus-within {
+  border-color: #c6d7ff;
+  box-shadow:
+    0 0 0 0.75px rgba(59, 130, 246, 0.13),
+    0 7px 18px rgba(23, 35, 63, 0.085);
+}
+
+.publish-skill-row__header,
+.publish-skill-row__summary-button {
+  min-width: 0;
+}
+
+.publish-skill-row__market-title-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  flex: 0 0 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition:
+    background-color 120ms ease,
+    color 120ms ease;
+}
+
+.publish-skill-row__market-title-link:hover,
+.publish-skill-row__market-title-link:focus-visible {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.publish-skill-row__market-title-link svg {
+  width: 14px;
+  height: 14px;
+}
+
+.publish-page .publish-skill-row--grid .skill-card__title-row h3 {
+  flex: 0 1 auto;
+}
+
+.publish-skill-row__details {
+  grid-column: 1 / -1;
+}
+
+.publish-skill-row__actions {
+  padding-left: 0;
+}
+
+.publish-skill-row--grid .publish-skill-row__version {
+  margin-right: auto;
+}
+
+.publish-skill-row__version {
+  display: inline-flex;
+  align-items: center;
+  min-height: 18px;
+  padding: 0 7px;
+  border: 1px solid rgba(117, 128, 147, 0.12);
+  border-radius: 999px;
+  background: rgba(117, 128, 147, 0.08);
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.publish-skill-row__market-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  width: max-content;
+}
+
+.publish-skill-row__market-link svg {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+}
+
+.publish-page .status-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 18px;
+  padding: 0 7px;
+  font-size: 0.68rem;
+}
+
+.publish-skill-row__action {
+  flex: 0 0 auto;
+}
+
+.publish-page .skill-card__icon-button.publish-skill-row__action--update-publish {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #ffffff;
+  opacity: 1;
+  box-shadow:
+    0 0 0 0.5px color-mix(in srgb, var(--accent) 24%, transparent),
+    0 3px 8px color-mix(in srgb, var(--accent) 24%, transparent);
+}
+
+.publish-page .skill-card__icon-button.publish-skill-row__action--update-publish:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 86%, #1d4ed8 14%);
+  color: #ffffff;
+}
+
+.publish-skill-row__action.is-loading {
+  color: var(--accent);
+}
+
+.tone-danger {
+  background: rgba(220, 38, 38, 0.1);
+  color: var(--danger);
+}
+
+.tone-processing {
+  background: rgba(124, 92, 255, 0.1);
+  color: #6950d8;
+}
+
+.dialog-card.publish-confirm-dialog {
+  width: min(620px, 100%);
+}
+
+.dialog-info-row.publish-confirm-dialog__info-row {
+  display: grid;
+  align-items: start;
+  justify-content: stretch;
+  gap: 4px;
+  background: color-mix(in srgb, var(--surface-muted) 68%, var(--surface) 32%);
+}
+
+.publish-confirm-dialog__description {
+  display: block;
+  flex: 1;
+  min-width: 0;
+  color: var(--heading);
+  font-size: 0.82rem;
+  font-weight: 400;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  text-align: left;
+}
+
+.publish-confirm-dialog__info-row strong {
+  color: var(--heading);
+  font-size: 0.82rem;
+  font-weight: 500;
+}
+
+.publish-confirm-dialog__summary {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.publish-confirm-dialog__summary div {
+  background: color-mix(in srgb, var(--surface-muted) 72%, var(--surface) 28%);
+}
+
+.publish-confirm-dialog__summary strong {
+  font-weight: 500;
+}
+
+.publish-confirm-dialog__summary.is-update {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.publish-batch-dialog__summary {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.publish-batch-dialog__names {
+  max-height: 180px;
+  overflow-y: auto;
+  margin: 0;
+  color: var(--heading);
+  font-size: 0.82rem;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.publish-skill-row.is-selecting .publish-skill-row__actions {
+  pointer-events: none;
+  opacity: 0.45;
+}
+
+.publish-confirm-dialog__changelog h4 {
+  font-weight: 500;
+}
+
+.publish-confirm-dialog__changelog textarea {
+  min-height: 86px;
+  resize: vertical;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: var(--surface-strong);
+  color: var(--heading);
+  font: inherit;
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.publish-confirm-dialog__changelog textarea:focus {
+  border-color: #c6d6f5;
+  outline: 0;
+  box-shadow: 0 0 0 3px rgba(47, 120, 255, 0.08);
+}
+
+.dialog-card.publish-confirm-dialog .publish-confirm-dialog__primary-button {
+  border-color: var(--button-primary-border);
+  background: var(--button-primary-soft);
+  color: var(--accent);
+  box-shadow: none;
+}
+
+.dialog-card.publish-confirm-dialog .dialog-card__footer > .primary-button,
+.dialog-card.publish-confirm-dialog .dialog-card__footer > .secondary-button {
+  font-weight: 500;
+}
+
+.dialog-card.publish-confirm-dialog .publish-confirm-dialog__primary-button:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 42%, transparent);
+  background: var(--button-primary-soft-hover);
+  color: var(--accent-strong);
+  box-shadow: 0 4px 10px color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.publish-skill-detail-modal {
+  width: min(700px, calc(100vw - 48px));
+}
+
+.skill-card-detail-modal__icon-action {
+  position: relative;
+  overflow: visible;
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+}
+
+@media (max-width: 720px) {
+  .skillhub-publish-card--connected,
+  .skillhub-publish-form__grid,
+  .skillhub-auth-flow {
+    grid-template-columns: 1fr;
+  }
+
+  .publish-skill-list.is-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 .empty-state__actions {
   display: flex;
   flex-wrap: wrap;

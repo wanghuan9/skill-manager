@@ -53,6 +53,7 @@ test("renders primary navigation entries with plugins before tools and cli hidde
   expect(screen.getByRole("button", { name: "Plugins" })).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "CLI" })).not.toBeInTheDocument();
   expect(within(screen.getByRole("navigation", { name: "Primary" })).getByRole("button", { name: /安装/ })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /发布/ })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: /设置/ })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: /关于/ })).toBeInTheDocument();
   expect(navLabels).toEqual([
@@ -61,6 +62,7 @@ test("renders primary navigation entries with plugins before tools and cli hidde
     "Plugins",
     "工具",
     "安装",
+    "发布",
     "设置",
     "关于",
   ]);

@@ -11,6 +11,7 @@ mod plugin_manager;
 mod plugin_watcher;
 mod skill_watcher;
 mod skillhub_market;
+mod skillhub_publishing;
 mod state;
 mod tool_adapters;
 mod workspace;
@@ -63,6 +64,14 @@ pub fn run() {
             commands::get_marketplace_skill_detail,
             commands::get_marketplace_skill_file_browser,
             commands::get_marketplace_skill_file_content,
+            skillhub_publishing::get_skillhub_auth_status,
+            skillhub_publishing::save_skillhub_auth_token,
+            skillhub_publishing::clear_skillhub_auth_token,
+            skillhub_publishing::list_skillhub_publishable_skills,
+            skillhub_publishing::reconcile_skillhub_publishable_skills,
+            skillhub_publishing::get_skillhub_publish_update_preview,
+            skillhub_publishing::revert_skillhub_publish_update_hunk,
+            skillhub_publishing::publish_skillhub_skill,
             commands::list_local_skill_candidates,
             commands::list_tool_skill_entries,
             commands::list_tool_configs,

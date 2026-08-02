@@ -2114,6 +2114,11 @@ async fn build_marketplace_skills(
 }
 
 fn build_local_candidates(installed_skills: &[SkillSummary]) -> Vec<LocalSkillCandidate> {
+    let tool_ids_by_skills_path = build_tool_configs()
+        .into_iter()
+        .filter(|tool| !tool.skills_path.is_empty())
+        .map(|tool| (tool.skills_path, tool.id))
+        .collect::<HashMap<_, _>>();
     scan_local_skill_candidates(installed_skills)
         .into_iter()
         .map(|(name, detected_from)| {
@@ -2122,9 +2127,20 @@ fn build_local_candidates(installed_skills: &[SkillSummary]) -> Vec<LocalSkillCa
                 .to_string_lossy()
                 .to_string();
             let source_hint = local_candidate_source_hint(&local_path).to_string();
+            let tool_id = tool_ids_by_skills_path
+                .get(&detected_from)
+                .cloned()
+                .unwrap_or_default();
+            let resolved_path = Path::new(&local_path)
+                .canonicalize()
+                .unwrap_or_else(|_| PathBuf::from(&local_path))
+                .to_string_lossy()
+                .to_string();
             LocalSkillCandidate {
                 description: read_skill_description(&Path::new(&local_path).join("SKILL.md")),
                 source_hint,
+                tool_id,
+                resolved_path,
                 name,
                 local_path,
                 detected_from,
