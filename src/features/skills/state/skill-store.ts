@@ -403,6 +403,7 @@ export type BackupStatus = {
   repositoryName: string;
   repositoryUrl: string;
   lastSyncAt: string;
+  lastOperation: "" | "backup" | "restore";
   lastError: string;
   phase: "disabled" | "enabling" | "backingUp" | "restoring" | "enabled" | "error";
   syncing: boolean;

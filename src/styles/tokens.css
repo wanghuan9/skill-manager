@@ -9167,7 +9167,13 @@ button.settings-form-item:disabled {
   justify-items: end;
 }
 
-.settings-backup-node-dialog__node-actions .secondary-button {
+.settings-backup-node-dialog__node-buttons {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.settings-backup-node-dialog__node-buttons .secondary-button {
   border-color: color-mix(in srgb, var(--accent) 24%, var(--line));
   background: color-mix(in srgb, var(--accent) 7%, var(--surface-strong));
   color: color-mix(in srgb, var(--accent) 78%, var(--heading));
@@ -9175,11 +9181,77 @@ button.settings-form-item:disabled {
   font-weight: 450;
 }
 
-.settings-backup-node-dialog__node-actions .secondary-button:hover:not(:disabled) {
+.settings-backup-node-dialog__node-buttons .secondary-button:hover:not(:disabled) {
   border-color: color-mix(in srgb, var(--accent) 38%, var(--line));
   background: color-mix(in srgb, var(--accent) 11%, var(--surface-strong));
   color: color-mix(in srgb, var(--accent) 86%, var(--heading));
   box-shadow: 0 4px 10px color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.settings-backup-node-dialog__delete {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, #d25a5a 20%, var(--line));
+  border-radius: 9px;
+  background: color-mix(in srgb, #d25a5a 4%, var(--surface-strong));
+  color: color-mix(in srgb, #b64b4b 72%, var(--muted));
+  cursor: pointer;
+  transition: border-color 140ms ease, background 140ms ease, color 140ms ease;
+}
+
+.settings-backup-node-dialog__delete svg {
+  width: 16px;
+  height: 16px;
+}
+
+.settings-backup-node-dialog__delete:hover:not(:disabled) {
+  border-color: color-mix(in srgb, #d25a5a 40%, var(--line));
+  background: color-mix(in srgb, #d25a5a 9%, var(--surface-strong));
+  color: #b13f3f;
+}
+
+.settings-backup-node-dialog__delete:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.settings-backup-node-dialog__delete:focus-visible {
+  outline: 2px solid color-mix(in srgb, #d25a5a 30%, transparent);
+  outline-offset: 2px;
+}
+
+.settings-backup-confirm-dialog__backdrop {
+  z-index: 40;
+}
+
+.settings-backup-confirm-dialog {
+  width: min(460px, calc(100vw - 40px));
+}
+
+.settings-backup-confirm-dialog .skill-card-detail-modal__title h3 {
+  font-size: 0.94rem;
+  font-weight: 500;
+}
+
+.settings-backup-confirm-dialog__body {
+  display: grid;
+  gap: 22px;
+  min-height: 0;
+}
+
+.settings-backup-confirm-dialog__body p {
+  margin: 0;
+  color: var(--text);
+  font-size: 0.82rem;
+  line-height: 1.65;
+}
+
+.settings-backup-confirm-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 9px;
 }
 
 .settings-github-backup__conflicts {

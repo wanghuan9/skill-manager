@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::fs;
 use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
@@ -34,17 +35,36 @@ const BACKUP_REMOTE_CONFIG_KEY: &str = "skilldock.remoteUrl";
 const BACKUP_STATUS_CHANGED_EVENT: &str = "backup-status-changed";
 const GIT_TRANSFER_IDLE_TIMEOUT: Duration = Duration::from_secs(120);
 const GIT_PROGRESS_POLL_INTERVAL: Duration = Duration::from_millis(100);
+const CLOUD_BACKUP_NODE_LIMIT: usize = 5;
+const CLOUD_BACKUP_NODE_SCAN_LIMIT: usize = 100;
+const CLOUD_BACKUP_NODE_CACHE_TTL: Duration = Duration::from_secs(30);
+const SNAPSHOT_MANIFEST_PATH: &str = ".skilldock/snapshot.json";
+const LIBRARY_SNAPSHOT_PATH: &str = ".skilldock/library.json";
+const DELETED_NODES_PATH: &str = ".skilldock-control/deleted-nodes.json";
+const DELETE_NODE_COMMIT_PREFIX: &str = "SkillDock hide backup node";
+const DELETE_NODE_UPDATE_ATTEMPTS: usize = 3;
+const LAST_OPERATION_BACKUP: &str = "backup";
+const LAST_OPERATION_RESTORE: &str = "restore";
 const ASKPASS_SCRIPT: &str = "#!/bin/sh\ncase \"$1\" in\n  *[Uu]sername*) printf '%s\\n' \"${SKILLDOCK_ASKPASS_USERNAME}\" ;;\n  *) printf '%s\\n' \"${SKILLDOCK_ASKPASS_PASSWORD}\" ;;\nesac\n";
 
 static BACKUP_SYNC_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 static BACKUP_SYNCING: AtomicBool = AtomicBool::new(false);
 static BACKUP_OPERATION_PHASE: OnceLock<Mutex<Option<BackupPhase>>> = OnceLock::new();
 static BACKUP_OPERATION_PROGRESS: OnceLock<Mutex<BackupOperationProgress>> = OnceLock::new();
+static CLOUD_BACKUP_NODE_CACHE: OnceLock<Mutex<Option<CloudBackupNodeCache>>> = OnceLock::new();
 
 #[derive(Clone, Debug, Default)]
 struct BackupOperationProgress {
     stage: String,
     percent: u8,
+}
+
+#[derive(Clone, Debug)]
+struct CloudBackupNodeCache {
+    repository_owner: String,
+    repository_name: String,
+    cached_at: Instant,
+    nodes: Vec<CloudBackupNode>,
 }
 
 type OperationProgressCallback<'a> = dyn Fn(&str, u8) + 'a;
@@ -73,6 +93,20 @@ pub struct CloudBackupNode {
     pub plugin_count: usize,
 }
 
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DeletedCloudBackupNodes {
+    schema_version: u32,
+    deleted_nodes: Vec<DeletedCloudBackupNode>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DeletedCloudBackupNode {
+    commit_id: String,
+    deleted_at: String,
+}
+
 #[derive(Default)]
 struct BackupOperationReport {
     included_skills: usize,
@@ -93,6 +127,39 @@ fn operation_phase_lock() -> &'static Mutex<Option<BackupPhase>> {
 
 fn operation_progress_lock() -> &'static Mutex<BackupOperationProgress> {
     BACKUP_OPERATION_PROGRESS.get_or_init(|| Mutex::new(BackupOperationProgress::default()))
+}
+
+fn cloud_backup_node_cache_lock() -> &'static Mutex<Option<CloudBackupNodeCache>> {
+    CLOUD_BACKUP_NODE_CACHE.get_or_init(|| Mutex::new(None))
+}
+
+fn cached_cloud_backup_nodes(owner: &str, repository: &str) -> Option<Vec<CloudBackupNode>> {
+    let cache = cloud_backup_node_cache_lock().lock().ok()?;
+    let cache = cache.as_ref()?;
+    if cache.cached_at.elapsed() >= CLOUD_BACKUP_NODE_CACHE_TTL
+        || cache.repository_owner != owner
+        || cache.repository_name != repository
+    {
+        return None;
+    }
+    Some(cache.nodes.clone())
+}
+
+fn cache_cloud_backup_nodes(owner: &str, repository: &str, nodes: &[CloudBackupNode]) {
+    if let Ok(mut cache) = cloud_backup_node_cache_lock().lock() {
+        *cache = Some(CloudBackupNodeCache {
+            repository_owner: owner.to_string(),
+            repository_name: repository.to_string(),
+            cached_at: Instant::now(),
+            nodes: nodes.to_vec(),
+        });
+    }
+}
+
+fn clear_cloud_backup_node_cache() {
+    if let Ok(mut cache) = cloud_backup_node_cache_lock().lock() {
+        *cache = None;
+    }
 }
 
 fn current_operation_progress() -> BackupOperationProgress {
@@ -174,6 +241,7 @@ fn status_from_settings(settings: GithubBackupSettings) -> BackupStatus {
         repository_name: settings.repository_name,
         repository_url: settings.repository_url,
         last_sync_at: settings.last_sync_at,
+        last_operation: settings.last_operation,
         last_error: settings.last_error,
         phase,
         syncing: BACKUP_SYNCING.load(Ordering::SeqCst),
@@ -207,6 +275,7 @@ fn reconcile_backup_settings_for_account(
     settings.repository_name.clear();
     settings.repository_url.clear();
     settings.last_sync_at.clear();
+    settings.last_operation.clear();
     settings.last_error.clear();
     settings
 }
@@ -674,6 +743,7 @@ fn upload_current_snapshot_with_progress(
         progress("uploading", 70);
     }
     push_branch_with_retry_progress(repo_path, token, progress, "uploading", 70, 99)?;
+    clear_cloud_backup_node_cache();
     Ok(operation_report_from_snapshot(report))
 }
 
@@ -723,6 +793,38 @@ fn cloud_node_has_data(node: &CloudBackupNode) -> bool {
     node.skill_count > 0 || node.mcp_count > 0 || node.plugin_count > 0
 }
 
+fn parse_deleted_cloud_backup_nodes(payload: Option<&[u8]>) -> DeletedCloudBackupNodes {
+    let mut deleted = payload
+        .and_then(|payload| serde_json::from_slice::<DeletedCloudBackupNodes>(payload).ok())
+        .unwrap_or_default();
+    if deleted.schema_version == 0 {
+        deleted.schema_version = 1;
+    }
+    deleted
+}
+
+fn deleted_cloud_backup_node_ids(deleted: &DeletedCloudBackupNodes) -> HashSet<String> {
+    deleted
+        .deleted_nodes
+        .iter()
+        .map(|node| node.commit_id.clone())
+        .collect()
+}
+
+fn is_backup_control_commit(message: &str) -> bool {
+    message.starts_with(DELETE_NODE_COMMIT_PREFIX)
+}
+
+fn deleted_cloud_backup_nodes_from_remote(repo_path: &Path) -> DeletedCloudBackupNodes {
+    let payload = git(
+        repo_path,
+        &["show", &format!("origin/main:{DELETED_NODES_PATH}")],
+        None,
+    )
+    .ok();
+    parse_deleted_cloud_backup_nodes(payload.as_deref().map(str::as_bytes))
+}
+
 fn remote_snapshot_has_data(repo_path: &Path) -> Result<bool, String> {
     latest_nonempty_cloud_commit(repo_path).map(|commit| commit.is_some())
 }
@@ -731,8 +833,18 @@ fn latest_nonempty_cloud_commit(repo_path: &Path) -> Result<Option<String>, Stri
     if !remote_branch_exists(repo_path) {
         return Ok(None);
     }
-    let history = git(repo_path, &["log", "--format=%H", "origin/main"], None)?;
-    for commit_id in history.lines() {
+    let deleted = deleted_cloud_backup_nodes_from_remote(repo_path);
+    let deleted_ids = deleted_cloud_backup_node_ids(&deleted);
+    let history = git(
+        repo_path,
+        &["log", "--format=%H%x09%s", "origin/main"],
+        None,
+    )?;
+    for entry in history.lines() {
+        let (commit_id, message) = entry.split_once('\t').unwrap_or((entry, ""));
+        if deleted_ids.contains(commit_id) || is_backup_control_commit(message) {
+            continue;
+        }
         if cloud_node_has_data(&parse_cloud_node(repo_path, commit_id, "")?) {
             return Ok(Some(commit_id.to_string()));
         }
@@ -744,35 +856,145 @@ fn latest_restore_commit(repo_path: &Path) -> Result<String, String> {
     latest_nonempty_cloud_commit(repo_path)?.ok_or_else(|| "还没有可用的云端备份节点".to_string())
 }
 
-fn list_cloud_backup_nodes_blocking() -> Result<Vec<CloudBackupNode>, String> {
-    let _guard = sync_lock()
-        .lock()
-        .map_err(|_| "备份同步锁不可用".to_string())?;
+async fn cloud_backup_node_from_api(
+    client: &reqwest::Client,
+    token: &str,
+    owner: &str,
+    repository: &str,
+    commit: github_api::GithubRepositoryCommit,
+) -> Result<CloudBackupNode, String> {
+    let manifest_payload = github_api::fetch_repository_file_at_commit(
+        client,
+        token,
+        owner,
+        repository,
+        &commit.commit_id,
+        SNAPSHOT_MANIFEST_PATH,
+    )
+    .await?;
+    if manifest_payload
+        .as_deref()
+        .and_then(|payload| serde_json::from_slice::<BackupSnapshotManifest>(payload).ok())
+        .is_some()
+    {
+        return Ok(cloud_backup_node_from_payloads(
+            commit,
+            manifest_payload.as_deref(),
+            None,
+        ));
+    }
+
+    let library_payload = github_api::fetch_repository_file_at_commit(
+        client,
+        token,
+        owner,
+        repository,
+        &commit.commit_id,
+        LIBRARY_SNAPSHOT_PATH,
+    )
+    .await?;
+    Ok(cloud_backup_node_from_payloads(
+        commit,
+        None,
+        library_payload.as_deref(),
+    ))
+}
+
+fn cloud_backup_node_from_payloads(
+    commit: github_api::GithubRepositoryCommit,
+    manifest_payload: Option<&[u8]>,
+    library_payload: Option<&[u8]>,
+) -> CloudBackupNode {
+    if let Some(manifest) = manifest_payload
+        .and_then(|payload| serde_json::from_slice::<BackupSnapshotManifest>(payload).ok())
+    {
+        return CloudBackupNode {
+            commit_id: commit.commit_id,
+            created_at: manifest.created_at,
+            device_label: manifest.device_label,
+            skill_count: manifest.skill_count,
+            mcp_count: manifest.mcp_count,
+            plugin_count: manifest.plugin_count,
+        };
+    }
+    let skill_count = library_payload
+        .and_then(|payload| {
+            serde_json::from_slice::<crate::backup_snapshot::BackupLibrary>(payload).ok()
+        })
+        .map(|library| library.skills.len())
+        .unwrap_or_default();
+    CloudBackupNode {
+        commit_id: commit.commit_id,
+        created_at: commit.created_at,
+        device_label: "未知设备".to_string(),
+        skill_count,
+        mcp_count: 0,
+        plugin_count: 0,
+    }
+}
+
+async fn list_cloud_backup_nodes_via_api() -> Result<Vec<CloudBackupNode>, String> {
     let settings = load_github_backup_settings();
     if !settings.enabled {
         return Err("尚未启用 GitHub 备份".to_string());
     }
     let credential = github_credentials::load_active_credential()
         .ok_or_else(|| "GitHub 凭据不可用，请重新连接".to_string())?;
-    let repo_path = backup_repo_path()?;
-    ensure_local_repository(&repo_path, &settings.repository_url)?;
-    reconcile_remote(&repo_path, &credential.token)?;
-    if !remote_branch_exists(&repo_path) {
-        return Ok(Vec::new());
+    if let Some(nodes) =
+        cached_cloud_backup_nodes(&settings.repository_owner, &settings.repository_name)
+    {
+        return Ok(nodes);
     }
-    let history = git(
-        &repo_path,
-        &["log", "--max-count=5", "--format=%H%x09%cI", "origin/main"],
-        None,
-    )?;
-    history
-        .lines()
-        .filter_map(|line| line.split_once('\t'))
-        .map(|(commit_id, created_at)| parse_cloud_node(&repo_path, commit_id, created_at))
-        .collect()
+    let client = github_api::http_client()?;
+    let deleted_file = github_api::fetch_repository_file(
+        &client,
+        &credential.token,
+        &settings.repository_owner,
+        &settings.repository_name,
+        "main",
+        DELETED_NODES_PATH,
+    )
+    .await?;
+    let deleted =
+        parse_deleted_cloud_backup_nodes(deleted_file.as_ref().map(|file| file.content.as_slice()));
+    let deleted_ids = deleted_cloud_backup_node_ids(&deleted);
+    let commits = github_api::list_repository_commits(
+        &client,
+        &credential.token,
+        &settings.repository_owner,
+        &settings.repository_name,
+        CLOUD_BACKUP_NODE_SCAN_LIMIT,
+    )
+    .await?;
+    let visible_commits = commits
+        .into_iter()
+        .filter(|commit| {
+            !deleted_ids.contains(&commit.commit_id) && !is_backup_control_commit(&commit.message)
+        })
+        .take(CLOUD_BACKUP_NODE_LIMIT)
+        .collect::<Vec<_>>();
+    let mut nodes = Vec::with_capacity(visible_commits.len());
+    for commit in visible_commits {
+        nodes.push(
+            cloud_backup_node_from_api(
+                &client,
+                &credential.token,
+                &settings.repository_owner,
+                &settings.repository_name,
+                commit,
+            )
+            .await?,
+        );
+    }
+    cache_cloud_backup_nodes(
+        &settings.repository_owner,
+        &settings.repository_name,
+        &nodes,
+    );
+    Ok(nodes)
 }
 
-fn validate_cloud_commit(repo_path: &Path, commit_id: &str) -> Result<(), String> {
+fn validate_cloud_commit_id(commit_id: &str) -> Result<(), String> {
     if commit_id.len() != 40
         || !commit_id
             .chars()
@@ -780,11 +1002,97 @@ fn validate_cloud_commit(repo_path: &Path, commit_id: &str) -> Result<(), String
     {
         return Err("备份节点标识无效".to_string());
     }
+    Ok(())
+}
+
+async fn delete_cloud_backup_node_via_api(commit_id: String) -> Result<(), String> {
+    validate_cloud_commit_id(&commit_id)?;
+    let settings = load_github_backup_settings();
+    if !settings.enabled {
+        return Err("尚未启用 GitHub 备份".to_string());
+    }
+    let credential = github_credentials::load_active_credential()
+        .ok_or_else(|| "GitHub 凭据不可用，请重新连接".to_string())?;
+    let client = github_api::http_client()?;
+    let commits = github_api::list_repository_commits(
+        &client,
+        &credential.token,
+        &settings.repository_owner,
+        &settings.repository_name,
+        CLOUD_BACKUP_NODE_SCAN_LIMIT,
+    )
+    .await?;
+    let target = commits
+        .iter()
+        .find(|commit| commit.commit_id == commit_id)
+        .ok_or_else(|| "云端备份节点不存在或已超出可管理范围".to_string())?;
+    if is_backup_control_commit(&target.message) {
+        return Err("该提交不是可删除的云端备份节点".to_string());
+    }
+
+    let deleted_at = Utc::now().to_rfc3339();
+    let commit_message = format!("{DELETE_NODE_COMMIT_PREFIX} {}", &commit_id[..8]);
+    for _ in 0..DELETE_NODE_UPDATE_ATTEMPTS {
+        let file = github_api::fetch_repository_file(
+            &client,
+            &credential.token,
+            &settings.repository_owner,
+            &settings.repository_name,
+            "main",
+            DELETED_NODES_PATH,
+        )
+        .await?;
+        let mut deleted =
+            parse_deleted_cloud_backup_nodes(file.as_ref().map(|file| file.content.as_slice()));
+        if deleted
+            .deleted_nodes
+            .iter()
+            .any(|node| node.commit_id == commit_id)
+        {
+            clear_cloud_backup_node_cache();
+            return Ok(());
+        }
+        deleted.deleted_nodes.push(DeletedCloudBackupNode {
+            commit_id: commit_id.clone(),
+            deleted_at: deleted_at.clone(),
+        });
+        let mut payload = serde_json::to_vec_pretty(&deleted)
+            .map_err(|error| format!("序列化云端节点删除记录失败: {error}"))?;
+        payload.push(b'\n');
+        let updated = github_api::update_repository_file(
+            &client,
+            &credential.token,
+            &settings.repository_owner,
+            &settings.repository_name,
+            DELETED_NODES_PATH,
+            &commit_message,
+            &payload,
+            file.as_ref().map(|file| file.sha.as_str()),
+        )
+        .await?;
+        if updated {
+            clear_cloud_backup_node_cache();
+            return Ok(());
+        }
+    }
+    Err("云端备份节点正在被其他设备修改，请重试".to_string())
+}
+
+fn validate_cloud_commit(repo_path: &Path, commit_id: &str) -> Result<(), String> {
+    validate_cloud_commit_id(commit_id)?;
     if !git_success(
         repo_path,
         &["merge-base", "--is-ancestor", commit_id, "origin/main"],
     ) {
         return Err("备份节点不属于当前云端备份历史".to_string());
+    }
+    let deleted = deleted_cloud_backup_nodes_from_remote(repo_path);
+    if deleted_cloud_backup_node_ids(&deleted).contains(commit_id) {
+        return Err("该云端备份节点已删除".to_string());
+    }
+    let message = git(repo_path, &["show", "-s", "--format=%s", commit_id], None)?;
+    if is_backup_control_commit(&message) {
+        return Err("该提交不是可恢复的云端备份节点".to_string());
     }
     Ok(())
 }
@@ -813,17 +1121,9 @@ fn preview_cloud_backup_node_blocking(
     )
 }
 
-fn create_before_restore_node(repo_path: &Path, token: &str) -> Result<(), String> {
-    reconcile_remote(repo_path, token)?;
-    write_current_library_snapshot(repo_path)?;
-    commit_snapshot_with_message(repo_path, "SkillDock before restore", true)?;
-    push_branch_with_retry(repo_path, token)
-}
-
 fn restore_cloud_node_blocking(
     app_handle: tauri::AppHandle,
     commit_id: Option<String>,
-    backup_current: bool,
 ) -> Result<(), String> {
     let _guard = sync_lock()
         .lock()
@@ -840,10 +1140,6 @@ fn restore_cloud_node_blocking(
     progress("preparing", 3);
     let repo_path = backup_repo_path()?;
     ensure_local_repository(&repo_path, &settings.repository_url)?;
-    if backup_current {
-        progress("preserving", 10);
-        create_before_restore_node(&repo_path, &credential.token)?;
-    }
     progress("downloading", 12);
     reconcile_remote_with_progress(
         &repo_path,
@@ -892,7 +1188,9 @@ fn restore_cloud_node_blocking(
         95,
         99,
     )?;
+    clear_cloud_backup_node_cache();
     settings.last_sync_at = Utc::now().to_rfc3339();
+    settings.last_operation = LAST_OPERATION_RESTORE.to_string();
     settings.last_error.clear();
     save_github_backup_settings(settings)?;
     progress("completed", 100);
@@ -936,6 +1234,7 @@ fn run_backup_operation_locked(app_handle: &tauri::AppHandle) -> Result<BackupSy
     let ending_commit = git(&repo_path, &["rev-parse", "HEAD"], None)?;
     let changed = starting_commit.as_deref() != Some(ending_commit.as_str());
     settings.last_sync_at = Utc::now().to_rfc3339();
+    settings.last_operation = LAST_OPERATION_BACKUP.to_string();
     settings.last_error.clear();
     save_github_backup_settings(settings.clone())?;
     update_operation_progress(app_handle, "completed", 100);
@@ -976,9 +1275,12 @@ pub fn get_backup_status() -> BackupStatus {
 
 #[tauri::command]
 pub async fn list_cloud_backup_nodes() -> Result<Vec<CloudBackupNode>, String> {
-    tauri::async_runtime::spawn_blocking(list_cloud_backup_nodes_blocking)
-        .await
-        .map_err(|error| format!("读取云端备份节点失败: {error}"))?
+    list_cloud_backup_nodes_via_api().await
+}
+
+#[tauri::command]
+pub async fn delete_cloud_backup_node(commit_id: String) -> Result<(), String> {
+    delete_cloud_backup_node_via_api(commit_id).await
 }
 
 #[tauri::command]
@@ -995,13 +1297,12 @@ pub fn restore_cloud_backup_node(
     app_handle: tauri::AppHandle,
     commit_id: String,
 ) -> Result<BackupStatus, String> {
-    start_cloud_restore(app_handle, Some(commit_id), true)
+    start_cloud_restore(app_handle, Some(commit_id))
 }
 
 fn start_cloud_restore(
     app_handle: tauri::AppHandle,
     commit_id: Option<String>,
-    backup_current: bool,
 ) -> Result<BackupStatus, String> {
     if !load_github_backup_settings().enabled {
         return Err("尚未启用 GitHub 备份".to_string());
@@ -1019,7 +1320,7 @@ fn start_cloud_restore(
     let restore_app_handle = app_handle.clone();
     tauri::async_runtime::spawn(async move {
         let result = tauri::async_runtime::spawn_blocking(move || {
-            restore_cloud_node_blocking(restore_app_handle, commit_id, backup_current)
+            restore_cloud_node_blocking(restore_app_handle, commit_id)
         })
         .await
         .map_err(|error| format!("启动云端恢复失败: {error}"))
@@ -1095,7 +1396,7 @@ pub fn run_backup_sync(app_handle: tauri::AppHandle) -> Result<BackupStatus, Str
 
 #[tauri::command]
 pub fn sync_backup_to_local(app_handle: tauri::AppHandle) -> Result<BackupStatus, String> {
-    start_cloud_restore(app_handle, None, false)
+    start_cloud_restore(app_handle, None)
 }
 
 fn run_backup_command(app_handle: tauri::AppHandle) -> Result<BackupStatus, String> {
@@ -1167,8 +1468,10 @@ fn resolve_backup_conflict_blocking(
         let changed = commit_snapshot(&repo_path)?;
         let _ = apply_and_refresh_library(&app_handle, &repo_path, &[])?;
         push_branch_with_retry(&repo_path, &credential.token)?;
+        clear_cloud_backup_node_cache();
         let included_skills = apply_and_refresh_library(&app_handle, &repo_path, &[])?;
         settings.last_sync_at = Utc::now().to_rfc3339();
+        settings.last_operation = LAST_OPERATION_RESTORE.to_string();
         settings.last_error.clear();
         save_github_backup_settings(settings.clone())?;
         Ok(BackupSyncResult {
@@ -1210,13 +1513,17 @@ pub async fn resolve_backup_conflict(
 #[cfg(test)]
 mod tests {
     use super::{
-        advance_operation_progress, cloud_node_has_data, commit_snapshot, ensure_local_repository,
-        git, latest_nonempty_cloud_commit, latest_restore_commit, map_item_progress,
-        map_progress_percent, parse_cloud_node, parse_git_progress_percent, push_branch_with_retry,
+        advance_operation_progress, cloud_backup_node_from_payloads, cloud_node_has_data,
+        commit_snapshot, commit_snapshot_with_message, deleted_cloud_backup_node_ids,
+        ensure_local_repository, git, is_backup_control_commit, latest_nonempty_cloud_commit,
+        latest_restore_commit, map_item_progress, map_progress_percent, parse_cloud_node,
+        parse_deleted_cloud_backup_nodes, parse_git_progress_percent, push_branch_with_retry,
         reconcile_backup_settings_for_account, reconcile_remote, remote_snapshot_has_data,
-        status_from_settings, upload_current_snapshot, BackupOperationProgress,
+        status_from_settings, upload_current_snapshot, validate_cloud_commit,
+        BackupOperationProgress, DELETED_NODES_PATH, LAST_OPERATION_BACKUP,
     };
-    use crate::backup_snapshot::{BackupLibrary, BackupSkillMetadata};
+    use crate::backup_snapshot::{BackupLibrary, BackupSkillMetadata, BackupSnapshotManifest};
+    use crate::github_api::GithubRepositoryCommit;
     use crate::models::GithubBackupSettings;
     use crate::workspace::with_test_home;
     use std::collections::BTreeMap;
@@ -1239,6 +1546,81 @@ mod tests {
             content_hash: format!("hash-{backup_id}"),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn creates_cloud_node_from_snapshot_manifest() {
+        let manifest = BackupSnapshotManifest {
+            schema_version: 1,
+            created_at: "2026-07-31T12:00:00Z".to_string(),
+            device_label: "MacBook Pro".to_string(),
+            skill_count: 21,
+            mcp_count: 9,
+            plugin_count: 3,
+        };
+        let payload = serde_json::to_vec(&manifest).expect("serialize manifest");
+
+        let node = cloud_backup_node_from_payloads(
+            GithubRepositoryCommit {
+                commit_id: "commit-id".to_string(),
+                created_at: "fallback-date".to_string(),
+                message: "SkillDock backup".to_string(),
+            },
+            Some(&payload),
+            None,
+        );
+
+        assert_eq!(node.commit_id, "commit-id");
+        assert_eq!(node.created_at, "2026-07-31T12:00:00Z");
+        assert_eq!(node.device_label, "MacBook Pro");
+        assert_eq!(node.skill_count, 21);
+        assert_eq!(node.mcp_count, 9);
+        assert_eq!(node.plugin_count, 3);
+    }
+
+    #[test]
+    fn creates_legacy_cloud_node_from_library() {
+        let library = BackupLibrary {
+            schema_version: 1,
+            skills: vec![metadata("one", "one"), metadata("two", "two")],
+        };
+        let payload = serde_json::to_vec(&library).expect("serialize library");
+
+        let node = cloud_backup_node_from_payloads(
+            GithubRepositoryCommit {
+                commit_id: "legacy-commit".to_string(),
+                created_at: "2026-07-30T12:00:00Z".to_string(),
+                message: "SkillDock backup".to_string(),
+            },
+            None,
+            Some(&payload),
+        );
+
+        assert_eq!(node.created_at, "2026-07-30T12:00:00Z");
+        assert_eq!(node.device_label, "未知设备");
+        assert_eq!(node.skill_count, 2);
+        assert_eq!(node.mcp_count, 0);
+        assert_eq!(node.plugin_count, 0);
+    }
+
+    #[test]
+    fn parses_deleted_cloud_backup_nodes_and_control_commits() {
+        let payload = br#"{
+            "schemaVersion": 1,
+            "deletedNodes": [{
+                "commitId": "0123456789012345678901234567890123456789",
+                "deletedAt": "2026-08-01T12:00:00Z"
+            }]
+        }"#;
+
+        let deleted = parse_deleted_cloud_backup_nodes(Some(payload));
+        let ids = deleted_cloud_backup_node_ids(&deleted);
+
+        assert!(ids.contains("0123456789012345678901234567890123456789"));
+        assert!(is_backup_control_commit(
+            "SkillDock hide backup node 01234567"
+        ));
+        assert!(!is_backup_control_commit("SkillDock backup"));
     }
 
     fn write_library(repository: &Path, skills: &[BackupSkillMetadata]) {
@@ -1312,6 +1694,7 @@ mod tests {
         assert!(!status.enabled);
         assert!(!status.syncing);
         assert_eq!(status.pending_conflicts, 0);
+        assert!(status.last_operation.is_empty());
     }
 
     #[test]
@@ -1354,6 +1737,7 @@ mod tests {
             repository_name: "skilldock-backup".into(),
             repository_url: "https://github.com/octocat/skilldock-backup.git".into(),
             last_sync_at: "2026-07-31T00:00:00Z".into(),
+            last_operation: LAST_OPERATION_BACKUP.into(),
             last_error: String::new(),
         };
 
@@ -1363,6 +1747,7 @@ mod tests {
         assert_eq!(reconciled.account_user_id, Some(42));
         assert_eq!(reconciled.repository_owner, "octocat");
         assert_eq!(reconciled.repository_name, "skilldock-backup");
+        assert_eq!(reconciled.last_operation, LAST_OPERATION_BACKUP);
     }
 
     #[test]
@@ -1374,6 +1759,7 @@ mod tests {
             repository_name: "skilldock-backup".into(),
             repository_url: "https://github.com/octocat/skilldock-backup.git".into(),
             last_sync_at: "2026-07-31T00:00:00Z".into(),
+            last_operation: LAST_OPERATION_BACKUP.into(),
             last_error: "old error".into(),
         };
 
@@ -1385,6 +1771,7 @@ mod tests {
         assert!(reconciled.repository_name.is_empty());
         assert!(reconciled.repository_url.is_empty());
         assert!(reconciled.last_sync_at.is_empty());
+        assert!(reconciled.last_operation.is_empty());
         assert!(reconciled.last_error.is_empty());
     }
 
@@ -1397,6 +1784,7 @@ mod tests {
             repository_name: "skilldock-backup".into(),
             repository_url: "https://github.com/OctoCat/skilldock-backup.git".into(),
             last_sync_at: String::new(),
+            last_operation: String::new(),
             last_error: String::new(),
         };
 
@@ -1416,6 +1804,7 @@ mod tests {
             repository_name: "skilldock-backup".into(),
             repository_url: "https://github.com/octocat/skilldock-backup.git".into(),
             last_sync_at: String::new(),
+            last_operation: String::new(),
             last_error: String::new(),
         };
 
@@ -1574,6 +1963,64 @@ mod tests {
             nonempty_commit
         );
         assert!(remote_snapshot_has_data(&device).expect("inspect cloud history"));
+        let _ = fs::remove_dir_all(temp_root);
+    }
+
+    #[test]
+    fn skips_deleted_node_when_selecting_latest_restore_commit() {
+        let temp_root = std::env::temp_dir().join(format!(
+            "skilldock-backup-deleted-node-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        let remote = temp_root.join("remote.git");
+        let device = temp_root.join("device");
+        fs::create_dir_all(&temp_root).expect("create test root");
+        initialize_bare_repository(&remote);
+        let remote_url = remote.to_string_lossy().to_string();
+        ensure_local_repository(&device, &remote_url).expect("initialize device");
+
+        write_library(&device, &[metadata("skill-a", "Skill A")]);
+        write_snapshot_manifest(&device, 1, 0, 0);
+        commit_snapshot(&device).expect("commit first node");
+        let first_commit = git(&device, &["rev-parse", "HEAD"], None).expect("read first commit");
+        push_branch_with_retry(&device, "").expect("push first node");
+
+        write_library(&device, &[metadata("skill-b", "Skill B")]);
+        write_snapshot_manifest(&device, 1, 0, 0);
+        commit_snapshot(&device).expect("commit second node");
+        let deleted_commit =
+            git(&device, &["rev-parse", "HEAD"], None).expect("read second commit");
+        push_branch_with_retry(&device, "").expect("push second node");
+
+        let control_path = device.join(DELETED_NODES_PATH);
+        fs::create_dir_all(control_path.parent().expect("control parent"))
+            .expect("create control directory");
+        let payload = serde_json::json!({
+            "schemaVersion": 1,
+            "deletedNodes": [{
+                "commitId": deleted_commit.clone(),
+                "deletedAt": "2026-08-01T12:00:00Z"
+            }]
+        });
+        fs::write(
+            &control_path,
+            serde_json::to_vec_pretty(&payload).expect("serialize deletion control"),
+        )
+        .expect("write deletion control");
+        commit_snapshot_with_message(&device, "SkillDock hide backup node deleted", false)
+            .expect("commit deletion control");
+        push_branch_with_retry(&device, "").expect("push deletion control");
+        reconcile_remote(&device, "").expect("refresh remote branch");
+
+        assert_eq!(
+            latest_restore_commit(&device).expect("select restore node"),
+            first_commit
+        );
+        assert_eq!(
+            validate_cloud_commit(&device, &deleted_commit).expect_err("reject deleted node"),
+            "该云端备份节点已删除"
+        );
         let _ = fs::remove_dir_all(temp_root);
     }
 

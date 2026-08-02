@@ -89,6 +89,7 @@ pub fn run() {
             backup_repository::run_backup_sync,
             backup_repository::sync_backup_to_local,
             backup_repository::list_cloud_backup_nodes,
+            backup_repository::delete_cloud_backup_node,
             backup_repository::preview_cloud_backup_node,
             backup_repository::restore_cloud_backup_node,
             backup_repository::list_backup_conflicts,

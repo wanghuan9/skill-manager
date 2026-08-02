@@ -188,6 +188,7 @@ test("runs manual GitHub sync and backup from settings", async () => {
     repositoryName: "skilldock-backup",
     repositoryUrl: "https://github.com/octocat/skilldock-backup.git",
     lastSyncAt: "",
+    lastOperation: "",
     lastError: "",
     phase: "enabled",
     syncing: false,
@@ -196,6 +197,7 @@ test("runs manual GitHub sync and backup from settings", async () => {
     progressPercent: 0,
   };
   let backupStatusListener: ((event: { payload: typeof backupStatus }) => void) | undefined;
+  let cloudBackupNodeRequestCount = 0;
   vi.mocked(listen).mockImplementation(async (event, handler) => {
     if (event === "backup-status-changed") {
       backupStatusListener = handler as typeof backupStatusListener;
@@ -225,26 +227,56 @@ test("runs manual GitHub sync and backup from settings", async () => {
       case "list_backup_conflicts":
         return [];
       case "list_cloud_backup_nodes":
-        return [
-          {
-            commitId: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            createdAt: "2026-07-31T02:44:00Z",
-            deviceLabel: "MacBook Pro",
-            skillCount: 0,
-            mcpCount: 0,
-            pluginCount: 0,
-          },
-          {
-            commitId: "0123456789abcdef0123456789abcdef01234567",
-            createdAt: "2026-07-30T07:57:00Z",
-            deviceLabel: "MacBook Pro",
-            skillCount: 21,
-            mcpCount: 3,
-            pluginCount: 2,
-          },
-        ];
+        cloudBackupNodeRequestCount += 1;
+        return cloudBackupNodeRequestCount === 1
+          ? [
+              {
+                commitId: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                createdAt: "2026-07-31T02:44:00Z",
+                deviceLabel: "MacBook Pro",
+                skillCount: 0,
+                mcpCount: 0,
+                pluginCount: 0,
+              },
+              {
+                commitId: "0123456789abcdef0123456789abcdef01234567",
+                createdAt: "2026-07-30T07:57:00Z",
+                deviceLabel: "MacBook Pro",
+                skillCount: 21,
+                mcpCount: 3,
+                pluginCount: 2,
+              },
+            ]
+          : [
+              {
+                commitId: "0123456789abcdef0123456789abcdef01234567",
+                createdAt: "2026-07-30T07:57:00Z",
+                deviceLabel: "MacBook Pro",
+                skillCount: 21,
+                mcpCount: 3,
+                pluginCount: 2,
+              },
+              {
+                commitId: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                createdAt: "2026-07-29T07:57:00Z",
+                deviceLabel: "MacBook Pro",
+                skillCount: 19,
+                mcpCount: 2,
+                pluginCount: 1,
+              },
+            ];
       case "preview_cloud_backup_node":
         return { added: 4, overwritten: 18, deleted: 1 };
+      case "delete_cloud_backup_node":
+        return undefined;
+      case "restore_cloud_backup_node":
+        return {
+          ...backupStatus,
+          phase: "restoring",
+          syncing: true,
+          progressStage: "preparing",
+          progressPercent: 3,
+        };
       case "sync_backup_to_local":
       case "run_backup_sync":
         return backupStatus;
@@ -263,6 +295,17 @@ test("runs manual GitHub sync and backup from settings", async () => {
   expect(screen.getByText("尚未备份")).toBeInTheDocument();
 
   await waitFor(() => expect(backupStatusListener).toBeDefined());
+  act(() => {
+    backupStatusListener?.({
+      payload: {
+        ...backupStatus,
+        lastSyncAt: "2026-07-31T02:44:00Z",
+        lastOperation: "backup",
+      },
+    });
+  });
+  expect(await screen.findByText(/备份到云端 · 已完成 ·/)).toBeInTheDocument();
+
   act(() => {
     backupStatusListener?.({
       payload: {
@@ -316,12 +359,33 @@ test("runs manual GitHub sync and backup from settings", async () => {
   expect(await screen.findByText("21 Skills · 3 MCP · 2 插件")).toBeInTheDocument();
   expect(await screen.findAllByText("设备：MacBook Pro")).toHaveLength(2);
 
-  const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
   await userEvent.click(screen.getAllByRole("button", { name: "从此节点恢复" })[1]);
-  await waitFor(() => expect(confirmSpy).toHaveBeenCalledWith(
-    "将新增 4 项、覆盖 18 项、删除 1 项 SkillDock 托管数据。系统会先备份当前状态，是否继续？",
-  ));
+  const restoreDialog = await screen.findByRole("dialog", { name: "确认恢复云端节点" });
+  expect(within(restoreDialog).getByText(
+    "将新增 4 项、覆盖 18 项、删除 1 项 SkillDock 托管数据，是否继续？",
+  )).toBeInTheDocument();
+  await userEvent.click(within(restoreDialog).getByRole("button", { name: "取消" }));
   expect(invoke).not.toHaveBeenCalledWith("restore_cloud_backup_node", expect.anything());
+
+  await userEvent.click(screen.getAllByRole("button", { name: "删除节点" })[0]);
+  const deleteDialog = await screen.findByRole("dialog", { name: "删除云端备份节点" });
+  expect(within(deleteDialog).getByText(/Git 历史中的底层数据仍会保留/)).toBeInTheDocument();
+  await userEvent.click(within(deleteDialog).getByRole("button", { name: "删除节点" }));
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("delete_cloud_backup_node", {
+    commitId: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  }));
+  expect(screen.queryByText("0 Skills · 0 MCP · 0 插件")).not.toBeInTheDocument();
+  expect(await screen.findByText("19 Skills · 2 MCP · 1 插件")).toBeInTheDocument();
+  expect(cloudBackupNodeRequestCount).toBe(2);
+
+  await userEvent.click(screen.getAllByRole("button", { name: "从此节点恢复" })[0]);
+  const confirmedRestoreDialog = await screen.findByRole("dialog", { name: "确认恢复云端节点" });
+  await userEvent.click(within(confirmedRestoreDialog).getByRole("button", { name: "确认恢复" }));
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("restore_cloud_backup_node", {
+    commitId: "0123456789abcdef0123456789abcdef01234567",
+  }));
+  expect(screen.queryByRole("dialog", { name: "云端历史备份节点" })).not.toBeInTheDocument();
+  expect(await screen.findByText("正在准备 · 3%")).toBeInTheDocument();
 });
 
 test("allows selecting default open tool in settings", async () => {

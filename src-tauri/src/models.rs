@@ -415,6 +415,8 @@ pub struct GithubBackupSettings {
     pub repository_name: String,
     pub repository_url: String,
     pub last_sync_at: String,
+    #[serde(default)]
+    pub last_operation: String,
     pub last_error: String,
 }
 
@@ -443,6 +445,7 @@ pub struct BackupStatus {
     pub repository_name: String,
     pub repository_url: String,
     pub last_sync_at: String,
+    pub last_operation: String,
     pub last_error: String,
     pub phase: BackupPhase,
     pub syncing: bool,

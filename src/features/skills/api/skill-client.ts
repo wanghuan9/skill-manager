@@ -1365,6 +1365,7 @@ const backupStatusFixture: BackupStatus = {
   repositoryName: "",
   repositoryUrl: "",
   lastSyncAt: "",
+  lastOperation: "",
   lastError: "",
   phase: "disabled",
   syncing: false,
@@ -1398,6 +1399,10 @@ export async function syncBackupToLocal(): Promise<BackupStatus> {
 
 export async function listCloudBackupNodes(): Promise<CloudBackupNode[]> {
   return invokeOrFallback("list_cloud_backup_nodes", {}, []);
+}
+
+export async function deleteCloudBackupNode(commitId: string): Promise<void> {
+  return invoke("delete_cloud_backup_node", { commitId });
 }
 
 export async function restoreCloudBackupNode(commitId: string): Promise<BackupStatus> {

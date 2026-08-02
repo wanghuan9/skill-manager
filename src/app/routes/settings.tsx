@@ -28,6 +28,7 @@ import {
 import { getToolLogoUrl } from "@/features/skills/utils/tool-logo";
 import {
   clearRepoCache,
+  deleteCloudBackupNode,
   disconnectGithubBackup,
   enableGithubBackup,
   fetchBackupConflicts,
@@ -47,6 +48,7 @@ import type {
   BackupConflict,
   BackupStatus,
   CloudBackupNode,
+  WorkspaceRestorePreview,
 } from "@/features/skills/state/skill-store";
 import {
   applyGlobalListGridViewPreference,
@@ -84,6 +86,14 @@ function FolderOpenIcon() {
         strokeLinecap="round"
         strokeLinejoin="round"
       />
+    </svg>
+  );
+}
+
+function BackupNodeTrashIcon() {
+  return (
+    <svg viewBox="0 0 18 18" fill="none" aria-hidden="true">
+      <path d="M4.75 5.75h8.5M7 3.75h4M6 5.75l.5 8h5l.5-8" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }
@@ -251,6 +261,11 @@ export function SettingsRoute() {
   const [cloudBackupNodes, setCloudBackupNodes] = useState<CloudBackupNode[]>([]);
   const [isBackupNodeDialogOpen, setIsBackupNodeDialogOpen] = useState(false);
   const [isLoadingBackupNodes, setIsLoadingBackupNodes] = useState(false);
+  const [pendingRestoreBackupNode, setPendingRestoreBackupNode] = useState<{
+    node: CloudBackupNode;
+    preview: WorkspaceRestorePreview;
+  } | null>(null);
+  const [pendingDeleteBackupNode, setPendingDeleteBackupNode] = useState<CloudBackupNode | null>(null);
   const [activeBackupAction, setActiveBackupAction] = useState("");
   const [currentAppVersion, setCurrentAppVersion] = useState("");
   const [appUpdate, setAppUpdate] = useState<AppUpdateCheckResult | null>(null);
@@ -299,6 +314,11 @@ export function SettingsRoute() {
     ? ["backingUp", "restoring"].includes(backupStatus.phase)
     : false;
   const backupProgressPercent = Math.min(100, Math.max(0, backupStatus?.progressPercent ?? 0));
+  const lastBackupOperationLabel = backupStatus?.lastOperation === "backup"
+    ? t("settings.backup.operation.backup")
+    : backupStatus?.lastOperation === "restore"
+      ? t("settings.backup.operation.restore")
+      : "";
   const backupProgressStageLabel = (() => {
     switch (backupStatus?.progressStage) {
       case "preparing":
@@ -435,8 +455,7 @@ export function SettingsRoute() {
     }
   }
 
-  async function handleOpenBackupNodes() {
-    setIsBackupNodeDialogOpen(true);
+  async function refreshCloudBackupNodes() {
     setIsLoadingBackupNodes(true);
     try {
       setCloudBackupNodes(await listCloudBackupNodes());
@@ -450,24 +469,62 @@ export function SettingsRoute() {
     }
   }
 
+  async function handleOpenBackupNodes() {
+    setIsBackupNodeDialogOpen(true);
+    await refreshCloudBackupNodes();
+  }
+
   async function handleRestoreBackupNode(node: CloudBackupNode) {
     setActiveBackupAction(node.commitId);
     try {
       const preview = await previewCloudBackupNode(node.commitId);
-      if (!window.confirm(t("settings.backup.restoreConfirm", {
-        added: preview.added,
-        overwritten: preview.overwritten,
-        deleted: preview.deleted,
-      }))) {
-        return;
-      }
+      setPendingRestoreBackupNode({ node, preview });
+    } catch (error) {
+      reportFailure(error, {
+        operation: "preview_cloud_backup_node",
+        fallbackMessage: t("settings.backup.restoreFailed"),
+      });
+    } finally {
+      setActiveBackupAction("");
+    }
+  }
+
+  async function handleConfirmRestoreBackupNode() {
+    if (!pendingRestoreBackupNode || activeBackupAction) {
+      return;
+    }
+    const { node } = pendingRestoreBackupNode;
+    setActiveBackupAction(node.commitId);
+    try {
       const status = await restoreCloudBackupNode(node.commitId);
-      await updateBackupState(status);
+      setPendingRestoreBackupNode(null);
       setIsBackupNodeDialogOpen(false);
+      await updateBackupState(status);
     } catch (error) {
       reportFailure(error, {
         operation: "restore_cloud_backup_node",
         fallbackMessage: t("settings.backup.restoreFailed"),
+      });
+    } finally {
+      setActiveBackupAction("");
+    }
+  }
+
+  async function handleConfirmDeleteBackupNode() {
+    if (!pendingDeleteBackupNode || activeBackupAction) {
+      return;
+    }
+    const { commitId } = pendingDeleteBackupNode;
+    const actionId = `delete:${commitId}`;
+    setActiveBackupAction(actionId);
+    try {
+      await deleteCloudBackupNode(commitId);
+      setPendingDeleteBackupNode(null);
+      await refreshCloudBackupNodes();
+    } catch (error) {
+      reportFailure(error, {
+        operation: "delete_cloud_backup_node",
+        fallbackMessage: t("settings.backup.deleteFailed"),
       });
     } finally {
       setActiveBackupAction("");
@@ -1343,12 +1400,18 @@ export function SettingsRoute() {
                               : backupStatus.phase === "error"
                                 ? t("settings.backup.failed")
                                 : backupStatus.lastSyncAt
-                                  ? t("settings.backup.completed", {
-                                      time: formatBackupTimestamp(
-                                        backupStatus.lastSyncAt,
-                                        language,
-                                      ),
-                                    })
+                                  ? t(
+                                      lastBackupOperationLabel
+                                        ? "settings.backup.completedWithOperation"
+                                        : "settings.backup.completed",
+                                      {
+                                        operation: lastBackupOperationLabel,
+                                        time: formatBackupTimestamp(
+                                          backupStatus.lastSyncAt,
+                                          language,
+                                        ),
+                                      },
+                                    )
                                   : t("settings.backup.notBackedUp")}
                           </strong>
                         </div>
@@ -1609,19 +1672,141 @@ export function SettingsRoute() {
                       </div>
                       <div className="settings-backup-node-dialog__node-actions">
                         <span>{t("settings.backup.cloudOnly")}</span>
-                        <button
-                          type="button"
-                          className="secondary-button secondary-button--compact"
-                          disabled={Boolean(activeBackupAction)}
-                          onClick={() => void handleRestoreBackupNode(node)}
-                        >
-                          {t("settings.backup.restoreNode")}
-                        </button>
+                        <div className="settings-backup-node-dialog__node-buttons">
+                          <button
+                            type="button"
+                            className="secondary-button secondary-button--compact"
+                            disabled={Boolean(activeBackupAction)}
+                            onClick={() => void handleRestoreBackupNode(node)}
+                          >
+                            {t("settings.backup.restoreNode")}
+                          </button>
+                          <button
+                            type="button"
+                            className="settings-backup-node-dialog__delete"
+                            aria-label={t("settings.backup.deleteNode")}
+                            title={t("settings.backup.deleteNode")}
+                            disabled={Boolean(activeBackupAction)}
+                            onClick={() => setPendingDeleteBackupNode(node)}
+                          >
+                            <BackupNodeTrashIcon />
+                          </button>
+                        </div>
                       </div>
                     </article>
                   ))}
                 </div>
               )}
+            </div>
+          </section>
+        </div>
+      ) : null}
+      {pendingRestoreBackupNode ? (
+        <div
+          className="skill-card-detail-modal__backdrop settings-backup-confirm-dialog__backdrop"
+          role="presentation"
+          onClick={() => {
+            if (!activeBackupAction) {
+              setPendingRestoreBackupNode(null);
+            }
+          }}
+        >
+          <section
+            className="skill-card-detail-modal settings-backup-confirm-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="settings-backup-restore-confirm-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <header className="skill-card-detail-modal__header">
+              <div className="skill-card-detail-modal__identity">
+                <div className="skill-card-detail-modal__copy">
+                  <div className="skill-card-detail-modal__title">
+                    <h3 id="settings-backup-restore-confirm-title">
+                      {t("settings.backup.restoreConfirmTitle")}
+                    </h3>
+                  </div>
+                </div>
+              </div>
+            </header>
+            <div className="skill-card-detail-modal__body settings-backup-confirm-dialog__body">
+              <p>
+                {t("settings.backup.restoreConfirm", {
+                  added: pendingRestoreBackupNode.preview.added,
+                  overwritten: pendingRestoreBackupNode.preview.overwritten,
+                  deleted: pendingRestoreBackupNode.preview.deleted,
+                })}
+              </p>
+              <div className="settings-backup-confirm-dialog__actions">
+                <button
+                  type="button"
+                  className="secondary-button secondary-button--compact"
+                  disabled={Boolean(activeBackupAction)}
+                  onClick={() => setPendingRestoreBackupNode(null)}
+                >
+                  {t("settings.backup.confirmCancel")}
+                </button>
+                <button
+                  type="button"
+                  className="primary-button primary-button--compact"
+                  disabled={Boolean(activeBackupAction)}
+                  onClick={() => void handleConfirmRestoreBackupNode()}
+                >
+                  {t("settings.backup.confirmRestore")}
+                </button>
+              </div>
+            </div>
+          </section>
+        </div>
+      ) : null}
+      {pendingDeleteBackupNode ? (
+        <div
+          className="skill-card-detail-modal__backdrop settings-backup-confirm-dialog__backdrop"
+          role="presentation"
+          onClick={() => {
+            if (!activeBackupAction) {
+              setPendingDeleteBackupNode(null);
+            }
+          }}
+        >
+          <section
+            className="skill-card-detail-modal settings-backup-confirm-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="settings-backup-delete-confirm-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <header className="skill-card-detail-modal__header">
+              <div className="skill-card-detail-modal__identity">
+                <div className="skill-card-detail-modal__copy">
+                  <div className="skill-card-detail-modal__title">
+                    <h3 id="settings-backup-delete-confirm-title">
+                      {t("settings.backup.deleteTitle")}
+                    </h3>
+                  </div>
+                </div>
+              </div>
+            </header>
+            <div className="skill-card-detail-modal__body settings-backup-confirm-dialog__body">
+              <p>{t("settings.backup.deleteDescription")}</p>
+              <div className="settings-backup-confirm-dialog__actions">
+                <button
+                  type="button"
+                  className="secondary-button secondary-button--compact"
+                  disabled={Boolean(activeBackupAction)}
+                  onClick={() => setPendingDeleteBackupNode(null)}
+                >
+                  {t("settings.backup.confirmCancel")}
+                </button>
+                <button
+                  type="button"
+                  className="secondary-button secondary-button--compact danger-button"
+                  disabled={Boolean(activeBackupAction)}
+                  onClick={() => void handleConfirmDeleteBackupNode()}
+                >
+                  {t(activeBackupAction ? "settings.backup.deletingNode" : "settings.backup.confirmDelete")}
+                </button>
+              </div>
             </div>
           </section>
         </div>
