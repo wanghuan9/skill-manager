@@ -70,7 +70,7 @@ import {
 } from "@/features/skills/utils/marketplace-skills";
 import {
   createMarketplaceSourceRecord,
-  MARKETPLACE_SOURCE_SITES,
+  VISIBLE_MARKETPLACE_SOURCE_SITES,
 } from "@/features/skills/utils/marketplace-sources";
 import type {
   AppLanguage,
@@ -1374,7 +1374,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
     setIsSearchLoading(true);
     setMarketplaceSearchError("");
     try {
-      const searchSourceSites = sourceSite ? [sourceSite] : MARKETPLACE_SOURCE_SITES;
+      const searchSourceSites = sourceSite ? [sourceSite] : VISIBLE_MARKETPLACE_SOURCE_SITES;
       const searchResults = await Promise.allSettled(
         searchSourceSites.map((searchSourceSite) =>
           fetchMarketplaceSkillsByPage({

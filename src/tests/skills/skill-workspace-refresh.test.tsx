@@ -1058,6 +1058,7 @@ test("reports a GitHub rate limit returned by the Agent CLI refresh", async () =
 });
 
 test("keeps successful marketplace search results visible when another source fails", async () => {
+  const requestedSourceSites: string[] = [];
   mockedInvoke.mockImplementation(async (command, args) => {
     switch (command) {
       case "list_startup_installed_skills":
@@ -1075,6 +1076,7 @@ test("keeps successful marketplace search results visible when another source fa
         return (args as { settings: AppSettings }).settings;
       case "list_marketplace_skills_page": {
         const sourceSite = (args as { sourceSite: string }).sourceSite;
+        requestedSourceSites.push(sourceSite);
         if (sourceSite === "skills.sh") {
           throw new Error("skills.sh 搜索请求失败");
         }
@@ -1102,6 +1104,7 @@ test("keeps successful marketplace search results visible when another source fa
     expect(screen.getByTestId("marketplace-search-results").textContent).toBe("release-guardian");
     expect(screen.getByTestId("marketplace-search-error").textContent).toBe("skills.sh 搜索请求失败");
   });
+  expect(requestedSourceSites).toEqual(["skills.sh", "skillsmp", "skillhub"]);
 });
 
 test("persists selected language into local storage", async () => {
