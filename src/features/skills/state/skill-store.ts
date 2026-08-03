@@ -293,6 +293,8 @@ export type LocalSkillCandidate = {
   localPath: string;
   detectedFrom: string;
   sourceHint: string;
+  toolId?: string;
+  resolvedPath?: string;
 };
 
 export type ToolSkillEntryKind = "symlink" | "directory";

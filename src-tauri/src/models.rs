@@ -282,6 +282,10 @@ pub struct LocalSkillCandidate {
     pub local_path: String,
     pub detected_from: String,
     pub source_hint: String,
+    #[serde(default)]
+    pub tool_id: String,
+    #[serde(default)]
+    pub resolved_path: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

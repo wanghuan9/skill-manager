@@ -21,6 +21,7 @@ import {
 import { SettingsRoute } from "@/app/routes/settings";
 import { AboutRoute } from "@/app/routes/about";
 import { PluginsRoute } from "@/app/routes/plugins";
+import { PublishRoute } from "@/app/routes/publish";
 import { AppI18nProvider, tx, useTranslate } from "@/app/i18n";
 import { subscribeOpenGithubSettings } from "@/app/github-settings-navigation";
 import { NotificationProvider, useNotifications } from "@/app/notifications";
@@ -62,6 +63,7 @@ type RouteKey =
   | "plugins"
   | "tools"
   | "install"
+  | "publish"
   | "settings"
   | "about";
 type SkillsSectionKey = "skills" | "mcp";
@@ -155,6 +157,11 @@ const routes: RouteDefinition[] = [
     descriptionKey: "app.nav.install.description",
   },
   {
+    key: "publish",
+    labelKey: "app.nav.publish.label",
+    descriptionKey: "app.nav.publish.description",
+  },
+  {
     key: "settings",
     labelKey: "app.nav.settings.label",
     descriptionKey: "app.nav.settings.description",
@@ -215,6 +222,21 @@ function NavRouteIcon(props: { route: RouteKey }) {
       </svg>
     );
   }
+  if (route === "publish") {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path
+          d="M12 20V10m0 0-4 4m4-4 4 4M5 5h14"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.8"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+    );
+  }
+
   if (route === "plugins") {
     return (
       <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -320,6 +342,9 @@ function renderRoute(
         onInstallTabChange={onInstallTabChange}
       />
     );
+  }
+  if (route === "publish") {
+    return <PublishRoute />;
   }
   if (route === "plugins") {
     return (
@@ -1297,6 +1322,34 @@ function AppContent() {
               </div>
               <p>{activeDescription}</p>
             </div>
+          ) : activeRoute === "publish" ? (
+            <div
+              key="publish"
+              className={`page-header--split${isCompactManagementHeader ? " management-page-header--compact" : ""}`}
+              data-tauri-drag-region={macOSDragRegion}
+            >
+              {isCompactManagementHeader ? (
+                <>
+                  <div className="management-page-header__identity" data-tauri-drag-region={macOSDragRegion}>
+                    <h1>{tx(language, activeDefinition.labelKey)}</h1>
+                    <p id="publish-header-summary-slot" />
+                  </div>
+                  <div className="management-page-header__toolbar-row">
+                    <div className="skills-source-header-slot management-page-header__source" id="publish-source-header-slot" />
+                    <div className="management-page-header__toolbar" id="publish-header-toolbar-slot" />
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="page-header__row" data-tauri-drag-region={macOSDragRegion}>
+                    <h1>{tx(language, activeDefinition.labelKey)}</h1>
+                    <div id="publish-header-toolbar-slot" />
+                  </div>
+                  <p id="publish-header-summary-slot" />
+                  <div className="skills-source-header-slot" id="publish-source-header-slot" />
+                </>
+              )}
+            </div>
           ) : activeRoute === "plugins" ? (
             <div
               key="plugins"
@@ -1357,7 +1410,7 @@ function AppContent() {
         <div
           className={`page-header-divider${
             (isCompactManagementHeader
-              && (activeRoute === "skills" || activeRoute === "plugins"))
+              && (activeRoute === "skills" || activeRoute === "plugins" || activeRoute === "publish"))
               || (activeRoute === "skills" && activeSkillsSection === "skills")
               || activeRoute === "plugins"
               ? " page-header-divider--skills"

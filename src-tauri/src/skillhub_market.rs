@@ -327,7 +327,7 @@ pub(crate) async fn update_installed_skill(skill: SkillSummary) -> Result<SkillS
 }
 
 pub(crate) fn is_installed_skillhub_skill(skill: &SkillSummary) -> bool {
-    skill.source_label == SOURCE_LABEL || slug_from_source_url(&skill.source_url).is_some()
+    skill.source_label == SOURCE_LABEL || installed_skillhub_slug(skill).is_some()
 }
 
 fn map_list_items(
@@ -585,11 +585,20 @@ fn slug_from_marketplace_skill(skill: &MarketplaceSkill) -> Option<String> {
         .or_else(|| slug_from_source_url(&skill.source_url))
 }
 
-fn slug_from_installed_skill(skill: &SkillSummary) -> Option<String> {
-    if skill.source_label != SOURCE_LABEL && skill.source_type != "marketplace" {
+pub(crate) fn installed_skillhub_slug(skill: &SkillSummary) -> Option<String> {
+    let source_url_slug = slug_from_source_url(&skill.source_url);
+    if skill.source_label != SOURCE_LABEL && source_url_slug.is_none() {
         return None;
     }
-    slug_from_source_url(&skill.source_url)
+    let marketplace_slug = skill.instance.marketplace_slug.trim();
+    if !marketplace_slug.is_empty() {
+        return Some(marketplace_slug.to_string());
+    }
+    source_url_slug
+}
+
+fn slug_from_installed_skill(skill: &SkillSummary) -> Option<String> {
+    installed_skillhub_slug(skill)
 }
 
 fn slug_from_source_url(source_url: &str) -> Option<String> {

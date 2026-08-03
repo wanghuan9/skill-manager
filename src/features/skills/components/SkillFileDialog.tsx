@@ -13,7 +13,12 @@ import {
   type SkillDiffDisplayMode,
 } from "@/features/skills/components/SkillDiffView";
 import { useSkillWorkspace } from "@/features/skills/state/skill-workspace";
-import type { GitChangeFile, SkillFileEntry, SkillSummary } from "@/features/skills/state/skill-store";
+import type {
+  GitChangeFile,
+  SkillFileEntry,
+  SkillSummary,
+  UpdatePreviewSnapshot,
+} from "@/features/skills/state/skill-store";
 import {
   getSkillFileLanguage,
   normalizeCodeFenceLanguage,
@@ -35,6 +40,13 @@ type SkillFileDialogProps = {
   toolId?: string;
   readOnly?: boolean;
   initialMode?: SkillFilePanelMode;
+  onLocalChangesChanged?: () => void;
+  loadUpdatePreview?: () => Promise<UpdatePreviewSnapshot>;
+  revertUpdateHunk?: (
+    relativePath: string,
+    expectedContent: string,
+    content: string,
+  ) => Promise<UpdatePreviewSnapshot>;
 };
 
 const FRONTMATTER_PATTERN = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/;
@@ -633,6 +645,9 @@ export function SkillFileDialog({
   toolId,
   readOnly = false,
   initialMode = "files",
+  onLocalChangesChanged,
+  loadUpdatePreview: loadExternalUpdatePreview,
+  revertUpdateHunk,
 }: SkillFileDialogProps) {
   const { t } = useTranslate();
   const reportFailure = useFailureReporter();
@@ -676,7 +691,8 @@ export function SkillFileDialog({
   const [pendingRevert, setPendingRevert] = useState<PendingSkillRevert | null>(null);
   const canUseChanges = Boolean(skill.gitLinked) && !toolId && !readOnly;
   const canUseUpdatePreview = (
-    Boolean(skill.gitLinked)
+    Boolean(loadExternalUpdatePreview)
+    || Boolean(skill.gitLinked)
     || skill.updateDriver === "agent-skills-cli"
     || skill.updateDriver === "clawhub"
     || skill.sourceType === "marketplace"
@@ -688,6 +704,7 @@ export function SkillFileDialog({
     && (hasLocalChanges || initialMode === "changes");
   const canShowUpdates = canUseUpdatePreview
     && (skill.collabStatus === "update-available" || initialMode === "updates");
+  const canEditUpdates = Boolean(loadExternalUpdatePreview && revertUpdateHunk) && !readOnly;
   const activeChangeFiles = panelMode === "updates" ? updateFiles : changeFiles;
   const skillPath = skill.canonicalPath ?? skill.localPath ?? "";
 
@@ -706,7 +723,7 @@ export function SkillFileDialog({
   const handleSave = useCallback(async () => {
     if (
       readOnly
-      || panelMode === "updates"
+      || (panelMode === "updates" && !canEditUpdates)
       || !selectedPath
       || isSaving
       || (panelMode === "changes" && selectedChange?.currentContent == null)
@@ -726,7 +743,19 @@ export function SkillFileDialog({
       });
       setContent(document.content);
       setHasDirtyChanges(false);
-      setChangesRefreshVersion((current) => current + 1);
+      if (panelMode === "updates" && loadExternalUpdatePreview) {
+        const preview = await loadExternalUpdatePreview();
+        setUpdateFiles(preview.changedFiles);
+        setHasLoadedUpdates(true);
+        const refreshedChange = preview.changedFiles.find((change) => change.path === selectedPath);
+        setContent(refreshedChange?.currentContent ?? document.content);
+      } else {
+        setChangesRefreshVersion((current) => current + 1);
+        setHasLoadedUpdates(false);
+      }
+      setHasLoadedBrowser(false);
+      setBrowserRefreshVersion((current) => current + 1);
+      onLocalChangesChanged?.();
       setIsSaving(false);
       void refreshSkillLocalGitState(skill.name, skillPath).catch((error) => {
         reportFailure(error, {
@@ -741,8 +770,11 @@ export function SkillFileDialog({
     }
   }, [
     content,
+    canEditUpdates,
     isSaving,
+    loadExternalUpdatePreview,
     panelMode,
+    onLocalChangesChanged,
     refreshSkillLocalGitState,
     readOnly,
     reportFailure,
@@ -896,7 +928,9 @@ export function SkillFileDialog({
       setErrorMessage("");
       try {
         await waitForNextPaint();
-        const preview = await loadSkillUpdatePreview(skill.name, skillPath);
+        const preview = loadExternalUpdatePreview
+          ? await loadExternalUpdatePreview()
+          : await loadSkillUpdatePreview(skill.name, skillPath);
         if (!active) {
           return;
         }
@@ -925,6 +959,7 @@ export function SkillFileDialog({
     canShowUpdates,
     hasLoadedUpdates,
     isOpen,
+    loadExternalUpdatePreview,
     loadSkillUpdatePreview,
     panelMode,
     reportGithubRateLimit,
@@ -1124,6 +1159,43 @@ export function SkillFileDialog({
     });
   }
 
+  async function handleRevertUpdateHunk(expectedContent: string, nextContent: string) {
+    if (!selectedChange || !revertUpdateHunk || isReverting) {
+      return;
+    }
+    if (expectedContent !== selectedChange.currentContent) {
+      setContent(expectedContent);
+      setErrorMessage(t("skill.files.saveBeforeSwitch"));
+      return;
+    }
+
+    setIsReverting(true);
+    setErrorMessage("");
+    try {
+      const preview = await revertUpdateHunk(
+        selectedChange.path,
+        expectedContent,
+        nextContent,
+      );
+      setUpdateFiles(preview.changedFiles);
+      setHasLoadedUpdates(true);
+      const refreshedChange = preview.changedFiles.find(
+        (change) => change.path === selectedChange.path,
+      );
+      setContent(refreshedChange?.currentContent ?? nextContent);
+      setHasDirtyChanges(false);
+      setHasLoadedBrowser(false);
+      setBrowserRefreshVersion((current) => current + 1);
+      onLocalChangesChanged?.();
+    } catch (error) {
+      setContent(expectedContent);
+      setHasDirtyChanges(false);
+      setErrorMessage(error instanceof Error ? error.message : t("skill.changes.error.revert"));
+    } finally {
+      setIsReverting(false);
+    }
+  }
+
   async function handleConfirmRevert() {
     if (!pendingRevert || isReverting) {
       return;
@@ -1235,7 +1307,13 @@ export function SkillFileDialog({
                 onDisplayModeChange={setDiffDisplayMode}
                 onSave={() => void handleSave()}
                 onRevertFile={() => handleRequestRevert({})}
-                readOnly={panelMode === "updates"}
+                onRevertHunk={panelMode === "updates" && canEditUpdates
+                  ? (expectedContent, nextContent) => {
+                    void handleRevertUpdateHunk(expectedContent, nextContent);
+                  }
+                  : undefined}
+                readOnly={readOnly || (panelMode === "updates" && !canEditUpdates)}
+                canRevertFile={panelMode !== "updates"}
                 emptyLabel={panelMode === "updates" ? t("skill.updates.empty") : undefined}
               />
             ) : (
