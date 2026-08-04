@@ -1850,11 +1850,19 @@ fn json_server_to_toml_table(server: &Value) -> Result<toml_edit::Table, String>
 }
 
 fn read_agent_json_mcp_servers(path: &Path) -> Result<Vec<(String, Value)>, String> {
-    let mut servers = read_json_mcp_servers(path, "mcp", true)?;
-    for (_, spec) in &mut servers {
-        *spec = agent_json_to_unified(spec)?;
+    if !path.exists() {
+        return Ok(Vec::new());
     }
-    Ok(servers)
+
+    let root = read_json_value(path, true)?;
+    let servers = get_json_object_at_path(&root, "mcp")
+        .cloned()
+        .unwrap_or_default();
+    servers
+        .into_iter()
+        .filter(|(_, spec)| spec.get("enabled").and_then(Value::as_bool) != Some(false))
+        .map(|(server_id, spec)| agent_json_to_unified(&spec).map(|server| (server_id, server)))
+        .collect()
 }
 
 fn upsert_agent_json_mcp_server(
@@ -7989,6 +7997,81 @@ mcpServers:
                 "command": "uvx",
                 "args": ["context7-mcp"]
             })
+        );
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn writes_and_reads_opencode_mcp_servers_without_double_normalizing() {
+        let temp_dir = unique_continue_test_dir("opencode-write-read");
+        let config_path = temp_dir.join("opencode.json");
+
+        upsert_agent_json_mcp_server(
+            &config_path,
+            "local-server",
+            &json!({
+                "type": "stdio",
+                "command": "uvx",
+                "args": ["local-server"],
+                "env": {
+                    "LOG_LEVEL": "info"
+                }
+            }),
+        )
+        .expect("write local OpenCode MCP server");
+        upsert_agent_json_mcp_server(
+            &config_path,
+            "remote-server",
+            &json!({
+                "type": "sse",
+                "url": "https://example.com/mcp",
+                "headers": {
+                    "Authorization": "Bearer demo"
+                }
+            }),
+        )
+        .expect("write remote OpenCode MCP server");
+        upsert_json_mcp_server(
+            &config_path,
+            "mcp",
+            "disabled-server",
+            &json!({
+                "type": "local",
+                "command": ["uvx", "disabled-server"],
+                "enabled": false
+            }),
+        )
+        .expect("write disabled OpenCode MCP server");
+
+        let loaded = read_agent_json_mcp_servers(&config_path)
+            .expect("read OpenCode MCP servers after writing native config");
+
+        assert_eq!(
+            loaded,
+            vec![
+                (
+                    "local-server".to_string(),
+                    json!({
+                        "type": "stdio",
+                        "command": "uvx",
+                        "args": ["local-server"],
+                        "env": {
+                            "LOG_LEVEL": "info"
+                        }
+                    })
+                ),
+                (
+                    "remote-server".to_string(),
+                    json!({
+                        "type": "sse",
+                        "url": "https://example.com/mcp",
+                        "headers": {
+                            "Authorization": "Bearer demo"
+                        }
+                    })
+                ),
+            ]
         );
 
         let _ = fs::remove_dir_all(temp_dir);
