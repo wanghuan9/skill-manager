@@ -54,8 +54,9 @@ type SkillDiffViewProps = {
   onSave: () => void;
   onRevertFile: () => void;
   onRevertHunk?: (expectedContent: string, content: string) => void;
-  canRevertFile?: boolean;
   readOnly?: boolean;
+  isUpdatePreview?: boolean;
+  canRevertFile?: boolean;
   emptyLabel?: string;
 };
 
@@ -332,6 +333,7 @@ function SkillDiffEditor({
   onContentChange,
   onRevertHunk,
   readOnly,
+  isUpdatePreview,
 }: {
   change: GitChangeFile;
   content: string;
@@ -339,6 +341,7 @@ function SkillDiffEditor({
   onContentChange: (content: string) => void;
   onRevertHunk?: (expectedContent: string, content: string) => void;
   readOnly: boolean;
+  isUpdatePreview: boolean;
 }) {
   const { t } = useTranslate();
   const editorHostRef = useRef<HTMLDivElement | null>(null);
@@ -378,7 +381,7 @@ function SkillDiffEditor({
           "$ unchanged lines": t("skill.changes.unchangedLines"),
         }),
         EditorView.contentAttributes.of({
-          "aria-label": t(readOnly ? "skill.updates.editor" : "skill.changes.editor"),
+          "aria-label": t(isUpdatePreview ? "skill.updates.editor" : "skill.changes.editor"),
         }),
         unifiedMergeView({
           original: change.originalContent,
@@ -411,7 +414,7 @@ function SkillDiffEditor({
       }
       editorView.destroy();
     };
-  }, [change.currentContent, change.originalContent, change.path, displayMode, readOnly, t]);
+  }, [change.currentContent, change.originalContent, change.path, displayMode, isUpdatePreview, readOnly, t]);
 
   useEffect(() => {
     const editorView = editorViewRef.current;
@@ -442,8 +445,9 @@ export function SkillDiffView({
   onSave,
   onRevertFile,
   onRevertHunk,
-  canRevertFile = true,
   readOnly = false,
+  isUpdatePreview = false,
+  canRevertFile = false,
   emptyLabel,
 }: SkillDiffViewProps) {
   const { t } = useTranslate();
@@ -502,7 +506,7 @@ export function SkillDiffView({
               {isSaving ? t("skill.files.saving") : t("skill.files.save")}
             </button>
           ) : null}
-          {!readOnly && canRevertFile ? (
+          {!readOnly || canRevertFile ? (
             <button
               className="secondary-button secondary-button--compact skill-diff__revert-file"
               type="button"
@@ -522,6 +526,7 @@ export function SkillDiffView({
           onContentChange={onContentChange}
           onRevertHunk={onRevertHunk}
           readOnly={readOnly}
+          isUpdatePreview={isUpdatePreview}
         />
       ) : (
         <div className="skill-diff skill-file-dialog__empty">

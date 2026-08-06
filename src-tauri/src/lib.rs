@@ -81,6 +81,7 @@ pub fn run() {
             skillhub_publishing::list_skillhub_publishable_skills,
             skillhub_publishing::reconcile_skillhub_publishable_skills,
             skillhub_publishing::get_skillhub_publish_update_preview,
+            skillhub_publishing::revert_skillhub_publish_update_file,
             skillhub_publishing::revert_skillhub_publish_update_hunk,
             skillhub_publishing::publish_skillhub_skill,
             commands::list_local_skill_candidates,
