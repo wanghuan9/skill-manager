@@ -1,6 +1,4 @@
-export const PUBLISHING_PLATFORM_IDS = ["secondary-market", "skillhub"] as const;
-
-export type PublishingPlatformId = (typeof PUBLISHING_PLATFORM_IDS)[number];
+export type PublishingPlatformId = string;
 
 export type PublishingPlatform = {
   id: PublishingPlatformId;
@@ -51,6 +49,8 @@ export type PublishableSkill = {
   gitLinked?: boolean;
   localChangeCount?: number;
   updateFileCount?: number;
+  /** Whether this Skill's complete local/remote file diff was computed successfully. */
+  fileDiffReconciled?: boolean;
   localContentHash: string;
   fileCount: number;
   packageSize: number;
@@ -60,6 +60,8 @@ export type PublishableSkill = {
   remoteContentHash: string;
   remotePrimaryContentHash?: string;
   publishStatus: PublishStatus;
+  /** Platform returned a terminal restriction; keep visible but prevent publish actions. */
+  publishBlocked?: boolean;
   failureReason: string;
   marketUrl: string;
   targetVersion: string;
@@ -67,6 +69,7 @@ export type PublishableSkill = {
 
 export type PublishableSkillSnapshot = {
   skills: PublishableSkill[];
+  displayOrder?: string[];
   authorizationRequired: boolean;
   statusSyncError?: string;
 };

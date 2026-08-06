@@ -4,6 +4,7 @@ import type { UpdatePreviewSnapshot } from "@/features/skills/state/skill-store"
 export type SkillHubAuthStatus = {
   connected: boolean;
   handle: string;
+  displayName: string;
   userId: number;
   verifiedAt: string;
 };
@@ -24,6 +25,7 @@ export type SkillHubPublishableSkill = {
   gitLinked?: boolean;
   localChangeCount?: number;
   updateFileCount: number;
+  fileDiffReconciled: boolean;
   localContentHash: string;
   fileCount: number;
   packageSize: number;
@@ -31,6 +33,7 @@ export type SkillHubPublishableSkill = {
   remoteVersion: string;
   lastPublishedAt: string;
   publishStatus: SkillHubPublishStatus;
+  publishBlocked: boolean;
   failureReason: string;
   marketUrl: string;
   targetVersion: string;
@@ -93,6 +96,16 @@ export function fetchSkillHubPublishUpdatePreview(input: {
   remoteVersion: string;
 }): Promise<UpdatePreviewSnapshot> {
   return invoke("get_skillhub_publish_update_preview", input);
+}
+
+export function revertSkillHubPublishUpdateFile(input: {
+  skillName: string;
+  localPath: string;
+  remoteSkillId: string;
+  remoteVersion: string;
+  relativePath: string;
+}): Promise<UpdatePreviewSnapshot> {
+  return invoke("revert_skillhub_publish_update_file", input);
 }
 
 export function revertSkillHubPublishUpdateHunk(input: {

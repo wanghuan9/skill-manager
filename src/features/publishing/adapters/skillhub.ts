@@ -8,12 +8,16 @@ import {
   listSkillHubPublishableSkills,
   publishSkillHubSkill,
   reconcileSkillHubPublishableSkills,
+  revertSkillHubPublishUpdateFile,
   revertSkillHubPublishUpdateHunk,
   type SkillHubAuthStatus,
   type SkillHubPublishableSkill,
   type SkillHubPublishableSkillsSnapshot,
 } from "@/features/skillhub-publishing/publishing-client";
-import type { PublishingPlatformAdapter } from "../publishing-adapter";
+import {
+  CACHED_SNAPSHOT_BACKGROUND_REFRESH_DELAY_MS,
+  type PublishingPlatformAdapter,
+} from "../publishing-adapter";
 import type {
   PublishableSkill,
   PublishingAuthState,
@@ -25,13 +29,16 @@ const SKILLHUB_PLATFORM = {
   id: "skillhub",
   label: "SkillHub",
 } as const;
+const SKILLHUB_AUTH_CACHE_KEY = "skilldock.skillhubPublishingAuthCache";
 const SKILLHUB_PUBLISHING_CACHE_KEY = "skilldock.skillhubPublishingCache";
 
 function toPublishingAuthState(auth: SkillHubAuthStatus): PublishingAuthState {
-  const account = auth.handle || String(auth.userId);
+  const displayName = auth.displayName.trim();
+  const handle = auth.handle.trim();
+  const account = displayName || (handle ? `@${handle}` : String(auth.userId));
   return {
     connected: auth.connected,
-    accountLabel: auth.connected ? `@${account}` : "",
+    accountLabel: auth.connected ? account : "",
     verifiedAt: auth.verifiedAt,
   };
 }
@@ -59,6 +66,47 @@ function toPublishableSkillSnapshot(snapshot: SkillHubPublishableSkillsSnapshot)
   };
 }
 
+function readCachedSkillHubAuthState(): PublishingAuthState | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  try {
+    const value = window.localStorage.getItem(SKILLHUB_AUTH_CACHE_KEY);
+    if (!value) {
+      const snapshot = readCachedSkillHubSnapshot();
+      return snapshot
+        ? {
+          connected: !snapshot.authorizationRequired,
+          accountLabel: "",
+          verifiedAt: "",
+        }
+        : null;
+    }
+    const authState = JSON.parse(value) as Partial<PublishingAuthState>;
+    if (
+      typeof authState.connected !== "boolean"
+      || typeof authState.accountLabel !== "string"
+      || typeof authState.verifiedAt !== "string"
+    ) {
+      return null;
+    }
+    return authState as PublishingAuthState;
+  } catch {
+    return null;
+  }
+}
+
+function writeCachedSkillHubAuthState(authState: PublishingAuthState) {
+  if (typeof window === "undefined") {
+    return;
+  }
+  try {
+    window.localStorage.setItem(SKILLHUB_AUTH_CACHE_KEY, JSON.stringify(authState));
+  } catch {
+    // The native credential remains authoritative when browser storage is unavailable.
+  }
+}
+
 function readCachedSkillHubSnapshot(): PublishableSkillSnapshot | null {
   if (typeof window === "undefined") {
     return null;
@@ -74,6 +122,7 @@ function readCachedSkillHubSnapshot(): PublishableSkillSnapshot | null {
     }
     return {
       skills: snapshot.skills,
+      displayOrder: Array.isArray(snapshot.displayOrder) ? snapshot.displayOrder : [],
       authorizationRequired: snapshot.authorizationRequired,
       statusSyncError: snapshot.statusSyncError ?? "",
     };
@@ -126,8 +175,10 @@ function findPublishedSkill(
 
 export const skillHubPublishingAdapter: PublishingPlatformAdapter = {
   platform: SKILLHUB_PLATFORM,
+  cachedSnapshotRefreshDelayMs: CACHED_SNAPSHOT_BACKGROUND_REFRESH_DELAY_MS,
   capabilities: {
     updatePreview: true,
+    revertUpdateFile: true,
     revertUpdateHunk: true,
   },
   getAuthState: async () => toPublishingAuthState(await getSkillHubAuthStatus()),
@@ -135,14 +186,20 @@ export const skillHubPublishingAdapter: PublishingPlatformAdapter = {
   reconcileSkills: async (forceRefresh) => toPublishableSkillSnapshot(
     await reconcileSkillHubPublishableSkills(forceRefresh),
   ),
+  readCachedAuthState: readCachedSkillHubAuthState,
+  writeCachedAuthState: writeCachedSkillHubAuthState,
   readCachedSnapshot: readCachedSkillHubSnapshot,
   writeCachedSnapshot: writeCachedSkillHubSnapshot,
   refreshSkill: async (skill) => {
-    const snapshot = await fetchSkillHubSkills();
+    // 文件回退后必须走完整 diff，轻量列表不会计算 updateFileCount。
+    const snapshot = toPublishableSkillSnapshot(
+      await reconcileSkillHubPublishableSkills(true),
+    );
     return findPublishedSkill(snapshot.skills, skill.name, skill.remoteSkillId);
   },
   publishSkill: publishSkillHub,
   getUpdatePreview: fetchSkillHubPublishUpdatePreview,
+  revertUpdateFile: revertSkillHubPublishUpdateFile,
   revertUpdateHunk: revertSkillHubPublishUpdateHunk,
   fetchUnmanagedSkills: async () => (await fetchLocalSkillCandidates()).map(toUnmanagedSkill),
   importAndPublishUnmanagedSkill: async (skill) => {

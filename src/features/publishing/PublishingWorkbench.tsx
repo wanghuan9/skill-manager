@@ -1,6 +1,8 @@
 import {
+  useCallback,
   useDeferredValue,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -16,7 +18,6 @@ import {
 } from "@/app/components/BatchActions";
 import { SearchFieldIcon } from "@/app/components/SearchFieldIcon";
 import { useBatchSelection } from "@/app/hooks/useBatchSelection";
-import { useStableListOrder } from "@/app/hooks/useStableListOrder";
 import { alignExpandedRowIntoView } from "@/app/utils/align-expanded-row";
 import { getPublishingAdapterCapabilities, type PublishingPlatformAdapter } from "./publishing-adapter";
 import type {
@@ -43,7 +44,10 @@ type PublishStatusFilter = "all" | PublishStatus;
 
 type PublishingWorkbenchProps = {
   adapter: PublishingPlatformAdapter;
+  externalAuthState?: PublishingAuthState | null;
+  isVisible?: boolean;
   renderAuthentication?: (refreshAuth: () => Promise<void>) => ReactNode;
+  onAuthStateChange?: (authState: PublishingAuthState) => void;
 };
 
 type BatchConfirmState = {
@@ -91,6 +95,14 @@ const BATCH_PUBLISHABLE_STATUSES = new Set<PublishStatus>([
 const VIEW_MODE_STORAGE_KEY = "skilldock.publish:view-mode";
 const PUBLISH_STATUS_POLL_INTERVAL_MS = 5_000;
 const SKILL_LIBRARY_CHANGE_DEBOUNCE_MS = 500;
+const PUBLISH_ORDER_ANIMATION_DURATION_MS = 180;
+const PUBLISH_ORDER_ANIMATION_EASING = "cubic-bezier(0.22, 1, 0.36, 1)";
+const REDUCED_MOTION_MEDIA_QUERY = "(prefers-reduced-motion: reduce)";
+
+type RefreshOptions = {
+  forceRefresh?: boolean;
+  background?: boolean;
+};
 
 function readViewMode(): ListGridViewMode {
   if (typeof window === "undefined") {
@@ -108,6 +120,44 @@ function writeViewMode(viewMode: ListGridViewMode) {
     window.localStorage.setItem(VIEW_MODE_STORAGE_KEY, viewMode);
   } catch {
     // Keep the in-memory preference when storage is unavailable.
+  }
+}
+
+function comparePublishVersions(left: string, right: string): number | null {
+  const parse = (version: string) => {
+    const normalized = version.trim().replace(/^v/i, "");
+    if (!normalized) {
+      return null;
+    }
+    const parts = normalized.split(".").map(Number);
+    return parts.every(Number.isInteger) ? parts : null;
+  };
+  const leftParts = parse(left);
+  const rightParts = parse(right);
+  if (!leftParts || !rightParts) {
+    return null;
+  }
+  const partCount = Math.max(leftParts.length, rightParts.length);
+  for (let index = 0; index < partCount; index += 1) {
+    const difference = (leftParts[index] ?? 0) - (rightParts[index] ?? 0);
+    if (difference !== 0) {
+      return difference;
+    }
+  }
+  return 0;
+}
+
+function releaseEventListener(unlisten: (() => void) | null) {
+  if (!unlisten) {
+    return;
+  }
+
+  try {
+    void Promise.resolve(unlisten()).catch((error) => {
+      console.warn("Failed to release publishing event listener:", error);
+    });
+  } catch (error) {
+    console.warn("Failed to release publishing event listener:", error);
   }
 }
 
@@ -169,28 +219,101 @@ function replaceSkill(skills: PublishableSkill[], updatedSkill: PublishableSkill
   ));
 }
 
-function retainCachedUpdateStatus(
+function retainCachedPublishStatus(
   previousSkills: PublishableSkill[],
   refreshedSkills: PublishableSkill[],
-) {
+  isFileDiffReconciled = false,
+): PublishableSkill[] {
   const previousByPath = new Map(previousSkills.map((skill) => [skill.localPath, skill]));
   return refreshedSkills.map((skill) => {
     const previous = previousByPath.get(skill.localPath);
-    const canRetainUpdateStatus = previous?.publishStatus === "update-available"
-      && (previous.updateFileCount ?? 0) > 0
-      && previous.localContentHash === skill.localContentHash
-      && previous.remoteSkillId === skill.remoteSkillId
-      && previous.remoteVersion === skill.remoteVersion;
-    if (!canRetainUpdateStatus) {
+    if (skill.publishBlocked) {
+      // 平台的终态限制必须立即覆盖缓存，避免继续显示可发布或可更新操作。
       return skill;
     }
-    return {
-      ...skill,
-      publishStatus: previous.publishStatus,
-      updateFileCount: previous.updateFileCount,
-      targetVersion: previous.targetVersion,
-    };
+    const isSameRemoteSkill = Boolean(previous?.remoteSkillId)
+      && previous?.remoteSkillId === skill.remoteSkillId;
+    const isSamePublishedSkill = previous?.localContentHash === skill.localContentHash
+      && isSameRemoteSkill
+      && previous.remoteVersion === skill.remoteVersion;
+    const isSkillFileDiffReconciled = skill.fileDiffReconciled === true
+      || (isFileDiffReconciled && skill.fileDiffReconciled !== false);
+    const canRetainUpdateStatus = !isSkillFileDiffReconciled
+      && previous?.publishStatus === "update-available"
+      && (previous.updateFileCount ?? 0) > 0
+      && previous.localContentHash === skill.localContentHash
+      && isSameRemoteSkill;
+    if (canRetainUpdateStatus) {
+      // 轻量快照不会计算远端文件 diff；完整对齐后的结果必须覆盖缓存状态。
+      return {
+        ...skill,
+        publishStatus: previous.publishStatus,
+        updateFileCount: previous.updateFileCount,
+        targetVersion: previous.targetVersion,
+      };
+    }
+    const canRetainLocalPublishResult = Boolean(previous?.remoteSkillId)
+      && !skill.remoteSkillId
+      && previous?.localContentHash === skill.localContentHash
+      && (previous.publishStatus === "publishing"
+        || previous.publishStatus === "published"
+        || previous.publishStatus === "failed");
+    if (canRetainLocalPublishResult) {
+      // 发布请求返回的结果比进入页面前已发出的轻量扫描新，不能被后者倒灌为未发布。
+      return previous;
+    }
+    const canRetainCompletedPublish = previous?.publishStatus === "published"
+      && skill.publishStatus === "update-available"
+      && previous.localContentHash === skill.localContentHash
+      && isSameRemoteSkill
+      && (comparePublishVersions(previous.remoteVersion, skill.remoteVersion) ?? 0) > 0;
+    if (canRetainCompletedPublish) {
+      // 发布接口已确认新版本，商店列表尚未索引完成时继续展示该结果，避免又倒回“可更新”。
+      return previous;
+    }
+    const canRetainFailure = previous?.publishStatus === "failed"
+      && skill.publishStatus === "publishing"
+      && previous.localContentHash === skill.localContentHash
+      && (!previous.remoteSkillId || previous.remoteSkillId === skill.remoteSkillId);
+    return canRetainFailure
+      ? { ...skill, publishStatus: "failed", failureReason: previous.failureReason }
+      : skill;
   });
+}
+
+function hasSamePublishableSkills(
+  currentSkills: PublishableSkill[],
+  nextSkills: PublishableSkill[],
+) {
+  if (currentSkills.length !== nextSkills.length) {
+    return false;
+  }
+  const currentByPath = new Map(currentSkills.map((skill) => [skill.localPath, JSON.stringify(skill)]));
+  return nextSkills.every((skill) => currentByPath.get(skill.localPath) === JSON.stringify(skill));
+}
+
+function buildPublishableSkillDisplayOrder(skills: PublishableSkill[]) {
+  return [...skills].sort(comparePublishableSkills).map((skill) => skill.localPath);
+}
+
+function hasSameDisplayOrder(currentOrder: string[], nextOrder: string[]) {
+  return currentOrder.length === nextOrder.length
+    && currentOrder.every((skillPath, index) => skillPath === nextOrder[index]);
+}
+
+function orderPublishableSkills(
+  skills: PublishableSkill[],
+  displayOrder: string[],
+) {
+  const skillByPath = new Map(skills.map((skill) => [skill.localPath, skill]));
+  const orderedSkills = displayOrder
+    .map((skillPath) => skillByPath.get(skillPath))
+    .filter((skill): skill is PublishableSkill => Boolean(skill));
+  const orderedPaths = new Set(orderedSkills.map((skill) => skill.localPath));
+  const newlyAddedSkills = skills
+    .filter((skill) => !orderedPaths.has(skill.localPath))
+    .sort(comparePublishableSkills);
+  return [...orderedSkills, ...newlyAddedSkills];
 }
 
 function buildUnmanagedSkillGroups(candidates: PublishingUnmanagedSkill[]): UnmanagedSkillGroup[] {
@@ -341,11 +464,14 @@ function PublishFilePreviewButton(props: {
   onClick: () => void;
   showLabel?: boolean;
 }) {
-  const hasUpdates = (props.skill.updateFileCount ?? 0) > 0;
+  const updateFileCount = props.skill.publishStatus === "update-available"
+    ? props.skill.updateFileCount ?? 0
+    : 0;
+  const hasUpdates = updateFileCount > 0;
   const label = hasUpdates ? "预览变更" : "预览文件";
   const className = props.showLabel
     ? "secondary-button secondary-button--compact skill-card-detail-modal__action publish-skill-row__preview-button"
-    : "skill-card__icon-button publish-skill-row__preview-button";
+    : "skill-card__icon-button skill-card__file-preview-button publish-skill-row__preview-button";
   return (
     <button
       className={className}
@@ -356,6 +482,9 @@ function PublishFilePreviewButton(props: {
     >
       {hasUpdates && props.showLabel ? <UpdatePreviewIcon /> : <ViewFileIcon />}
       {props.showLabel ? <span>{label}</span> : null}
+      {hasUpdates && !props.showLabel ? (
+        <span className="skill-card__change-count" aria-hidden="true">{updateFileCount}</span>
+      ) : null}
     </button>
   );
 }
@@ -664,7 +793,8 @@ function PublishSkillRow(props: {
   const { skill } = props;
   const rowRef = useRef<HTMLElement | null>(null);
   const isGridLayout = props.layout === "grid";
-  const canPublish = BATCH_PUBLISHABLE_STATUSES.has(skill.publishStatus);
+  const isPublishBlocked = skill.publishBlocked === true;
+  const canPublish = !isPublishBlocked && BATCH_PUBLISHABLE_STATUSES.has(skill.publishStatus);
   const isUpdatePublish = skill.publishStatus === "update-available";
   const isPublishingStatus = skill.publishStatus === "publishing";
   const hasMarketLink = Boolean(skill.marketUrl);
@@ -676,7 +806,8 @@ function PublishSkillRow(props: {
       : `v${skill.remoteVersion}`
     : "";
   const buttonLabel = getPublishButtonLabel(skill.publishStatus);
-  const tone = getPublishStatusTone(skill.publishStatus);
+  const tone = isPublishBlocked ? "danger" : getPublishStatusTone(skill.publishStatus);
+  const statusLabel = isPublishBlocked ? "已封禁" : STATUS_LABELS[skill.publishStatus];
   const actionClassName = [
     "skill-card__icon-button",
     "publish-skill-row__action",
@@ -723,6 +854,7 @@ function PublishSkillRow(props: {
     <>
       <article
         ref={rowRef}
+        data-publish-skill-path={skill.localPath}
         className={`skill-card skill-card--list publish-skill-row${isGridLayout ? " skill-card--grid publish-skill-row--grid" : ""}${props.expanded ? " is-expanded" : ""}${props.selectionMode ? " is-selecting" : ""}${props.selected ? " is-selected" : ""}`}
       >
         <div className="skill-card__header publish-skill-row__header">
@@ -740,10 +872,17 @@ function PublishSkillRow(props: {
                     </span>
                   ) : null}
                   <span className={`status-badge tone-${tone}${isGridLayout ? " skill-card__grid-status" : ""}`}>
-                    {STATUS_LABELS[skill.publishStatus]}
+                    {statusLabel}
                   </span>
                 </div>
                 <p className="skill-card__summary-description">{skill.description || "暂无简介"}</p>
+                {isGridLayout ? (
+                  <span className="skill-card__grid-source-label publish-skill-row__grid-source-label">
+                    <span className="skill-card__grid-source-text">
+                      {getPublishSourceMethodLabel(skill)} · {getPublishManagementOwnerLabel(skill.managementOwner)}
+                    </span>
+                  </span>
+                ) : null}
               </div>
             </div>
           </div>
@@ -763,13 +902,6 @@ function PublishSkillRow(props: {
             </button>
           </div>
         </div>
-        {isGridLayout ? (
-          <span className="skill-card__grid-source-label">
-            <span className="skill-card__grid-source-text">
-              {getPublishSourceMethodLabel(skill)} · {getPublishManagementOwnerLabel(skill.managementOwner)}
-            </span>
-          </span>
-        ) : null}
         {props.expanded && !isGridLayout ? (
           <PublishSkillDetails
             skill={skill}
@@ -781,7 +913,7 @@ function PublishSkillRow(props: {
       {props.expanded && isGridLayout ? createPortal(
         <PublishSkillDetailModal
           skill={skill}
-          statusLabel={STATUS_LABELS[skill.publishStatus]}
+          statusLabel={statusLabel}
           statusTone={tone}
           buttonLabel={buttonLabel}
           canPublish={canPublish}
@@ -813,7 +945,7 @@ function PublishSkillDetailModal(props: {
   onOpenDirectory: () => void;
   onClose: () => void;
 }) {
-  const isPrimaryDisabled = !props.canPublish && !props.canOpenMarket;
+  const hasPrimaryAction = props.canPublish || props.canOpenMarket;
 
   function handlePrimaryAction() {
     props.onClose();
@@ -843,10 +975,12 @@ function PublishSkillDetailModal(props: {
             </div>
           </div>
           <div className="skill-card-detail-modal__actions">
-            <button className={`secondary-button secondary-button--compact skill-card-detail-modal__action${props.canPublish ? " is-primary" : ""}`} type="button" onClick={handlePrimaryAction} disabled={isPrimaryDisabled}>
-              {props.isPublishing ? <RefreshIcon isSpinning /> : props.canPublish ? <PublishActionIcon /> : <OpenMarketIcon />}
-              <span>{props.buttonLabel}</span>
-            </button>
+            {hasPrimaryAction ? (
+              <button className={`secondary-button secondary-button--compact skill-card-detail-modal__action${props.canPublish ? " is-primary" : ""}`} type="button" onClick={handlePrimaryAction} disabled={props.isPublishing}>
+                {props.isPublishing ? <RefreshIcon isSpinning /> : props.canPublish ? <PublishActionIcon /> : <OpenMarketIcon />}
+                <span>{props.buttonLabel}</span>
+              </button>
+            ) : null}
             <PublishFilePreviewButton skill={props.skill} onClick={handlePreview} showLabel />
             <button className="skill-card__icon-button skill-card-detail-modal__icon-action" type="button" onClick={props.onOpenDirectory} aria-label={`打开目录 ${props.skill.name}`} data-tooltip="打开目录">
               <OpenFolderIcon />
@@ -896,6 +1030,9 @@ function PublishSkillDetails({
           ) : null}
         </div>
         <dl className="detail-grid detail-grid--single"><div><dt>简介</dt><dd>{description}</dd></div></dl>
+        {skill.publishBlocked && skill.failureReason ? (
+          <dl className="detail-grid detail-grid--single"><div><dt>发布限制</dt><dd>{skill.failureReason}</dd></div></dl>
+        ) : null}
         <dl className="detail-grid detail-grid--source">
           <div><dt>来源方式</dt><dd>{sourceLabel}</dd></div>
           {sourceValue ? (
@@ -1048,11 +1185,18 @@ function UnmanagedImportDialog(props: {
   );
 }
 
-export function PublishingWorkbench({ adapter, renderAuthentication }: PublishingWorkbenchProps) {
+export function PublishingWorkbench({
+  adapter,
+  externalAuthState,
+  isVisible = true,
+  renderAuthentication,
+  onAuthStateChange,
+}: PublishingWorkbenchProps) {
   const capabilities = useMemo(() => getPublishingAdapterCapabilities(adapter), [adapter]);
   const startupSnapshot = useMemo(() => adapter.readCachedSnapshot?.() ?? null, [adapter]);
   const [authState, setAuthState] = useState<PublishingAuthState | null>(null);
   const [skills, setSkills] = useState<PublishableSkill[]>(() => startupSnapshot?.skills ?? []);
+  const [displayOrder, setDisplayOrder] = useState<string[]>(() => startupSnapshot?.displayOrder ?? []);
   const [unmanagedSkills, setUnmanagedSkills] = useState<PublishingUnmanagedSkill[]>([]);
   const [query, setQuery] = useState("");
   const deferredQuery = useDeferredValue(query.trim().toLowerCase());
@@ -1060,6 +1204,7 @@ export function PublishingWorkbench({ adapter, renderAuthentication }: Publishin
   const [viewMode, setViewMode] = useState<ListGridViewMode>(readViewMode);
   const [statusFilter, setStatusFilter] = useState<PublishStatusFilter>("all");
   const [isRefreshing, setIsRefreshing] = useState(() => startupSnapshot === null);
+  const [isRefreshingUnmanagedSkills, setIsRefreshingUnmanagedSkills] = useState(false);
   const [isPublishing, setIsPublishing] = useState(false);
   const [loadError, setLoadError] = useState("");
   const [statusSyncError, setStatusSyncError] = useState(() => startupSnapshot?.statusSyncError ?? "");
@@ -1072,7 +1217,14 @@ export function PublishingWorkbench({ adapter, renderAuthentication }: Publishin
   const [toolbarContainer, setToolbarContainer] = useState<HTMLElement | null>(null);
   const [summaryContainer, setSummaryContainer] = useState<HTMLElement | null>(null);
   const [sourceContainer, setSourceContainer] = useState<HTMLElement | null>(null);
-  const [orderRevision, setOrderRevision] = useState(0);
+  const refreshRequestRef = useRef(0);
+  const skillsRef = useRef<PublishableSkill[]>(startupSnapshot?.skills ?? []);
+  const displayOrderRef = useRef<string[]>(startupSnapshot?.displayOrder ?? []);
+  const refreshRef = useRef<(options?: RefreshOptions) => Promise<void>>(() => Promise.resolve());
+  const fetchUnmanagedSkillsRef = useRef(adapter.fetchUnmanagedSkills);
+  const previousSkillCardRectsRef = useRef<Map<string, DOMRect>>(new Map());
+  const shouldPersistLocalPublishStatusRef = useRef(false);
+  const wasVisibleRef = useRef(isVisible);
 
   const counts = useMemo(() => {
     const nextCounts: Record<PublishStatusFilter, number> = {
@@ -1092,8 +1244,10 @@ export function PublishingWorkbench({ adapter, renderAuthentication }: Publishin
     }
     return nextCounts;
   }, [skills]);
-  const statusSortedSkills = useMemo(() => [...skills].sort(comparePublishableSkills), [skills]);
-  const orderedSkills = useStableListOrder(statusSortedSkills, (skill) => skill.localPath, orderRevision);
+  const orderedSkills = useMemo(
+    () => orderPublishableSkills(skills, displayOrder),
+    [displayOrder, skills],
+  );
   const filteredSkills = useMemo(() => orderedSkills.filter((skill) => (
     matchesStatusFilter(skill.publishStatus, statusFilter)
       && (!deferredQuery
@@ -1111,7 +1265,7 @@ export function PublishingWorkbench({ adapter, renderAuthentication }: Publishin
       || group.candidates.some((candidate) => formatUnmanagedSource(candidate).toLowerCase().includes(deferredQuery))
   )), [deferredQuery, unmanagedGroups]);
   const visibleBatchIds = useMemo(() => filteredSkills
-    .filter((skill) => BATCH_PUBLISHABLE_STATUSES.has(skill.publishStatus))
+    .filter((skill) => !skill.publishBlocked && BATCH_PUBLISHABLE_STATUSES.has(skill.publishStatus))
     .map((skill) => skill.localPath), [filteredSkills]);
   const batchSelection = useBatchSelection(visibleBatchIds);
   const selectedBatchSkills = useMemo(() => filteredSkills.filter((skill) => (
@@ -1121,62 +1275,226 @@ export function PublishingWorkbench({ adapter, renderAuthentication }: Publishin
     ? `${adapter.platform.label} · 可发布 ${counts.unpublished} · 已发布 ${counts.published} · 可更新 ${counts["update-available"]} · 发布中 ${counts.publishing}`
     : `${adapter.platform.label} · 待导入 ${unmanagedGroups.length}`;
 
-  async function refreshAuth() {
-    await refresh(true);
+  useLayoutEffect(() => {
+    const previousSkillCardRects = previousSkillCardRectsRef.current;
+    if (previousSkillCardRects.size === 0) {
+      return;
+    }
+    previousSkillCardRectsRef.current = new Map();
+    if (window.matchMedia?.(REDUCED_MOTION_MEDIA_QUERY).matches) {
+      return;
+    }
+    for (const element of document.querySelectorAll<HTMLElement>("[data-publish-skill-path]")) {
+      const skillPath = element.dataset.publishSkillPath;
+      const previousRect = skillPath ? previousSkillCardRects.get(skillPath) : undefined;
+      if (!previousRect) {
+        continue;
+      }
+      const nextRect = element.getBoundingClientRect();
+      const offsetX = previousRect.left - nextRect.left;
+      const offsetY = previousRect.top - nextRect.top;
+      if ((offsetX !== 0 || offsetY !== 0) && typeof element.animate === "function") {
+        element.animate(
+          [
+            { transform: `translate(${offsetX}px, ${offsetY}px)` },
+            { transform: "translate(0, 0)" },
+          ],
+          {
+            duration: PUBLISH_ORDER_ANIMATION_DURATION_MS,
+            easing: PUBLISH_ORDER_ANIMATION_EASING,
+          },
+        );
+      }
+    }
+  }, [orderedSkills]);
+
+  function captureSkillCardPositions() {
+    const positions = new Map<string, DOMRect>();
+    for (const element of document.querySelectorAll<HTMLElement>("[data-publish-skill-path]")) {
+      const skillPath = element.dataset.publishSkillPath;
+      if (skillPath) {
+        positions.set(skillPath, element.getBoundingClientRect());
+      }
+    }
+    previousSkillCardRectsRef.current = positions;
   }
 
-  async function refresh(forceRefresh = false) {
-    setIsRefreshing(true);
-    setLoadError("");
+  function applySkillSnapshot(nextSkills: PublishableSkill[], nextDisplayOrder: string[]) {
+    const orderChanged = !hasSameDisplayOrder(displayOrderRef.current, nextDisplayOrder);
+    if (orderChanged) {
+      captureSkillCardPositions();
+    }
+    skillsRef.current = nextSkills;
+    displayOrderRef.current = nextDisplayOrder;
+    setSkills(nextSkills);
+    setDisplayOrder(nextDisplayOrder);
+  }
+
+  async function refreshAuth() {
+    await refresh({ forceRefresh: true });
+  }
+
+  const refreshUnmanagedSkills = useCallback(async () => {
+    const fetchUnmanagedSkills = fetchUnmanagedSkillsRef.current;
+    if (!fetchUnmanagedSkills) {
+      return;
+    }
+    setIsRefreshingUnmanagedSkills(true);
     try {
-      const nextAuthState = await adapter.getAuthState();
+      setUnmanagedSkills(await fetchUnmanagedSkills());
+    } catch {
+      // 保留上一轮扫描结果，避免本地目录临时不可读时清空未托管列表。
+    } finally {
+      setIsRefreshingUnmanagedSkills(false);
+    }
+  }, []);
+
+  async function refresh(options: RefreshOptions = {}) {
+    const forceRefresh = options.forceRefresh ?? false;
+    const isBackground = options.background ?? false;
+    const hasExternalAuthOwner = externalAuthState !== undefined;
+    const shouldNotifyAuthState = onAuthStateChange !== undefined;
+    if (hasExternalAuthOwner && !externalAuthState?.connected) {
+      return;
+    }
+    const requestId = refreshRequestRef.current + 1;
+    refreshRequestRef.current = requestId;
+    if (!isBackground) {
+      setIsRefreshing(true);
+      setLoadError("");
+    }
+    try {
+      const nextAuthState = hasExternalAuthOwner
+        ? externalAuthState
+        : await adapter.getAuthState();
+      if (requestId !== refreshRequestRef.current) {
+        return;
+      }
       setAuthState(nextAuthState);
+      if (shouldNotifyAuthState) {
+        onAuthStateChange?.(nextAuthState);
+      } else {
+        adapter.writeCachedAuthState?.(nextAuthState);
+      }
       if (!nextAuthState.connected) {
+        skillsRef.current = [];
+        displayOrderRef.current = [];
         setSkills([]);
-        setUnmanagedSkills([]);
+        setDisplayOrder([]);
         setStatusSyncError("");
         return;
       }
-      const [snapshot, nextUnmanagedSkills] = await Promise.all([
-        adapter.fetchSkills(forceRefresh),
-        adapter.fetchUnmanagedSkills?.() ?? Promise.resolve([]),
-      ]);
+      const snapshot = await adapter.fetchSkills(forceRefresh);
+      if (requestId !== refreshRequestRef.current) {
+        return;
+      }
       if (snapshot.authorizationRequired) {
-        setAuthState({
+        const disconnectedAuthState: PublishingAuthState = {
           connected: false,
           accountLabel: "",
           verifiedAt: "",
-        });
+        };
+        setAuthState(disconnectedAuthState);
+        if (shouldNotifyAuthState) {
+          onAuthStateChange?.(disconnectedAuthState);
+        } else {
+          adapter.writeCachedAuthState?.(disconnectedAuthState);
+        }
+        skillsRef.current = [];
+        displayOrderRef.current = [];
         setSkills([]);
-        setUnmanagedSkills([]);
+        setDisplayOrder([]);
         setStatusSyncError("");
         return;
       }
-      const stableSkills = retainCachedUpdateStatus(skills, snapshot.skills);
-      setSkills(stableSkills);
-      setUnmanagedSkills(nextUnmanagedSkills);
+      const currentSkills = skillsRef.current;
+      const currentDisplayOrder = displayOrderRef.current;
+      const stableSkills = retainCachedPublishStatus(
+        currentSkills,
+        snapshot.skills,
+        adapter.fetchSkillsIncludesFileDiff === true,
+      );
+      const skillsChanged = !hasSamePublishableSkills(currentSkills, stableSkills);
+      const shouldReorder = !isBackground || currentDisplayOrder.length === 0;
+      const nextDisplayOrder = shouldReorder
+        ? buildPublishableSkillDisplayOrder(stableSkills)
+        : currentDisplayOrder;
+      if (skillsChanged || !hasSameDisplayOrder(currentDisplayOrder, nextDisplayOrder)) {
+        applySkillSnapshot(stableSkills, nextDisplayOrder);
+      }
       setStatusSyncError(snapshot.statusSyncError ?? "");
-      adapter.writeCachedSnapshot?.({ ...snapshot, skills: stableSkills });
-      setOrderRevision((current) => current + 1);
+      adapter.writeCachedSnapshot?.({ ...snapshot, skills: stableSkills, displayOrder: nextDisplayOrder });
       if (adapter.reconcileSkills) {
+        const reconciledBaseSkills = stableSkills;
+        const reconciledBaseDisplayOrder = nextDisplayOrder;
         void adapter.reconcileSkills(forceRefresh).then((reconciledSnapshot) => {
-          if (reconciledSnapshot.authorizationRequired) {
+          if (requestId !== refreshRequestRef.current) {
             return;
           }
-          setSkills(reconciledSnapshot.skills);
+          if (reconciledSnapshot.authorizationRequired) {
+            const disconnectedAuthState: PublishingAuthState = {
+              connected: false,
+              accountLabel: "",
+              verifiedAt: "",
+            };
+            setAuthState(disconnectedAuthState);
+            if (shouldNotifyAuthState) {
+              onAuthStateChange?.(disconnectedAuthState);
+            } else {
+              adapter.writeCachedAuthState?.(disconnectedAuthState);
+            }
+            skillsRef.current = [];
+            displayOrderRef.current = [];
+            setSkills([]);
+            setDisplayOrder([]);
+            setStatusSyncError("");
+            return;
+          }
+          const stableReconciledSkills = retainCachedPublishStatus(
+            reconciledBaseSkills,
+            reconciledSnapshot.skills,
+            !reconciledSnapshot.statusSyncError,
+          );
+          const skillsChanged = !hasSamePublishableSkills(reconciledBaseSkills, stableReconciledSkills);
+          const shouldReorder = !isBackground || reconciledBaseDisplayOrder.length === 0;
+          const nextDisplayOrder = shouldReorder
+            ? buildPublishableSkillDisplayOrder(stableReconciledSkills)
+            : reconciledBaseDisplayOrder;
+          if (skillsChanged || !hasSameDisplayOrder(reconciledBaseDisplayOrder, nextDisplayOrder)) {
+            applySkillSnapshot(stableReconciledSkills, nextDisplayOrder);
+          }
           setStatusSyncError(reconciledSnapshot.statusSyncError ?? "");
-          adapter.writeCachedSnapshot?.(reconciledSnapshot);
-          setOrderRevision((current) => current + 1);
+          adapter.writeCachedSnapshot?.({ ...reconciledSnapshot, skills: stableReconciledSkills, displayOrder: nextDisplayOrder });
         }).catch((error) => {
+          if (requestId !== refreshRequestRef.current) {
+            return;
+          }
           setStatusSyncError(formatError(error));
         });
       }
     } catch (error) {
-      setLoadError(formatError(error));
+      if (requestId !== refreshRequestRef.current) {
+        return;
+      }
+      if (!isBackground) {
+        setLoadError(formatError(error));
+      }
     } finally {
-      setIsRefreshing(false);
+      if (!isBackground && requestId === refreshRequestRef.current) {
+        setIsRefreshing(false);
+      }
     }
   }
+
+  refreshRef.current = refresh;
+
+  useEffect(() => {
+    const becameVisible = isVisible && !wasVisibleRef.current;
+    wasVisibleRef.current = isVisible;
+    if (becameVisible) {
+      void refreshRef.current({ forceRefresh: true });
+    }
+  }, [isVisible]);
 
   async function importAndPublishUnmanagedSkill(group: UnmanagedSkillGroup) {
     const candidate = group.candidates[0];
@@ -1189,7 +1507,10 @@ export function PublishingWorkbench({ adapter, renderAuthentication }: Publishin
       await adapter.importAndPublishUnmanagedSkill(candidate);
       setUnmanagedImportGroup(null);
       setActiveTab("managed");
-      await refresh(true);
+      await Promise.all([
+        refresh({ forceRefresh: true }),
+        refreshUnmanagedSkills(),
+      ]);
     } catch (error) {
       setLoadError(formatError(error));
     } finally {
@@ -1198,7 +1519,12 @@ export function PublishingWorkbench({ adapter, renderAuthentication }: Publishin
   }
 
   async function publishSkill(skill: PublishableSkill, changelog?: string) {
-    setSkills((current) => replaceSkill(current, { ...skill, publishStatus: "publishing", failureReason: "" }));
+    shouldPersistLocalPublishStatusRef.current = true;
+    setSkills((current) => {
+      const nextSkills = replaceSkill(current, { ...skill, publishStatus: "publishing", failureReason: "" });
+      skillsRef.current = nextSkills;
+      return nextSkills;
+    });
     try {
       const publishedSkill = await adapter.publishSkill({
         skillName: skill.name,
@@ -1207,28 +1533,58 @@ export function PublishingWorkbench({ adapter, renderAuthentication }: Publishin
         expectedRemoteVersion: skill.remoteVersion || undefined,
         changelog,
       });
-      setSkills((current) => replaceSkill(current, publishedSkill));
+      setSkills((current) => {
+        const nextSkills = replaceSkill(current, publishedSkill);
+        skillsRef.current = nextSkills;
+        return nextSkills;
+      });
     } catch (error) {
-      const failedSkill = { ...skill, publishStatus: "failed" as const, failureReason: formatError(error) };
-      setSkills((current) => replaceSkill(current, failedSkill));
+      const isPublishResultUnknown = adapter.isPublishResultUnknown?.(error) === true;
+      const failedSkill = isPublishResultUnknown
+        ? { ...skill, publishStatus: "publishing" as const, failureReason: "" }
+        : { ...skill, publishStatus: "failed" as const, failureReason: formatError(error) };
+      shouldPersistLocalPublishStatusRef.current = true;
+      setSkills((current) => {
+        const nextSkills = replaceSkill(current, failedSkill);
+        skillsRef.current = nextSkills;
+        return nextSkills;
+      });
       throw error;
     }
   }
 
-  async function handlePublish(changelog: string) {
-    if (!selectedSkill) {
+  async function refreshSkillAfterLocalChanges(localPath: string) {
+    const currentSkill = skillsRef.current.find((skill) => skill.localPath === localPath);
+    if (!currentSkill) {
       return;
     }
-    setIsPublishing(true);
-    setLoadError("");
     try {
-      await publishSkill(selectedSkill, changelog);
-      setSelectedSkill(null);
+      const refreshedSkill = await adapter.refreshSkill(currentSkill);
+      shouldPersistLocalPublishStatusRef.current = true;
+      setSkills((current) => {
+        const nextSkills = replaceSkill(current, refreshedSkill);
+        skillsRef.current = nextSkills;
+        return nextSkills;
+      });
+      setPreviewSkill((current) => (
+        current?.localPath === refreshedSkill.localPath ? refreshedSkill : current
+      ));
     } catch (error) {
-      setLoadError(formatError(error));
-    } finally {
-      setIsPublishing(false);
+      setStatusSyncError(formatError(error));
     }
+  }
+
+  function handlePublish(changelog: string) {
+    const skill = selectedSkill;
+    if (!skill) {
+      return;
+    }
+    // 保持旧共享发布的反馈：确认后立即收起窗口，卡片在后台请求期间显示“发布中”。
+    setSelectedSkill(null);
+    setLoadError("");
+    void publishSkill(skill, changelog).catch((error) => {
+      setLoadError(formatError(error));
+    });
   }
 
   async function handleBatchPublish() {
@@ -1244,35 +1600,93 @@ export function PublishingWorkbench({ adapter, renderAuthentication }: Publishin
         setLoadError(formatError(error));
       }
     }
+    await refresh({ forceRefresh: true });
     setIsPublishing(false);
     setBatchConfirm(null);
     batchSelection.exitSelection();
   }
 
+  useLayoutEffect(() => {
+    refreshRequestRef.current += 1;
+    fetchUnmanagedSkillsRef.current = adapter.fetchUnmanagedSkills;
+    const cachedSnapshot = adapter.readCachedSnapshot?.() ?? null;
+    skillsRef.current = cachedSnapshot?.skills ?? [];
+    const cachedSkills = cachedSnapshot?.skills ?? [];
+    const initialDisplayOrder = buildPublishableSkillDisplayOrder(cachedSkills);
+    displayOrderRef.current = initialDisplayOrder;
+    setAuthState(null);
+    setSkills(cachedSkills);
+    setDisplayOrder(initialDisplayOrder);
+    setIsRefreshing(cachedSnapshot === null);
+    setLoadError("");
+    setStatusSyncError(cachedSnapshot?.statusSyncError ?? "");
+    setSelectedSkill(null);
+    setPreviewSkill(null);
+    setPreviewCandidate(null);
+    setUnmanagedImportGroup(null);
+    setBatchConfirm(null);
+    setExpandedSkillPath("");
+    previousSkillCardRectsRef.current = new Map();
+    shouldPersistLocalPublishStatusRef.current = false;
+  }, [adapter]);
+
+  useEffect(() => {
+    if (!shouldPersistLocalPublishStatusRef.current) {
+      return;
+    }
+    shouldPersistLocalPublishStatusRef.current = false;
+    adapter.writeCachedSnapshot?.({
+      skills,
+      displayOrder,
+      authorizationRequired: false,
+      statusSyncError,
+    });
+  }, [adapter, displayOrder, skills, statusSyncError]);
+
   useEffect(() => {
     setToolbarContainer(document.getElementById("publish-header-toolbar-slot"));
     setSummaryContainer(document.getElementById("publish-header-summary-slot"));
     setSourceContainer(document.getElementById("publish-source-header-slot"));
-    void refresh();
-  }, [adapter]);
+    if (!isVisible) {
+      return;
+    }
+    if (!startupSnapshot || !adapter.cachedSnapshotRefreshDelayMs) {
+      void refresh();
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      if (wasVisibleRef.current) {
+        void refreshRef.current({ background: true });
+      }
+    }, adapter.cachedSnapshotRefreshDelayMs);
+    return () => window.clearTimeout(timer);
+  }, [adapter, startupSnapshot]);
+
+  useEffect(() => {
+    void refreshUnmanagedSkills();
+  }, [refreshUnmanagedSkills]);
 
   useEffect(() => {
     const hasPendingStatus = skills.some((skill) => (
       skill.publishStatus === "publishing" || skill.publishStatus === "reviewing"
     ));
-    if (!hasPendingStatus) {
+    if (!isVisible || !hasPendingStatus) {
       return;
     }
-    const timer = window.setInterval(() => void refresh(), PUBLISH_STATUS_POLL_INTERVAL_MS);
+    const timer = window.setInterval(
+      () => void refresh({ background: true }),
+      PUBLISH_STATUS_POLL_INTERVAL_MS,
+    );
     return () => window.clearInterval(timer);
-  }, [skills]);
+  }, [isVisible, skills]);
 
   useEffect(() => {
     let active = true;
     let unlisten: (() => void) | null = null;
     let refreshTimer: number | null = null;
     void subscribeSkillLibraryChanges(({ skillName }) => {
-      if (!active || !skills.some((skill) => skill.name === skillName)) {
+      const isManagedSkill = skillsRef.current.some((skill) => skill.name === skillName);
+      if (!active || !isManagedSkill) {
         return;
       }
       if (refreshTimer !== null) {
@@ -1280,23 +1694,27 @@ export function PublishingWorkbench({ adapter, renderAuthentication }: Publishin
       }
       refreshTimer = window.setTimeout(() => {
         refreshTimer = null;
-        void refresh(true);
+        if (wasVisibleRef.current) {
+          void refreshRef.current({ forceRefresh: true, background: true });
+        }
       }, SKILL_LIBRARY_CHANGE_DEBOUNCE_MS);
     }).then((stop) => {
       if (active) {
         unlisten = stop;
       } else {
-        stop();
+        releaseEventListener(stop);
       }
+    }).catch((error) => {
+      console.warn("Failed to subscribe to publishing skill library changes:", error);
     });
     return () => {
       active = false;
-      unlisten?.();
+      releaseEventListener(unlisten);
       if (refreshTimer !== null) {
         window.clearTimeout(refreshTimer);
       }
     };
-  }, [adapter, skills]);
+  }, []);
 
   const toolbar = (
     <PublishToolbar
@@ -1305,7 +1723,7 @@ export function PublishingWorkbench({ adapter, renderAuthentication }: Publishin
       activeTab={activeTab}
       statusFilter={statusFilter}
       counts={counts}
-      isRefreshing={isRefreshing}
+      isRefreshing={isRefreshing || isRefreshingUnmanagedSkills}
       isBatchSelecting={batchSelection.isSelecting}
       batchPublishing={capabilities.batchPublishing}
       onQueryChange={setQuery}
@@ -1317,9 +1735,16 @@ export function PublishingWorkbench({ adapter, renderAuthentication }: Publishin
       onBatchSelectingChange={(selecting) => (
         selecting ? batchSelection.enterSelection() : batchSelection.exitSelection()
       )}
-      onRefresh={() => void refresh(true)}
+      onRefresh={() => void Promise.all([
+        refresh({ forceRefresh: true }),
+        refreshUnmanagedSkills(),
+      ])}
     />
   );
+
+  if (!isVisible) {
+    return null;
+  }
 
   if (authState && !authState.connected) {
     return renderAuthentication ? (
@@ -1373,13 +1798,13 @@ export function PublishingWorkbench({ adapter, renderAuthentication }: Publishin
       {loadError ? (
         <div className="panel-card publish-page__error">
           <strong>发布状态加载失败</strong><p>{loadError}</p>
-          <button className="secondary-button" type="button" onClick={() => void refresh(true)}>重试</button>
+          <button className="secondary-button" type="button" onClick={() => void refresh({ forceRefresh: true })}>重试</button>
         </div>
       ) : null}
       {!loadError && statusSyncError ? (
         <div className="panel-card publish-page__error">
           <strong>远端发布状态暂未同步</strong><p>{statusSyncError}</p>
-          <button className="secondary-button" type="button" onClick={() => void refresh(true)}>重试</button>
+          <button className="secondary-button" type="button" onClick={() => void refresh({ forceRefresh: true })}>重试</button>
         </div>
       ) : null}
       {!loadError && !isRefreshing && activeTab === "managed" && filteredSkills.length === 0 ? (
@@ -1388,7 +1813,7 @@ export function PublishingWorkbench({ adapter, renderAuthentication }: Publishin
           <p>{skills.length === 0 ? "请先在 Skills 页面创建或托管本地 Skill。" : "试试调整搜索内容或状态筛选。"}</p>
         </div>
       ) : null}
-      {!loadError && !isRefreshing && activeTab === "unmanaged" && filteredUnmanagedGroups.length === 0 ? (
+      {!loadError && !isRefreshingUnmanagedSkills && activeTab === "unmanaged" && filteredUnmanagedGroups.length === 0 ? (
         <div className="panel-card empty-state">
           <h3>{unmanagedGroups.length === 0 ? "没有未托管的 Skill" : "没有符合条件的 Skill"}</h3>
           <p>{unmanagedGroups.length === 0 ? "当前支持的工具目录中没有发现新的本地 Skill。" : "试试调整搜索内容。"}</p>
@@ -1469,6 +1894,17 @@ export function PublishingWorkbench({ adapter, renderAuthentication }: Publishin
             remoteSkillId: previewSkill.remoteSkillId!,
             remoteVersion: previewSkill.remoteVersion,
           }) : undefined}
+          revertUpdateFile={(
+            (previewSkill.updateFileCount ?? 0) > 0
+            && previewSkill.remoteSkillId
+            && adapter.revertUpdateFile
+          ) ? (relativePath) => adapter.revertUpdateFile!({
+            skillName: previewSkill.name,
+            localPath: previewSkill.localPath,
+            remoteSkillId: previewSkill.remoteSkillId!,
+            remoteVersion: previewSkill.remoteVersion,
+            relativePath,
+          }) : undefined}
           revertUpdateHunk={(
             (previewSkill.updateFileCount ?? 0) > 0
             && previewSkill.remoteSkillId
@@ -1482,7 +1918,7 @@ export function PublishingWorkbench({ adapter, renderAuthentication }: Publishin
             expectedContent,
             content,
           }) : undefined}
-          onLocalChangesChanged={() => void refresh(true)}
+          onLocalChangesChanged={() => void refreshSkillAfterLocalChanges(previewSkill.localPath)}
           onClose={() => setPreviewSkill(null)}
         />
       ) : null}

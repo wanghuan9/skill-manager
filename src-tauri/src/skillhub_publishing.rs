@@ -14,18 +14,22 @@ use crate::workspace;
 
 const API_BASE_URL: &str = "https://api.skillhub.cn";
 const AUTH_ME_PATH: &str = "/api/v1/auth/me";
+const USER_PROFILE_PATH_PREFIX: &str = "/api/v1/users/";
 const DASHBOARD_SKILLS_PATH: &str = "/api/v1/dashboard/skills";
 const PUBLISH_SKILL_PATH: &str = "/api/v1/community/skills/publish";
 const MARKET_SKILL_URL_PREFIX: &str = "/skills/";
 const CREDENTIAL_FILE_NAME: &str = "skillhub-auth.json";
 const PUBLISH_STATE_FILE_NAME: &str = "skillhub-publish-state.json";
 const CREDENTIAL_SCHEMA_VERSION: u8 = 1;
+const PROFILE_CACHE_SCHEMA_VERSION: u8 = 1;
 const INITIAL_VERSION: &str = "1.0.0";
 const PACKAGE_MAX_FILE_COUNT: usize = 500;
 const PACKAGE_MAX_FILE_BYTES: u64 = 5 * 1024 * 1024;
 const PACKAGE_MAX_TOTAL_BYTES: u64 = 20 * 1024 * 1024;
 const DASHBOARD_SKILLS_PAGE_SIZE: usize = 100;
 const REMOTE_PACKAGE_CONCURRENCY: usize = 4;
+const SKILLHUB_BANNED_REASON: &str =
+    "SkillHub 已封禁，暂不能发布或比较版本文件；解除封禁后刷新即可恢复。";
 
 static REMOTE_PACKAGE_CACHE: OnceLock<
     Mutex<HashMap<RemotePackageCacheKey, Vec<(String, Vec<u8>)>>>,
@@ -42,6 +46,7 @@ struct RemotePackageCacheKey {
 pub(crate) struct SkillHubAuthStatus {
     connected: bool,
     handle: String,
+    display_name: String,
     user_id: u64,
     verified_at: String,
 }
@@ -54,6 +59,12 @@ struct SkillHubCredential {
     token: String,
     user_id: u64,
     handle: String,
+    #[serde(default)]
+    display_name: String,
+    #[serde(default)]
+    profile_checked_at: String,
+    #[serde(default)]
+    profile_cache_schema_version: u8,
     verified_at: String,
 }
 
@@ -67,6 +78,18 @@ struct SkillHubUser {
     id: u64,
     #[serde(default)]
     handle: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SkillHubUserProfile {
+    #[serde(default)]
+    display_name: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct SkillHubUserProfileResponse {
+    user: SkillHubUserProfile,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -85,6 +108,7 @@ pub(crate) struct SkillHubPublishableSkill {
     git_linked: bool,
     local_change_count: usize,
     update_file_count: usize,
+    file_diff_reconciled: bool,
     local_content_hash: String,
     file_count: usize,
     package_size: u64,
@@ -92,6 +116,7 @@ pub(crate) struct SkillHubPublishableSkill {
     remote_version: String,
     last_published_at: String,
     publish_status: String,
+    publish_blocked: bool,
     failure_reason: String,
     market_url: String,
     target_version: String,
@@ -174,6 +199,7 @@ struct RemoteSkillHubSkill {
     last_published_at: String,
     status: String,
     review_status: String,
+    banned: bool,
     failure_reason: String,
     market_url: String,
 }
@@ -184,11 +210,23 @@ enum RemoteSkillHubFetchError {
 }
 
 #[tauri::command]
-pub(crate) fn get_skillhub_auth_status() -> Result<SkillHubAuthStatus, String> {
-    let credential = load_credential()?;
-    Ok(credential
-        .map(status_from_credential)
-        .unwrap_or_else(disconnected_status))
+pub(crate) async fn get_skillhub_auth_status() -> Result<SkillHubAuthStatus, String> {
+    let Some(mut credential) = load_credential()? else {
+        return Ok(disconnected_status());
+    };
+    if credential.profile_cache_schema_version != PROFILE_CACHE_SCHEMA_VERSION
+        && !credential.handle.trim().is_empty()
+    {
+        if let Ok(client) = crate::commands::marketplace_http_client() {
+            if let Ok(display_name) = fetch_skillhub_display_name(&client, &credential).await {
+                credential.display_name = display_name;
+                credential.profile_checked_at = Utc::now().to_rfc3339();
+                credential.profile_cache_schema_version = PROFILE_CACHE_SCHEMA_VERSION;
+                save_credential(&credential)?;
+            }
+        }
+    }
+    Ok(status_from_credential(credential))
 }
 
 #[tauri::command]
@@ -210,14 +248,24 @@ pub(crate) async fn save_skillhub_auth_token(token: String) -> Result<SkillHubAu
         .json::<SkillHubAuthMeResponse>()
         .await
         .map_err(|error| format!("解析 SkillHub 登录信息失败: {error}"))?;
+    let profile_checked_at = Utc::now().to_rfc3339();
     let credential = SkillHubCredential {
         schema_version: CREDENTIAL_SCHEMA_VERSION,
         host: API_BASE_URL.to_string(),
         token,
         user_id: response.user.id,
         handle: response.user.handle,
-        verified_at: Utc::now().to_rfc3339(),
+        display_name: String::new(),
+        profile_checked_at: String::new(),
+        profile_cache_schema_version: 0,
+        verified_at: profile_checked_at,
     };
+    let mut credential = credential;
+    if let Ok(display_name) = fetch_skillhub_display_name(&client, &credential).await {
+        credential.display_name = display_name;
+        credential.profile_checked_at = Utc::now().to_rfc3339();
+        credential.profile_cache_schema_version = PROFILE_CACHE_SCHEMA_VERSION;
+    }
     save_credential(&credential)?;
     Ok(status_from_credential(credential))
 }
@@ -302,6 +350,42 @@ pub(crate) async fn get_skillhub_publish_update_preview(
         false,
     )
     .await?;
+    let changed_files = build_skillhub_publish_update_changes(&skill_path, remote_files)?;
+    Ok(UpdatePreviewSnapshot {
+        current_branch: String::new(),
+        remote_branch: format!("skillhub/{}", remote_skill_id.trim()),
+        commits_to_pull: 0,
+        changed_files,
+        has_local_changes: false,
+    })
+}
+
+#[tauri::command]
+pub(crate) async fn revert_skillhub_publish_update_file(
+    skill_name: String,
+    local_path: String,
+    remote_skill_id: String,
+    remote_version: String,
+    relative_path: String,
+) -> Result<UpdatePreviewSnapshot, String> {
+    let credential = load_credential()?.ok_or_else(|| "请先登录 SkillHub。".to_string())?;
+    let skill_path = resolve_requested_publishable_skill_path(&skill_name, &local_path)?;
+    validate_publish_relative_path(&relative_path)?;
+    let remote_files = load_remote_skill_files(
+        &credential,
+        remote_skill_id.trim(),
+        remote_version.trim(),
+        false,
+    )
+    .await?;
+    let has_change = build_skillhub_publish_update_changes(&skill_path, remote_files.clone())?
+        .iter()
+        .any(|change| change.path == relative_path);
+    if !has_change {
+        return Err("该文件已没有可回退的发布变更。".to_string());
+    }
+
+    revert_publish_update_file(&skill_path, &relative_path, &remote_files)?;
     let changed_files = build_skillhub_publish_update_changes(&skill_path, remote_files)?;
     Ok(UpdatePreviewSnapshot {
         current_branch: String::new(),
@@ -461,6 +545,7 @@ fn disconnected_status() -> SkillHubAuthStatus {
     SkillHubAuthStatus {
         connected: false,
         handle: String::new(),
+        display_name: String::new(),
         user_id: 0,
         verified_at: String::new(),
     }
@@ -470,9 +555,36 @@ fn status_from_credential(credential: SkillHubCredential) -> SkillHubAuthStatus 
     SkillHubAuthStatus {
         connected: true,
         handle: credential.handle,
+        display_name: credential.display_name,
         user_id: credential.user_id,
         verified_at: credential.verified_at,
     }
+}
+
+async fn fetch_skillhub_display_name(
+    client: &reqwest::Client,
+    credential: &SkillHubCredential,
+) -> Result<String, String> {
+    let handle = credential.handle.trim();
+    if handle.is_empty() {
+        return Ok(String::new());
+    }
+    let encoded_handle =
+        url::form_urlencoded::byte_serialize(handle.as_bytes()).collect::<String>();
+    let response = client
+        .get(format!(
+            "{API_BASE_URL}{USER_PROFILE_PATH_PREFIX}{encoded_handle}"
+        ))
+        .bearer_auth(&credential.token)
+        .send()
+        .await
+        .map_err(|error| format!("查询 SkillHub 用户资料失败: {error}"))?
+        .error_for_status()
+        .map_err(|error| format!("查询 SkillHub 用户资料失败: {error}"))?
+        .json::<SkillHubUserProfileResponse>()
+        .await
+        .map_err(|error| format!("解析 SkillHub 用户资料失败: {error}"))?;
+    Ok(response.user.display_name.trim().to_string())
 }
 
 fn credential_path() -> Result<PathBuf, String> {
@@ -802,6 +914,7 @@ fn build_publishable_skills(
             git_linked: skill.git_linked,
             local_change_count: skill.local_change_count,
             update_file_count: 0,
+            file_diff_reconciled: false,
             local_content_hash: content_hash,
             file_count: files.len(),
             package_size,
@@ -818,10 +931,11 @@ fn build_publishable_skills(
                 .or_else(|| remote.as_ref().map(|state| state.last_published_at.clone()))
                 .unwrap_or_default(),
             publish_status,
+            publish_blocked: remote.as_ref().is_some_and(remote_skill_is_banned),
             failure_reason: remote
                 .as_ref()
                 .filter(|state| remote_skill_is_failed(state))
-                .map(|state| state.failure_reason.clone())
+                .map(remote_skill_failure_reason)
                 .unwrap_or_default(),
             market_url: remote
                 .as_ref()
@@ -909,10 +1023,12 @@ async fn enrich_remote_skill_file_diffs(
         .iter()
         .enumerate()
         .filter_map(|(index, skill)| {
-            if !matches!(
-                skill.publish_status.as_str(),
-                "published" | "update-available"
-            ) || skill.remote_skill_id.trim().is_empty()
+            if skill.publish_blocked
+                || !matches!(
+                    skill.publish_status.as_str(),
+                    "published" | "update-available"
+                )
+                || skill.remote_skill_id.trim().is_empty()
                 || skill.remote_version.trim().is_empty()
             {
                 return None;
@@ -954,6 +1070,7 @@ async fn enrich_remote_skill_file_diffs(
                         continue;
                     };
                     skill.update_file_count = update_file_count;
+                    skill.file_diff_reconciled = true;
                     if update_file_count > 0 {
                         skill.publish_status = "update-available".to_string();
                         skill.target_version = next_patch_version(&skill.remote_version);
@@ -1130,6 +1247,37 @@ fn validate_publish_relative_path(relative_path: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn revert_publish_update_file(
+    skill_root: &Path,
+    relative_path: &str,
+    remote_files: &[(String, Vec<u8>)],
+) -> Result<(), String> {
+    let canonical_root = skill_root
+        .canonicalize()
+        .map_err(|error| format!("解析本地 Skill 目录失败: {error}"))?;
+    let target = canonical_root.join(relative_path);
+    validate_publish_target(&canonical_root, &target)?;
+    let remote_content = remote_files
+        .iter()
+        .find(|(path, _)| path == relative_path)
+        .map(|(_, content)| content);
+
+    let Some(content) = remote_content else {
+        if !target.exists() {
+            return Err("该文件已没有可回退的发布变更。".to_string());
+        }
+        fs::remove_file(&target).map_err(|error| format!("回退新增文件失败: {error}"))?;
+        return Ok(());
+    };
+
+    let parent = target
+        .parent()
+        .ok_or_else(|| "待回退文件缺少父目录。".to_string())?;
+    fs::create_dir_all(parent).map_err(|error| format!("创建待回退文件目录失败: {error}"))?;
+    validate_publish_target(&canonical_root, &target)?;
+    fs::write(&target, content).map_err(|error| format!("回退发布文件失败: {error}"))
+}
+
 fn write_publish_update_content(
     skill_root: &Path,
     relative_path: &str,
@@ -1243,6 +1391,10 @@ fn remote_skill_from_value(value: &serde_json::Value) -> Option<RemoteSkillHubSk
         ),
         status: value_string(value, &["status"]),
         review_status: value_string(value, &["reviewStatus", "publishStatus"]),
+        banned: value
+            .get("banned")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false),
         failure_reason: value_string(value, &["failureReason", "reviewNote", "errorMessage"]),
         market_url: value_string(value, &["marketUrl", "market_url", "url", "detailUrl"]),
     })
@@ -1326,13 +1478,26 @@ fn remote_skill_is_pending(remote: &RemoteSkillHubSkill) -> bool {
 }
 
 fn remote_skill_is_failed(remote: &RemoteSkillHubSkill) -> bool {
-    matches!(
-        remote.review_status.trim().to_lowercase().as_str(),
-        "rejected" | "security_rejected" | "admin_rejected" | "platform_rejected"
-    ) || matches!(
-        remote.status.trim().to_lowercase().as_str(),
-        "failed" | "rejected" | "error"
-    )
+    remote_skill_is_banned(remote)
+        || matches!(
+            remote.review_status.trim().to_lowercase().as_str(),
+            "rejected" | "security_rejected" | "admin_rejected" | "platform_rejected"
+        )
+        || matches!(
+            remote.status.trim().to_lowercase().as_str(),
+            "failed" | "rejected" | "error"
+        )
+}
+
+fn remote_skill_is_banned(remote: &RemoteSkillHubSkill) -> bool {
+    remote.banned
+}
+
+fn remote_skill_failure_reason(remote: &RemoteSkillHubSkill) -> String {
+    if remote_skill_is_banned(remote) {
+        return SKILLHUB_BANNED_REASON.to_string();
+    }
+    remote.failure_reason.clone()
 }
 
 fn remote_version_matches(left: &str, right: &str) -> bool {
@@ -1463,8 +1628,10 @@ mod tests {
 
     use super::{
         build_skillhub_publish_update_changes, disconnected_status, next_patch_version,
-        normalize_slug, remote_skill_from_value, resolve_publish_baseline, resolve_publish_status,
-        write_publish_update_content, PendingSkillState, PublishedSkillState, RemoteSkillHubSkill,
+        normalize_slug, remote_skill_failure_reason, remote_skill_from_value,
+        remote_skill_is_banned, resolve_publish_baseline, resolve_publish_status,
+        revert_publish_update_file, write_publish_update_content, PendingSkillState,
+        PublishedSkillState, RemoteSkillHubSkill, SkillHubCredential, SkillHubUserProfileResponse,
     };
 
     fn test_directory(name: &str) -> std::path::PathBuf {
@@ -1480,6 +1647,28 @@ mod tests {
         let status = disconnected_status();
         let serialized = serde_json::to_string(&status).expect("serialize status");
         assert!(!serialized.contains("token"));
+    }
+
+    #[test]
+    fn legacy_credential_without_display_name_remains_readable() {
+        let credential = serde_json::from_str::<SkillHubCredential>(
+            r#"{"schemaVersion":1,"host":"https://api.skillhub.cn","token":"skh_test","userId":1,"handle":"user_demo","verifiedAt":"2026-08-04T00:00:00Z"}"#,
+        )
+        .expect("deserialize legacy credential");
+
+        assert!(credential.display_name.is_empty());
+        assert!(credential.profile_checked_at.is_empty());
+        assert_eq!(credential.profile_cache_schema_version, 0);
+    }
+
+    #[test]
+    fn reads_the_display_name_from_the_profile_response_user_field() {
+        let profile = serde_json::from_str::<SkillHubUserProfileResponse>(
+            r#"{"user":{"handle":"user_demo","displayName":"生活告诉我"}}"#,
+        )
+        .expect("deserialize user profile");
+
+        assert_eq!(profile.user.display_name, "生活告诉我");
     }
 
     #[test]
@@ -1562,6 +1751,23 @@ mod tests {
     }
 
     #[test]
+    fn treats_a_banned_dashboard_skill_as_a_blocked_publish_failure() {
+        let remote = remote_skill_from_value(&serde_json::json!({
+            "slug": "xhs-wechat-plugin-promo",
+            "latestApprovedVersion": "1.0.1",
+            "banned": true,
+        }))
+        .expect("dashboard skill should be parsed");
+
+        assert!(remote_skill_is_banned(&remote));
+        assert_eq!(
+            resolve_publish_status(Some(&remote), None, None, "local-hash"),
+            "failed"
+        );
+        assert!(remote_skill_failure_reason(&remote).contains("已封禁"));
+    }
+
+    #[test]
     fn builds_publish_update_diffs_from_store_baseline_to_local_content() {
         let root = test_directory("update-diff");
         fs::create_dir_all(&root).expect("create skill directory");
@@ -1612,6 +1818,36 @@ mod tests {
         )
         .expect_err("reject stale update hunk");
         assert_eq!(error, "文件内容已变化，请刷新后重试。");
+        fs::remove_dir_all(root).expect("remove skill directory");
+    }
+
+    #[test]
+    fn reverts_complete_publish_update_files_to_the_remote_snapshot() {
+        let root = test_directory("revert-file");
+        fs::create_dir_all(root.join("nested")).expect("create skill directory");
+        fs::write(root.join("SKILL.md"), "local change\n").expect("write modified file");
+        fs::write(root.join("local-only.md"), "local only\n").expect("write added file");
+        let remote_files = vec![
+            ("SKILL.md".to_string(), b"published content\n".to_vec()),
+            ("nested/remote-only.bin".to_string(), vec![0, 1, 2, 3]),
+        ];
+
+        revert_publish_update_file(&root, "SKILL.md", &remote_files)
+            .expect("restore modified file");
+        revert_publish_update_file(&root, "local-only.md", &remote_files)
+            .expect("remove added file");
+        revert_publish_update_file(&root, "nested/remote-only.bin", &remote_files)
+            .expect("restore deleted binary file");
+
+        assert_eq!(
+            fs::read_to_string(root.join("SKILL.md")).expect("read restored file"),
+            "published content\n"
+        );
+        assert!(!root.join("local-only.md").exists());
+        assert_eq!(
+            fs::read(root.join("nested/remote-only.bin")).expect("read restored binary"),
+            vec![0, 1, 2, 3]
+        );
         fs::remove_dir_all(root).expect("remove skill directory");
     }
 }
