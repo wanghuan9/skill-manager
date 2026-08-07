@@ -74,6 +74,8 @@ const APP_GROK: &str = "grok";
 const APP_MIMO_CODE: &str = "mimo-code";
 #[cfg(test)]
 const APP_WORKBUDDY: &str = "workbuddy";
+#[cfg(test)]
+const APP_ZCODE: &str = "zcode";
 const MCP_IMPORT_PROGRESS_EVENT: &str = "mcp-import-progress";
 static MCP_NPM_METADATA_CACHE: OnceLock<Mutex<HashMap<String, McpResolvedMetadata>>> =
     OnceLock::new();
@@ -1107,7 +1109,13 @@ fn read_registered_mcp_servers(
     match definition.mcp_format {
         tool_adapters::McpAdapterFormat::None => Ok(Vec::new()),
         tool_adapters::McpAdapterFormat::JsonObject { field } => {
-            read_json_mcp_servers(config_path, field, false)
+            let mut servers = read_json_mcp_servers(config_path, field, false)?;
+            if let Some(enabled_field) = definition.mcp_enabled_field {
+                servers.retain(|(_, server)| {
+                    server.get(enabled_field).and_then(Value::as_bool) != Some(false)
+                });
+            }
+            Ok(servers)
         }
         tool_adapters::McpAdapterFormat::JsonObjectCommandArray { field } => {
             read_json_object_command_array_mcp_servers(config_path, field)
@@ -1129,7 +1137,14 @@ fn upsert_registered_mcp_server(
     match definition.mcp_format {
         tool_adapters::McpAdapterFormat::None => Err(format!("{app_id} 暂不支持 MCP 配置同步")),
         tool_adapters::McpAdapterFormat::JsonObject { field } => {
-            upsert_json_mcp_server(config_path, field, server_id, server)
+            let mut enabled_server = server.clone();
+            if let Some(enabled_field) = definition.mcp_enabled_field {
+                enabled_server
+                    .as_object_mut()
+                    .ok_or_else(|| "MCP 服务器定义必须为 JSON 对象".to_string())?
+                    .remove(enabled_field);
+            }
+            upsert_json_mcp_server(config_path, field, server_id, &enabled_server)
         }
         tool_adapters::McpAdapterFormat::JsonObjectCommandArray { field } => {
             upsert_json_object_command_array_mcp_server(config_path, field, server_id, server)
@@ -1305,7 +1320,7 @@ fn read_json_mcp_servers(
     }
 
     let root = read_json_value(path, allow_json5)?;
-    let mut servers = get_json_object_at_path(&root, field_name)
+    let mut servers = get_json_object_at_path_strict(&root, field_name)?
         .cloned()
         .unwrap_or_default();
     for spec in servers.values_mut() {
@@ -1351,7 +1366,7 @@ fn remove_json_mcp_server(path: &Path, field_name: &str, server_id: &str) -> Res
     }
 
     let mut root = read_json_value(path, false)?;
-    if let Some(servers) = get_json_object_mut_at_path(&mut root, field_name) {
+    if let Some(servers) = get_json_object_mut_at_path_strict(&mut root, field_name)? {
         servers.remove(server_id);
     }
     write_json_value(path, &root)
@@ -1372,15 +1387,56 @@ fn get_json_object_at_path<'a>(
     current.as_object()
 }
 
-fn get_json_object_mut_at_path<'a>(
+fn get_json_object_at_path_strict<'a>(
+    root: &'a Value,
+    field_name: &str,
+) -> Result<Option<&'a Map<String, Value>>, String> {
+    let segments = json_field_segments(field_name).collect::<Vec<_>>();
+    if segments.is_empty() {
+        return Err("JSON 字段路径不能为空".to_string());
+    }
+
+    let mut current = root;
+    for segment in segments {
+        let object = current
+            .as_object()
+            .ok_or_else(|| format!("{field_name} 必须是 JSON 对象路径"))?;
+        let Some(next) = object.get(segment) else {
+            return Ok(None);
+        };
+        current = next;
+    }
+
+    current
+        .as_object()
+        .map(Some)
+        .ok_or_else(|| format!("{field_name} 必须是 JSON 对象"))
+}
+
+fn get_json_object_mut_at_path_strict<'a>(
     root: &'a mut Value,
     field_name: &str,
-) -> Option<&'a mut Map<String, Value>> {
-    let mut current = root;
-    for segment in json_field_segments(field_name) {
-        current = current.get_mut(segment)?;
+) -> Result<Option<&'a mut Map<String, Value>>, String> {
+    let segments = json_field_segments(field_name).collect::<Vec<_>>();
+    if segments.is_empty() {
+        return Err("JSON 字段路径不能为空".to_string());
     }
-    current.as_object_mut()
+
+    let mut current = root;
+    for segment in segments {
+        let object = current
+            .as_object_mut()
+            .ok_or_else(|| format!("{field_name} 必须是 JSON 对象路径"))?;
+        let Some(next) = object.get_mut(segment) else {
+            return Ok(None);
+        };
+        current = next;
+    }
+
+    current
+        .as_object_mut()
+        .map(Some)
+        .ok_or_else(|| format!("{field_name} 必须是 JSON 对象"))
 }
 
 fn ensure_json_object_path<'a>(
@@ -6018,6 +6074,78 @@ mod tests {
                 .len(),
             1
         );
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn registered_json_object_adapter_round_trips_zcode_config() {
+        let temp_dir = env::temp_dir().join(format!(
+            "skilldock-zcode-adapter-{}-{}",
+            std::process::id(),
+            unix_millis()
+        ));
+        fs::create_dir_all(&temp_dir).expect("create zcode adapter directory");
+        let path = temp_dir.join("config.json");
+        fs::write(
+            &path,
+            r#"{"plugins":{"enabled":true},"mcp":{"servers":{"existing":{"command":"old"},"disabled":{"command":"off","enable":false}}}}"#,
+        )
+        .expect("write zcode config");
+        let server =
+            json!({"type":"stdio","command":"npx","args":["-y","demo-mcp"],"enable":false});
+
+        upsert_registered_mcp_server(APP_ZCODE, &path, "demo", &server)
+            .expect("upsert zcode server");
+        upsert_registered_mcp_server(APP_ZCODE, &path, "demo", &server)
+            .expect("update zcode server without duplication");
+        let remote_server = json!({"type":"http","url":"https://example.com/mcp"});
+        upsert_registered_mcp_server(APP_ZCODE, &path, "remote", &remote_server)
+            .expect("upsert zcode remote server");
+
+        let servers = read_registered_mcp_servers(APP_ZCODE, &path).expect("read zcode servers");
+        assert_eq!(servers.len(), 3);
+        assert!(servers.iter().all(|(id, _)| id != "disabled"));
+        let root: Value =
+            serde_json::from_str(&fs::read_to_string(&path).expect("read zcode file"))
+                .expect("parse zcode file");
+        assert_eq!(
+            root.pointer("/plugins/enabled").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            root.pointer("/mcp/servers/demo/command")
+                .and_then(Value::as_str),
+            Some("npx")
+        );
+        assert!(root.pointer("/mcp/servers/demo/enable").is_none());
+        assert_eq!(
+            root.pointer("/mcp/servers/remote/type")
+                .and_then(Value::as_str),
+            Some("http")
+        );
+
+        remove_registered_mcp_server(APP_ZCODE, &path, "demo").expect("remove zcode server");
+        let servers =
+            read_registered_mcp_servers(APP_ZCODE, &path).expect("read zcode after remove");
+        assert_eq!(servers.len(), 2);
+        assert!(servers.iter().all(|(id, _)| id != "demo"));
+        assert!(servers.iter().any(|(id, _)| id == "existing"));
+        assert!(servers.iter().any(|(id, _)| id == "remote"));
+        let root: Value =
+            serde_json::from_str(&fs::read_to_string(&path).expect("read zcode file"))
+                .expect("parse zcode file");
+        assert_eq!(
+            root.pointer("/plugins/enabled").and_then(Value::as_bool),
+            Some(true)
+        );
+
+        fs::write(&path, r#"{"mcp":{"servers":[]}}"#).expect("write invalid zcode config");
+        assert!(read_registered_mcp_servers(APP_ZCODE, &path)
+            .expect_err("reject non-object zcode servers while reading")
+            .contains("mcp.servers 必须是 JSON 对象"));
+        assert!(remove_registered_mcp_server(APP_ZCODE, &path, "existing")
+            .expect_err("reject non-object zcode servers while removing")
+            .contains("mcp.servers 必须是 JSON 对象"));
         let _ = fs::remove_dir_all(temp_dir);
     }
 

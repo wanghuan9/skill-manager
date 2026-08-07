@@ -378,6 +378,7 @@ export const toolConfigFixtures: ToolConfig[] = [
   { id: "grok", name: "Grok Build", skillsPath: "/Users/demo/.grok/skills", mcpConfigPath: "/Users/demo/.grok/config.toml", supportsMcp: true, mcpConfigPathRecognized: true, statusLabel: "未安装", isEnabled: false, primaryType: "cli", surfaceTypes: ["cli"], supportsDirectOpen: false },
   { id: "mimo-code", name: "MiMo Code", skillsPath: "/Users/demo/.config/mimocode/skills", mcpConfigPath: "/Users/demo/.config/mimocode/mimocode.json", supportsMcp: true, mcpConfigPathRecognized: true, statusLabel: "未安装", isEnabled: false, primaryType: "cli", surfaceTypes: ["cli"], supportsDirectOpen: false },
   { id: "workbuddy", name: "WorkBuddy", skillsPath: "/Users/demo/.workbuddy/skills", mcpConfigPath: "/Users/demo/.workbuddy/.mcp.json", supportsMcp: true, mcpConfigPathRecognized: true, statusLabel: "未安装", isEnabled: false, primaryType: "desktop", surfaceTypes: ["desktop"], supportsDirectOpen: false },
+  { id: "zcode", name: "ZCode", skillsPath: "/Users/demo/.zcode/skills", mcpConfigPath: "/Users/demo/.zcode/cli/config.json", supportsMcp: true, mcpConfigPathRecognized: true, statusLabel: "未安装", isEnabled: false, primaryType: "desktop", surfaceTypes: ["desktop"], supportsDirectOpen: false },
 ];
 
 const managedToolSkillEntryFixtures: ToolSkillEntry[] = toolConfigFixtures.flatMap((tool) =>

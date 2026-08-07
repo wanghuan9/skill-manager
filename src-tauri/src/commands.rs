@@ -12810,6 +12810,21 @@ mod tests {
             workbuddy.mcp_config_path,
             home.join(".workbuddy/.mcp.json").to_string_lossy()
         );
+        let zcode = configs
+            .iter()
+            .find(|tool| tool.id == "zcode")
+            .expect("zcode config");
+        assert_eq!(
+            zcode.skills_path,
+            home.join(".zcode/skills").to_string_lossy()
+        );
+        assert_eq!(
+            zcode.mcp_config_path,
+            home.join(".zcode/cli/config.json").to_string_lossy()
+        );
+        assert!(zcode.supports_mcp);
+        assert_eq!(zcode.primary_type, "desktop");
+        assert_eq!(zcode.surface_types, vec!["desktop"]);
     }
 
     #[test]

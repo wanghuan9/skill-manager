@@ -16,6 +16,11 @@ const TOOL_SOURCES = [
   },
   { id: "codex", homepage: "https://openai.com/codex/" },
   {
+    id: "zcode",
+    homepage: "https://zcode.z.ai/cn",
+    preferredAssetUrl: "https://zcode.z.ai/favicon-192x192.png?v=20260707-transparent",
+  },
+  {
     id: "workbuddy",
     homepage: "https://www.workbuddy.ai/",
     keepExistingFileName: "workbuddy.svg",

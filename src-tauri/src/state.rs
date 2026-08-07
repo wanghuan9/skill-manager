@@ -725,6 +725,7 @@ pub fn scan_local_skill_candidates(installed_skills: &[SkillSummary]) -> Vec<(St
         home_dir.join(".augment/skills"),
         home_dir.join(".kilocode/skills"),
         home_dir.join(".zencoder/skills"),
+        home_dir.join(".zcode/skills"),
         home_dir.join(".trae-cn/skills"),
         home_dir.join(".hermes/skills"),
         home_dir.join(".copilot/skills"),
@@ -1713,6 +1714,26 @@ mod tests {
                 vec![(
                     "real-skill".to_string(),
                     codex_skills_root.to_string_lossy().to_string()
+                )]
+            );
+        });
+    }
+
+    #[test]
+    fn local_candidate_scan_discovers_zcode_skills() {
+        with_temp_home(|temp_home| {
+            let zcode_skills_root = temp_home.join(".zcode/skills");
+            let skill_dir = zcode_skills_root.join("zcode-skill");
+            fs::create_dir_all(&skill_dir).expect("create zcode skill dir");
+            fs::write(skill_dir.join("SKILL.md"), "# zcode-skill").expect("write skill file");
+
+            let candidates = scan_local_skill_candidates(&[]);
+
+            assert_eq!(
+                candidates,
+                vec![(
+                    "zcode-skill".to_string(),
+                    zcode_skills_root.to_string_lossy().to_string()
                 )]
             );
         });
