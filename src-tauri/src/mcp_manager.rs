@@ -6542,7 +6542,7 @@ A comprehensive GitLab MCP server for AI clients. Manage projects, merge request
             panic!("save empty mcp records failed: {error}");
         }
 
-        let state_file = temp_home.join(".skilldock").join(MCP_STATE_FILE_NAME);
+        let state_file = temp_home.join(".skilldock/config/mcp-servers.json");
         let content = match fs::read_to_string(&state_file) {
             Ok(content) => content,
             Err(error) => {

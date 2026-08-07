@@ -1930,7 +1930,7 @@ mod tests {
             fs::create_dir_all(&skill_path).expect("create sample Skill");
             fs::write(skill_path.join("SKILL.md"), "# Sample").expect("write Skill");
             save_installed_skills(&[test_skill(&skill_path)]).expect("save initial state");
-            let state_path = home.join(".skilldock/state.json");
+            let state_path = home.join(".skilldock/data/state.json");
             let state_before = fs::read(&state_path).expect("read state before backup");
 
             let repo = home.join(".skilldock/backup/repo");
@@ -2023,7 +2023,7 @@ mod tests {
             fs::write(skill_path.join("SKILL.md"), "# Temporary").expect("write Skill");
             save_installed_skills(&[test_skill(&skill_path)]).expect("save initial state");
             fs::remove_dir_all(&skill_path).expect("simulate temporarily missing path");
-            let state_path = home.join(".skilldock/state.json");
+            let state_path = home.join(".skilldock/data/state.json");
             let state_before = fs::read(&state_path).expect("read state before backup");
 
             let repo = home.join(".skilldock/backup/repo");

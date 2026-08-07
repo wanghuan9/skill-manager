@@ -1,26 +1,86 @@
 #[cfg(test)]
 use std::cell::RefCell;
+use std::collections::HashSet;
 use std::env;
-use std::fs;
+use std::fs::{self, File, OpenOptions};
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::{Path, PathBuf};
-#[cfg(test)]
-use std::sync::Mutex;
-use std::time::SystemTime;
+use std::sync::{Mutex, OnceLock};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use serde::{Deserialize, Serialize};
 
 pub const APP_BRAND_NAME: &str = "SkillDock";
 pub const WORKSPACE_DIR_NAME: &str = ".skilldock";
+pub const REPOSITORIES_DIR_NAME: &str = "repositories";
 pub const SKILL_LIBRARY_PROVIDER_SKILLDOCK: &str = "skilldock";
 pub const SKILL_LIBRARY_PROVIDER_AGENT_SKILLS: &str = "agent-skills";
-#[allow(dead_code)]
 const SETTINGS_FILE_NAME: &str = "settings.json";
 const LEGACY_WORKSPACE_DIR_NAME: &str = ".skillm";
 const LEGACY_MACOS_APP_STORAGE_NAMES: [&str; 2] = ["com.wanghuan.skilldock", "skill-manager"];
 const MACOS_APP_STORAGE_ROOTS: [&str; 3] = ["Library/Caches", "Library/WebKit", "Library/Logs"];
-const MIGRATION_DEFERRED_FILE_NAMES: [&str; 3] =
-    ["state.json", "settings.json", "mcp-servers.json"];
-const CONFLICT_SUFFIX: &str = ".migrated-from-skillm";
+const WORKSPACE_LAYOUT_VERSION: u32 = 2;
+const LAYOUT_FILE_PATH: &str = "data/layout.json";
+const WORKSPACE_LAYOUT_DIRECTORIES: [&str; 11] = [
+    "config",
+    "data",
+    "data/publishing",
+    "credentials",
+    "cache",
+    REPOSITORIES_DIR_NAME,
+    "skills",
+    "plugins",
+    "imports",
+    "backup",
+    "logs",
+];
+const WORKSPACE_MIGRATION_PARENT_DIRECTORIES: [&str; 5] =
+    ["config", "data", "data/publishing", "credentials", "cache"];
+const WORKSPACE_FILE_MOVES: [WorkspaceFileMove; 11] = [
+    WorkspaceFileMove::new("settings.json", "config/settings.json"),
+    WorkspaceFileMove::new("mcp-servers.json", "config/mcp-servers.json"),
+    WorkspaceFileMove::new("state.json", "data/state.json"),
+    WorkspaceFileMove::new("publish-state.json", "data/publishing/legacy-marketplace.json"),
+    WorkspaceFileMove::new(
+        "skillhub-publish-state.json",
+        "data/publishing/skillhub.json",
+    ),
+    WorkspaceFileMove::new("cache/legacy-marketplace-session.json", "credentials/legacy-marketplace.json"),
+    WorkspaceFileMove::new("skillhub-auth.json", "credentials/skillhub.json"),
+    WorkspaceFileMove::new("github-credentials.json", "credentials/github.json"),
+    WorkspaceFileMove::new("git-update-cache.json", "cache/git-update.json"),
+    WorkspaceFileMove::new("plugin-list-cache.json", "cache/plugin-list.json"),
+    WorkspaceFileMove::new("plugin-update-cache.json", "cache/plugin-update.json"),
+];
+static MIGRATED_WORKSPACE_ROOTS: OnceLock<Mutex<HashSet<PathBuf>>> = OnceLock::new();
 #[cfg(test)]
 pub static TEST_ENV_LOCK: Mutex<()> = Mutex::new(());
+
+#[derive(Clone, Copy)]
+struct WorkspaceFileMove {
+    source: &'static str,
+    target: &'static str,
+}
+
+impl WorkspaceFileMove {
+    const fn new(source: &'static str, target: &'static str) -> Self {
+        Self { source, target }
+    }
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WorkspaceLayout {
+    layout_version: u32,
+}
+
+struct WorkspaceMigrationLock(File);
+
+impl Drop for WorkspaceMigrationLock {
+    fn drop(&mut self) {
+        let _ = fs2::FileExt::unlock(&self.0);
+    }
+}
 
 #[cfg(test)]
 thread_local! {
@@ -140,19 +200,12 @@ pub fn ensure_workspace_initialized() -> Result<PathBuf, String> {
     let workspace_root = managed_workspace_root()?;
     // Existing workspaces predate this setting, so keep their visible Skill list unchanged.
     let is_new_workspace = !workspace_root.exists();
-    fs::create_dir_all(workspace_root.join("skills"))
-        .map_err(|error| format!("创建 skills 目录失败: {error}"))?;
-    fs::create_dir_all(workspace_root.join("cache"))
-        .map_err(|error| format!("创建 cache 目录失败: {error}"))?;
-    fs::create_dir_all(workspace_root.join("repo-cache"))
-        .map_err(|error| format!("创建 repo-cache 目录失败: {error}"))?;
-    fs::create_dir_all(workspace_root.join("imports"))
-        .map_err(|error| format!("创建 imports 目录失败: {error}"))?;
+    ensure_workspace_layout_directories(&workspace_root)?;
     fs::create_dir_all(managed_skill_library_root()?)
         .map_err(|error| format!("创建 Skill 托管目录失败: {error}"))?;
 
     ensure_workspace_file_with_default_content(
-        &workspace_root.join("state.json"),
+        &workspace_root.join(workspace_relative_file_path("state.json")),
         "{\n  \"installedSkills\": []\n}\n",
     )?;
     let default_settings = if is_new_workspace {
@@ -161,13 +214,15 @@ pub fn ensure_workspace_initialized() -> Result<PathBuf, String> {
         "{\n  \"defaultOpenToolId\": \"\",\n  \"skillInstallActivation\": \"apply-all-tools\",\n  \"mcpInstallActivation\": \"apply-all-tools\",\n  \"skillSourceViewStyle\": \"select\",\n  \"skillLibraryProvider\": \"skilldock\"\n}\n"
     };
     ensure_workspace_file_with_default_content(
-        &workspace_root.join("settings.json"),
+        &workspace_root.join(workspace_relative_file_path("settings.json")),
         default_settings,
     )?;
     ensure_workspace_file_with_default_content(
-        &workspace_root.join("mcp-servers.json"),
+        &workspace_root.join(workspace_relative_file_path("mcp-servers.json")),
         "{\n  \"servers\": []\n}\n",
     )?;
+    protect_credentials_directory(&workspace_root)?;
+    write_layout_file_if_missing(&workspace_root)?;
 
     Ok(workspace_root)
 }
@@ -266,7 +321,9 @@ fn create_directory_link(source_path: &Path, target_path: &Path) -> Result<(), S
 
 #[allow(dead_code)]
 pub fn compatibility_enabled_for_home(home_dir: &Path) -> bool {
-    let settings_path = home_dir.join(WORKSPACE_DIR_NAME).join(SETTINGS_FILE_NAME);
+    let settings_path = home_dir
+        .join(WORKSPACE_DIR_NAME)
+        .join(workspace_relative_file_path(SETTINGS_FILE_NAME));
     let Ok(contents) = fs::read_to_string(settings_path) else {
         return false;
     };
@@ -289,26 +346,36 @@ pub fn compatibility_enabled_for_home(home_dir: &Path) -> bool {
 }
 
 pub fn workspace_file_path(file_name: &str) -> Result<PathBuf, String> {
-    Ok(managed_workspace_root()?.join(file_name))
+    Ok(managed_workspace_root()?.join(workspace_relative_file_path(file_name)))
 }
 
 pub fn workspace_file_candidates(file_name: &str) -> Vec<PathBuf> {
     let Some(home_dir) = home_dir_option() else {
         return Vec::new();
     };
-    let current = home_dir.join(WORKSPACE_DIR_NAME).join(file_name);
-    let legacy = home_dir.join(LEGACY_WORKSPACE_DIR_NAME).join(file_name);
-    if current == legacy {
-        return vec![current];
+    let workspace_root = home_dir.join(WORKSPACE_DIR_NAME);
+    let current = workspace_root.join(workspace_relative_file_path(file_name));
+    let legacy_relative_path = legacy_relative_file_path(file_name);
+    let flat = workspace_root.join(&legacy_relative_path);
+    let oldest = home_dir
+        .join(LEGACY_WORKSPACE_DIR_NAME)
+        .join(legacy_relative_path);
+    let mut candidates = Vec::with_capacity(3);
+    for candidate in [current, flat, oldest] {
+        if !candidates.contains(&candidate) {
+            candidates.push(candidate);
+        }
     }
-    vec![current, legacy]
+    candidates
 }
 
 pub fn remove_legacy_workspace_file(file_name: &str) {
     let Some(home_dir) = home_dir_option() else {
         return;
     };
-    let legacy_file = home_dir.join(LEGACY_WORKSPACE_DIR_NAME).join(file_name);
+    let legacy_file = home_dir
+        .join(LEGACY_WORKSPACE_DIR_NAME)
+        .join(legacy_relative_file_path(file_name));
     if legacy_file.exists() {
         let _ = fs::remove_file(legacy_file);
     }
@@ -353,50 +420,172 @@ fn ensure_workspace_file_with_default_content(
 }
 
 fn ensure_workspace_migrated_for_home(home_dir: &Path) -> Result<(), String> {
+    let current_root = home_dir.join(WORKSPACE_DIR_NAME);
+    let migrated_roots = MIGRATED_WORKSPACE_ROOTS.get_or_init(|| Mutex::new(HashSet::new()));
+    let mut migrated_roots = migrated_roots
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    if migrated_roots.contains(&current_root) {
+        return Ok(());
+    }
+
+    let _migration_lock = acquire_workspace_migration_lock(home_dir)?;
+    if read_layout_version(&current_root)? == Some(WORKSPACE_LAYOUT_VERSION) {
+        migrated_roots.insert(current_root);
+        return Ok(());
+    }
     let legacy_root = home_dir.join(LEGACY_WORKSPACE_DIR_NAME);
-    if !legacy_root.exists() {
+    read_layout_version(&legacy_root)?;
+    migrate_legacy_workspace_root(home_dir)?;
+    migrate_workspace_layout(&current_root)?;
+    migrated_roots.insert(current_root);
+    Ok(())
+}
+
+fn acquire_workspace_migration_lock(home_dir: &Path) -> Result<WorkspaceMigrationLock, String> {
+    let mut hasher = DefaultHasher::new();
+    home_dir.hash(&mut hasher);
+    let lock_path = env::temp_dir().join(format!(
+        "skilldock-workspace-migration-{:016x}.lock",
+        hasher.finish()
+    ));
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .open(&lock_path)
+        .map_err(|error| format!("打开工作区迁移锁失败（{}）: {error}", lock_path.display()))?;
+    fs2::FileExt::lock_exclusive(&file)
+        .map_err(|error| format!("获取工作区迁移锁失败（{}）: {error}", lock_path.display()))?;
+    Ok(WorkspaceMigrationLock(file))
+}
+
+fn migrate_legacy_workspace_root(home_dir: &Path) -> Result<(), String> {
+    let legacy_root = home_dir.join(LEGACY_WORKSPACE_DIR_NAME);
+    if !path_exists(&legacy_root)? {
         return Ok(());
     }
 
     let current_root = home_dir.join(WORKSPACE_DIR_NAME);
-    if !current_root.exists() {
-        match fs::rename(&legacy_root, &current_root) {
-            Ok(_) => return Ok(()),
-            Err(_) => {
-                copy_dir_recursive(&legacy_root, &current_root)?;
-                fs::remove_dir_all(&legacy_root)
-                    .map_err(|error| format!("清理旧工作区目录失败: {error}"))?;
-                return Ok(());
-            }
-        }
+    if !path_exists(&current_root)? {
+        return move_path(&legacy_root, &current_root);
     }
 
-    merge_workspace_dirs(&legacy_root, &current_root, true)?;
-    prune_empty_directories(&legacy_root)?;
+    move_directory_contents(&legacy_root, &current_root)?;
     prune_legacy_workspace_root_if_empty(home_dir);
     Ok(())
 }
 
-fn merge_workspace_dirs(source: &Path, target: &Path, is_root: bool) -> Result<(), String> {
-    fs::create_dir_all(target).map_err(|error| format!("创建迁移目标目录失败: {error}"))?;
+fn migrate_workspace_layout(workspace_root: &Path) -> Result<(), String> {
+    if !path_exists(workspace_root)? {
+        return Ok(());
+    }
+    if read_layout_version(workspace_root)? == Some(WORKSPACE_LAYOUT_VERSION) {
+        return Ok(());
+    }
 
-    let entries = fs::read_dir(source).map_err(|error| format!("读取旧工作区目录失败: {error}"))?;
+    ensure_workspace_migration_parent_directories(workspace_root)?;
+    protect_credentials_directory(workspace_root)?;
+    for entry in WORKSPACE_FILE_MOVES {
+        move_path(
+            &workspace_root.join(entry.source),
+            &workspace_root.join(entry.target),
+        )?;
+        let target = workspace_root.join(entry.target);
+        if Path::new(entry.target).starts_with("credentials") && path_exists(&target)? {
+            protect_credential_file(&target)?;
+        }
+    }
+    move_path(
+        &workspace_root.join("repo-cache"),
+        &workspace_root.join(REPOSITORIES_DIR_NAME),
+    )?;
+    ensure_workspace_layout_directories(workspace_root)?;
+    verify_legacy_layout_is_absent(workspace_root)?;
+    protect_credentials_directory(workspace_root)?;
+    write_layout_file(workspace_root)?;
+    log::info!("SkillDock workspace layout migrated to version {WORKSPACE_LAYOUT_VERSION}");
+    Ok(())
+}
+
+fn ensure_workspace_layout_directories(workspace_root: &Path) -> Result<(), String> {
+    for relative_path in WORKSPACE_LAYOUT_DIRECTORIES {
+        let path = workspace_root.join(relative_path);
+        fs::create_dir_all(&path)
+            .map_err(|error| format!("创建工作区目录失败（{}）: {error}", path.display()))?;
+    }
+    Ok(())
+}
+
+fn ensure_workspace_migration_parent_directories(workspace_root: &Path) -> Result<(), String> {
+    for relative_path in WORKSPACE_MIGRATION_PARENT_DIRECTORIES {
+        let path = workspace_root.join(relative_path);
+        fs::create_dir_all(&path)
+            .map_err(|error| format!("创建迁移目标目录失败（{}）: {error}", path.display()))?;
+    }
+    Ok(())
+}
+
+fn move_directory_contents(source: &Path, target: &Path) -> Result<(), String> {
+    if !path_exists(source)? {
+        return if path_exists(target)? {
+            Ok(())
+        } else {
+            Err(format!(
+                "工作区迁移源和目标均不存在：{} -> {}",
+                source.display(),
+                target.display()
+            ))
+        };
+    }
+    if !path_exists(target)? {
+        return move_path(source, target);
+    }
+    let source_metadata = fs::symlink_metadata(source)
+        .map_err(|error| format!("读取迁移源目录失败（{}）: {error}", source.display()))?;
+    let target_metadata = fs::symlink_metadata(target)
+        .map_err(|error| format!("读取迁移目标目录失败（{}）: {error}", target.display()))?;
+    if !source_metadata.is_dir() || !target_metadata.is_dir() {
+        return Err(format!(
+            "工作区迁移目标冲突：{} -> {}",
+            source.display(),
+            target.display()
+        ));
+    }
+
+    let entries = match fs::read_dir(source) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound && !path_exists(source)? => {
+            return if path_exists(target)? {
+                Ok(())
+            } else {
+                Err(format!(
+                    "工作区迁移源和目标均不存在：{} -> {}",
+                    source.display(),
+                    target.display()
+                ))
+            };
+        }
+        Err(error) => return Err(format!("读取旧工作区目录失败: {error}")),
+    };
     for entry in entries {
         let entry = entry.map_err(|error| format!("读取旧工作区条目失败: {error}"))?;
         let source_path = entry.path();
         let file_name = entry.file_name();
         let target_path = target.join(&file_name);
 
-        if is_root
-            && file_name
-                .to_str()
-                .is_some_and(|value| MIGRATION_DEFERRED_FILE_NAMES.contains(&value))
-            && target_path.exists()
-        {
-            continue;
+        if !path_exists(&source_path)? {
+            if path_exists(&target_path)? {
+                continue;
+            }
+            return Err(format!(
+                "工作区迁移条目在目标生成前消失：{} -> {}",
+                source_path.display(),
+                target_path.display()
+            ));
         }
 
-        if !target_path.exists() {
+        if !path_exists(&target_path)? {
             move_path(&source_path, &target_path)?;
             continue;
         }
@@ -407,139 +596,219 @@ fn merge_workspace_dirs(source: &Path, target: &Path, is_root: bool) -> Result<(
             .map_err(|error| format!("读取目标条目失败: {error}"))?;
 
         if source_metadata.is_dir() && target_metadata.is_dir() {
-            merge_workspace_dirs(&source_path, &target_path, false)?;
+            move_directory_contents(&source_path, &target_path)?;
             continue;
         }
-
-        if source_metadata.is_file()
-            && target_metadata.is_file()
-            && file_contents_equal(&source_path, &target_path)?
-        {
-            fs::remove_file(&source_path).map_err(|error| format!("清理重复文件失败: {error}"))?;
-            continue;
-        }
-
-        let conflict_target = conflict_target_path(&target_path);
-        move_path(&source_path, &conflict_target)?;
+        return Err(format!(
+            "工作区迁移目标冲突：{} -> {}",
+            source_path.display(),
+            target_path.display()
+        ));
     }
-
+    match fs::remove_dir(source) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(format!(
+                "清理已移动的空目录失败（{}）: {error}",
+                source.display()
+            ))
+        }
+    }
     Ok(())
 }
 
 fn move_path(source: &Path, target: &Path) -> Result<(), String> {
+    if !path_exists(source)? {
+        return Ok(());
+    }
+    if path_exists(target)? {
+        return Err(format!(
+            "工作区迁移目标已存在：{} -> {}",
+            source.display(),
+            target.display()
+        ));
+    }
     if let Some(parent) = target.parent() {
         fs::create_dir_all(parent).map_err(|error| format!("创建迁移父目录失败: {error}"))?;
     }
 
     match fs::rename(source, target) {
         Ok(_) => Ok(()),
-        Err(_) => {
-            if source.is_dir() {
-                copy_dir_recursive(source, target)?;
-                fs::remove_dir_all(source).map_err(|error| format!("清理已复制目录失败: {error}"))
+        Err(error) => {
+            let source_exists = path_exists(source)?;
+            let target_exists = path_exists(target)?;
+            if !source_exists && target_exists {
+                Ok(())
             } else {
-                fs::copy(source, target).map_err(|error| format!("复制文件失败: {error}"))?;
-                fs::remove_file(source).map_err(|error| format!("清理已复制文件失败: {error}"))
+                Err(format!(
+                    "移动工作区数据失败（{} -> {}）: {error}",
+                    source.display(),
+                    target.display()
+                ))
             }
         }
     }
 }
 
-fn copy_dir_recursive(source: &Path, target: &Path) -> Result<(), String> {
-    fs::create_dir_all(target).map_err(|error| format!("创建目录失败: {error}"))?;
-    let entries = fs::read_dir(source).map_err(|error| format!("读取目录失败: {error}"))?;
-    for entry in entries {
-        let entry = entry.map_err(|error| format!("读取目录条目失败: {error}"))?;
-        let source_path = entry.path();
-        let target_path = target.join(entry.file_name());
-        if source_path.is_dir() {
-            copy_dir_recursive(&source_path, &target_path)?;
-        } else {
-            if let Some(parent) = target_path.parent() {
-                fs::create_dir_all(parent)
-                    .map_err(|error| format!("创建文件父目录失败: {error}"))?;
+fn verify_legacy_layout_is_absent(workspace_root: &Path) -> Result<(), String> {
+    for entry in WORKSPACE_FILE_MOVES {
+        let source = workspace_root.join(entry.source);
+        if path_exists(&source)? {
+            return Err(format!("工作区旧文件仍然存在：{}", source.display()));
+        }
+    }
+    let legacy_repositories = workspace_root.join("repo-cache");
+    if path_exists(&legacy_repositories)? {
+        return Err(format!(
+            "工作区旧仓库目录仍然存在：{}",
+            legacy_repositories.display()
+        ));
+    }
+    Ok(())
+}
+
+fn read_layout_version(workspace_root: &Path) -> Result<Option<u32>, String> {
+    let layout_path = workspace_root.join(LAYOUT_FILE_PATH);
+    let content = match fs::read_to_string(&layout_path) {
+        Ok(content) => content,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(format!(
+                "读取工作区布局标记失败（{}）: {error}",
+                layout_path.display()
+            ))
+        }
+    };
+    let layout = serde_json::from_str::<WorkspaceLayout>(&content).map_err(|error| {
+        format!(
+            "解析工作区布局标记失败（{}）: {error}",
+            layout_path.display()
+        )
+    })?;
+    if layout.layout_version != WORKSPACE_LAYOUT_VERSION {
+        return Err(format!(
+            "工作区布局版本 {} 不受当前版本支持（仅支持 {WORKSPACE_LAYOUT_VERSION}）",
+            layout.layout_version
+        ));
+    }
+    Ok(Some(layout.layout_version))
+}
+
+fn write_layout_file_if_missing(workspace_root: &Path) -> Result<(), String> {
+    if read_layout_version(workspace_root)? == Some(WORKSPACE_LAYOUT_VERSION) {
+        return Ok(());
+    }
+    write_layout_file(workspace_root)
+}
+
+fn write_layout_file(workspace_root: &Path) -> Result<(), String> {
+    let layout_path = workspace_root.join(LAYOUT_FILE_PATH);
+    let parent = layout_path
+        .parent()
+        .ok_or_else(|| "工作区布局标记父目录无效".to_string())?;
+    fs::create_dir_all(parent).map_err(|error| format!("创建布局标记目录失败: {error}"))?;
+    let payload = serde_json::to_vec_pretty(&WorkspaceLayout {
+        layout_version: WORKSPACE_LAYOUT_VERSION,
+    })
+    .map_err(|error| format!("序列化工作区布局标记失败: {error}"))?;
+    let sequence = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let temporary = parent.join(format!(
+        ".layout.json.tmp-{}-{sequence}",
+        std::process::id()
+    ));
+    fs::write(&temporary, payload)
+        .map_err(|error| format!("写入工作区布局临时标记失败: {error}"))?;
+    match fs::rename(&temporary, &layout_path) {
+        Ok(()) => Ok(()),
+        Err(_) if read_layout_version(workspace_root)? == Some(WORKSPACE_LAYOUT_VERSION) => {
+            let _ = fs::remove_file(temporary);
+            Ok(())
+        }
+        Err(error) => {
+            let _ = fs::remove_file(temporary);
+            Err(format!(
+                "提交工作区布局标记失败（{}）: {error}",
+                layout_path.display()
+            ))
+        }
+    }
+}
+
+fn protect_credentials_directory(workspace_root: &Path) -> Result<(), String> {
+    let credentials_dir = workspace_root.join("credentials");
+    fs::create_dir_all(&credentials_dir).map_err(|error| format!("创建凭证目录失败: {error}"))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        fs::set_permissions(&credentials_dir, fs::Permissions::from_mode(0o700))
+            .map_err(|error| format!("设置凭证目录权限失败: {error}"))?;
+        for file_name in ["legacy-marketplace.json", "skillhub.json", "github.json"] {
+            let path = credentials_dir.join(file_name);
+            if path_exists(&path)? {
+                protect_credential_file(&path)?;
             }
-            fs::copy(&source_path, &target_path)
-                .map_err(|error| format!("复制文件失败: {error}"))?;
         }
     }
     Ok(())
 }
 
-fn file_contents_equal(left: &Path, right: &Path) -> Result<bool, String> {
-    let left_bytes = fs::read(left).map_err(|error| format!("读取文件失败: {error}"))?;
-    let right_bytes = fs::read(right).map_err(|error| format!("读取文件失败: {error}"))?;
-    Ok(left_bytes == right_bytes)
-}
+fn protect_credential_file(path: &Path) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
 
-fn conflict_target_path(target: &Path) -> PathBuf {
-    let parent = target.parent().unwrap_or_else(|| Path::new(""));
-    let stem = target
-        .file_stem()
-        .and_then(|value| value.to_str())
-        .unwrap_or("migrated");
-    let extension = target
-        .extension()
-        .and_then(|value| value.to_str())
-        .unwrap_or("");
-
-    let mut index = 1usize;
-    loop {
-        let suffix = if index == 1 {
-            CONFLICT_SUFFIX.to_string()
-        } else {
-            format!("{CONFLICT_SUFFIX}-{index}")
-        };
-        let file_name = if extension.is_empty() {
-            format!("{stem}{suffix}")
-        } else {
-            format!("{stem}{suffix}.{extension}")
-        };
-        let candidate = parent.join(file_name);
-        if !candidate.exists() {
-            return candidate;
-        }
-        index += 1;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+            .map_err(|error| format!("设置凭证文件权限失败（{}）: {error}", path.display()))?;
     }
-}
-
-fn prune_empty_directories(path: &Path) -> Result<bool, String> {
-    if !path.exists() {
-        return Ok(true);
+    #[cfg(not(unix))]
+    {
+        let _ = path;
     }
-    if !path.is_dir() {
-        return Ok(false);
-    }
-
-    let entries = fs::read_dir(path).map_err(|error| format!("读取目录失败: {error}"))?;
-    let child_paths = entries
-        .map(|entry| entry.map(|value| value.path()))
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| format!("读取目录条目失败: {error}"))?;
-
-    let mut is_empty = true;
-    for child_path in child_paths {
-        if child_path.is_dir() {
-            if !prune_empty_directories(&child_path)? {
-                is_empty = false;
-            }
-            continue;
-        }
-        is_empty = false;
-    }
-
-    if is_empty {
-        fs::remove_dir(path).map_err(|error| format!("删除空目录失败: {error}"))?;
-        return Ok(true);
-    }
-
-    Ok(false)
+    Ok(())
 }
 
 fn prune_legacy_workspace_root_if_empty(home_dir: &Path) {
     let legacy_root = home_dir.join(LEGACY_WORKSPACE_DIR_NAME);
-    if legacy_root.is_dir() {
-        let _ = prune_empty_directories(&legacy_root);
+    if legacy_root.is_dir()
+        && fs::read_dir(&legacy_root)
+            .ok()
+            .is_some_and(|mut entries| entries.next().is_none())
+    {
+        let _ = fs::remove_dir(legacy_root);
+    }
+}
+
+fn workspace_relative_file_path(file_name: &str) -> PathBuf {
+    workspace_file_move(file_name)
+        .map(|entry| PathBuf::from(entry.target))
+        .unwrap_or_else(|| PathBuf::from(file_name))
+}
+
+fn legacy_relative_file_path(file_name: &str) -> PathBuf {
+    workspace_file_move(file_name)
+        .map(|entry| entry.source)
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(file_name))
+}
+
+fn workspace_file_move(file_name: &str) -> Option<&'static WorkspaceFileMove> {
+    WORKSPACE_FILE_MOVES.iter().find(|entry| {
+        Path::new(entry.source)
+            .file_name()
+            .is_some_and(|source_name| source_name == file_name)
+    })
+}
+
+fn path_exists(path: &Path) -> Result<bool, String> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(format!("检查工作区路径失败（{}）: {error}", path.display())),
     }
 }
 
@@ -751,8 +1020,17 @@ mod tests {
             assert_eq!(
                 workspace_file_candidates("state.json"),
                 vec![
+                    temp_home.join(".skilldock/data/state.json"),
                     temp_home.join(".skilldock/state.json"),
                     temp_home.join(".skillm/state.json"),
+                ]
+            );
+            assert_eq!(
+                workspace_file_candidates("legacy-marketplace-session.json"),
+                vec![
+                    temp_home.join(".skilldock/credentials/legacy-marketplace.json"),
+                    temp_home.join(".skilldock/cache/legacy-marketplace-session.json"),
+                    temp_home.join(".skillm/cache/legacy-marketplace-session.json"),
                 ]
             );
         });
@@ -767,18 +1045,19 @@ mod tests {
             assert_eq!(workspace_root, temp_home.join(WORKSPACE_DIR_NAME));
             assert!(workspace_root.join("skills").is_dir());
             assert!(workspace_root.join("cache").is_dir());
-            assert!(workspace_root.join("repo-cache").is_dir());
+            assert!(workspace_root.join("repositories").is_dir());
             assert!(workspace_root.join("imports").is_dir());
             assert_eq!(
-                fs::read_to_string(workspace_root.join("state.json")).expect("read state"),
+                fs::read_to_string(workspace_root.join("data/state.json")).expect("read state"),
                 "{\n  \"installedSkills\": []\n}\n"
             );
             assert_eq!(
-                fs::read_to_string(workspace_root.join("mcp-servers.json")).expect("read mcp"),
+                fs::read_to_string(workspace_root.join("config/mcp-servers.json"))
+                    .expect("read mcp"),
                 "{\n  \"servers\": []\n}\n"
             );
-            let settings_content =
-                fs::read_to_string(workspace_root.join("settings.json")).expect("read settings");
+            let settings_content = fs::read_to_string(workspace_root.join("config/settings.json"))
+                .expect("read settings");
             assert!(settings_content.contains("\"defaultOpenToolId\": \"\""));
             assert!(settings_content.contains("\"skillInstallActivation\": \"apply-all-tools\""));
             assert!(settings_content.contains("\"mcpInstallActivation\": \"apply-all-tools\""));
@@ -786,6 +1065,14 @@ mod tests {
             assert!(settings_content.contains("\"skillLibraryProvider\": \"skilldock\""));
             assert!(settings_content.contains("\"agentSkillsCompatibilityEnabled\": true"));
             assert!(compatibility_enabled_for_home(&temp_home));
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(
+                    &fs::read_to_string(workspace_root.join("data/layout.json"))
+                        .expect("read layout")
+                )
+                .expect("parse layout")["layoutVersion"],
+                2
+            );
         });
     }
 
@@ -797,8 +1084,8 @@ mod tests {
 
             ensure_workspace_initialized().expect("workspace should initialize");
 
-            let settings_content =
-                fs::read_to_string(workspace_root.join("settings.json")).expect("read settings");
+            let settings_content = fs::read_to_string(workspace_root.join("config/settings.json"))
+                .expect("read settings");
             assert!(!settings_content.contains("agentSkillsCompatibilityEnabled"));
             assert!(!compatibility_enabled_for_home(&temp_home));
         });
@@ -824,9 +1111,9 @@ mod tests {
     fn keeps_skilldock_root_when_legacy_agent_provider_is_enabled() {
         run_with_temp_home("active-agent-skills", |temp_home| {
             let workspace_root = temp_home.join(WORKSPACE_DIR_NAME);
-            fs::create_dir_all(&workspace_root).expect("create workspace");
+            fs::create_dir_all(workspace_root.join("config")).expect("create workspace");
             fs::write(
-                workspace_root.join("settings.json"),
+                workspace_root.join("config/settings.json"),
                 "{\"skillLibraryProvider\":\"agent-skills\"}",
             )
             .expect("write settings");
@@ -912,18 +1199,364 @@ mod tests {
 
             assert_eq!(initialized_root, workspace_root);
             assert_eq!(
-                fs::read_to_string(workspace_root.join("state.json")).expect("read state"),
+                fs::read_to_string(workspace_root.join("data/state.json")).expect("read state"),
                 "{\n  \"installedSkills\": [{\"name\": \"kept\"}]\n}\n"
             );
             assert_eq!(
-                fs::read_to_string(workspace_root.join("settings.json")).expect("read settings"),
+                fs::read_to_string(workspace_root.join("config/settings.json"))
+                    .expect("read settings"),
                 "{\n  \"defaultOpenToolId\": \"cursor\"\n}\n"
             );
             assert!(!compatibility_enabled_for_home(&temp_home));
             assert_eq!(
-                fs::read_to_string(workspace_root.join("mcp-servers.json")).expect("read mcp"),
+                fs::read_to_string(workspace_root.join("config/mcp-servers.json"))
+                    .expect("read mcp"),
                 "{\n  \"servers\": [{\"id\": \"kept\"}]\n}\n"
             );
         });
+    }
+
+    #[test]
+    fn migrates_flat_workspace_layout_by_moving_every_entry() {
+        run_with_temp_home("layout-v2", |temp_home| {
+            let workspace_root = temp_home.join(WORKSPACE_DIR_NAME);
+            fs::create_dir_all(workspace_root.join("cache")).expect("create cache");
+            fs::create_dir_all(workspace_root.join("repo-cache/仓库/子目录"))
+                .expect("create repository");
+            let files = [
+                ("settings.json", "{\"theme\":\"dark\"}"),
+                ("mcp-servers.json", "{\"servers\":[]}"),
+                ("state.json", "{\"installedSkills\":[]}"),
+                ("publish-state.json", "{\"skills\":{}}"),
+                ("skillhub-publish-state.json", "{\"skills\":{}}"),
+                ("cache/legacy-marketplace-session.json", "{\"accessToken\":\"secret\"}"),
+                ("skillhub-auth.json", "{\"token\":\"secret\"}"),
+                ("github-credentials.json", "{\"token\":\"secret\"}"),
+                ("git-update-cache.json", "{\"entries\":[]}"),
+                ("plugin-list-cache.json", "[]"),
+                ("plugin-update-cache.json", "{\"entries\":[]}"),
+            ];
+            for (relative_path, content) in files {
+                fs::write(workspace_root.join(relative_path), content).expect("write legacy file");
+            }
+            fs::write(
+                workspace_root.join("repo-cache/仓库/子目录/README.md"),
+                "仓库内容",
+            )
+            .expect("write repository content");
+
+            ensure_workspace_initialized().expect("migrate workspace");
+
+            let moved_files = [
+                ("config/settings.json", "{\"theme\":\"dark\"}"),
+                ("config/mcp-servers.json", "{\"servers\":[]}"),
+                ("data/state.json", "{\"installedSkills\":[]}"),
+                ("data/publishing/legacy-marketplace.json", "{\"skills\":{}}"),
+                ("data/publishing/skillhub.json", "{\"skills\":{}}"),
+                ("credentials/legacy-marketplace.json", "{\"accessToken\":\"secret\"}"),
+                ("credentials/skillhub.json", "{\"token\":\"secret\"}"),
+                ("credentials/github.json", "{\"token\":\"secret\"}"),
+                ("cache/git-update.json", "{\"entries\":[]}"),
+                ("cache/plugin-list.json", "[]"),
+                ("cache/plugin-update.json", "{\"entries\":[]}"),
+            ];
+            for (relative_path, expected) in moved_files {
+                assert_eq!(
+                    fs::read_to_string(workspace_root.join(relative_path))
+                        .expect("read moved file"),
+                    expected
+                );
+            }
+            for (relative_path, _) in files {
+                assert!(!super::path_exists(&workspace_root.join(relative_path))
+                    .expect("check legacy path"));
+            }
+            assert_eq!(
+                fs::read_to_string(workspace_root.join("repositories/仓库/子目录/README.md"))
+                    .expect("read moved repository"),
+                "仓库内容"
+            );
+            assert!(!super::path_exists(&workspace_root.join("repo-cache"))
+                .expect("check legacy repositories"));
+            assert_eq!(
+                super::read_layout_version(&workspace_root).expect("read layout"),
+                Some(super::WORKSPACE_LAYOUT_VERSION)
+            );
+
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+
+                assert_eq!(
+                    fs::metadata(workspace_root.join("credentials"))
+                        .expect("credential directory metadata")
+                        .permissions()
+                        .mode()
+                        & 0o777,
+                    0o700
+                );
+                assert_eq!(
+                    fs::metadata(workspace_root.join("credentials/github.json"))
+                        .expect("credential file metadata")
+                        .permissions()
+                        .mode()
+                        & 0o777,
+                    0o600
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn resumes_partially_moved_workspace_without_overwriting_targets() {
+        run_with_temp_home("layout-resume", |temp_home| {
+            let workspace_root = temp_home.join(WORKSPACE_DIR_NAME);
+            fs::create_dir_all(workspace_root.join("config")).expect("create target directory");
+            fs::write(
+                workspace_root.join("config/settings.json"),
+                "{\"theme\":\"dark\"}",
+            )
+            .expect("write already moved settings");
+            fs::write(
+                workspace_root.join("state.json"),
+                "{\"installedSkills\":[]}",
+            )
+            .expect("write pending state");
+
+            ensure_workspace_initialized().expect("resume migration");
+
+            assert_eq!(
+                fs::read_to_string(workspace_root.join("config/settings.json"))
+                    .expect("read settings"),
+                "{\"theme\":\"dark\"}"
+            );
+            assert!(workspace_root.join("data/state.json").is_file());
+            assert!(!workspace_root.join("state.json").exists());
+            assert_eq!(
+                super::read_layout_version(&workspace_root).expect("read layout"),
+                Some(super::WORKSPACE_LAYOUT_VERSION)
+            );
+        });
+    }
+
+    #[test]
+    fn rejects_layout_conflicts_without_removing_either_file_or_writing_marker() {
+        run_with_temp_home("layout-conflict", |temp_home| {
+            let workspace_root = temp_home.join(WORKSPACE_DIR_NAME);
+            fs::create_dir_all(workspace_root.join("config")).expect("create target directory");
+            fs::write(workspace_root.join("settings.json"), "legacy")
+                .expect("write legacy settings");
+            fs::write(workspace_root.join("config/settings.json"), "current")
+                .expect("write current settings");
+
+            let error = ensure_workspace_initialized().expect_err("conflict should fail migration");
+
+            assert!(error.contains("迁移目标已存在"));
+            assert_eq!(
+                fs::read_to_string(workspace_root.join("settings.json")).expect("read legacy"),
+                "legacy"
+            );
+            assert_eq!(
+                fs::read_to_string(workspace_root.join("config/settings.json"))
+                    .expect("read current"),
+                "current"
+            );
+            assert!(!workspace_root.join("data/layout.json").exists());
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn permission_errors_abort_migration_without_writing_marker() {
+        use std::os::unix::fs::PermissionsExt;
+
+        run_with_temp_home("layout-permission-error", |temp_home| {
+            let workspace_root = temp_home.join(WORKSPACE_DIR_NAME);
+            let legacy_cache = workspace_root.join("cache");
+            fs::create_dir_all(&legacy_cache).expect("create legacy cache");
+            fs::write(legacy_cache.join("legacy-marketplace-session.json"), "secret")
+                .expect("write legacy credential");
+            fs::set_permissions(&legacy_cache, fs::Permissions::from_mode(0o000))
+                .expect("remove cache permissions");
+
+            let result = ensure_workspace_initialized();
+
+            fs::set_permissions(&legacy_cache, fs::Permissions::from_mode(0o700))
+                .expect("restore cache permissions");
+            assert!(result.is_err());
+            assert!(legacy_cache.join("legacy-marketplace-session.json").is_file());
+            assert!(!workspace_root.join("data/layout.json").exists());
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn credentials_are_protected_even_when_a_later_move_conflicts() {
+        use std::os::unix::fs::PermissionsExt;
+
+        run_with_temp_home("layout-credential-partial-failure", |temp_home| {
+            let workspace_root = temp_home.join(WORKSPACE_DIR_NAME);
+            fs::create_dir_all(workspace_root.join("cache")).expect("create cache");
+            fs::write(workspace_root.join("github-credentials.json"), "secret")
+                .expect("write legacy credential");
+            fs::write(workspace_root.join("git-update-cache.json"), "legacy")
+                .expect("write legacy cache");
+            fs::write(workspace_root.join("cache/git-update.json"), "current")
+                .expect("write current cache");
+
+            assert!(ensure_workspace_initialized().is_err());
+
+            let credential_path = workspace_root.join("credentials/github.json");
+            assert_eq!(
+                fs::metadata(workspace_root.join("credentials"))
+                    .expect("credential directory metadata")
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o700
+            );
+            assert_eq!(
+                fs::metadata(&credential_path)
+                    .expect("credential metadata")
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o600
+            );
+            assert!(!workspace_root.join("github-credentials.json").exists());
+            assert!(!workspace_root.join("data/layout.json").exists());
+        });
+    }
+
+    #[test]
+    fn directory_merge_accepts_source_removed_after_target_was_created() {
+        let temp_root = unique_temp_home("directory-merge-race");
+        let source = temp_root.join("legacy");
+        let target = temp_root.join("current");
+        fs::create_dir_all(&target).expect("create migration target");
+
+        super::move_directory_contents(&source, &target)
+            .expect("missing source with existing target is complete");
+
+        let _ = fs::remove_dir_all(temp_root);
+    }
+
+    #[test]
+    fn rejects_future_or_damaged_layout_markers_without_touching_workspace_data() {
+        for (label, marker) in [
+            ("older-layout", "{\"layoutVersion\":1}"),
+            ("future-layout", "{\"layoutVersion\":3}"),
+            ("damaged-layout", "not-json"),
+        ] {
+            run_with_temp_home(label, |temp_home| {
+                let workspace_root = temp_home.join(WORKSPACE_DIR_NAME);
+                fs::create_dir_all(workspace_root.join("data")).expect("create data directory");
+                fs::write(workspace_root.join("data/layout.json"), marker).expect("write marker");
+                fs::write(workspace_root.join("settings.json"), "legacy")
+                    .expect("write legacy settings");
+
+                assert!(ensure_workspace_initialized().is_err());
+                assert_eq!(
+                    fs::read_to_string(workspace_root.join("settings.json")).expect("read legacy"),
+                    "legacy"
+                );
+                assert_eq!(
+                    fs::read_to_string(workspace_root.join("data/layout.json"))
+                        .expect("read marker"),
+                    marker
+                );
+            });
+        }
+    }
+
+    #[test]
+    fn validates_layout_markers_before_moving_legacy_workspace_data() {
+        for (label, marker_root) in [
+            ("current-marker-before-legacy", ".skilldock"),
+            ("legacy-marker-before-legacy", ".skillm"),
+        ] {
+            run_with_temp_home(label, |temp_home| {
+                let legacy_skill = temp_home.join(".skillm/skills/demo/SKILL.md");
+                fs::create_dir_all(legacy_skill.parent().expect("legacy skill parent"))
+                    .expect("create legacy skill");
+                fs::write(&legacy_skill, "# demo").expect("write legacy skill");
+                let marker_path = temp_home.join(marker_root).join("data/layout.json");
+                fs::create_dir_all(marker_path.parent().expect("marker parent"))
+                    .expect("create marker directory");
+                fs::write(&marker_path, "{\"layoutVersion\":1}").expect("write old marker");
+
+                assert!(ensure_workspace_initialized().is_err());
+
+                assert!(legacy_skill.is_file());
+                assert_eq!(
+                    fs::read_to_string(marker_path).expect("read unchanged marker"),
+                    "{\"layoutVersion\":1}"
+                );
+            });
+        }
+    }
+
+    #[test]
+    fn completed_layout_initialization_is_idempotent() {
+        run_with_temp_home("layout-idempotent", |temp_home| {
+            let workspace_root = temp_home.join(WORKSPACE_DIR_NAME);
+            fs::create_dir_all(&workspace_root).expect("create workspace");
+            fs::write(
+                workspace_root.join("state.json"),
+                "{\"installedSkills\":[]}",
+            )
+            .expect("write state");
+
+            ensure_workspace_initialized().expect("first initialization");
+            let state = fs::read(workspace_root.join("data/state.json")).expect("read state");
+            let layout = fs::read(workspace_root.join("data/layout.json")).expect("read layout");
+
+            ensure_workspace_initialized().expect("second initialization");
+
+            assert_eq!(
+                fs::read(workspace_root.join("data/state.json")).expect("read state again"),
+                state
+            );
+            assert_eq!(
+                fs::read(workspace_root.join("data/layout.json")).expect("read layout again"),
+                layout
+            );
+        });
+    }
+
+    #[test]
+    fn serializes_concurrent_layout_migration_for_the_same_workspace() {
+        let temp_home = unique_temp_home("layout-concurrent");
+        let workspace_root = temp_home.join(WORKSPACE_DIR_NAME);
+        fs::create_dir_all(&workspace_root).expect("create workspace");
+        fs::write(
+            workspace_root.join("state.json"),
+            "{\"installedSkills\":[]}",
+        )
+        .expect("write state");
+
+        let first_home = temp_home.clone();
+        let second_home = temp_home.clone();
+        let first =
+            std::thread::spawn(move || super::ensure_workspace_migrated_for_home(&first_home));
+        let second =
+            std::thread::spawn(move || super::ensure_workspace_migrated_for_home(&second_home));
+
+        first
+            .join()
+            .expect("join first migration")
+            .expect("first migration");
+        second
+            .join()
+            .expect("join second migration")
+            .expect("second migration");
+        assert!(workspace_root.join("data/state.json").is_file());
+        assert!(!workspace_root.join("state.json").exists());
+        assert_eq!(
+            super::read_layout_version(&workspace_root).expect("read layout"),
+            Some(super::WORKSPACE_LAYOUT_VERSION)
+        );
+
+        let _ = fs::remove_dir_all(temp_home);
     }
 }

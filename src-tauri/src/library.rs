@@ -18,9 +18,21 @@ use serde::Deserialize;
 /// 进度回调：接收来自 git clone stderr 的实时输出行。
 pub type CloneProgressCallback = Arc<dyn Fn(&str) + Send + Sync + 'static>;
 
-const REPO_CACHE_DIR: &str = "repo-cache";
-const RESERVED_WORKSPACE_LINK_NAMES: [&str; 5] =
-    ["state.json", "skills", "repo-cache", "cache", "imports"];
+const REPO_CACHE_DIR: &str = workspace::REPOSITORIES_DIR_NAME;
+const RESERVED_WORKSPACE_LINK_NAMES: [&str; 12] = [
+    "state.json",
+    "config",
+    "data",
+    "credentials",
+    "skills",
+    "repositories",
+    "repo-cache",
+    "cache",
+    "plugins",
+    "imports",
+    "backup",
+    "logs",
+];
 const GIT_CLONE_HISTORY_DEPTH: &str = "10";
 const GIT_NETWORK_TIMEOUT: Duration = Duration::from_secs(120);
 const GIT_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
@@ -2401,7 +2413,7 @@ pub fn create_skill_symlink(
     }
 
     // 旧版本曾用 local_path 的最后一级目录名作为链接名。安装自仓库子目录或缓存路径时，
-    // 这可能留下 repo-cache 等错误链接；创建正确链接前先清掉旧链接。
+    // 这可能留下工作区保留目录的错误链接；创建正确链接前先清掉旧链接。
     let legacy_skill_name = skill_path
         .file_name()
         .and_then(|name| name.to_str())
@@ -2734,10 +2746,16 @@ fn is_reserved_workspace_symlink_target(symlink_path: &Path) -> bool {
         return false;
     };
     [
+        workspace_root.join("config"),
+        workspace_root.join("data"),
+        workspace_root.join("credentials"),
         workspace_root.join("cache"),
-        workspace_root.join("repo-cache"),
+        workspace_root.join(REPO_CACHE_DIR),
         workspace_root.join("skills"),
+        workspace_root.join("plugins"),
         workspace_root.join("imports"),
+        workspace_root.join("backup"),
+        workspace_root.join("logs"),
     ]
     .into_iter()
     .filter_map(|path| path.canonicalize().ok())

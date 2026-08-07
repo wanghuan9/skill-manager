@@ -39,9 +39,7 @@ fn credential_file_path() -> Result<PathBuf, String> {
         return Ok(path);
     }
 
-    crate::workspace::managed_workspace_root_option()
-        .map(|root| root.join(CREDENTIAL_FILE_NAME))
-        .ok_or_else(|| "无法定位 GitHub 凭据文件".to_string())
+    crate::workspace::workspace_file_path(CREDENTIAL_FILE_NAME)
 }
 
 pub fn store_credential(token: &str, auth_method: &str) -> Result<(), String> {
@@ -62,6 +60,7 @@ pub fn store_credential(token: &str, auth_method: &str) -> Result<(), String> {
         .ok_or_else(|| "GitHub 凭据文件目录无效".to_string())?;
     fs::create_dir_all(parent).map_err(|error| format!("创建 GitHub 凭据目录失败: {error}"))?;
     fs::write(&path, payload).map_err(|error| format!("保存 GitHub 凭据失败: {error}"))?;
+    protect_credential_permissions(parent, &path)?;
 
     let mut cache = credential_cache()
         .lock()
@@ -69,6 +68,26 @@ pub fn store_credential(token: &str, auth_method: &str) -> Result<(), String> {
     cache.initialized = true;
     cache.credential = Some(credential);
 
+    Ok(())
+}
+
+fn protect_credential_permissions(
+    parent: &std::path::Path,
+    path: &std::path::Path,
+) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        fs::set_permissions(parent, fs::Permissions::from_mode(0o700))
+            .map_err(|error| format!("设置 GitHub 凭据目录权限失败: {error}"))?;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+            .map_err(|error| format!("设置 GitHub 凭据文件权限失败: {error}"))?;
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (parent, path);
+    }
     Ok(())
 }
 
@@ -172,6 +191,27 @@ mod tests {
             )
             .expect("save connected metadata");
             assert!(credential_path.is_file());
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+
+                assert_eq!(
+                    fs::metadata(credential_path.parent().expect("credential parent"))
+                        .expect("read credential directory metadata")
+                        .permissions()
+                        .mode()
+                        & 0o777,
+                    0o700
+                );
+                assert_eq!(
+                    fs::metadata(&credential_path)
+                        .expect("read credential metadata")
+                        .permissions()
+                        .mode()
+                        & 0o777,
+                    0o600
+                );
+            }
             clear_session_credential();
 
             let credential = load_credential().expect("load credential");
