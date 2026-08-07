@@ -35,6 +35,8 @@ const CLAUDE_MARKETPLACE_MANIFEST: &str = ".claude-plugin/marketplace.json";
 const CURSOR_PLUGIN_MANIFEST: &str = ".cursor-plugin/plugin.json";
 const CODEX_PLUGIN_MANIFEST: &str = ".codex-plugin/plugin.json";
 const CODEX_MARKETPLACE_MANIFEST: &str = ".agents/plugins/marketplace.json";
+const OPENCODE_PLUGIN_DIR: &str = ".opencode/plugins";
+const OPENCODE_USER_PLUGIN_DIR: &str = ".config/opencode/plugins";
 const CODEX_SKILLDOCK_CACHE_VERSION: &str = "latest";
 const PLUGIN_PACKAGE_DIR: &str = "plugins";
 const REMOTE_BRANCH_PREFIX: &str = "origin/";
@@ -48,6 +50,7 @@ const PLUGIN_PACKAGE_HASH_LEN: usize = 8;
 const PLUGIN_UPDATE_CACHE_FILE_NAME: &str = "plugin-update-cache.json";
 const PLUGIN_LIST_CACHE_FILE_NAME: &str = "plugin-list-cache.json";
 const CURSOR_DISABLED_PLUGIN_DIR: &str = ".skilldock/disabled-plugins/cursor";
+const OPENCODE_DISABLED_PLUGIN_DIR: &str = ".skilldock/disabled-plugins/opencode";
 
 static PLUGIN_UPDATE_CACHE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 static PLUGIN_GIT_FETCH_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -279,6 +282,8 @@ pub struct PortablePluginSource {
     pub source_root: PathBuf,
     pub host_tools: Vec<String>,
     pub cursor_was_disabled: bool,
+    pub disabled_host_tools: Vec<String>,
+    pub plugin_relative_path: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -289,6 +294,10 @@ pub struct PortablePluginTarget {
     pub directory_name: String,
     pub host_tools: Vec<String>,
     pub cursor_was_disabled: bool,
+    #[serde(default)]
+    pub disabled_host_tools: Vec<String>,
+    #[serde(default)]
+    pub plugin_relative_path: String,
     pub content_hash: String,
 }
 
@@ -530,13 +539,17 @@ fn insert_portable_plugin_directories(
             .or_insert_with(|| PortablePluginSource {
                 package_id: directory_name.clone(),
                 directory_name,
-                source_root,
+                source_root: source_root.clone(),
                 host_tools: if cursor_was_disabled {
                     vec!["cursor".to_string()]
                 } else {
                     Vec::new()
                 },
                 cursor_was_disabled,
+                disabled_host_tools: Vec::new(),
+                plugin_relative_path: read_plugin_package_identity(&source_root)
+                    .map(|identity| identity.plugin_relative_path)
+                    .unwrap_or_default(),
             });
     }
 }
@@ -564,6 +577,12 @@ pub fn collect_portable_plugin_sources() -> Result<Vec<PortablePluginSource>, St
             let Some(source) = sources.get_mut(&source_root) else {
                 continue;
             };
+            if plugin.host_tool == "opencode" && plugin.enabled_state == "disabled" {
+                source.disabled_host_tools.push("opencode".to_string());
+            }
+            if source.plugin_relative_path.is_empty() {
+                source.plugin_relative_path = plugin.plugin_relative_path.clone();
+            }
             source.host_tools.push(plugin.host_tool);
             source.host_tools.extend(plugin.related_host_tools);
         }
@@ -573,6 +592,8 @@ pub fn collect_portable_plugin_sources() -> Result<Vec<PortablePluginSource>, St
     for source in &mut result {
         source.host_tools.sort();
         source.host_tools.dedup();
+        source.disabled_host_tools.sort();
+        source.disabled_host_tools.dedup();
     }
     result.sort_by(|left, right| {
         left.cursor_was_disabled
@@ -599,7 +620,20 @@ pub fn align_portable_plugin_targets(
             warnings.push(format!("插件文件不存在，跳过启用: {}", target.package_id));
             continue;
         }
-        let probe = probe_plugin_root(&package_root, None);
+        let plugin_relative_path = PathBuf::from(&target.plugin_relative_path);
+        if !plugin_relative_path.as_os_str().is_empty() {
+            write_plugin_package_identity(
+                &package_root,
+                &path_to_string(&package_root),
+                &plugin_relative_path,
+            )?;
+        }
+        let probe_root = if plugin_relative_path.as_os_str().is_empty() {
+            package_root.clone()
+        } else {
+            package_root.join(&plugin_relative_path)
+        };
+        let probe = probe_plugin_root(&probe_root, None);
         let source_root = PathBuf::from(&probe.plugin_root);
         for host_tool in &target.host_tools {
             let result = if target.cursor_was_disabled && host_tool == "cursor" {
@@ -618,6 +652,21 @@ pub fn align_portable_plugin_targets(
                     "{} 未能启用到 {}: {error}",
                     target.package_id, host_tool
                 ));
+                continue;
+            }
+            if target
+                .disabled_host_tools
+                .iter()
+                .any(|disabled_host| disabled_host == host_tool)
+            {
+                if let Err(error) =
+                    set_plugin_enabled(host_tool.clone(), path_to_string(&source_root), false)
+                {
+                    warnings.push(format!(
+                        "{} 未能恢复 {} 停用状态: {error}",
+                        target.package_id, host_tool
+                    ));
+                }
             }
         }
     }
@@ -631,6 +680,7 @@ fn list_installed_plugins_blocking_with_mode(
     plugins.extend(scan_codex_installed_plugins(scan_mode));
     plugins.extend(scan_claude_installed_plugins(scan_mode));
     plugins.extend(scan_cursor_installed_plugins(scan_mode));
+    plugins.extend(scan_opencode_installed_plugins(scan_mode));
     dedupe_and_sort_plugins(plugins)
 }
 
@@ -825,6 +875,7 @@ pub fn set_plugin_enabled(
         "codex" => set_codex_plugin_enabled(&root_path, enabled),
         "claude-code" => set_claude_plugin_enabled(&root_path, enabled),
         "cursor" => set_cursor_plugin_enabled(&root_path, enabled),
+        "opencode" => set_opencode_plugin_enabled(&root_path, enabled),
         _ => Err(format!("不支持的插件宿主: {host_tool}")),
     }
 }
@@ -858,6 +909,15 @@ fn update_plugin_blocking(host_tool: &str, root_path: &str) -> Result<PluginSumm
             if host_tool == "codex" && plugin.source_label == "skilldock" {
                 reconcile_skilldock_codex_cache_after_update(&plugin, &target_root, &update_root)?;
             }
+            if host_tool == "opencode" {
+                let home_dir =
+                    workspace::home_dir_option().ok_or_else(|| "无法定位用户主目录".to_string())?;
+                if plugin.enabled_state == "disabled" {
+                    ensure_opencode_links_disabled(&home_dir, &target_root)?;
+                } else {
+                    ensure_opencode_links_enabled(&home_dir, &target_root)?;
+                }
+            }
             find_plugin_after_enabled_change(host_tool, &target_root)
         }
         "hash" => update_hash_plugin(host_tool, &target_root),
@@ -871,6 +931,7 @@ pub fn delete_plugin(host_tool: String, root_path: String) -> Result<(), String>
         "codex" => delete_codex_plugin(&root_path),
         "claude-code" => delete_claude_plugin(&root_path),
         "cursor" => delete_cursor_plugin(&root_path),
+        "opencode" => delete_opencode_plugin(&root_path),
         _ => Err(format!("不支持的插件宿主: {host_tool}")),
     }
 }
@@ -1940,6 +2001,95 @@ fn scan_cursor_installed_plugins(scan_mode: PluginScanMode) -> Vec<PluginSummary
     installed
 }
 
+fn opencode_managed_plugin_root_for_link(home_dir: &Path, link_path: &Path) -> Option<PathBuf> {
+    let source_path = opencode_link_source(link_path)?;
+    let plugin_root = opencode_plugin_root_from_entry_path(&source_path)?;
+    let canonical_plugin_root = canonicalize_existing_dir(&plugin_root).ok()?;
+    managed_plugin_package_root_for_path(&canonical_plugin_root)?;
+    let expected_links = opencode_expected_links(home_dir, &canonical_plugin_root).ok()?;
+    expected_links
+        .iter()
+        .any(|(source, target)| target == link_path && opencode_link_points_to(link_path, source))
+        .then_some(canonical_plugin_root)
+}
+
+fn scan_opencode_installed_plugins(scan_mode: PluginScanMode) -> Vec<PluginSummary> {
+    let Some(home_dir) = workspace::home_dir_option() else {
+        return Vec::new();
+    };
+    let mut plugin_states = BTreeMap::<PathBuf, &'static str>::new();
+    if let Ok(entries) = fs::read_dir(opencode_user_plugins_root(&home_dir)) {
+        for entry in entries.flatten() {
+            let link_path = entry.path();
+            let is_symlink = fs::symlink_metadata(&link_path)
+                .map(|metadata| metadata.file_type().is_symlink())
+                .unwrap_or(false);
+            if !is_symlink {
+                continue;
+            }
+            if let Some(plugin_root) = opencode_managed_plugin_root_for_link(&home_dir, &link_path)
+            {
+                plugin_states.insert(plugin_root, "enabled");
+            }
+        }
+    }
+
+    let managed_root = workspace::managed_workspace_root()
+        .ok()
+        .map(|root| root.join(PLUGIN_PACKAGE_DIR));
+    if let (Some(managed_root), Ok(entries)) = (
+        managed_root,
+        fs::read_dir(opencode_disabled_plugins_root(&home_dir)),
+    ) {
+        for entry in entries.flatten() {
+            let marker = entry.path();
+            if !marker.is_dir() {
+                continue;
+            }
+            let package_root = managed_root.join(entry.file_name());
+            if !package_root.is_dir() {
+                continue;
+            }
+            let plugin_root = managed_plugin_root_from_package_root(&package_root);
+            if first_opencode_plugin_entry(&plugin_root).is_some() {
+                plugin_states.entry(plugin_root).or_insert("disabled");
+            }
+        }
+    }
+
+    plugin_states
+        .into_iter()
+        .filter_map(|(plugin_root, enabled_state)| {
+            build_opencode_plugin_summary(&home_dir, &plugin_root, enabled_state, scan_mode)
+        })
+        .collect()
+}
+
+fn set_opencode_plugin_enabled(root_path: &str, enabled: bool) -> Result<PluginSummary, String> {
+    let home_dir = workspace::home_dir_option().ok_or_else(|| "无法定位用户主目录".to_string())?;
+    let plugin_root = canonicalize_existing_dir(Path::new(root_path))?;
+    ensure_plugin_manifest_for_host("opencode", &plugin_root)?;
+    if enabled {
+        ensure_opencode_links_enabled(&home_dir, &plugin_root)?;
+    } else {
+        ensure_opencode_links_disabled(&home_dir, &plugin_root)?;
+    }
+    find_plugin_after_enabled_change("opencode", &plugin_root)
+}
+
+fn delete_opencode_plugin(root_path: &str) -> Result<(), String> {
+    let home_dir = workspace::home_dir_option().ok_or_else(|| "无法定位用户主目录".to_string())?;
+    let plugin_root = canonicalize_existing_dir(Path::new(root_path))?;
+    ensure_plugin_manifest_for_host("opencode", &plugin_root)?;
+    let package_root = managed_plugin_package_root_for_path(&plugin_root)
+        .ok_or_else(|| "OpenCode 插件源必须位于 SkillDock 托管目录".to_string())?;
+    remove_opencode_installation(&home_dir, &plugin_root)?;
+    if !managed_package_has_other_shared_host_installations(&package_root, "opencode") {
+        remove_path(&package_root)?;
+    }
+    Ok(())
+}
+
 fn set_cursor_plugin_enabled(root_path: &str, enabled: bool) -> Result<PluginSummary, String> {
     let home_dir = workspace::home_dir_option().ok_or_else(|| "无法定位用户主目录".to_string())?;
     let home_dir = canonicalize_existing_dir(&home_dir).unwrap_or(home_dir);
@@ -2498,10 +2648,30 @@ fn managed_package_has_other_shared_host_installations(
     deleting_host_tool: &str,
 ) -> bool {
     match deleting_host_tool {
-        "codex" => claude_has_plugin_from_package(managed_package_root),
-        "claude-code" => codex_has_plugin_from_package(managed_package_root),
+        "codex" => {
+            claude_has_plugin_from_package(managed_package_root)
+                || opencode_has_plugin_from_package(managed_package_root)
+        }
+        "claude-code" => {
+            codex_has_plugin_from_package(managed_package_root)
+                || opencode_has_plugin_from_package(managed_package_root)
+        }
+        "opencode" => {
+            codex_has_plugin_from_package(managed_package_root)
+                || claude_has_plugin_from_package(managed_package_root)
+        }
         _ => false,
     }
+}
+
+fn opencode_has_plugin_from_package(managed_package_root: &Path) -> bool {
+    scan_opencode_installed_plugins(PluginScanMode::Local)
+        .into_iter()
+        .any(|plugin| {
+            managed_plugin_package_root_for_path(Path::new(&plugin.root_path)).is_some_and(
+                |package_root| paths_refer_to_same_dir(&package_root, managed_package_root),
+            )
+        })
 }
 
 fn codex_has_plugin_from_package(managed_package_root: &Path) -> bool {
@@ -2597,7 +2767,8 @@ fn managed_package_has_other_host_installations(
         }
 
         path_contains_plugin_from_package(host_root, managed_package_root)
-    })
+    }) || (deleting_host_tool != "opencode"
+        && opencode_has_plugin_from_package(managed_package_root))
 }
 
 fn path_contains_plugin_from_package(root: &Path, managed_package_root: &Path) -> bool {
@@ -3320,6 +3491,8 @@ fn plugin_manifest_path_for_host(host_tool: &str, plugin_root: &Path) -> Result<
         "codex" => Ok(plugin_root.join(CODEX_PLUGIN_MANIFEST)),
         "claude-code" => Ok(plugin_root.join(CLAUDE_PLUGIN_MANIFEST)),
         "cursor" => Ok(plugin_root.join(CURSOR_PLUGIN_MANIFEST)),
+        "opencode" => first_opencode_plugin_entry(plugin_root)
+            .ok_or_else(|| format!("目录缺少 OpenCode 插件入口: {}", plugin_root.display())),
         _ => Err(format!("不支持的插件宿主: {host_tool}")),
     }
 }
@@ -3395,13 +3568,14 @@ fn update_hash_plugin_root(
                 ));
             }
 
-            let manifest_relative_path = match host_tool {
-                "codex" => PathBuf::from(CODEX_PLUGIN_MANIFEST),
-                "claude-code" => PathBuf::from(CLAUDE_PLUGIN_MANIFEST),
-                "cursor" => PathBuf::from(CURSOR_PLUGIN_MANIFEST),
+            let has_remote_plugin = match host_tool {
+                "codex" => remote_plugin_root.join(CODEX_PLUGIN_MANIFEST).is_file(),
+                "claude-code" => remote_plugin_root.join(CLAUDE_PLUGIN_MANIFEST).is_file(),
+                "cursor" => remote_plugin_root.join(CURSOR_PLUGIN_MANIFEST).is_file(),
+                "opencode" => first_opencode_plugin_entry(&remote_plugin_root).is_some(),
                 _ => return Err(format!("不支持的插件宿主: {host_tool}")),
             };
-            if !remote_plugin_root.join(&manifest_relative_path).is_file() {
+            if !has_remote_plugin {
                 return Err("远端插件目录缺少宿主 manifest，无法更新".to_string());
             }
 
@@ -3426,6 +3600,15 @@ fn update_hash_plugin_root(
             baseline_hash: new_baseline_hash,
         },
     )?;
+    if host_tool == "opencode" {
+        let home_dir =
+            workspace::home_dir_option().ok_or_else(|| "无法定位用户主目录".to_string())?;
+        if plugin.enabled_state == "disabled" {
+            ensure_opencode_links_disabled(&home_dir, target_root)?;
+        } else {
+            ensure_opencode_links_enabled(&home_dir, target_root)?;
+        }
+    }
     find_plugin_after_enabled_change(host_tool, target_root)
 }
 
@@ -3477,6 +3660,7 @@ fn install_plugin_probe_for_host(
         "codex" => install_codex_plugin_probe(home_dir, &install_root, probe),
         "claude-code" => install_claude_plugin_probe(home_dir, &install_root, probe),
         "cursor" => install_cursor_plugin_probe(home_dir, &install_root, package_root, probe),
+        "opencode" => install_opencode_plugin_probe(home_dir, &install_root, package_root, probe),
         _ => Err(format!("不支持的插件宿主: {host_tool}")),
     }
 }
@@ -3700,6 +3884,18 @@ fn plugin_root_from_probe_manifest_path(probe: &PluginProbeResult) -> Option<Pat
 
 fn plugin_root_from_manifest_path(manifest_path: &Path) -> Option<PathBuf> {
     let canonical_manifest_path = fs::canonicalize(manifest_path).ok()?;
+    if is_opencode_plugin_entry(&canonical_manifest_path) {
+        let plugins_dir = canonical_manifest_path.parent()?;
+        if plugins_dir.file_name().and_then(|value| value.to_str()) == Some("plugins")
+            && plugins_dir
+                .parent()
+                .and_then(|path| path.file_name())
+                .and_then(|value| value.to_str())
+                == Some(".opencode")
+        {
+            return plugins_dir.parent()?.parent().map(Path::to_path_buf);
+        }
+    }
     if canonical_manifest_path
         .file_name()
         .and_then(|value| value.to_str())
@@ -3745,6 +3941,10 @@ fn ensure_host_manifests_for_hosts(
     host_tools: &[String],
 ) -> Result<(), String> {
     for host_tool in host_tools {
+        if host_tool == "opencode" {
+            ensure_plugin_manifest_for_host(host_tool, plugin_root)?;
+            continue;
+        }
         repair_host_manifest_copied_from_generic_manifest(plugin_root, host_tool)?;
         materialize_missing_host_manifest(plugin_root, host_tool, probe)?;
     }
@@ -4080,6 +4280,10 @@ fn plugin_base_package_name(source: &str, plugin_relative_path: &Path) -> String
 }
 
 fn plugin_preferred_package_name(probe: &PluginProbeResult, plugin_root: &Path) -> Option<String> {
+    if probe.tool == "opencode" {
+        return Some(opencode_plugin_manifest(plugin_root).name)
+            .filter(|name| !name.trim().is_empty());
+    }
     let manifest_path = match probe.tool.as_str() {
         "cursor" => plugin_root.join(CURSOR_PLUGIN_MANIFEST),
         "claude-code" => plugin_root.join(CLAUDE_PLUGIN_MANIFEST),
@@ -4159,6 +4363,7 @@ fn contains_plugin_manifest(path: &Path) -> bool {
     if path.join(CODEX_PLUGIN_MANIFEST).is_file()
         || path.join(CLAUDE_PLUGIN_MANIFEST).is_file()
         || path.join(CURSOR_PLUGIN_MANIFEST).is_file()
+        || first_opencode_plugin_entry(path).is_some()
     {
         return true;
     }
@@ -4448,6 +4653,490 @@ fn configure_plugin_sparse_checkout(
     Ok(())
 }
 
+fn is_opencode_plugin_entry(path: &Path) -> bool {
+    fs::symlink_metadata(path)
+        .map(|metadata| metadata.file_type().is_file())
+        .unwrap_or(false)
+        && path
+            .extension()
+            .and_then(|value| value.to_str())
+            .is_some_and(|extension| matches!(extension.to_ascii_lowercase().as_str(), "js" | "ts"))
+}
+
+fn opencode_plugin_entries(plugin_root: &Path) -> Vec<PathBuf> {
+    let entry_root = plugin_root.join(OPENCODE_PLUGIN_DIR);
+    let Ok(entries) = fs::read_dir(entry_root) else {
+        return Vec::new();
+    };
+    let mut entrypoints = entries
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| is_opencode_plugin_entry(path))
+        .collect::<Vec<_>>();
+    entrypoints.sort();
+    entrypoints
+}
+
+fn first_opencode_plugin_entry(plugin_root: &Path) -> Option<PathBuf> {
+    opencode_plugin_entries(plugin_root).into_iter().next()
+}
+
+fn opencode_plugin_manifest(plugin_root: &Path) -> PluginManifest {
+    let fallback_name = plugin_root
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("opencode-plugin")
+        .to_string();
+    let Ok(content) = fs::read_to_string(plugin_root.join("package.json")) else {
+        return PluginManifest {
+            name: fallback_name,
+            ..PluginManifest::default()
+        };
+    };
+    let Ok(package) = serde_json::from_str::<JsonValue>(&content) else {
+        return PluginManifest {
+            name: fallback_name,
+            ..PluginManifest::default()
+        };
+    };
+    let string_field = |field: &str| {
+        package
+            .get(field)
+            .and_then(JsonValue::as_str)
+            .unwrap_or_default()
+            .trim()
+            .to_string()
+    };
+    let repository = package
+        .get("repository")
+        .and_then(|value| {
+            value.as_str().or_else(|| {
+                value
+                    .as_object()
+                    .and_then(|object| object.get("url"))
+                    .and_then(JsonValue::as_str)
+            })
+        })
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    let name = string_field("name");
+    PluginManifest {
+        name: if name.is_empty() { fallback_name } else { name },
+        version: string_field("version"),
+        description: string_field("description"),
+        homepage: string_field("homepage"),
+        repository,
+        ..PluginManifest::default()
+    }
+}
+
+fn opencode_user_plugins_root(home_dir: &Path) -> PathBuf {
+    home_dir.join(OPENCODE_USER_PLUGIN_DIR)
+}
+
+fn opencode_disabled_plugins_root(home_dir: &Path) -> PathBuf {
+    home_dir.join(OPENCODE_DISABLED_PLUGIN_DIR)
+}
+
+fn managed_plugin_root_from_package_root(package_root: &Path) -> PathBuf {
+    let relative_path = read_plugin_package_identity(package_root)
+        .map(|identity| PathBuf::from(identity.plugin_relative_path))
+        .unwrap_or_default();
+    if relative_path.as_os_str().is_empty() {
+        package_root.to_path_buf()
+    } else {
+        package_root.join(relative_path)
+    }
+}
+
+fn opencode_package_id(package_root: &Path) -> Result<String, String> {
+    package_root
+        .file_name()
+        .and_then(|value| value.to_str())
+        .and_then(non_empty_trimmed_string)
+        .ok_or_else(|| format!("无法确定 OpenCode 插件包名: {}", package_root.display()))
+}
+
+fn opencode_disabled_marker(home_dir: &Path, package_root: &Path) -> Result<PathBuf, String> {
+    Ok(opencode_disabled_plugins_root(home_dir).join(opencode_package_id(package_root)?))
+}
+
+fn opencode_link_name(
+    package_root: &Path,
+    plugin_root: &Path,
+    entrypoint: &Path,
+) -> Result<String, String> {
+    let package_id = opencode_package_id(package_root)?;
+    let plugin_relative_path = plugin_root
+        .strip_prefix(package_root)
+        .unwrap_or(Path::new(""));
+    let scope_hash = short_stable_hash(&normalize_relative_path(plugin_relative_path));
+    let stem = entrypoint
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .map(sanitize_storage_name)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "plugin".to_string());
+    let extension = entrypoint
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("ts")
+        .to_ascii_lowercase();
+    let entry_hash = short_stable_hash(
+        entrypoint
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or_default(),
+    );
+    Ok(format!(
+        "{package_id}-{scope_hash}-{stem}-{entry_hash}.{extension}"
+    ))
+}
+
+fn opencode_expected_links(
+    home_dir: &Path,
+    plugin_root: &Path,
+) -> Result<Vec<(PathBuf, PathBuf)>, String> {
+    let package_root = managed_plugin_package_root_for_path(plugin_root).ok_or_else(|| {
+        format!(
+            "OpenCode 插件源不在 SkillDock 托管目录中: {}",
+            plugin_root.display()
+        )
+    })?;
+    let canonical_package_root = canonicalize_existing_dir(&package_root)?;
+    let entrypoints = opencode_plugin_entries(plugin_root);
+    if entrypoints.is_empty() {
+        return Err(format!(
+            "目录缺少 OpenCode 插件入口: {}",
+            plugin_root.join(OPENCODE_PLUGIN_DIR).display()
+        ));
+    }
+    let target_root = opencode_user_plugins_root(home_dir);
+    entrypoints
+        .into_iter()
+        .map(|source| {
+            let canonical_source = fs::canonicalize(&source).map_err(|error| {
+                format!(
+                    "解析 OpenCode 插件入口失败（{}）: {error}",
+                    source.display()
+                )
+            })?;
+            if !canonical_source.starts_with(&canonical_package_root) {
+                return Err(format!(
+                    "OpenCode 插件入口必须位于 SkillDock 托管包内: {}",
+                    source.display()
+                ));
+            }
+            let link_name = opencode_link_name(&package_root, plugin_root, &source)?;
+            Ok((source, target_root.join(link_name)))
+        })
+        .collect()
+}
+
+fn opencode_link_source(link_path: &Path) -> Option<PathBuf> {
+    let target = fs::read_link(link_path).ok()?;
+    if target.is_absolute() {
+        return Some(target);
+    }
+    link_path.parent().map(|parent| parent.join(target))
+}
+
+fn opencode_link_points_to(link_path: &Path, source_path: &Path) -> bool {
+    let Some(link_source) = opencode_link_source(link_path) else {
+        return false;
+    };
+    match (fs::canonicalize(link_source), fs::canonicalize(source_path)) {
+        (Ok(link_source), Ok(source_path)) => link_source == source_path,
+        _ => false,
+    }
+}
+
+fn opencode_plugin_root_from_entry_path(entrypoint: &Path) -> Option<PathBuf> {
+    let plugins_dir = entrypoint.parent()?;
+    if plugins_dir.file_name().and_then(|value| value.to_str()) != Some("plugins") {
+        return None;
+    }
+    let marker_dir = plugins_dir.parent()?;
+    if marker_dir.file_name().and_then(|value| value.to_str()) != Some(".opencode") {
+        return None;
+    }
+    marker_dir.parent().map(Path::to_path_buf)
+}
+
+fn opencode_link_belongs_to_plugin(link_path: &Path, plugin_root: &Path) -> Result<bool, String> {
+    let link_source = opencode_link_source(link_path)
+        .ok_or_else(|| format!("读取 OpenCode 插件软连接失败（{}）", link_path.display()))?;
+    let Some(link_plugin_root) = opencode_plugin_root_from_entry_path(&link_source) else {
+        return Ok(false);
+    };
+    if !paths_refer_to_same_dir(&link_plugin_root, plugin_root)
+        && !(link_plugin_root == plugin_root && link_source.starts_with(plugin_root))
+    {
+        return Ok(false);
+    }
+    let package_root = managed_plugin_package_root_for_path(plugin_root)
+        .ok_or_else(|| "OpenCode 插件源必须位于 SkillDock 托管目录".to_string())?;
+    let expected_name = opencode_link_name(&package_root, plugin_root, &link_source)?;
+    Ok(link_path.file_name().and_then(|value| value.to_str()) == Some(expected_name.as_str()))
+}
+
+fn collect_opencode_links_for_plugin(
+    home_dir: &Path,
+    plugin_root: &Path,
+) -> Result<Vec<PathBuf>, String> {
+    let active_root = opencode_user_plugins_root(home_dir);
+    let entries = match fs::read_dir(&active_root) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => {
+            return Err(format!(
+                "读取 OpenCode 插件目录失败（{}）: {error}",
+                active_root.display()
+            ))
+        }
+    };
+    let mut links = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|error| {
+            format!(
+                "读取 OpenCode 插件目录项失败（{}）: {error}",
+                active_root.display()
+            )
+        })?;
+        let path = entry.path();
+        let metadata = fs::symlink_metadata(&path).map_err(|error| {
+            format!("读取 OpenCode 插件路径失败（{}）: {error}", path.display())
+        })?;
+        if metadata.file_type().is_symlink() && opencode_link_belongs_to_plugin(&path, plugin_root)?
+        {
+            links.push(path);
+        }
+    }
+    Ok(links)
+}
+
+fn resolve_opencode_link_sources(
+    link_paths: Vec<PathBuf>,
+) -> Result<Vec<(PathBuf, PathBuf)>, String> {
+    link_paths
+        .into_iter()
+        .map(|link_path| {
+            let source_path = opencode_link_source(&link_path).ok_or_else(|| {
+                format!("读取 OpenCode 插件软连接失败（{}）", link_path.display())
+            })?;
+            Ok((source_path, link_path))
+        })
+        .collect()
+}
+
+fn rollback_opencode_link_changes(
+    created_links: &[PathBuf],
+    removed_links: &[(PathBuf, PathBuf)],
+) -> Vec<String> {
+    let mut errors = Vec::new();
+    for created_link in created_links.iter().rev() {
+        if let Err(error) = fs::remove_file(created_link) {
+            if error.kind() != std::io::ErrorKind::NotFound {
+                errors.push(format!("删除 {} 失败: {error}", created_link.display()));
+            }
+        }
+    }
+    for (source_path, link_path) in removed_links.iter().rev() {
+        if fs::symlink_metadata(link_path).is_ok() {
+            continue;
+        }
+        if let Err(error) = create_opencode_symlink(source_path, link_path) {
+            errors.push(error);
+        }
+    }
+    errors
+}
+
+fn opencode_transaction_error(error: String, rollback_errors: Vec<String>) -> String {
+    if rollback_errors.is_empty() {
+        error
+    } else {
+        format!("{error}；回滚失败: {}", rollback_errors.join("；"))
+    }
+}
+
+fn create_opencode_symlink(source_path: &Path, link_path: &Path) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(source_path, link_path).map_err(|error| {
+            format!(
+                "创建 OpenCode 插件软连接失败（{} -> {}）: {error}",
+                link_path.display(),
+                source_path.display()
+            )
+        })
+    }
+    #[cfg(windows)]
+    {
+        std::os::windows::fs::symlink_file(source_path, link_path).map_err(|error| {
+            format!(
+                "创建 OpenCode 插件软连接失败（{} -> {}）: {error}",
+                link_path.display(),
+                source_path.display()
+            )
+        })
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (source_path, link_path);
+        Err("当前系统不支持 OpenCode 插件软连接".to_string())
+    }
+}
+
+fn ensure_opencode_links_enabled(home_dir: &Path, plugin_root: &Path) -> Result<(), String> {
+    let plugin_root = canonicalize_existing_dir(plugin_root)?;
+    let package_root = managed_plugin_package_root_for_path(&plugin_root)
+        .ok_or_else(|| "OpenCode 插件源必须位于 SkillDock 托管目录".to_string())?;
+    let expected_links = opencode_expected_links(home_dir, &plugin_root)?;
+    for (source_path, link_path) in &expected_links {
+        if fs::symlink_metadata(link_path).is_err() {
+            continue;
+        }
+        if !opencode_link_points_to(link_path, source_path) {
+            return Err(format!(
+                "OpenCode 插件目标已存在且不属于当前 SkillDock 插件: {}",
+                link_path.display()
+            ));
+        }
+    }
+    let target_root = opencode_user_plugins_root(home_dir);
+    fs::create_dir_all(&target_root).map_err(|error| {
+        format!(
+            "创建 OpenCode 插件目录失败（{}）: {error}",
+            target_root.display()
+        )
+    })?;
+
+    let existing_links =
+        resolve_opencode_link_sources(collect_opencode_links_for_plugin(home_dir, &plugin_root)?)?;
+    let mut created_links = Vec::new();
+    for (source_path, link_path) in &expected_links {
+        if fs::symlink_metadata(link_path).is_ok() {
+            continue;
+        }
+        if let Err(error) = create_opencode_symlink(source_path, link_path) {
+            let rollback_errors = rollback_opencode_link_changes(&created_links, &[]);
+            return Err(opencode_transaction_error(error, rollback_errors));
+        }
+        created_links.push(link_path.clone());
+    }
+
+    let expected_paths = expected_links
+        .iter()
+        .map(|(_, link_path)| link_path.clone())
+        .collect::<BTreeSet<_>>();
+    let mut removed_links = Vec::new();
+    for (source_path, stale_link) in existing_links {
+        if expected_paths.contains(&stale_link) {
+            continue;
+        }
+        if let Err(error) = fs::remove_file(&stale_link) {
+            let rollback_errors = rollback_opencode_link_changes(&created_links, &removed_links);
+            return Err(opencode_transaction_error(
+                format!(
+                    "清理失效 OpenCode 插件软连接失败（{}）: {error}",
+                    stale_link.display()
+                ),
+                rollback_errors,
+            ));
+        }
+        removed_links.push((source_path, stale_link));
+    }
+
+    let disabled_marker = opencode_disabled_marker(home_dir, &package_root)?;
+    if disabled_marker.exists() {
+        if let Err(error) = fs::remove_dir_all(&disabled_marker) {
+            let rollback_errors = rollback_opencode_link_changes(&created_links, &removed_links);
+            return Err(opencode_transaction_error(
+                format!(
+                    "清理 OpenCode 插件停用标记失败（{}）: {error}",
+                    disabled_marker.display()
+                ),
+                rollback_errors,
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn ensure_opencode_links_disabled(home_dir: &Path, plugin_root: &Path) -> Result<(), String> {
+    let plugin_root = canonicalize_existing_dir(plugin_root)?;
+    let package_root = managed_plugin_package_root_for_path(&plugin_root)
+        .ok_or_else(|| "OpenCode 插件源必须位于 SkillDock 托管目录".to_string())?;
+    let links =
+        resolve_opencode_link_sources(collect_opencode_links_for_plugin(home_dir, &plugin_root)?)?;
+    let disabled_marker = opencode_disabled_marker(home_dir, &package_root)?;
+    let marker_existed = disabled_marker.exists();
+    fs::create_dir_all(&disabled_marker).map_err(|error| {
+        format!(
+            "创建 OpenCode 插件停用标记失败（{}）: {error}",
+            disabled_marker.display()
+        )
+    })?;
+
+    let mut removed_links = Vec::<(PathBuf, PathBuf)>::new();
+    for (source_path, link_path) in links {
+        if let Err(error) = fs::remove_file(&link_path) {
+            let mut rollback_errors = rollback_opencode_link_changes(&[], &removed_links);
+            if !marker_existed {
+                if let Err(marker_error) = fs::remove_dir_all(&disabled_marker) {
+                    rollback_errors.push(format!(
+                        "删除停用标记 {} 失败: {marker_error}",
+                        disabled_marker.display()
+                    ));
+                }
+            }
+            return Err(opencode_transaction_error(
+                format!("停用 OpenCode 插件失败（{}）: {error}", link_path.display()),
+                rollback_errors,
+            ));
+        }
+        removed_links.push((source_path, link_path));
+    }
+    Ok(())
+}
+
+fn remove_opencode_installation(home_dir: &Path, plugin_root: &Path) -> Result<(), String> {
+    let package_root = managed_plugin_package_root_for_path(plugin_root)
+        .ok_or_else(|| "OpenCode 插件源必须位于 SkillDock 托管目录".to_string())?;
+    let links =
+        resolve_opencode_link_sources(collect_opencode_links_for_plugin(home_dir, plugin_root)?)?;
+    let mut removed_links = Vec::new();
+    for (source_path, link_path) in links {
+        if let Err(error) = fs::remove_file(&link_path) {
+            let rollback_errors = rollback_opencode_link_changes(&[], &removed_links);
+            return Err(opencode_transaction_error(
+                format!(
+                    "删除 OpenCode 插件软连接失败（{}）: {error}",
+                    link_path.display()
+                ),
+                rollback_errors,
+            ));
+        }
+        removed_links.push((source_path, link_path));
+    }
+    let marker = opencode_disabled_marker(home_dir, &package_root)?;
+    if marker.exists() {
+        if let Err(error) = fs::remove_dir_all(&marker) {
+            let rollback_errors = rollback_opencode_link_changes(&[], &removed_links);
+            return Err(opencode_transaction_error(
+                format!(
+                    "删除 OpenCode 插件停用标记失败（{}）: {error}",
+                    marker.display()
+                ),
+                rollback_errors,
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn link_or_copy_plugin_dir(source_root: &Path, target_root: &Path) -> Result<(), String> {
     if paths_refer_to_same_dir(source_root, target_root) {
         return Ok(());
@@ -4580,6 +5269,11 @@ fn plugin_host_detection_spec(host_tool: &str) -> Option<PluginHostDetectionSpec
             app_names: &["Cursor"],
             executable_names: &["cursor"],
         }),
+        "opencode" => Some(PluginHostDetectionSpec {
+            label: "OpenCode",
+            app_names: &["OpenCode"],
+            executable_names: &["opencode"],
+        }),
         _ => None,
     }
 }
@@ -4668,6 +5362,22 @@ fn install_codex_plugin_probe(
         &marketplace_root,
     )?;
     Ok(marketplace_plugin_root)
+}
+
+fn install_opencode_plugin_probe(
+    home_dir: &Path,
+    source_root: &Path,
+    package_root: &Path,
+    probe: &PluginProbeResult,
+) -> Result<PathBuf, String> {
+    if managed_plugin_package_root_for_path(source_root)
+        .is_none_or(|managed_root| !paths_refer_to_same_dir(&managed_root, package_root))
+    {
+        return Err("OpenCode 插件源必须来自当前 SkillDock 托管包".to_string());
+    }
+    ensure_opencode_links_enabled(home_dir, source_root)?;
+    write_skilldock_plugin_source_metadata(source_root, probe)?;
+    Ok(source_root.to_path_buf())
 }
 
 fn ensure_skilldock_codex_cache_link(
@@ -6426,6 +7136,7 @@ fn host_tool_sort_order(host_tool: &str) -> usize {
         "claude-code" => 0,
         "codex" => 1,
         "cursor" => 2,
+        "opencode" => 3,
         _ => 99,
     }
 }
@@ -7027,9 +7738,64 @@ fn build_installed_plugin_summary(
     descriptor: InstalledPluginDescriptor,
     scan_mode: PluginScanMode,
 ) -> Option<PluginSummary> {
+    let manifest = read_plugin_manifest(&descriptor.manifest_path).ok()?;
+    build_installed_plugin_summary_with_manifest(descriptor, scan_mode, manifest)
+}
+
+fn build_opencode_plugin_summary(
+    home_dir: &Path,
+    plugin_root: &Path,
+    enabled_state: &str,
+    scan_mode: PluginScanMode,
+) -> Option<PluginSummary> {
+    let manifest_path = first_opencode_plugin_entry(plugin_root)?;
+    let manifest = opencode_plugin_manifest(plugin_root);
+    let source_metadata = read_skilldock_plugin_source_metadata(plugin_root);
+    let source_url = source_metadata
+        .as_ref()
+        .and_then(|metadata| non_empty_trimmed_string(&metadata.source_url))
+        .unwrap_or_else(|| source_url_from_manifest(&manifest));
+    let descriptor = InstalledPluginDescriptor {
+        host_tool: "opencode".to_string(),
+        root: plugin_root.to_path_buf(),
+        display_root: opencode_user_plugins_root(home_dir),
+        manifest_path,
+        repo_root_override: None,
+        plugin_relative_path_override: None,
+        source_type: resolve_plugin_source_type(plugin_root, source_metadata.as_ref(), "local"),
+        source_label: "skilldock".to_string(),
+        source_url,
+        source_ref: source_metadata
+            .as_ref()
+            .map(|metadata| metadata.source_ref.clone())
+            .unwrap_or_default(),
+        source_revision: source_metadata
+            .as_ref()
+            .map(|metadata| metadata.source_revision.clone())
+            .unwrap_or_default(),
+        current_version: String::new(),
+        current_commit: String::new(),
+        installed_at: String::new(),
+        updated_at: String::new(),
+        install_state: "installed".to_string(),
+        install_source: "skilldock".to_string(),
+        scopes: vec![build_plugin_scope_summary(
+            "user",
+            "用户级",
+            enabled_state,
+            &opencode_user_plugins_root(home_dir),
+        )],
+    };
+    build_installed_plugin_summary_with_manifest(descriptor, scan_mode, manifest)
+}
+
+fn build_installed_plugin_summary_with_manifest(
+    descriptor: InstalledPluginDescriptor,
+    scan_mode: PluginScanMode,
+    manifest: PluginManifest,
+) -> Option<PluginSummary> {
     let root = canonicalize_existing_dir(&descriptor.root).ok()?;
     let display_root = descriptor.display_root;
-    let manifest = read_plugin_manifest(&descriptor.manifest_path).ok()?;
     let git_root = descriptor
         .repo_root_override
         .as_ref()
@@ -8892,27 +9658,73 @@ fn detect_remote_github_plugin_candidates(
             ".codex-plugin",
         ),
     ];
-    let detected = manifest_candidates
+    let mut detected = manifest_candidates
         .into_iter()
         .filter(|(_, _, marker_dir)| entry_names.get(marker_dir) == Some(&"dir"))
+        .map(|(tool, path, _)| (tool, path))
         .collect::<Vec<_>>();
+    if entry_names.get(".opencode") == Some(&"dir") {
+        let opencode_root = plugin_root.join(".opencode");
+        let opencode_entries =
+            fetch_github_contents(&owner_repo, &opencode_root, source_spec.branch.as_deref())?;
+        if opencode_entries
+            .iter()
+            .any(|entry| entry.name == "plugins" && entry.entry_type == "dir")
+        {
+            let opencode_plugins_root = plugin_root.join(OPENCODE_PLUGIN_DIR);
+            let mut opencode_plugin_entries = fetch_github_contents(
+                &owner_repo,
+                &opencode_plugins_root,
+                source_spec.branch.as_deref(),
+            )?
+            .into_iter()
+            .filter(|entry| {
+                entry.entry_type == "file"
+                    && matches!(
+                        Path::new(&entry.name)
+                            .extension()
+                            .and_then(|value| value.to_str())
+                            .map(str::to_ascii_lowercase)
+                            .as_deref(),
+                        Some("js") | Some("ts")
+                    )
+            })
+            .collect::<Vec<_>>();
+            opencode_plugin_entries.sort_by(|left, right| left.name.cmp(&right.name));
+            if let Some(entry) = opencode_plugin_entries.first() {
+                detected.push(("opencode", opencode_plugins_root.join(&entry.name)));
+            }
+        }
+    }
     if detected.is_empty() {
         return Ok(None);
     }
     let selected_index = hint_host_tool
         .as_deref()
-        .and_then(|hint| detected.iter().position(|(tool, _, _)| *tool == hint))
+        .and_then(|hint| detected.iter().position(|(tool, _)| *tool == hint))
         .unwrap_or(0);
     let compatible_host_tools = detected
         .iter()
-        .map(|(tool, _, _)| (*tool).to_string())
+        .map(|(tool, _)| (*tool).to_string())
         .collect::<Vec<_>>();
-    let (selected_tool, selected_manifest_path, _) = &detected[selected_index];
-    let selected_manifest = parse_github_plugin_manifest(
-        &owner_repo,
-        selected_manifest_path,
-        source_spec.branch.as_deref(),
-    )?;
+    let (selected_tool, selected_manifest_path) = &detected[selected_index];
+    let selected_manifest = if *selected_tool == "opencode" {
+        PluginManifest {
+            name: plugin_root
+                .file_name()
+                .and_then(|value| value.to_str())
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| owner_repo.rsplit('/').next().unwrap_or("opencode-plugin"))
+                .to_string(),
+            ..PluginManifest::default()
+        }
+    } else {
+        parse_github_plugin_manifest(
+            &owner_repo,
+            selected_manifest_path,
+            source_spec.branch.as_deref(),
+        )?
+    };
     let warning = if detected.len() > 1 {
         Some(format!(
             "发现多个官方插件清单，已优先使用 {}",
@@ -8960,11 +9772,14 @@ fn detect_plugin_repo(
     git_root: Option<&Path>,
     hint_host_tool: Option<&str>,
 ) -> Option<PluginProbeResult> {
-    let manifest_candidates = [
+    let mut manifest_candidates = vec![
         ("claude-code", root.join(CLAUDE_PLUGIN_MANIFEST)),
         ("cursor", root.join(CURSOR_PLUGIN_MANIFEST)),
         ("codex", root.join(CODEX_PLUGIN_MANIFEST)),
     ];
+    if let Some(entrypoint) = first_opencode_plugin_entry(root) {
+        manifest_candidates.push(("opencode", entrypoint));
+    }
     let detected = manifest_candidates
         .iter()
         .filter(|(_, path)| path.is_file())
@@ -9036,6 +9851,7 @@ fn install_strategy_for_plugin_tool(tool: &str) -> &'static str {
         "claude-code" => "claude-plugin-dir",
         "cursor" => "cursor-registration",
         "codex" => "codex-marketplace",
+        "opencode" => "opencode-plugin-link",
         _ => "unsupported",
     }
 }
@@ -9730,7 +10546,7 @@ fn normalize_relative_path(path: &Path) -> String {
 fn normalize_host_tool(value: Option<&str>) -> Option<String> {
     let normalized = value?.trim().to_ascii_lowercase();
     match normalized.as_str() {
-        "claude-code" | "cursor" | "codex" => Some(normalized),
+        "claude-code" | "cursor" | "codex" | "opencode" => Some(normalized),
         _ => None,
     }
 }
@@ -15528,5 +16344,323 @@ source = "__SOURCE__"
         let plugins = dedupe_and_sort_plugins(vec![alias, primary]).expect("dedupe plugins");
 
         assert_eq!(plugins.len(), 2);
+    }
+
+    #[test]
+    fn probes_opencode_plugin_entrypoints_without_json_manifest() {
+        let temp_dir = temp_test_dir("opencode-probe");
+        let plugin_root = temp_dir.join("demo-plugin");
+        fs::create_dir_all(plugin_root.join(".opencode/plugins"))
+            .expect("create OpenCode plugin directory");
+        fs::write(
+            plugin_root.join("package.json"),
+            r#"{"name":"demo-opencode","version":"1.2.3","description":"Demo plugin"}"#,
+        )
+        .expect("write package manifest");
+        fs::write(
+            plugin_root.join(".opencode/plugins/demo.ts"),
+            "export const Demo = async () => ({})",
+        )
+        .expect("write OpenCode entrypoint");
+
+        let result = probe_plugin_repo(
+            plugin_root.to_string_lossy().into_owned(),
+            Some("opencode".to_string()),
+        )
+        .expect("probe OpenCode plugin");
+
+        assert_eq!(result.tool, "opencode");
+        assert_eq!(result.compatible_host_tools, vec!["opencode".to_string()]);
+        assert_eq!(result.kind, "plugin-repo");
+        assert_eq!(result.install_strategy, "opencode-plugin-link");
+        assert!(result.manifest_path.ends_with(".opencode/plugins/demo.ts"));
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn manages_opencode_links_from_skilldock_source_without_overwriting_conflicts() {
+        let _guard = TEST_ENV_LOCK.lock().expect("lock test env");
+        let temp_dir = temp_test_dir("opencode-link-lifecycle");
+        let home_dir = temp_dir.join("home");
+        let plugin_root = home_dir.join(".skilldock/plugins/demo-opencode");
+        let entry_root = plugin_root.join(".opencode/plugins");
+        fs::create_dir_all(&entry_root).expect("create managed OpenCode plugin");
+        fs::write(
+            plugin_root.join("package.json"),
+            r#"{"name":"demo-opencode","version":"1.0.0"}"#,
+        )
+        .expect("write package manifest");
+        let first_entry = entry_root.join("first.ts");
+        fs::write(&first_entry, "export const First = async () => ({})")
+            .expect("write first entrypoint");
+
+        let previous_home = env::var_os("HOME");
+        env::set_var("HOME", &home_dir);
+
+        super::ensure_opencode_links_enabled(&home_dir, &plugin_root)
+            .expect("enable OpenCode links");
+        let expected_links = super::opencode_expected_links(&home_dir, &plugin_root)
+            .expect("resolve expected OpenCode links");
+        assert_eq!(expected_links.len(), 1);
+        let first_link = expected_links[0].1.clone();
+        assert!(fs::symlink_metadata(&first_link)
+            .expect("read OpenCode link")
+            .file_type()
+            .is_symlink());
+        assert_eq!(
+            fs::canonicalize(&first_link).expect("resolve link"),
+            fs::canonicalize(&first_entry).expect("resolve first entrypoint")
+        );
+
+        let installed = super::scan_opencode_installed_plugins(super::PluginScanMode::Local);
+        assert_eq!(installed.len(), 1);
+        assert_eq!(installed[0].host_tool, "opencode");
+        assert_eq!(installed[0].enabled_state, "enabled");
+        assert!(paths_refer_to_same_dir(
+            Path::new(&installed[0].root_path),
+            &plugin_root
+        ));
+
+        let custom_link = first_link
+            .parent()
+            .expect("OpenCode target parent")
+            .join("user-custom.ts");
+        std::os::unix::fs::symlink(&first_entry, &custom_link)
+            .expect("create user-owned same-source link");
+        super::ensure_opencode_links_disabled(&home_dir, &plugin_root)
+            .expect("disable OpenCode links");
+        assert!(fs::symlink_metadata(&first_link).is_err());
+        assert!(fs::symlink_metadata(&custom_link)
+            .expect("read preserved user link")
+            .file_type()
+            .is_symlink());
+        let disabled = super::scan_opencode_installed_plugins(super::PluginScanMode::Local);
+        assert_eq!(disabled.len(), 1);
+        assert_eq!(disabled[0].enabled_state, "disabled");
+
+        fs::create_dir_all(first_link.parent().expect("link parent"))
+            .expect("create OpenCode target root");
+        fs::write(&first_link, "user-owned").expect("write conflicting user plugin");
+        let conflict = super::ensure_opencode_links_enabled(&home_dir, &plugin_root)
+            .expect_err("real file conflict must fail");
+        assert!(conflict.contains("不属于当前 SkillDock 插件"));
+        assert_eq!(
+            fs::read_to_string(&first_link).expect("read preserved conflict"),
+            "user-owned"
+        );
+
+        fs::remove_file(&first_link).expect("remove test conflict");
+        super::ensure_opencode_links_enabled(&home_dir, &plugin_root)
+            .expect("re-enable OpenCode links");
+        fs::remove_file(&first_entry).expect("remove old entrypoint");
+        let second_entry = entry_root.join("second.js");
+        fs::write(&second_entry, "export const Second = async () => ({})")
+            .expect("write second entrypoint");
+        super::ensure_opencode_links_enabled(&home_dir, &plugin_root)
+            .expect("reconcile renamed entrypoint");
+        let updated_links = super::opencode_expected_links(&home_dir, &plugin_root)
+            .expect("resolve updated OpenCode links");
+        assert_eq!(updated_links.len(), 1);
+        assert!(fs::symlink_metadata(&first_link).is_err());
+        assert_eq!(
+            fs::canonicalize(&updated_links[0].1).expect("resolve updated link"),
+            fs::canonicalize(&second_entry).expect("resolve second entrypoint")
+        );
+
+        match previous_home {
+            Some(value) => env::set_var("HOME", value),
+            None => env::remove_var("HOME"),
+        }
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_escaping_opencode_entries_and_avoids_sanitized_name_collisions() {
+        let _guard = TEST_ENV_LOCK.lock().expect("lock test env");
+        let temp_dir = temp_test_dir("opencode-entry-safety");
+        let home_dir = temp_dir.join("home");
+        let plugin_root = home_dir.join(".skilldock/plugins/demo-opencode");
+        let entry_root = plugin_root.join(".opencode/plugins");
+        fs::create_dir_all(&entry_root).expect("create managed OpenCode plugin");
+        fs::write(entry_root.join("foo-bar.ts"), "export const A = 1")
+            .expect("write first colliding entry");
+        fs::write(entry_root.join("foo_bar.ts"), "export const B = 2")
+            .expect("write second colliding entry");
+
+        let previous_home = env::var_os("HOME");
+        env::set_var("HOME", &home_dir);
+
+        let links = super::opencode_expected_links(&home_dir, &plugin_root)
+            .expect("resolve collision-safe OpenCode links");
+        assert_eq!(links.len(), 2);
+        assert_ne!(links[0].1, links[1].1);
+        super::ensure_opencode_links_enabled(&home_dir, &plugin_root)
+            .expect("enable collision-safe OpenCode links");
+        assert!(links
+            .iter()
+            .all(|(_, link)| fs::symlink_metadata(link).is_ok()));
+
+        super::remove_opencode_installation(&home_dir, &plugin_root)
+            .expect("remove collision-safe OpenCode links");
+        fs::remove_file(entry_root.join("foo-bar.ts")).expect("remove first entry");
+        fs::remove_file(entry_root.join("foo_bar.ts")).expect("remove second entry");
+        let outside_entry = temp_dir.join("outside.ts");
+        fs::write(&outside_entry, "export const Outside = 1").expect("write outside entry");
+        std::os::unix::fs::symlink(&outside_entry, entry_root.join("escape.ts"))
+            .expect("create escaping entry link");
+
+        let error = super::ensure_opencode_links_enabled(&home_dir, &plugin_root)
+            .expect_err("escaping OpenCode entry must be rejected");
+        assert!(error.contains("缺少 OpenCode 插件入口"));
+
+        match previous_home {
+            Some(value) => env::set_var("HOME", value),
+            None => env::remove_var("HOME"),
+        }
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn installs_opencode_plugin_into_skilldock_before_linking_it() {
+        let _guard = TEST_ENV_LOCK.lock().expect("lock test env");
+        let temp_dir = temp_test_dir("opencode-managed-install");
+        let home_dir = temp_dir.join("home");
+        let source_root = temp_dir.join("source");
+        let entry_path = source_root.join(".opencode/plugins/demo.ts");
+        fs::create_dir_all(entry_path.parent().expect("entry parent"))
+            .expect("create OpenCode source");
+        fs::write(
+            source_root.join("package.json"),
+            r#"{"name":"demo-opencode","version":"1.0.0"}"#,
+        )
+        .expect("write package manifest");
+        fs::write(&entry_path, "export const Demo = async () => ({})")
+            .expect("write OpenCode entrypoint");
+
+        let previous_home = env::var_os("HOME");
+        env::set_var("HOME", &home_dir);
+
+        let installed = super::install_shared_plugin_probe_for_hosts(
+            &home_dir,
+            &PluginProbeResult {
+                tool: "opencode".to_string(),
+                compatible_host_tools: vec!["opencode".to_string()],
+                kind: "plugin-repo".to_string(),
+                manifest_name: "demo-opencode".to_string(),
+                name: "demo-opencode".to_string(),
+                description: "Demo OpenCode plugin".to_string(),
+                plugin_root: source_root.to_string_lossy().into_owned(),
+                manifest_path: entry_path.to_string_lossy().into_owned(),
+                marketplace_manifest_path: String::new(),
+                components: Vec::new(),
+                source_type: "local".to_string(),
+                source_url: String::new(),
+                source_ref: String::new(),
+                is_git_repo: false,
+                repo_root: source_root.to_string_lossy().into_owned(),
+                plugin_relative_path: String::new(),
+                git_root: String::new(),
+                confidence: "high".to_string(),
+                install_strategy: "opencode-plugin-link".to_string(),
+                warnings: Vec::new(),
+            },
+            vec!["opencode".to_string()],
+            None,
+        )
+        .expect("install OpenCode plugin");
+
+        assert_eq!(installed.len(), 1);
+        let installed_root =
+            fs::canonicalize(&installed[0].1).expect("canonicalize installed OpenCode root");
+        let managed_root = fs::canonicalize(home_dir.join(".skilldock/plugins"))
+            .expect("canonicalize managed plugin root");
+        assert!(installed_root.starts_with(&managed_root));
+        assert!(!paths_refer_to_same_dir(&installed_root, &source_root));
+        let links = super::opencode_expected_links(&home_dir, &installed_root)
+            .expect("resolve installed OpenCode links");
+        assert_eq!(links.len(), 1);
+        assert_eq!(
+            fs::canonicalize(&links[0].1).expect("resolve installed OpenCode link"),
+            fs::canonicalize(&links[0].0).expect("resolve managed OpenCode source")
+        );
+        assert!(links[0].0.starts_with(&managed_root));
+
+        match previous_home {
+            Some(value) => env::set_var("HOME", value),
+            None => env::remove_var("HOME"),
+        }
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn portable_plugin_targets_default_missing_disabled_hosts() {
+        let target: super::PortablePluginTarget = serde_json::from_str(
+            r#"{
+                "schemaVersion": 1,
+                "packageId": "demo-opencode",
+                "directoryName": "demo-opencode",
+                "hostTools": ["opencode"],
+                "cursorWasDisabled": false,
+                "contentHash": "abc123"
+            }"#,
+        )
+        .expect("deserialize legacy portable plugin target");
+
+        assert!(target.disabled_host_tools.is_empty());
+        assert!(target.plugin_relative_path.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn restores_disabled_nested_opencode_plugin_from_portable_target() {
+        let _guard = TEST_ENV_LOCK.lock().expect("lock test env");
+        let temp_dir = temp_test_dir("opencode-portable-restore");
+        let home_dir = temp_dir.join("home");
+        let package_root = home_dir.join(".skilldock/plugins/demo-package");
+        let plugin_root = package_root.join("plugins/demo-opencode");
+        let entry_path = plugin_root.join(".opencode/plugins/demo.ts");
+        fs::create_dir_all(entry_path.parent().expect("entry parent"))
+            .expect("create nested OpenCode plugin");
+        fs::write(&entry_path, "export const Demo = async () => ({})")
+            .expect("write nested OpenCode entry");
+
+        let previous_home = env::var_os("HOME");
+        env::set_var("HOME", &home_dir);
+
+        let warnings = super::align_portable_plugin_targets(&[super::PortablePluginTarget {
+            schema_version: 1,
+            package_id: "demo-package".to_string(),
+            directory_name: "demo-package".to_string(),
+            host_tools: vec!["opencode".to_string()],
+            cursor_was_disabled: false,
+            disabled_host_tools: vec!["opencode".to_string()],
+            plugin_relative_path: "plugins/demo-opencode".to_string(),
+            content_hash: "abc123".to_string(),
+        }])
+        .expect("restore portable OpenCode target");
+        assert!(warnings.is_empty());
+        let restored = super::scan_opencode_installed_plugins(super::PluginScanMode::Local);
+        assert_eq!(restored.len(), 1);
+        assert_eq!(restored[0].enabled_state, "disabled");
+        assert!(paths_refer_to_same_dir(
+            Path::new(&restored[0].root_path),
+            &plugin_root
+        ));
+        assert!(
+            super::collect_opencode_links_for_plugin(&home_dir, &plugin_root)
+                .expect("collect restored OpenCode links")
+                .is_empty()
+        );
+
+        match previous_home {
+            Some(value) => env::set_var("HOME", value),
+            None => env::remove_var("HOME"),
+        }
+        let _ = fs::remove_dir_all(temp_dir);
     }
 }

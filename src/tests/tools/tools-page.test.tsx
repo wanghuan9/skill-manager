@@ -177,14 +177,50 @@ test("can toggle Cursor plugins with a reload hint", async () => {
   expect(screen.getByRole("button", { name: "启用 Example Plugin" })).toBeEnabled();
 });
 
-test("does not show plugin management for an unsupported tool", async () => {
+test("can manage OpenCode plugins", async () => {
   window.localStorage.clear();
+  const opencodePlugin: PluginSummary = {
+    ...pluginFixtures[0],
+    id: "opencode:demo-opencode",
+    manifestName: "demo-opencode",
+    name: "Demo OpenCode",
+    hostTool: "opencode",
+    relatedHostTools: [],
+    rootPath: "/Users/demo/.skilldock/plugins/demo-opencode",
+    manifestPath: "/Users/demo/.skilldock/plugins/demo-opencode/.opencode/plugins/demo.ts",
+    enabledState: "enabled",
+  };
+  vi.spyOn(skillClient, "fetchStartupInstalledPlugins").mockResolvedValue([opencodePlugin]);
+  const setPluginEnabledSpy = vi.spyOn(skillClient, "setPluginEnabled").mockImplementation(async (input) => ({
+    ...opencodePlugin,
+    enabledState: input.enabled ? "enabled" : "disabled",
+  }));
   render(<App />);
 
   await userEvent.click(screen.getByRole("button", { name: "工具" }));
   const openCodeToolCard = screen.getByText("OpenCode").closest("article");
   expect(openCodeToolCard).not.toBeNull();
   await userEvent.click(within(openCodeToolCard as HTMLElement).getByRole("button", { name: "管理" }));
+  await userEvent.click(screen.getByRole("tab", { name: "Plugins" }));
+  await userEvent.click(await screen.findByRole("button", { name: "关闭 demo-opencode" }));
+
+  expect(setPluginEnabledSpy).toHaveBeenCalledWith({
+    pluginId: opencodePlugin.id,
+    hostTool: "opencode",
+    rootPath: opencodePlugin.rootPath,
+    enabled: false,
+  });
+  expect(await screen.findByRole("button", { name: "启用 demo-opencode" })).toBeEnabled();
+});
+
+test("does not show plugin management for an unsupported tool", async () => {
+  window.localStorage.clear();
+  render(<App />);
+
+  await userEvent.click(screen.getByRole("button", { name: "工具" }));
+  const antigravityToolCard = screen.getByText("Antigravity").closest("article");
+  expect(antigravityToolCard).not.toBeNull();
+  await userEvent.click(within(antigravityToolCard as HTMLElement).getByRole("button", { name: "管理" }));
 
   expect(screen.queryByRole("tab", { name: "Plugins" })).not.toBeInTheDocument();
   expect(screen.queryByText(/插件 \d+\/\d+/)).not.toBeInTheDocument();

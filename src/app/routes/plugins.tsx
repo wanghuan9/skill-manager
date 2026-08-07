@@ -110,6 +110,7 @@ const pluginTabs: { key: PluginTabKey; label: string }[] = [
   { key: "claude-code", label: "Claude Code" },
   { key: "codex", label: "Codex" },
   { key: "cursor", label: "Cursor" },
+  { key: "opencode", label: "OpenCode" },
 ];
 const componentSections: ComponentSection[] = [
   { key: "skill", title: "Skills", summaryLabel: "skill" },
@@ -1027,7 +1028,12 @@ function getPluginCollabBadge(
 function canTogglePlugin(plugin: PluginSummary) {
   return (
     plugin.enabledState !== "unknown"
-    && (plugin.hostTool === "codex" || plugin.hostTool === "claude-code" || plugin.hostTool === "cursor")
+    && (
+      plugin.hostTool === "codex"
+      || plugin.hostTool === "claude-code"
+      || plugin.hostTool === "cursor"
+      || plugin.hostTool === "opencode"
+    )
   );
 }
 
@@ -1607,6 +1613,7 @@ export function PluginsRoute(props: PluginsRouteProps = {}) {
     { key: "claude-code", label: "Claude Code" },
     { key: "codex", label: "Codex" },
     { key: "cursor", label: "Cursor" },
+    { key: "opencode", label: "OpenCode" },
   ];
   const pluginSourceOptions: PluginSourceOption[] = localizedPluginTabs.map((tab) => ({
     ...tab,
@@ -2134,32 +2141,6 @@ export function PluginsRoute(props: PluginsRouteProps = {}) {
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
   }, [deleteConfirmingPluginId]);
-
-  useEffect(() => {
-    if (plugins.length === 0) {
-      return;
-    }
-
-    if (activeHost === "all") {
-      return;
-    }
-
-    const hasActiveHostPlugins = plugins.some(
-      (plugin) => plugin.hostTool === activeHost,
-    );
-    if (hasActiveHostPlugins) {
-      return;
-    }
-
-    const firstHostWithPlugins = pluginTabs
-      .filter((tab) => tab.key !== "all")
-      .find((tab) =>
-      plugins.some((plugin) => plugin.hostTool === tab.key),
-    );
-    if (firstHostWithPlugins) {
-      setActiveHost(firstHostWithPlugins.key);
-    }
-  }, [activeHost, plugins]);
 
   const normalizedQuery = query.trim().toLowerCase();
   const statusSortedScopedPlugins = (activeHost === "all"

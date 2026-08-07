@@ -1990,6 +1990,49 @@ test("toggles Cursor plugin enabled state from the plugin list", async () => {
   expect(await screen.findByRole("button", { name: "开启 Example Plugin 插件" })).toBeInTheDocument();
 });
 
+test("toggles OpenCode plugin enabled state from its host tab", async () => {
+  const opencodePlugin: PluginSummary = {
+    ...pluginFixtures[0],
+    id: "opencode:demo-opencode",
+    packageId: "demo-opencode",
+    manifestName: "demo-opencode",
+    name: "Demo OpenCode",
+    hostTool: "opencode",
+    relatedHostTools: [],
+    rootPath: "/Users/demo/.skilldock/plugins/demo-opencode",
+    displayRootPath: "/Users/demo/.config/opencode/plugins",
+    repoRootPath: "/Users/demo/.skilldock/plugins/demo-opencode",
+    manifestPath: "/Users/demo/.skilldock/plugins/demo-opencode/.opencode/plugins/demo.ts",
+    enabledState: "enabled",
+    scopes: [{
+      scopeId: "user",
+      scopeLabel: "用户级",
+      enabledState: "enabled",
+      location: "/Users/demo/.config/opencode/plugins",
+    }],
+  };
+  vi.spyOn(skillClient, "fetchStartupInstalledPlugins").mockResolvedValueOnce([opencodePlugin]);
+  const setPluginEnabledSpy = vi.spyOn(skillClient, "setPluginEnabled").mockResolvedValue({
+    ...opencodePlugin,
+    enabledState: "disabled",
+    scopes: opencodePlugin.scopes.map((scope) => ({ ...scope, enabledState: "disabled" })),
+  });
+
+  renderWithI18n(<PluginsRoute />);
+
+  await screen.findByRole("tab", { name: /全部/ });
+  await userEvent.click(screen.getByRole("tab", { name: /OpenCode/ }));
+  await userEvent.click(screen.getByRole("button", { name: "关闭 demo-opencode 插件" }));
+
+  expect(setPluginEnabledSpy).toHaveBeenCalledWith({
+    pluginId: opencodePlugin.id,
+    hostTool: "opencode",
+    rootPath: opencodePlugin.rootPath,
+    enabled: false,
+  });
+  expect(await screen.findByRole("button", { name: "开启 demo-opencode 插件" })).toBeInTheDocument();
+});
+
 test("keeps unknown plugins disabled from toggle actions", async () => {
   const setPluginEnabledSpy = vi.spyOn(skillClient, "setPluginEnabled");
   const unknownPlugin: PluginSummary = {

@@ -711,6 +711,8 @@ fn write_portable_plugins(staging_root: &Path) -> Result<usize, String> {
             directory_name: source.directory_name,
             host_tools: source.host_tools,
             cursor_was_disabled: source.cursor_was_disabled,
+            disabled_host_tools: source.disabled_host_tools,
+            plugin_relative_path: source.plugin_relative_path,
             content_hash,
         });
     }
