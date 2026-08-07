@@ -3671,8 +3671,20 @@ fn load_interactive_installed_skills() -> Vec<SkillSummary> {
 
 const ORIGIN_REMOTE: &str = "origin";
 const REMOTE_PREFIX: &str = "origin/";
-const RESERVED_WORKSPACE_NAMES: [&str; 5] =
-    ["state.json", "skills", "repo-cache", "cache", "imports"];
+const RESERVED_WORKSPACE_NAMES: [&str; 12] = [
+    "state.json",
+    "config",
+    "data",
+    "credentials",
+    "skills",
+    "repositories",
+    "repo-cache",
+    "cache",
+    "plugins",
+    "imports",
+    "backup",
+    "logs",
+];
 
 fn is_reserved_workspace_name(name: &str) -> bool {
     RESERVED_WORKSPACE_NAMES.contains(&name)
@@ -9758,7 +9770,7 @@ mod tests {
         assert_eq!(recovered[0].description, "Direct recovery");
         assert_eq!(recovered[1].description, "Nested recovery");
         let persisted: WorkspacePersistence = serde_json::from_str(
-            &fs::read_to_string(home_dir.join(".skilldock/state.json"))
+            &fs::read_to_string(home_dir.join(".skilldock/data/state.json"))
                 .expect("read recovered state"),
         )
         .expect("parse recovered state");
@@ -12074,8 +12086,9 @@ mod tests {
         run_git_test(&repo_path, &["add", "."]);
         run_git_test(&repo_path, &["commit", "-m", "init"]);
 
-        let state_file = temp_home.join(".skilldock/state.json");
-        fs::create_dir_all(state_file.parent().expect("state parent exists"))
+        let legacy_state_file = temp_home.join(".skilldock/state.json");
+        let state_file = temp_home.join(".skilldock/data/state.json");
+        fs::create_dir_all(legacy_state_file.parent().expect("state parent exists"))
             .expect("create state parent");
         let persisted = WorkspacePersistence {
             installed_skills: vec![SkillSummary {
@@ -12105,7 +12118,7 @@ mod tests {
             }],
         };
         fs::write(
-            &state_file,
+            &legacy_state_file,
             serde_json::to_string_pretty(&persisted).expect("serialize state"),
         )
         .expect("write state file");
@@ -12678,7 +12691,7 @@ mod tests {
 
         let loaded = resolve_startup_installed_skills();
         let persisted: WorkspacePersistence = serde_json::from_str(
-            &fs::read_to_string(temp_home.join(".skilldock/state.json"))
+            &fs::read_to_string(temp_home.join(".skilldock/data/state.json"))
                 .expect("read persisted startup state"),
         )
         .expect("deserialize persisted startup state");

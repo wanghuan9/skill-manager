@@ -6114,11 +6114,11 @@ fn install_cursor_plugin_probe_from_existing_git_source(
         return Err("插件本地源目录不是 Git 仓库".to_string());
     }
     let repo_cache_root = workspace::managed_workspace_root_option()
-        .map(|root| root.join("repo-cache"))
+        .map(|root| root.join(workspace::REPOSITORIES_DIR_NAME))
         .and_then(|root| canonicalize_existing_dir(&root).ok())
-        .ok_or_else(|| "插件本地源不是 SkillDock repo-cache".to_string())?;
+        .ok_or_else(|| "插件本地源不是 SkillDock repositories".to_string())?;
     if source_git_root.strip_prefix(&repo_cache_root).is_err() {
-        return Err("插件本地源不是 SkillDock repo-cache".to_string());
+        return Err("插件本地源不是 SkillDock repositories".to_string());
     }
 
     let host_tools = vec!["cursor".to_string()];
@@ -11910,7 +11910,7 @@ exit 0
             Some("master"),
             source_spec.relative_path.as_ref(),
         );
-        let repo_root = home_dir.join(".skilldock/repo-cache").join(&repo_key);
+        let repo_root = home_dir.join(".skilldock/repositories").join(&repo_key);
         let plugin_root = repo_root.join("example-plugin");
 
         fs::create_dir_all(plugin_root.join(".codex-plugin")).expect("create codex manifest dir");
@@ -12810,7 +12810,7 @@ source = "__SOURCE__"
         let _guard = TEST_ENV_LOCK.lock().expect("lock test env");
         let temp_dir = temp_test_dir("probed-git-plugin-install");
         let home_dir = temp_dir.join("home");
-        let repo_root = home_dir.join(".skilldock/repo-cache/probed-plugin-install");
+        let repo_root = home_dir.join(".skilldock/repositories/probed-plugin-install");
         let plugin_root = repo_root.join("plugins/product-design");
         fs::create_dir_all(plugin_root.join(".claude-plugin")).expect("create claude manifest dir");
         fs::create_dir_all(plugin_root.join("commands")).expect("create command dir");
@@ -12879,7 +12879,7 @@ source = "__SOURCE__"
         let _guard = TEST_ENV_LOCK.lock().expect("lock test env");
         let temp_dir = temp_test_dir("cursor-install-from-repo-cache");
         let home_dir = temp_dir.join("home");
-        let repo_root = home_dir.join(".skilldock/repo-cache/cursor-cache-install");
+        let repo_root = home_dir.join(".skilldock/repositories/cursor-cache-install");
         let plugin_root = repo_root.join("plugins/coding-tutor");
         fs::create_dir_all(plugin_root.join(".cursor-plugin")).expect("create cursor manifest dir");
         fs::create_dir_all(plugin_root.join("commands")).expect("create command dir");

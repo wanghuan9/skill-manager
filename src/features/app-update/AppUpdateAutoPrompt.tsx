@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useTranslate } from "@/app/i18n";
@@ -13,6 +13,7 @@ import { resolveAppUpdateReleaseNoteEntries } from "@/features/app-update/releas
 
 const AUTO_UPDATE_CHECK_DELAY_MS = 2000;
 const AUTO_UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
+const UPDATE_POPOVER_CLOSE_DELAY_MS = 160;
 
 let autoUpdatePromptState: "idle" | "scheduled" | "running" | "done" = "idle";
 let autoUpdatePromptedVersion = "";
@@ -30,6 +31,31 @@ export function AppUpdateAutoPrompt() {
   const [isPanelOpen, setIsPanelOpen] = useState(false);
   const [isInstalling, setIsInstalling] = useState(false);
   const [progress, setProgress] = useState<AppUpdateProgress | null>(null);
+  const panelCloseTimerRef = useRef<number | null>(null);
+
+  function cancelPanelClose() {
+    if (panelCloseTimerRef.current === null) {
+      return;
+    }
+
+    window.clearTimeout(panelCloseTimerRef.current);
+    panelCloseTimerRef.current = null;
+  }
+
+  function openPanel() {
+    cancelPanelClose();
+    setIsPanelOpen(true);
+  }
+
+  function schedulePanelClose() {
+    cancelPanelClose();
+    panelCloseTimerRef.current = window.setTimeout(() => {
+      panelCloseTimerRef.current = null;
+      setIsPanelOpen(false);
+    }, UPDATE_POPOVER_CLOSE_DELAY_MS);
+  }
+
+  useEffect(() => () => cancelPanelClose(), []);
 
   useEffect(() => {
     if (autoUpdatePromptState !== "idle") {
@@ -111,11 +137,12 @@ export function AppUpdateAutoPrompt() {
     <div
       className={`app-update-notice${isPanelOpen ? " is-panel-open" : ""}`}
       aria-live="polite"
-      onMouseEnter={() => setIsPanelOpen(true)}
-      onMouseLeave={() => setIsPanelOpen(false)}
-      onFocus={() => setIsPanelOpen(true)}
+      onMouseEnter={openPanel}
+      onMouseLeave={schedulePanelClose}
+      onFocus={openPanel}
       onBlur={(event) => {
         if (!event.currentTarget.contains(event.relatedTarget)) {
+          cancelPanelClose();
           setIsPanelOpen(false);
         }
       }}

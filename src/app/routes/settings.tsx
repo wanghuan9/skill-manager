@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { getDirectoryPath } from "@/app/path-utils";
+import { getWorkspaceDirectoryPath } from "@/app/path-utils";
 import { useTranslate } from "@/app/i18n";
 import { useFailureReporter } from "@/app/failure-feedback";
 import { AppSelect } from "@/app/components/AppSelect";
@@ -279,7 +279,7 @@ export function SettingsRoute() {
   const toolStatusGroupRef = useRef<HTMLElement | null>(null);
   const reportFailure = useFailureReporter();
   const toolStatusPanelClassName = "panel-card placeholder-panel settings-panel settings-panel--tool-status";
-  const storageDirectoryPath = getDirectoryPath(appSettings.storagePath);
+  const storageDirectoryPath = getWorkspaceDirectoryPath(appSettings.storagePath);
   const isCheckingAppUpdate = appUpdateStatus === "checking";
   const isInstallingAppUpdate = appUpdateStatus === "installing";
   const appUpdateReleaseNoteEntries = useMemo(

@@ -15,6 +15,15 @@ export function getDirectoryPath(filePath: string) {
   return normalizedPath.slice(0, lastSeparatorIndex);
 }
 
+export function getWorkspaceDirectoryPath(settingsFilePath: string) {
+  const settingsDirectoryPath = getDirectoryPath(settingsFilePath);
+  if (!/(^|[\\/])config$/iu.test(settingsDirectoryPath)) {
+    return settingsDirectoryPath;
+  }
+
+  return getDirectoryPath(settingsDirectoryPath);
+}
+
 export function formatPathForDisplay(filePath: string) {
   return filePath.trim()
     .replace(/^\\\\\?\\UNC\\/i, "\\\\")

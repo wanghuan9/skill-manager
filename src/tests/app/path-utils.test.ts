@@ -2,6 +2,7 @@ import {
   formatHomePathForDisplay,
   formatPathForDisplay,
   getDirectoryPath,
+  getWorkspaceDirectoryPath,
 } from "@/app/path-utils";
 
 test("getDirectoryPath strips settings file on macOS paths", () => {
@@ -16,6 +17,23 @@ test("getDirectoryPath strips settings file on Windows paths", () => {
 test("getDirectoryPath supports mixed separators", () => {
   expect(getDirectoryPath(String.raw`C:/Users/demo/.skilldock\settings.json`))
     .toBe(String.raw`C:/Users/demo/.skilldock`);
+});
+
+test.each([
+  ["/Users/demo/.skilldock/config/settings.json", "/Users/demo/.skilldock"],
+  [
+    String.raw`C:\Users\demo\.skilldock\config\settings.json`,
+    String.raw`C:\Users\demo\.skilldock`,
+  ],
+  ["/Users/demo/.skilldock/settings.json", "/Users/demo/.skilldock"],
+])("getWorkspaceDirectoryPath resolves the SkillDock root for %s", (settingsPath, expected) => {
+  expect(getWorkspaceDirectoryPath(settingsPath)).toBe(expected);
+});
+
+test("getWorkspaceDirectoryPath preserves empty and ordinary settings directories", () => {
+  expect(getWorkspaceDirectoryPath("   ")).toBe("");
+  expect(getWorkspaceDirectoryPath("/Users/demo/configuration/settings.json"))
+    .toBe("/Users/demo/configuration");
 });
 
 test.each([

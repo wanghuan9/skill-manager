@@ -1098,59 +1098,219 @@ function UnmanagedSkillRow(props: {
   layout: ListGridViewMode;
   onImportAndPublish: () => void;
   onPreview: () => void;
-  onOpenDirectory: () => void;
+  onOpenPath: (path: string) => void;
+  expanded: boolean;
+  onExpandedChange: (expanded: boolean) => void;
 }) {
+  const rowRef = useRef<HTMLElement | null>(null);
   const isGridLayout = props.layout === "grid";
   const sources = Array.from(new Set(props.group.candidates.map(formatUnmanagedSource)));
   const fileTypes = Array.from(new Set(props.group.candidates.map(formatUnmanagedFileType)));
   const canPreview = Boolean(props.group.candidates[0]?.toolId);
+  const defaultPath = props.group.candidates[0]?.resolvedPath || props.group.candidates[0]?.localPath || "";
+
+  useEffect(() => {
+    if (!props.expanded || !isGridLayout) {
+      return;
+    }
+    const previousOverflow = document.body.style.overflow;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        props.onExpandedChange(false);
+      }
+    };
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isGridLayout, props.expanded, props.onExpandedChange]);
+
+  async function handleExpandedChange(nextExpanded: boolean) {
+    const shouldAlignExpandedCard = nextExpanded && !props.expanded && !isGridLayout;
+    props.onExpandedChange(nextExpanded);
+    if (shouldAlignExpandedCard) {
+      await alignExpandedRowIntoView(rowRef.current);
+    }
+  }
+
   return (
-    <article className={`skill-card skill-card--list publish-skill-row unmanaged-skill-row${isGridLayout ? " skill-card--grid publish-skill-row--grid" : ""}`}>
-      <div className="skill-card__header publish-skill-row__header">
-        <div className="skill-card__summary-button publish-skill-row__summary-button">
-          <div className="skill-card__identity">
-            <PublishSkillMonogram name={props.group.name} />
-            <div className="skill-card__title-stack">
-              <div className="skill-card__title-row">
-                <h3>{props.group.name}</h3>
-                <span className="unmanaged-skill-row__type-badges">
-                  {fileTypes.map((fileType) => <span key={fileType} className="status-badge tone-info">{fileType}</span>)}
-                </span>
-              </div>
-              <p className="skill-card__summary-description">{props.group.description || "暂无简介"}</p>
-              <div className="unmanaged-skill-row__sources" title={sources.join("、")}>
-                {sources.slice(0, 3).map((source) => <span key={source}>{source}</span>)}
-                {sources.length > 3 ? <span>+{sources.length - 3}</span> : null}
+    <>
+      <article
+        ref={rowRef}
+        className={`skill-card skill-card--list publish-skill-row unmanaged-skill-row${isGridLayout ? " skill-card--grid publish-skill-row--grid" : ""}${props.expanded ? " is-expanded" : ""}`}
+      >
+        <div className="skill-card__header publish-skill-row__header">
+          <div className="skill-card__summary-button publish-skill-row__summary-button" onClick={() => void handleExpandedChange(!props.expanded)}>
+            <div className="skill-card__identity">
+              <PublishSkillMonogram name={props.group.name} />
+              <div className="skill-card__title-stack">
+                <div className="skill-card__title-row">
+                  <h3>{props.group.name}</h3>
+                  <span className="unmanaged-skill-row__type-badges">
+                    {fileTypes.map((fileType) => <span key={fileType} className="status-badge tone-info">{fileType}</span>)}
+                  </span>
+                </div>
+                <p className="skill-card__summary-description">{props.group.description || "暂无简介"}</p>
+                <div className="unmanaged-skill-row__sources" title={sources.join("、")}>
+                  {sources.slice(0, 3).map((source) => <span key={source}>{source}</span>)}
+                  {sources.length > 3 ? <span>+{sources.length - 3}</span> : null}
+                </div>
               </div>
             </div>
           </div>
+          <div className="skill-card__list-actions publish-skill-row__actions unmanaged-skill-row__actions">
+            <button
+              className="skill-card__icon-button skill-card__icon-button--update unmanaged-skill-row__publish-button"
+              type="button"
+              onClick={props.onImportAndPublish}
+              aria-label={`导入并发布 ${props.group.name}`}
+              data-tooltip="导入并发布"
+            >
+              <PublishActionIcon />
+            </button>
+            <button
+              className="skill-card__icon-button"
+              type="button"
+              onClick={props.onPreview}
+              disabled={!canPreview}
+              aria-label={`预览 ${props.group.name}`}
+              data-tooltip={canPreview ? "预览文件" : "暂不支持预览"}
+            >
+              <ViewFileIcon />
+            </button>
+            <button className="skill-card__icon-button" type="button" onClick={() => props.onOpenPath(defaultPath)} aria-label={`打开目录 ${props.group.name}`} data-tooltip="打开目录">
+              <OpenFolderIcon />
+            </button>
+            <button className="skill-card__chevron-button" type="button" onClick={() => void handleExpandedChange(!props.expanded)} aria-expanded={props.expanded} aria-label={`${props.expanded ? "收起" : "展开"} ${props.group.name}`}>
+              <span className="skill-card__chevron" aria-hidden="true">{props.expanded && !isGridLayout ? "⌄" : "›"}</span>
+            </button>
+          </div>
         </div>
-        <div className="skill-card__list-actions publish-skill-row__actions unmanaged-skill-row__actions">
-          <button
-            className="skill-card__icon-button skill-card__icon-button--update unmanaged-skill-row__publish-button"
-            type="button"
-            onClick={props.onImportAndPublish}
-            aria-label={`导入并发布 ${props.group.name}`}
-            data-tooltip="导入并发布"
-          >
-            <PublishActionIcon />
-          </button>
-          <button
-            className="skill-card__icon-button"
-            type="button"
-            onClick={props.onPreview}
-            disabled={!canPreview}
-            aria-label={`预览 ${props.group.name}`}
-            data-tooltip={canPreview ? "预览文件" : "暂不支持预览"}
-          >
-            <ViewFileIcon />
-          </button>
-          <button className="skill-card__icon-button" type="button" onClick={props.onOpenDirectory} aria-label={`打开目录 ${props.group.name}`} data-tooltip="打开目录">
-            <OpenFolderIcon />
-          </button>
-        </div>
-      </div>
-    </article>
+        {props.expanded && !isGridLayout ? (
+          <UnmanagedSkillDetails group={props.group} onOpenPath={props.onOpenPath} />
+        ) : null}
+      </article>
+      {props.expanded && isGridLayout ? createPortal(
+        <UnmanagedSkillDetailModal
+          group={props.group}
+          onImportAndPublish={props.onImportAndPublish}
+          onPreview={props.onPreview}
+          onOpenPath={props.onOpenPath}
+          onClose={() => props.onExpandedChange(false)}
+        />,
+        document.body,
+      ) : null}
+    </>
+  );
+}
+
+function UnmanagedSkillDetails(props: {
+  group: UnmanagedSkillGroup;
+  onOpenPath: (path: string) => void;
+  isModal?: boolean;
+}) {
+  const fileTypes = Array.from(new Set(props.group.candidates.map(formatUnmanagedFileType)));
+  const sources = Array.from(new Set(props.group.candidates.map(formatUnmanagedSource)));
+  const resolvedPaths = Array.from(new Set(props.group.candidates.map((candidate) => (
+    candidate.resolvedPath || candidate.localPath
+  ))));
+
+  return (
+    <div className={`skill-card__details unmanaged-skill-details${props.isModal ? " skill-card-detail-modal__body" : ""}`}>
+      <section>
+        <div className="skill-card__section-header"><h4>基本信息</h4></div>
+        <dl className="detail-grid detail-grid--single">
+          <div><dt>简介</dt><dd>{props.group.description || "暂无简介"}</dd></div>
+        </dl>
+        <dl className="detail-grid unmanaged-skill-details__metadata unmanaged-skill-details__metadata-grid unmanaged-skill-details__paths">
+          <div>
+            <dt>文件类型</dt>
+            <dd className="unmanaged-skill-details__tags">
+              {fileTypes.map((fileType) => <span key={fileType} className="status-badge tone-info">{fileType}</span>)}
+            </dd>
+          </div>
+          <div>
+            <dt>真实目录</dt>
+            <dd className="unmanaged-skill-details__path-list">
+              {resolvedPaths.map((path) => (
+                <div key={path} className="detail-grid__source-value">
+                  <span className="detail-grid__single-line" title={path}>{path}</span>
+                  <button className="skill-card__icon-button" type="button" onClick={() => props.onOpenPath(path)} aria-label={`打开真实目录 ${props.group.name}`} data-tooltip="打开真实目录">
+                    <OpenFolderIcon />
+                  </button>
+                </div>
+              ))}
+            </dd>
+          </div>
+          <div className="unmanaged-skill-details__source">
+            <dt>发现来源</dt>
+            <dd className="unmanaged-skill-details__tags">
+              {sources.map((source) => <span key={source} className="status-badge tone-neutral">{source}</span>)}
+            </dd>
+          </div>
+        </dl>
+      </section>
+    </div>
+  );
+}
+
+function UnmanagedSkillDetailModal(props: {
+  group: UnmanagedSkillGroup;
+  onImportAndPublish: () => void;
+  onPreview: () => void;
+  onOpenPath: (path: string) => void;
+  onClose: () => void;
+}) {
+  const fileTypes = Array.from(new Set(props.group.candidates.map(formatUnmanagedFileType)));
+  const canPreview = Boolean(props.group.candidates[0]?.toolId);
+  const defaultPath = props.group.candidates[0]?.resolvedPath || props.group.candidates[0]?.localPath || "";
+
+  function handleImportAndPublish() {
+    props.onClose();
+    props.onImportAndPublish();
+  }
+
+  function handlePreview() {
+    props.onClose();
+    props.onPreview();
+  }
+
+  return (
+    <div className="skill-card-detail-modal__backdrop" role="presentation" onClick={props.onClose}>
+      <section className="skill-card-detail-modal publish-skill-detail-modal unmanaged-skill-detail-modal" role="dialog" aria-modal="true" aria-label={`${props.group.name} 未托管详情`} onClick={(event) => event.stopPropagation()}>
+        <header className="skill-card-detail-modal__header">
+          <div className="skill-card-detail-modal__identity">
+            <PublishSkillMonogram name={props.group.name} />
+            <div className="skill-card-detail-modal__copy">
+              <div className="skill-card-detail-modal__title">
+                <h3>{props.group.name}</h3>
+                {fileTypes.map((fileType) => <span key={fileType} className="status-badge tone-info">{fileType}</span>)}
+              </div>
+            </div>
+          </div>
+          <div className="skill-card-detail-modal__actions">
+            <button className="secondary-button secondary-button--compact skill-card-detail-modal__action is-primary" type="button" onClick={handleImportAndPublish}>
+              <PublishActionIcon />
+              <span>导入并发布</span>
+            </button>
+            <button className="secondary-button secondary-button--compact skill-card-detail-modal__action" type="button" onClick={handlePreview} disabled={!canPreview}>
+              <ViewFileIcon />
+              <span>预览文件</span>
+            </button>
+            <button className="secondary-button secondary-button--compact skill-card-detail-modal__action" type="button" onClick={() => props.onOpenPath(defaultPath)}>
+              <OpenFolderIcon />
+              <span>打开目录</span>
+            </button>
+            <button className="skill-card-detail-modal__close" type="button" onClick={props.onClose} aria-label={`关闭 ${props.group.name} 未托管详情`}>
+              <span aria-hidden="true">×</span>
+            </button>
+          </div>
+        </header>
+        <UnmanagedSkillDetails group={props.group} isModal onOpenPath={props.onOpenPath} />
+      </section>
+    </div>
   );
 }
 
@@ -1214,6 +1374,7 @@ export function PublishingWorkbench({
   const [unmanagedImportGroup, setUnmanagedImportGroup] = useState<UnmanagedSkillGroup | null>(null);
   const [batchConfirm, setBatchConfirm] = useState<BatchConfirmState | null>(null);
   const [expandedSkillPath, setExpandedSkillPath] = useState("");
+  const [expandedUnmanagedName, setExpandedUnmanagedName] = useState("");
   const [toolbarContainer, setToolbarContainer] = useState<HTMLElement | null>(null);
   const [summaryContainer, setSummaryContainer] = useState<HTMLElement | null>(null);
   const [sourceContainer, setSourceContainer] = useState<HTMLElement | null>(null);
@@ -1626,6 +1787,7 @@ export function PublishingWorkbench({
     setUnmanagedImportGroup(null);
     setBatchConfirm(null);
     setExpandedSkillPath("");
+    setExpandedUnmanagedName("");
     previousSkillCardRectsRef.current = new Map();
     shouldPersistLocalPublishStatusRef.current = false;
   }, [adapter]);
@@ -1847,12 +2009,9 @@ export function PublishingWorkbench({
               layout={viewMode}
               onImportAndPublish={() => setUnmanagedImportGroup(group)}
               onPreview={() => setPreviewCandidate(group.candidates[0] ?? null)}
-              onOpenDirectory={() => {
-                const path = group.candidates[0]?.resolvedPath || group.candidates[0]?.localPath;
-                if (path) {
-                  void openPathInFinder({ path });
-                }
-              }}
+              onOpenPath={(path) => void openPathInFinder({ path })}
+              expanded={expandedUnmanagedName === group.name}
+              onExpandedChange={(expanded) => setExpandedUnmanagedName(expanded ? group.name : "")}
             />
           ))}
         </div>

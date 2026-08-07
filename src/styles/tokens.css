@@ -3987,6 +3987,10 @@ code {
   flex: 0 0 auto;
 }
 
+.skill-card--grid.unmanaged-skill-row .skill-card__title-row {
+  padding-right: 0;
+}
+
 .unmanaged-skill-row__sources {
   display: flex;
   align-items: center;
@@ -4008,6 +4012,53 @@ code {
 .skill-card--grid .unmanaged-skill-row__sources {
   grid-column: 1 / -1;
   width: 100%;
+}
+
+.unmanaged-skill-details {
+  grid-column: 1 / -1;
+}
+
+.unmanaged-skill-details__metadata {
+  align-items: start;
+}
+
+.unmanaged-skill-details__tags {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.unmanaged-skill-details__paths {
+  display: grid;
+  grid-template-columns: 1fr;
+}
+
+.unmanaged-skill-details__metadata-grid {
+  grid-template-columns: minmax(160px, 0.65fr) minmax(0, 1.35fr);
+}
+
+.unmanaged-skill-details__source {
+  grid-column: 1 / -1;
+}
+
+.unmanaged-skill-details__path-list {
+  display: grid;
+  gap: 6px;
+}
+
+.unmanaged-skill-details__paths .detail-grid__source-value {
+  justify-content: flex-start;
+  gap: 6px;
+}
+
+.unmanaged-skill-details__paths .detail-grid__source-value > span:first-child {
+  flex: 0 1 auto;
+  max-width: calc(100% - 34px);
+}
+
+.unmanaged-skill-details__paths .skill-card__icon-button {
+  flex: 0 0 auto;
 }
 
 .skill-card--grid .skill-card__summary-tools {

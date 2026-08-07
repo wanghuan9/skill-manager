@@ -65,6 +65,7 @@ function createAdapter(): PublishingPlatformAdapter {
 
 afterEach(() => {
   vi.useRealTimers();
+  window.localStorage.clear();
   document.getElementById("publish-source-header-slot")?.remove();
 });
 
@@ -256,6 +257,49 @@ test("reuses the internal managed switcher and preview-file action", async () =>
   await userEvent.click(screen.getByRole("tab", { name: /未托管 1/ }));
   expect(await screen.findByRole("heading", { name: "external-skill" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "预览 external-skill" })).toBeInTheDocument();
+});
+
+test("restores unmanaged Skill details in list and grid layouts", async () => {
+  const sourceHeader = document.createElement("div");
+  sourceHeader.id = "publish-source-header-slot";
+  document.body.append(sourceHeader);
+  render(<PublishingWorkbench adapter={createAdapter()} />);
+
+  await userEvent.click(await screen.findByRole("tab", { name: /未托管 1/ }));
+
+  const unmanagedCard = screen.getByRole("heading", { name: "external-skill" }).closest("article");
+  const summary = unmanagedCard?.querySelector<HTMLElement>(".publish-skill-row__summary-button");
+  expect(unmanagedCard).not.toBeNull();
+  expect(summary).not.toBeNull();
+
+  await userEvent.click(summary!);
+
+  expect(unmanagedCard).toHaveClass("is-expanded");
+  expect(screen.queryByRole("dialog", { name: "external-skill 未托管详情" })).not.toBeInTheDocument();
+  expect(within(unmanagedCard!).getByRole("heading", { name: "基本信息" })).toBeInTheDocument();
+  const listDetails = unmanagedCard?.querySelector<HTMLElement>(".unmanaged-skill-details");
+  expect(listDetails).not.toBeNull();
+  expect(within(listDetails!).getByText("/tmp/external-skill")).toBeInTheDocument();
+  expect(within(listDetails!).getByText("Codex")).toBeInTheDocument();
+
+  await userEvent.click(screen.getByRole("button", { name: "skills.view.grid" }));
+
+  const detailDialog = screen.getByRole("dialog", { name: "external-skill 未托管详情" });
+  expect(within(detailDialog).getByRole("heading", { name: "基本信息" })).toBeInTheDocument();
+  expect(document.body).toHaveStyle({ overflow: "hidden" });
+
+  fireEvent.keyDown(window, { key: "Escape" });
+
+  expect(screen.queryByRole("dialog", { name: "external-skill 未托管详情" })).not.toBeInTheDocument();
+  expect(document.body).not.toHaveStyle({ overflow: "hidden" });
+
+  const gridCard = screen.getByRole("heading", { name: "external-skill" }).closest("article");
+  const gridSummary = gridCard?.querySelector<HTMLElement>(".publish-skill-row__summary-button");
+  await userEvent.click(gridSummary!);
+  await userEvent.click(within(screen.getByRole("dialog", { name: "external-skill 未托管详情" }))
+    .getByRole("button", { name: "导入并发布" }));
+
+  expect(screen.getByRole("dialog", { name: /导入托管并发布 · external-skill/ })).toBeInTheDocument();
 });
 
 test("keeps unmanaged candidates while switching the publishing platform", async () => {

@@ -18,8 +18,20 @@ use crate::workspace::{
 const STATE_FILE_NAME: &str = "state.json";
 const SETTINGS_FILE_NAME: &str = "settings.json";
 const EMPTY_DESCRIPTION_VALUES: [&str; 4] = ["", "---", "...", "未提供简介"];
-const RESERVED_WORKSPACE_DIR_NAMES: [&str; 5] =
-    ["state.json", "skills", "repo-cache", "cache", "imports"];
+const RESERVED_WORKSPACE_DIR_NAMES: [&str; 12] = [
+    "state.json",
+    "config",
+    "data",
+    "credentials",
+    "skills",
+    "repositories",
+    "repo-cache",
+    "cache",
+    "plugins",
+    "imports",
+    "backup",
+    "logs",
+];
 
 const SKILL_INSTALL_ACTIVATION_APPLY_ALL: &str = "apply-all-tools";
 const SKILL_INSTALL_ACTIVATION_DISABLE_ALL: &str = "disable-all-tools";
@@ -1204,7 +1216,7 @@ mod tests {
 
             let result = save_installed_skills(&skills);
             assert!(result.is_ok());
-            assert!(temp_home.join(".skilldock/state.json").exists());
+            assert!(temp_home.join(".skilldock/data/state.json").exists());
         });
     }
 
@@ -1362,7 +1374,8 @@ mod tests {
             let mut settings = load_app_settings();
             settings.theme = "light".into();
             let saved = save_app_settings(settings).expect("save ordinary setting");
-            let content = fs::read_to_string(settings_path).expect("read saved settings");
+            let content = fs::read_to_string(workspace_root.join("config/settings.json"))
+                .expect("read saved settings");
 
             assert!(!saved.agent_skills_compatibility_configured);
             assert!(!content.contains("agentSkillsCompatibilityEnabled"));
@@ -1385,7 +1398,8 @@ mod tests {
             assert_eq!(load_legacy_github_token(), "github_pat_example");
             settings.theme = "light".into();
             save_app_settings(settings).expect("save ordinary settings");
-            let content = fs::read_to_string(&settings_path).expect("read saved settings");
+            let migrated_settings_path = workspace_root.join("config/settings.json");
+            let content = fs::read_to_string(&migrated_settings_path).expect("read saved settings");
             assert!(content.contains("\"githubToken\": \"github_pat_example\""));
 
             save_github_connection_metadata(
@@ -1400,7 +1414,7 @@ mod tests {
             )
             .expect("save GitHub connection metadata");
             let migrated_content =
-                fs::read_to_string(settings_path).expect("read migrated settings");
+                fs::read_to_string(migrated_settings_path).expect("read migrated settings");
             assert!(!migrated_content.contains("githubToken"));
             assert_eq!(load_github_connection_metadata().username, "octocat");
         });
@@ -1517,7 +1531,7 @@ mod tests {
                 ],
             };
             let legacy_state_file = temp_home.join(".skillm/state.json");
-            let state_file = temp_home.join(".skilldock/state.json");
+            let state_file = temp_home.join(".skilldock/data/state.json");
             fs::create_dir_all(legacy_state_file.parent().expect("state parent exists"))
                 .expect("create state parent");
             fs::write(
@@ -1578,11 +1592,12 @@ mod tests {
                     tools: vec![],
                 }],
             };
-            let state_file = temp_home.join(".skilldock/state.json");
-            fs::create_dir_all(state_file.parent().expect("state parent exists"))
+            let legacy_state_file = temp_home.join(".skilldock/state.json");
+            let state_file = temp_home.join(".skilldock/data/state.json");
+            fs::create_dir_all(legacy_state_file.parent().expect("state parent exists"))
                 .expect("create state parent");
             fs::write(
-                &state_file,
+                &legacy_state_file,
                 serde_json::to_string_pretty(&persisted).expect("serialize persistence"),
             )
             .expect("write state file");
@@ -1675,7 +1690,7 @@ mod tests {
                 ],
             };
             let legacy_state_file = temp_home.join(".skillm/state.json");
-            let state_file = temp_home.join(".skilldock/state.json");
+            let state_file = temp_home.join(".skilldock/data/state.json");
             fs::create_dir_all(legacy_state_file.parent().expect("state parent exists"))
                 .expect("create state parent");
             fs::write(

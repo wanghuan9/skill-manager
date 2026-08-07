@@ -830,7 +830,7 @@ export const gitAccountFixture: GitAccountSummary = {
 };
 
 export const appSettingsFixture: AppSettings = {
-  storagePath: "/Users/demo/.skilldock/settings.json",
+  storagePath: "/Users/demo/.skilldock/config/settings.json",
   skillLibraryPath: "/Users/demo/.skilldock/skills",
   skillLibraryProvider: "skilldock",
   agentSkillsCompatibilityEnabled: false,
