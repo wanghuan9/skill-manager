@@ -25,6 +25,7 @@ const TOOL_NAME_IDS: Record<string, string> = {
 const TOOL_DISPLAY_ORDER = [
   "claude-code",
   "codex",
+  "zcode",
   "pi",
   "omp",
   "grok",

@@ -21,6 +21,7 @@ pub struct ToolAdapterDefinition {
     pub surface_types: &'static [&'static str],
     pub supports_direct_open: bool,
     pub mcp_format: McpAdapterFormat,
+    pub mcp_enabled_field: Option<&'static str>,
     pub software_app_names: &'static [&'static str],
     pub software_executable_names: &'static [&'static str],
 }
@@ -41,6 +42,7 @@ pub const TOOL_ADAPTER_DEFINITIONS: &[ToolAdapterDefinition] = &[
         surface_types: CLI_SURFACE,
         supports_direct_open: false,
         mcp_format: McpAdapterFormat::None,
+        mcp_enabled_field: None,
         software_app_names: NO_SOFTWARE_NAMES,
         software_executable_names: &["pi"],
     },
@@ -56,6 +58,7 @@ pub const TOOL_ADAPTER_DEFINITIONS: &[ToolAdapterDefinition] = &[
         mcp_format: McpAdapterFormat::JsonObject {
             field: "mcpServers",
         },
+        mcp_enabled_field: None,
         software_app_names: NO_SOFTWARE_NAMES,
         software_executable_names: &["omp"],
     },
@@ -71,6 +74,7 @@ pub const TOOL_ADAPTER_DEFINITIONS: &[ToolAdapterDefinition] = &[
         mcp_format: McpAdapterFormat::TomlTable {
             field: "mcp_servers",
         },
+        mcp_enabled_field: None,
         software_app_names: NO_SOFTWARE_NAMES,
         software_executable_names: &["grok"],
     },
@@ -84,6 +88,7 @@ pub const TOOL_ADAPTER_DEFINITIONS: &[ToolAdapterDefinition] = &[
         surface_types: CLI_SURFACE,
         supports_direct_open: false,
         mcp_format: McpAdapterFormat::JsonObjectCommandArray { field: "mcp" },
+        mcp_enabled_field: None,
         software_app_names: NO_SOFTWARE_NAMES,
         software_executable_names: &["mimo"],
     },
@@ -99,7 +104,24 @@ pub const TOOL_ADAPTER_DEFINITIONS: &[ToolAdapterDefinition] = &[
         mcp_format: McpAdapterFormat::JsonObject {
             field: "mcpServers",
         },
+        mcp_enabled_field: None,
         software_app_names: &["WorkBuddy"],
+        software_executable_names: NO_SOFTWARE_NAMES,
+    },
+    ToolAdapterDefinition {
+        id: "zcode",
+        name: "ZCode",
+        skills_relative_path: ".zcode/skills",
+        mcp_relative_path: ".zcode/cli/config.json",
+        install_probe_relative_path: ".zcode",
+        primary_type: "desktop",
+        surface_types: DESKTOP_SURFACE,
+        supports_direct_open: false,
+        mcp_format: McpAdapterFormat::JsonObject {
+            field: "mcp.servers",
+        },
+        mcp_enabled_field: Some("enable"),
+        software_app_names: &["ZCode"],
         software_executable_names: NO_SOFTWARE_NAMES,
     },
 ];
@@ -188,6 +210,26 @@ mod tests {
             workbuddy.mcp_format,
             McpAdapterFormat::JsonObject {
                 field: "mcpServers"
+            }
+        ));
+
+        let zcode = definition("zcode").expect("zcode adapter");
+        assert_eq!(
+            resolve_skills_path(zcode, &home),
+            home.join(".zcode/skills")
+        );
+        assert_eq!(
+            resolve_mcp_path(zcode, &home),
+            Some(home.join(".zcode/cli/config.json"))
+        );
+        assert_eq!(zcode.primary_type, "desktop");
+        assert_eq!(zcode.surface_types, &["desktop"]);
+        assert_eq!(zcode.software_app_names, &["ZCode"]);
+        assert_eq!(zcode.mcp_enabled_field, Some("enable"));
+        assert!(matches!(
+            zcode.mcp_format,
+            McpAdapterFormat::JsonObject {
+                field: "mcp.servers"
             }
         ));
     }
