@@ -310,7 +310,7 @@ function pluginSourceCandidateFixtures(input: ProbePluginSourceInput): LegacyPlu
   const sparsePath = input.sparsePath?.trim() ?? "";
   const agenticEngineeringProbe: LegacyPluginProbeResult = {
     tool: "codex",
-    compatibleHostTools: ["codex", "claude-code", "cursor"],
+    compatibleHostTools: ["codex", "claude-code", "cursor", "opencode"],
     kind: "plugin-repo",
     description: "基于 Skill 的模块化 Example Plugin 框架",
     pluginRoot: "/tmp/example-repo/example-plugin",
@@ -571,8 +571,12 @@ function normalizeSkillSummaryList(skills: LegacySkillSummary[]): SkillSummary[]
   return skills.map((skill) => normalizeSkillSummary(skill));
 }
 
+function isPluginHostTool(tool: string | undefined): tool is PluginHostTool {
+  return tool === "claude-code" || tool === "cursor" || tool === "codex" || tool === "opencode";
+}
+
 function normalizePluginHostTool(tool: string | undefined): PluginHostTool {
-  if (tool === "claude-code" || tool === "cursor" || tool === "codex") {
+  if (isPluginHostTool(tool)) {
     return tool;
   }
 
@@ -691,7 +695,7 @@ function normalizePluginSummary(plugin: LegacyPluginSummary): PluginSummary {
     description: plugin.description ?? "",
     hostTool: normalizePluginHostTool(plugin.hostTool),
     relatedHostTools: Array.isArray(plugin.relatedHostTools)
-      ? plugin.relatedHostTools.filter((tool): tool is PluginHostTool => tool === "claude-code" || tool === "cursor" || tool === "codex")
+      ? plugin.relatedHostTools.filter(isPluginHostTool)
       : [],
     kind: normalizePluginKind(plugin.kind),
     rootPath: plugin.rootPath ?? "",
@@ -743,15 +747,9 @@ function normalizePluginSummaryList(plugins: LegacyPluginSummary[]): PluginSumma
 
 function normalizePluginProbeResult(probe: LegacyPluginProbeResult): PluginProbeResult {
   const compatibleHostTools = Array.isArray(probe.compatibleHostTools)
-    ? probe.compatibleHostTools.filter(
-        (tool): tool is PluginHostTool =>
-          tool === "claude-code" || tool === "cursor" || tool === "codex",
-      )
+    ? probe.compatibleHostTools.filter(isPluginHostTool)
     : [];
-  const tool =
-    probe.tool === "claude-code" || probe.tool === "cursor" || probe.tool === "codex"
-      ? probe.tool
-      : "unknown";
+  const tool = isPluginHostTool(probe.tool) ? probe.tool : "unknown";
 
   return {
     tool,
@@ -780,6 +778,7 @@ function normalizePluginProbeResult(probe: LegacyPluginProbeResult): PluginProbe
       probe.installStrategy === "codex-marketplace"
       || probe.installStrategy === "claude-plugin-dir"
       || probe.installStrategy === "cursor-registration"
+      || probe.installStrategy === "opencode-plugin-link"
       || probe.installStrategy === "unsupported"
         ? probe.installStrategy
         : "unsupported",

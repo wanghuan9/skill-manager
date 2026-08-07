@@ -71,6 +71,7 @@ const pluginHostOptions: { key: PluginHostTool; label: string }[] = [
   { key: "codex", label: "Codex" },
   { key: "claude-code", label: "Claude Code" },
   { key: "cursor", label: "Cursor" },
+  { key: "opencode", label: "OpenCode" },
 ];
 const componentSummaryTypes: { key: PluginAssetType; label: string }[] = [
   { key: "skill", label: "skill" },

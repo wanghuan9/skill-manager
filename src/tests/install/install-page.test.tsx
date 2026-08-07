@@ -234,6 +234,64 @@ test("probes plugin sources with Codex-style inputs and host selection", async (
   branchSpy.mockRestore();
 });
 
+test("installs OpenCode plugins with OpenCode selected as the host", async () => {
+  const sourceUrl = "https://github.com/example/demo-opencode";
+  const branchSpy = vi.spyOn(skillClient, "fetchGitRepoBranches").mockResolvedValue([
+    { name: "main", isDefault: true, isSelected: true },
+  ]);
+  const probeSpy = vi.spyOn(skillClient, "probePluginSourceCandidates").mockResolvedValue([{
+    tool: "opencode",
+    compatibleHostTools: ["opencode"],
+    kind: "plugin-repo",
+    manifestName: "demo-opencode",
+    name: "demo-opencode",
+    description: "Demo OpenCode plugin",
+    pluginRoot: "/tmp/demo-opencode",
+    repoRoot: "/tmp/demo-opencode",
+    pluginRelativePath: "",
+    manifestPath: "/tmp/demo-opencode/.opencode/plugins/demo.ts",
+    marketplaceManifestPath: "",
+    components: [],
+    sourceType: "git",
+    sourceUrl,
+    sourceRef: "main",
+    isGitRepo: true,
+    gitRoot: "/tmp/demo-opencode",
+    confidence: "high",
+    installStrategy: "opencode-plugin-link",
+    warnings: [],
+  }]);
+  vi.spyOn(skillClient, "fetchInstalledPlugins").mockResolvedValue([]);
+  const installSpy = vi.spyOn(skillClient, "installSelectedPluginProbes").mockResolvedValue([]);
+
+  render(<App />);
+  await clickNavInstall();
+  await userEvent.click(screen.getByRole("tab", { name: "Plugin" }));
+  await userEvent.type(screen.getByRole("textbox", { name: "Git 仓库地址" }), sourceUrl);
+  await waitFor(() => {
+    expect(screen.getByRole("combobox", { name: "Git 分支" })).toHaveAttribute("data-value", "main");
+  });
+  await userEvent.click(screen.getByRole("button", { name: "识别插件" }));
+
+  expect(await screen.findByText("Demo OpenCode plugin")).toBeInTheDocument();
+  expect(screen.getByRole("button", {
+    name: "取消选择 OpenCode 作为 demo-opencode 安装宿主",
+  })).toHaveAttribute("aria-pressed", "true");
+
+  await userEvent.click(screen.getByRole("button", { name: "安装到选中宿主" }));
+
+  await waitFor(() => {
+    expect(installSpy).toHaveBeenCalledWith({
+      probes: [expect.objectContaining({ tool: "opencode" })],
+      hostTools: ["opencode"],
+    });
+  });
+
+  branchSpy.mockRestore();
+  probeSpy.mockRestore();
+  installSpy.mockRestore();
+});
+
 test("marks already installed plugin hosts and still allows installing remaining hosts", async () => {
   const sourceUrl = "https://git.example.com/example-org/example-repo";
   const branchSpy = vi.spyOn(skillClient, "fetchGitRepoBranches").mockResolvedValue([
