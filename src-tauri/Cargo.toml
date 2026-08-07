@@ -30,6 +30,7 @@ reqwest = { version = "0.12", default-features = false, features = ["blocking", 
 regex = "1.11"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 json5 = "0.4"
+jsonc-parser = { version = "0.33", features = ["cst"] }
 toml_edit = "0.22"
 base64 = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
