@@ -2546,7 +2546,7 @@ fn mcp_config_path_for_tool(tool_id: &str, home_path: &Path) -> PathBuf {
         "kilo-code" => application_support_dir
             .join("Code/User/globalStorage/kilocode.kilo-code/settings/mcp_settings.json"),
         "kiro" => home_path.join(".kiro/settings/mcp.json"),
-        "opencode" => home_path.join(".config/opencode/opencode.json"),
+        "opencode" => workspace::opencode_config_path_for_home(home_path),
         "qoder" => home_path.join(".config/Qoder/SharedClientCache/mcp.json"),
         "qwen-code" => home_path.join(".qwen/settings.json"),
         "roo-code" => application_support_dir
@@ -12723,6 +12723,29 @@ mod tests {
         });
         let path = super::mcp_config_path_for_tool("cursor", &home);
         assert!(path.ends_with(Path::new(".cursor").join("mcp.json")));
+    }
+
+    #[test]
+    fn opencode_mcp_path_prefers_existing_jsonc_config() {
+        let home = env::temp_dir().join(format!(
+            "skilldock-opencode-tool-path-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|duration| duration.as_nanos())
+                .unwrap_or_default()
+        ));
+        let config_dir = home.join(".config/opencode");
+        fs::create_dir_all(&config_dir).expect("create OpenCode config directory");
+        let jsonc_path = config_dir.join("opencode.jsonc");
+        fs::write(&jsonc_path, "{}").expect("write OpenCode JSONC config");
+
+        assert_eq!(
+            super::mcp_config_path_for_tool("opencode", &home),
+            jsonc_path
+        );
+
+        let _ = fs::remove_dir_all(home);
     }
 
     #[test]
