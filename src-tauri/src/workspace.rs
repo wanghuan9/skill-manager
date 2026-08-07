@@ -96,6 +96,26 @@ pub fn application_support_dir_for_home(home_dir: &Path) -> PathBuf {
     }
 }
 
+pub fn opencode_config_paths_in_dir(config_dir: &Path) -> [PathBuf; 3] {
+    [
+        config_dir.join("config.json"),
+        config_dir.join("opencode.json"),
+        config_dir.join("opencode.jsonc"),
+    ]
+}
+
+pub fn opencode_config_paths_for_home(home_dir: &Path) -> [PathBuf; 3] {
+    opencode_config_paths_in_dir(&home_dir.join(".config/opencode"))
+}
+
+pub fn opencode_config_path_for_home(home_dir: &Path) -> PathBuf {
+    opencode_config_paths_for_home(home_dir)
+        .into_iter()
+        .rev()
+        .find(|path| path.exists())
+        .unwrap_or_else(|| home_dir.join(".config/opencode/opencode.json"))
+}
+
 /// Remove cache, WebKit, and log directories left by pre-SkillDock builds.
 ///
 /// These directories are disposable and may contain the former bundle/user name. The
