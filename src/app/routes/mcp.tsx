@@ -2,6 +2,13 @@ import { startTransition, useDeferredValue, useEffect, useMemo, useRef, useState
 import type { MouseEvent as ReactMouseEvent, ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { SearchFieldIcon } from "@/app/components/SearchFieldIcon";
+import {
+  BatchActionBar,
+  BatchDeleteDialog,
+  BatchModeButton,
+  BatchSelectionMark,
+} from "@/app/components/BatchActions";
+import { useBatchSelection } from "@/app/hooks/useBatchSelection";
 import { alignExpandedRowIntoView } from "@/app/utils/align-expanded-row";
 import { ToolbarGoInstallButton } from "@/app/components/ToolbarGoInstallButton";
 import { useTranslate, type TranslationKey } from "@/app/i18n";
@@ -739,6 +746,8 @@ export function McpRoute(props: McpRouteProps = {}) {
   const [collapsedToolSectionIds, setCollapsedToolSectionIds] = useState<Record<string, boolean>>({});
   const [deleteConfirmingServerId, setDeleteConfirmingServerId] = useState("");
   const [deletingServerId, setDeletingServerId] = useState("");
+  const [batchAction, setBatchAction] = useState<"delete" | "toggle" | "">("");
+  const [isBatchDeleteConfirming, setIsBatchDeleteConfirming] = useState(false);
   const [saveErrorMessage, setSaveErrorMessage] = useState("");
   const deleteActionRef = useRef<HTMLButtonElement | null>(null);
   const isMountedRef = useRef(false);
@@ -1343,6 +1352,29 @@ export function McpRoute(props: McpRouteProps = {}) {
     () => new Set(installedApps.map((app) => app.id)),
     [installedApps],
   );
+  const visibleServerIds = useMemo(() => filteredServers.map((server) => server.id), [filteredServers]);
+  const batchSelection = useBatchSelection(visibleServerIds);
+  const selectedServers = useMemo(
+    () => filteredServers.filter((server) => batchSelection.selectedIds.has(server.id)),
+    [batchSelection.selectedIds, filteredServers],
+  );
+  const selectedServerAppStates = useMemo(() => selectedServers.map((server) => {
+    const visibleApps = installedAppDisplayOrder
+      .map((appId) => server.apps.find((app) => app.appId === appId))
+      .filter((app): app is McpAppStatus => (
+        app !== undefined
+        && installedAppIdSet.has(app.appId)
+        && isMcpAppSupported(app)
+      ));
+    const allEnabled = visibleApps.length > 0 && visibleApps.every((app) => app.isEnabled);
+    return { server, visibleApps, allEnabled };
+  }), [installedAppDisplayOrder, installedAppIdSet, selectedServers]);
+  const actionableServerAppStates = selectedServerAppStates.filter((item) => item.visibleApps.length > 0);
+  const shouldBatchEnableServers = actionableServerAppStates.some((item) => !item.allEnabled);
+  const toggleServerAppStates = actionableServerAppStates.filter((item) => item.visibleApps.some(
+    (app) => app.isEnabled !== shouldBatchEnableServers,
+  ));
+  const isBatchBusy = batchAction !== "";
   const isDialogOpen = isCreating || editingServer !== null;
   const activeEditingServer = editingServer
     ? workspace?.servers.find((server) => server.id === editingServer.id) ?? editingServer
@@ -1358,6 +1390,110 @@ export function McpRoute(props: McpRouteProps = {}) {
       ? t("mcp.toolbar.scannedCount", { count: importProgress.scannedCount })
       : t("mcp.toolbar.scanning")
     : t("mcp.toolbar.scanImport");
+
+  function handleBatchModeToggle() {
+    if (batchSelection.isSelecting) {
+      batchSelection.exitSelection();
+      setIsBatchDeleteConfirming(false);
+      return;
+    }
+    setExpandedServerId("");
+    batchSelection.enterSelection();
+  }
+
+  function finishMcpBatch(
+    actionLabel: string,
+    targetIds: string[],
+    results: PromiseSettledResult<void>[],
+    skippedCount = 0,
+  ) {
+    const failedIds = results.flatMap((result, index) => (
+      result.status === "rejected" ? [targetIds[index]] : []
+    ));
+    const successCount = results.length - failedIds.length;
+    batchSelection.keepSelected(failedIds);
+    if (failedIds.length === 0) {
+      notify({
+        tone: "success",
+        message: t("batch.result.success", { action: actionLabel, count: successCount, skipped: skippedCount }),
+      });
+      batchSelection.exitSelection();
+      return;
+    }
+    notify({
+      tone: successCount > 0 ? "info" : "error",
+      message: t("batch.result.partial", {
+        action: actionLabel,
+        success: successCount,
+        failed: failedIds.length,
+        skipped: skippedCount,
+      }),
+    });
+  }
+
+  async function handleBatchToggleServers() {
+    if (isBatchBusy || toggleServerAppStates.length === 0) {
+      return;
+    }
+    setBatchAction("toggle");
+    let latestSnapshot = workspace;
+    const results: PromiseSettledResult<void>[] = [];
+    try {
+      for (const item of toggleServerAppStates) {
+        try {
+          const targetApps = item.visibleApps.filter((app) => app.isEnabled !== shouldBatchEnableServers);
+          for (const app of targetApps) {
+            latestSnapshot = await toggleMcpServerApp({
+              serverId: item.server.id,
+              appId: app.appId,
+              enabled: shouldBatchEnableServers,
+            });
+          }
+          results.push({ status: "fulfilled", value: undefined });
+        } catch (reason) {
+          results.push({ status: "rejected", reason });
+        }
+      }
+      commitWorkspace(latestSnapshot);
+      finishMcpBatch(
+        t(shouldBatchEnableServers ? "batch.action.enable" : "batch.action.disable"),
+        toggleServerAppStates.map((item) => item.server.id),
+        results,
+        selectedServers.length - toggleServerAppStates.length,
+      );
+    } finally {
+      setBatchAction("");
+    }
+  }
+
+  async function handleBatchDeleteServers() {
+    if (isBatchBusy || selectedServers.length === 0) {
+      return;
+    }
+    setIsBatchDeleteConfirming(false);
+    setBatchAction("delete");
+    let latestSnapshot = workspace;
+    const results: PromiseSettledResult<void>[] = [];
+    try {
+      for (const server of selectedServers) {
+        try {
+          latestSnapshot = await deleteMcpServer(server.id);
+          results.push({ status: "fulfilled", value: undefined });
+        } catch (reason) {
+          results.push({ status: "rejected", reason });
+        }
+      }
+      commitWorkspace(latestSnapshot);
+      finishMcpBatch(
+        t("batch.action.delete"),
+        selectedServers.map((server) => server.id),
+        results,
+      );
+    } finally {
+      setBatchAction("");
+    }
+  }
+
   const toolbar = (
     <section className="mcp-toolbar skills-header-bar__tools" aria-label={t("mcp.toolbar.aria")}>
       <label className="search-field search-field--header mcp-toolbar__search">
@@ -1375,11 +1511,16 @@ export function McpRoute(props: McpRouteProps = {}) {
         />
       </label>
       <ListGridViewToggle value={viewMode} onChange={handleViewModeChange} />
+      <BatchModeButton
+        isSelecting={batchSelection.isSelecting}
+        label={t(batchSelection.isSelecting ? "batch.mode.exit" : "batch.mode.enter")}
+        onClick={handleBatchModeToggle}
+      />
       <button
         className={`secondary-button secondary-button--compact skills-toolbar-button skills-toolbar-button--refresh${isRefreshing ? " is-loading" : ""}`}
         type="button"
         onClick={() => void handleRefreshWorkspace()}
-        disabled={isRefreshing}
+        disabled={isRefreshing || batchSelection.isSelecting}
       >
         <span aria-hidden="true" className="skills-toolbar-button__icon">
           <RefreshIcon isSpinning={isRefreshing} />
@@ -1390,7 +1531,7 @@ export function McpRoute(props: McpRouteProps = {}) {
         className="secondary-button secondary-button--compact skills-toolbar-button"
         type="button"
         onClick={() => void handleImport()}
-        disabled={isImporting}
+        disabled={isImporting || batchSelection.isSelecting}
         aria-label={isImporting && importProgress
           ? t("mcp.toolbar.importProgress", {
               scanned: importProgress.scannedCount,
@@ -1407,13 +1548,14 @@ export function McpRoute(props: McpRouteProps = {}) {
         className="secondary-button secondary-button--compact skills-toolbar-button"
         type="button"
         onClick={handleCreate}
+        disabled={batchSelection.isSelecting}
       >
         <span aria-hidden="true" className="skills-toolbar-button__icon">
           <AddIcon />
         </span>
         <span>{t("mcp.toolbar.add")}</span>
       </button>
-      {props.onInstallFromMarketplace ? (
+      {!batchSelection.isSelecting && props.onInstallFromMarketplace ? (
         <ToolbarGoInstallButton onClick={props.onInstallFromMarketplace} />
       ) : null}
     </section>
@@ -1424,6 +1566,40 @@ export function McpRoute(props: McpRouteProps = {}) {
       {toolbarContainer ? createPortal(toolbar, toolbarContainer) : toolbar}
 
       {errorMessage ? <div className="dialog-error">{errorMessage}</div> : null}
+
+      {batchSelection.isSelecting ? (
+        <BatchActionBar
+          actions={selectedServers.length > 0 ? [
+            {
+              key: "delete",
+              label: t("batch.action.deleteCount", { count: selectedServers.length }),
+              tone: "danger",
+              isBusy: batchAction === "delete",
+              onClick: () => setIsBatchDeleteConfirming(true),
+            },
+            ...(toggleServerAppStates.length > 0 ? [{
+              key: "toggle",
+              label: t(shouldBatchEnableServers ? "batch.action.enableCount" : "batch.action.disableCount", {
+                count: toggleServerAppStates.length,
+              }),
+              tone: shouldBatchEnableServers ? "success" as const : "warning" as const,
+              isBusy: batchAction === "toggle",
+              onClick: () => void handleBatchToggleServers(),
+            }] : []),
+          ] : []}
+          ariaLabel={t("batch.toolbar.aria")}
+          cancelLabel={t("batch.cancel")}
+          deselectAllLabel={t("batch.deselectAll")}
+          hint={t("batch.hint")}
+          isAllVisibleSelected={batchSelection.isAllVisibleSelected}
+          isBusy={isBatchBusy}
+          selectedLabel={selectedServers.length > 0 ? t("batch.selected", { count: selectedServers.length }) : ""}
+          selectAllDisabled={filteredServers.length === 0}
+          selectAllLabel={t("batch.selectAll")}
+          onCancel={batchSelection.exitSelection}
+          onToggleSelectAll={batchSelection.toggleSelectAll}
+        />
+      ) : null}
 
       <section className={`mcp-server-list card-list${viewMode === "grid" ? " tool-card-grid" : ""}`}>
         {filteredServers.map((server) => {
@@ -1484,14 +1660,18 @@ export function McpRoute(props: McpRouteProps = {}) {
           return (
             <article
               key={server.id}
-              className={`mcp-server-card${viewMode === "grid" ? " mcp-server-card--grid" : ""}${isExpanded ? " is-expanded" : ""}`}
+              className={`mcp-server-card${viewMode === "grid" ? " mcp-server-card--grid" : ""}${isExpanded ? " is-expanded" : ""}${batchSelection.isSelecting ? " is-selecting" : ""}${batchSelection.selectedIds.has(server.id) ? " is-selected" : ""}`}
             >
               <div className="mcp-server-card__header">
                 <div
                   className="mcp-server-card__summary-button"
-                  role="button"
+                  role={batchSelection.isSelecting ? "checkbox" : "button"}
                   tabIndex={0}
                   onClick={(event) => {
+                    if (batchSelection.isSelecting) {
+                      batchSelection.toggleSelection(server.id);
+                      return;
+                    }
                     void toggleServerExpanded(
                       server.id,
                       event.currentTarget.closest(".mcp-server-card") as HTMLElement | null,
@@ -1500,17 +1680,29 @@ export function McpRoute(props: McpRouteProps = {}) {
                   onKeyDown={(event) => {
                     if (event.key === "Enter" || event.key === " ") {
                       event.preventDefault();
+                      if (batchSelection.isSelecting) {
+                        batchSelection.toggleSelection(server.id);
+                        return;
+                      }
                       void toggleServerExpanded(
                         server.id,
                         event.currentTarget.closest(".mcp-server-card") as HTMLElement | null,
                       );
                     }
                   }}
-                  aria-expanded={isExpanded}
-                  aria-label={`${isExpanded ? t("mcp.card.collapse") : t("mcp.card.expand")} ${server.name}`}
+                  aria-expanded={batchSelection.isSelecting ? undefined : isExpanded}
+                  aria-checked={batchSelection.isSelecting
+                    ? batchSelection.selectedIds.has(server.id)
+                    : undefined}
+                  aria-label={batchSelection.isSelecting
+                    ? t("batch.item.mcp", { name: server.name })
+                    : `${isExpanded ? t("mcp.card.collapse") : t("mcp.card.expand")} ${server.name}`}
                 >
                   <div className="mcp-server-card__main">
                     <div className="mcp-server-card__identity">
+                      {batchSelection.isSelecting ? (
+                        <BatchSelectionMark checked={batchSelection.selectedIds.has(server.id)} />
+                      ) : null}
                       <McpServerMonogram server={server} />
                       <div className="mcp-server-card__title-stack">
                         <div className="mcp-server-card__title-row">
@@ -1555,6 +1747,8 @@ export function McpRoute(props: McpRouteProps = {}) {
                   </div>
                 </div>
                 <div className="skill-card__list-actions mcp-server-card__actions">
+                  {!batchSelection.isSelecting ? (
+                    <>
                   {viewMode === "grid" ? (
                     <span className="skill-card__grid-source-label">
                       {server.serverType.toUpperCase()}
@@ -1621,6 +1815,8 @@ export function McpRoute(props: McpRouteProps = {}) {
                       {isExpanded ? "⌄" : "›"}
                     </span>
                   )}
+                    </>
+                  ) : null}
                 </div>
               </div>
               {isExpanded ? (
@@ -1853,6 +2049,16 @@ export function McpRoute(props: McpRouteProps = {}) {
           </div>
         ) : null}
       </section>
+      <BatchDeleteDialog
+        cancelLabel={t("batch.cancel")}
+        confirmLabel={t("batch.delete.confirm")}
+        description={t("batch.delete.description.mcp", { count: selectedServers.length })}
+        isBusy={batchAction === "delete"}
+        isOpen={isBatchDeleteConfirming}
+        title={t("batch.delete.title.mcp", { count: selectedServers.length })}
+        onCancel={() => setIsBatchDeleteConfirming(false)}
+        onConfirm={() => void handleBatchDeleteServers()}
+      />
 
       {isDialogOpen ? (
         <McpEditDialog

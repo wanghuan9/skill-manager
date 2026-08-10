@@ -35,35 +35,11 @@ The core workflow is team collaboration without intermediate handoff directories
 - **Skill diff and collaboration** — Review staged and unstaged diffs and incoming updates, and revert individual files or hunks.
 - **Cards and dark mode** — Switch Skills, MCP, and Plugins between list and card layouts, with light, dark, and system themes.
 - **MCP tools discovery** — Detect exposed MCP tools, track whether each server config is usable, and control tool-level enablement.
-- **Skill install** — Install skills with one click from `skills.sh` and `skillsmp`, or add them from Git repositories and local folders.
+- **Skill install** — Install skills with one click from `skills.sh` and ClawHub, or add them from Git repositories and local folders.
 - **MCP install** — Install MCP servers with one click from `MCP.Directory`, then manage their shared configuration lifecycle.
 - **Plugin install** — Install plugin packages with one click from Git repositories and enable their bundled skills, commands, agents, and integrations.
 - **Complete Git workflow** — Keep Git-based skills and plugins as real repositories, detect upstream updates, local edits, and pending pushes, and preview changes before updating or pushing.
 - **One-click multi-tool sync** — Enable skills, MCP servers, and plugins across Claude Code, Codex, Cursor, Windsurf, Gemini CLI, OpenCode, and other coding tools to avoid hand-copying files and editing complex config files.
-
-## Skill Management and Workflow
-
-“Managed” identifies where a Skill's real files live and who owns its update and removal lifecycle. “Enabled” means linking a managed Skill into Cursor, Claude Code, Codex, or another tool. Only managed Skills can be distributed centrally: the copy in the managed library is the single distribution source and can be enabled in multiple tools through symlinks.
-
-Skills already stored in a tool's local directory can first be imported into SkillDock for management, then centrally managed and distributed to other tools.
-
-<p align="center">
-  <img src="docs/images/skill-workflow-en.png" width="1200" alt="SkillDock Skill management workflow" />
-</p>
-
-| How it enters SkillDock | Managed location | Available after management |
-| --- | --- | --- |
-| Installed from the SkillDock marketplace, Git, or a local folder | `~/.skilldock/skills` | Inspect, edit, remove, and distribute to multiple tools; Git sources also support update checks, Diff previews, and pushes |
-| Installed globally with Agent Skills CLI, such as `npx skills add ... -g` | `~/.agents/skills` | Automatically detected after compatibility is enabled; inspect and distribute it, with preview, update, and removal where Agent Skills CLI supports them |
-| Already present in Cursor, Claude Code, Codex, or another tool | Copied to `~/.skilldock/skills` after import | Shown as unmanaged before import; after import SkillDock manages it and can enable it in other tools |
-
-### Agent Skills CLI Compatibility
-
-Turn on **Settings → Agent Skills CLI Compatibility** to scan `~/.agents/skills` and automatically recognize Skills installed globally with `npx skills add ... -g`. They remain managed by Agent Skills CLI and are not moved or copied into `~/.skilldock/skills`; SkillDock can inspect and distribute them, with preview, update, and removal where Agent Skills CLI supports those operations.
-
-Skills installed by SkillDock still live in `~/.skilldock/skills`. Turning compatibility off only stops the extra scan—it does not modify or delete anything in `~/.agents/skills`.
-
-If you prefer the command line, use Agent Skills CLI as the CLI entry point for Skills and SkillDock as the desktop management app: install and maintain `~/.agents/skills` through the CLI, then use SkillDock to inspect them visually, preview updates, and distribute them across tools without changing your existing CLI workflow.
 
 ## Skills
 
@@ -119,7 +95,7 @@ Install flows are split by package type so skills, MCP servers, and plugins can 
 
 ### Skill install
 
-Install skills with one click from `skills.sh` and `skillsmp`, or add them from Git repositories and local folders.
+Install skills with one click from `skills.sh` and ClawHub, or add them from Git repositories and local folders.
 
 **Skill marketplace install**
 
@@ -149,13 +125,37 @@ Configure the app storage directory, default editor, update checks, default inst
 
 ## Supported Tools
 
-Claude Code · Codex · Cursor · Windsurf · IntelliJ IDEA · OpenCode · Gemini · Antigravity · Continue · GitHub Copilot · Qwen Code · Trae · Trae CN · Cline · Roo Code · Kilo Code · Kiro · Goose · Junie · Augment · CodeBuddy · Droid · OpenClaw · CommandCode · Crush · Qoder · Zencoder · Hermes · iFlow
+Claude Code · Codex · Cursor · Windsurf · IntelliJ IDEA · OpenCode · Gemini · Antigravity · Continue · GitHub Copilot · Qwen Code · Trae · Trae CN · Cline · Roo Code · Kilo Code · Kiro · Goose · Junie · Augment · CodeBuddy · Droid · OpenClaw · CommandCode · Crush · Qoder · Zencoder · Hermes · iFlow · Pi · OMP · Grok Build · MiMo Code · WorkBuddy
 
 ## How It Works
 
 Plugins are managed as higher-level packages. A plugin can expose skills, agents, commands, MCP integrations, and host-specific capabilities; SkillDock installs the package once, tracks its source, and lets you enable or disable it for compatible host tools.
 
 MCP servers use a different model: SkillDock manages them as shared configuration records and writes the enabled servers into each tool's MCP config file.
+
+### Skill Management and Workflow
+
+“Managed” identifies where a Skill's real files live and who owns its update and removal lifecycle. “Enabled” means linking a managed Skill into Cursor, Claude Code, Codex, or another tool. Only managed Skills can be distributed centrally: the copy in the managed library is the single distribution source and can be enabled in multiple tools through symlinks.
+
+Skills already stored in a tool's local directory can first be imported into SkillDock for management, then centrally managed and distributed to other tools.
+
+<p align="center">
+  <img src="docs/images/skill-workflow-en.png" width="1200" alt="SkillDock Skill management workflow" />
+</p>
+
+| How it enters SkillDock | Managed location | Available after management |
+| --- | --- | --- |
+| Installed from the SkillDock marketplace, Git, or a local folder | `~/.skilldock/skills` | Inspect, edit, remove, and distribute to multiple tools; Git sources also support update checks, Diff previews, and pushes |
+| Installed globally with Agent Skills CLI, such as `npx skills add ... -g` | `~/.agents/skills` | Automatically detected after compatibility is enabled; inspect and distribute it, with preview, update, and removal where Agent Skills CLI supports them |
+| Already present in Cursor, Claude Code, Codex, or another tool | Copied to `~/.skilldock/skills` after import | Shown as unmanaged before import; after import SkillDock manages it and can enable it in other tools |
+
+### Agent Skills CLI Compatibility
+
+Turn on **Settings → Agent Skills CLI Compatibility** to scan `~/.agents/skills` and automatically recognize Skills installed globally with `npx skills add ... -g`. They remain managed by Agent Skills CLI and are not moved or copied into `~/.skilldock/skills`; SkillDock can inspect and distribute them, with preview, update, and removal where Agent Skills CLI supports those operations.
+
+Skills installed by SkillDock still live in `~/.skilldock/skills`. Turning compatibility off only stops the extra scan—it does not modify or delete anything in `~/.agents/skills`.
+
+If you prefer the command line, use Agent Skills CLI as the CLI entry point for Skills and SkillDock as the desktop management app: install and maintain `~/.agents/skills` through the CLI, then use SkillDock to inspect them visually, preview updates, and distribute them across tools without changing your existing CLI workflow.
 
 ## Download
 
@@ -165,6 +165,16 @@ Download the latest [SkillDock release](https://github.com/wanghuan9/skilldock/r
 | --- | --- |
 | macOS Apple Silicon | Released |
 | Windows x64 | Released |
+
+### Open the Unnotarized App
+
+SkillDock is not currently notarized by Apple, so macOS may prevent it from opening. After installation, run:
+
+```bash
+sudo xattr -cr /Applications/SkillDock.app
+```
+
+You can then launch SkillDock normally.
 
 ## Getting Started
 

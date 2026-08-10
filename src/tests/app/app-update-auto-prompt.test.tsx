@@ -135,6 +135,58 @@ test("falls back to the latest release body when structured history is unavailab
   view.unmount();
 });
 
+test("keeps the update popover open while the pointer crosses into it", async () => {
+  vi.useFakeTimers();
+  vi.mocked(checkForAppUpdate).mockResolvedValue({
+    available: true,
+    currentVersion: "0.1.0",
+    version: "0.1.1",
+    body: "## 修复\n\n- 修复更新说明弹窗过早关闭的问题。",
+    install: vi.fn().mockResolvedValue(undefined),
+  });
+
+  const view = render(
+    <NotificationProvider>
+      <AppUpdateAutoPrompt />
+    </NotificationProvider>,
+  );
+
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(2000);
+  });
+
+  const updateButton = screen.getByRole("button", { name: "Update" });
+  const updateNotice = updateButton.parentElement as HTMLElement;
+  const updatePopover = screen.getByLabelText("软件更新");
+
+  fireEvent.mouseEnter(updateButton);
+  fireEvent.mouseLeave(updateNotice);
+
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(100);
+  });
+
+  expect(updatePopover).toHaveAttribute("aria-hidden", "false");
+
+  fireEvent.mouseEnter(updatePopover);
+
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(200);
+  });
+
+  expect(updatePopover).toHaveAttribute("aria-hidden", "false");
+
+  fireEvent.mouseLeave(updateNotice);
+
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(200);
+  });
+
+  expect(updatePopover).toHaveAttribute("aria-hidden", "true");
+
+  view.unmount();
+});
+
 test("reports when automatic update check cannot reach the updater endpoint", async () => {
   vi.useFakeTimers();
   vi.mocked(checkForAppUpdate).mockRejectedValue(new Error("error sending request for url (https://github.com/...)"));

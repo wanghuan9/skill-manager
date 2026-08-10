@@ -15,6 +15,16 @@ const TOOL_SOURCES = [
     keepExistingFileName: "claude-code.png",
   },
   { id: "codex", homepage: "https://openai.com/codex/" },
+  {
+    id: "zcode",
+    homepage: "https://zcode.z.ai/cn",
+    preferredAssetUrl: "https://zcode.z.ai/favicon-192x192.png?v=20260707-transparent",
+  },
+  {
+    id: "workbuddy",
+    homepage: "https://www.workbuddy.ai/",
+    keepExistingFileName: "workbuddy.svg",
+  },
   { id: "opencode", homepage: "https://opencode.ai/" },
   { id: "cursor", homepage: "https://cursor.com/" },
   { id: "gemini", homepage: "https://gemini.google.com/" },

@@ -3,6 +3,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useTranslate } from "@/app/i18n";
 import { useFailureReporter } from "@/app/failure-feedback";
+import { isGithubRateLimitError, normalizeErrorMessage } from "@/app/errors";
 import { waitForNextPaint } from "@/app/utils/wait-for-next-paint";
 import { HighlightedCode, SkillCodePreview } from "@/features/skills/components/SkillCodePreview";
 import { SkillFileTreeIcon, TreeChevronIcon } from "@/features/skills/components/SkillFileTreeIcons";
@@ -12,7 +13,12 @@ import {
   type SkillDiffDisplayMode,
 } from "@/features/skills/components/SkillDiffView";
 import { useSkillWorkspace } from "@/features/skills/state/skill-workspace";
-import type { GitChangeFile, SkillFileEntry, SkillSummary } from "@/features/skills/state/skill-store";
+import type {
+  GitChangeFile,
+  SkillFileEntry,
+  SkillSummary,
+  UpdatePreviewSnapshot,
+} from "@/features/skills/state/skill-store";
 import {
   getSkillFileLanguage,
   normalizeCodeFenceLanguage,
@@ -26,13 +32,27 @@ type SkillFileDialogProps = {
     | "collabStatus"
     | "localPath"
     | "localChangeCount"
+    | "sourceLabel"
+    | "sourceUrl"
     | "updateDriver"
-  >>;
+  >> & {
+    sourceType?: string;
+    updateFileCount?: number;
+  };
   isOpen: boolean;
   onClose: () => void;
   toolId?: string;
   readOnly?: boolean;
   initialMode?: SkillFilePanelMode;
+  onLocalChangesChanged?: () => void;
+  loadUpdatePreview?: () => Promise<UpdatePreviewSnapshot>;
+  updateLabel?: string;
+  revertUpdateFile?: (relativePath: string) => Promise<UpdatePreviewSnapshot>;
+  revertUpdateHunk?: (
+    relativePath: string,
+    expectedContent: string,
+    content: string,
+  ) => Promise<UpdatePreviewSnapshot>;
 };
 
 const FRONTMATTER_PATTERN = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/;
@@ -49,7 +69,10 @@ type SkillRevertInput = {
 
 type PendingSkillRevert = {
   path: string;
-  confirmationKey: "skill.changes.confirmFile" | "skill.changes.confirmHunk";
+  confirmationKey:
+    | "skill.changes.confirmFile"
+    | "skill.changes.confirmHunk"
+    | "skill.updates.confirmFile";
   input: SkillRevertInput;
 };
 
@@ -156,6 +179,7 @@ function SkillFilePanelModeToggle({
   updateCount,
   canShowChanges,
   canShowUpdates,
+  updateLabel,
   onModeChange,
 }: {
   mode: SkillFilePanelMode;
@@ -163,6 +187,7 @@ function SkillFilePanelModeToggle({
   updateCount: number;
   canShowChanges: boolean;
   canShowUpdates: boolean;
+  updateLabel?: string;
   onModeChange: (mode: SkillFilePanelMode) => void;
 }) {
   const { t } = useTranslate();
@@ -193,7 +218,9 @@ function SkillFilePanelModeToggle({
           aria-pressed={mode === "updates"}
           onClick={() => onModeChange("updates")}
         >
-          {t("skill.files.updateContents", { count: updateCount })}
+          {updateLabel
+            ? `${updateLabel} ${updateCount}`
+            : t("skill.files.updateContents", { count: updateCount })}
         </button>
       ) : null}
     </div>
@@ -631,6 +658,11 @@ export function SkillFileDialog({
   toolId,
   readOnly = false,
   initialMode = "files",
+  onLocalChangesChanged,
+  loadUpdatePreview,
+  updateLabel,
+  revertUpdateFile,
+  revertUpdateHunk,
 }: SkillFileDialogProps) {
   const { t } = useTranslate();
   const reportFailure = useFailureReporter();
@@ -642,6 +674,7 @@ export function SkillFileDialog({
     loadToolSkillFileBrowser,
     loadToolSkillFileContent,
     markSkillAsActive,
+    reportGithubRateLimit,
     refreshSkillLocalGitState,
     revertSkillChange,
     saveSkillFileContent,
@@ -672,14 +705,21 @@ export function SkillFileDialog({
   const [browserRefreshVersion, setBrowserRefreshVersion] = useState(0);
   const [pendingRevert, setPendingRevert] = useState<PendingSkillRevert | null>(null);
   const canUseChanges = Boolean(skill.gitLinked) && !toolId && !readOnly;
-  const canUseUpdatePreview = (Boolean(skill.gitLinked) || skill.updateDriver === "agent-skills-cli")
+  const canUseUpdatePreview = (
+    Boolean(skill.gitLinked)
+    || skill.updateDriver === "agent-skills-cli"
+    || skill.updateDriver === "clawhub"
+    || skill.sourceType === "marketplace"
+  )
     && !toolId
     && !readOnly;
   const hasLocalChanges = skill.localChangeCount == null || skill.localChangeCount > 0;
   const showChangesTab = canUseChanges
     && (hasLocalChanges || initialMode === "changes");
-  const canShowUpdates = canUseUpdatePreview
-    && (skill.collabStatus === "update-available" || initialMode === "updates");
+  const canShowUpdates = Boolean(loadUpdatePreview)
+    || (canUseUpdatePreview
+      && (skill.collabStatus === "update-available" || initialMode === "updates"));
+  const canEditUpdates = Boolean(loadUpdatePreview && revertUpdateHunk) && !readOnly;
   const activeChangeFiles = panelMode === "updates" ? updateFiles : changeFiles;
   const skillPath = skill.canonicalPath ?? skill.localPath ?? "";
 
@@ -698,7 +738,7 @@ export function SkillFileDialog({
   const handleSave = useCallback(async () => {
     if (
       readOnly
-      || panelMode === "updates"
+      || (panelMode === "updates" && !canEditUpdates)
       || !selectedPath
       || isSaving
       || (panelMode === "changes" && selectedChange?.currentContent == null)
@@ -718,7 +758,19 @@ export function SkillFileDialog({
       });
       setContent(document.content);
       setHasDirtyChanges(false);
-      setChangesRefreshVersion((current) => current + 1);
+      if (panelMode === "updates" && loadUpdatePreview) {
+        const preview = await loadUpdatePreview();
+        setUpdateFiles(preview.changedFiles);
+        setHasLoadedUpdates(true);
+        const refreshedChange = preview.changedFiles.find((change) => change.path === selectedPath);
+        setContent(refreshedChange?.currentContent ?? document.content);
+      } else {
+        setChangesRefreshVersion((current) => current + 1);
+        setHasLoadedUpdates(false);
+      }
+      setHasLoadedBrowser(false);
+      setBrowserRefreshVersion((current) => current + 1);
+      onLocalChangesChanged?.();
       setIsSaving(false);
       void refreshSkillLocalGitState(skill.name, skillPath).catch((error) => {
         reportFailure(error, {
@@ -733,8 +785,11 @@ export function SkillFileDialog({
     }
   }, [
     content,
+    canEditUpdates,
     isSaving,
+    loadUpdatePreview,
     panelMode,
+    onLocalChangesChanged,
     refreshSkillLocalGitState,
     readOnly,
     reportFailure,
@@ -870,7 +925,7 @@ export function SkillFileDialog({
     return () => {
       active = false;
     };
-  }, [changesRefreshVersion, isOpen, loadSkillLocalChanges, panelMode, showChangesTab, skill.name, t]);
+  }, [changesRefreshVersion, isOpen, loadSkillLocalChanges, panelMode, showChangesTab, skill.name, skillPath, t]);
 
   useEffect(() => {
     if (
@@ -888,7 +943,9 @@ export function SkillFileDialog({
       setErrorMessage("");
       try {
         await waitForNextPaint();
-        const preview = await loadSkillUpdatePreview(skill.name, skillPath);
+        const preview = loadUpdatePreview
+          ? await loadUpdatePreview()
+          : await loadSkillUpdatePreview(skill.name, skillPath);
         if (!active) {
           return;
         }
@@ -896,7 +953,10 @@ export function SkillFileDialog({
         setHasLoadedUpdates(true);
       } catch (error) {
         if (active) {
-          setErrorMessage(error instanceof Error ? error.message : t("skill.updates.error.load"));
+          if (isGithubRateLimitError(error)) {
+            reportGithubRateLimit();
+          }
+          setErrorMessage(normalizeErrorMessage(error, t("skill.updates.error.load")));
           setUpdateFiles([]);
         }
       } finally {
@@ -915,7 +975,9 @@ export function SkillFileDialog({
     hasLoadedUpdates,
     isOpen,
     loadSkillUpdatePreview,
+    loadUpdatePreview,
     panelMode,
+    reportGithubRateLimit,
     skillPath,
     skill.name,
     t,
@@ -975,7 +1037,7 @@ export function SkillFileDialog({
   useEffect(() => {
     if (
       pendingRevert
-      && (panelMode !== "changes" || selectedChange?.path !== pendingRevert.path)
+      && (panelMode === "files" || selectedChange?.path !== pendingRevert.path)
     ) {
       setPendingRevert(null);
     }
@@ -998,7 +1060,7 @@ export function SkillFileDialog({
       }
 
       const isSaveShortcut = event.key.toLowerCase() === "s" && (event.metaKey || event.ctrlKey);
-      if (readOnly || panelMode === "updates" || !isSaveShortcut) {
+      if (readOnly || (panelMode === "updates" && !canEditUpdates) || !isSaveShortcut) {
         return;
       }
 
@@ -1011,7 +1073,7 @@ export function SkillFileDialog({
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, [handleSave, isOpen, onClose, panelMode, pendingRevert, readOnly]);
+  }, [canEditUpdates, handleSave, isOpen, onClose, panelMode, pendingRevert, readOnly]);
 
   if (!isOpen) {
     return null;
@@ -1105,11 +1167,50 @@ export function SkillFileDialog({
 
     setPendingRevert({
       path: selectedChange.path,
-      confirmationKey: input.hunkIndex === undefined
-        ? "skill.changes.confirmFile"
-        : "skill.changes.confirmHunk",
+      confirmationKey: panelMode === "updates"
+        ? "skill.updates.confirmFile"
+        : input.hunkIndex === undefined
+          ? "skill.changes.confirmFile"
+          : "skill.changes.confirmHunk",
       input,
     });
+  }
+
+  async function handleRevertUpdateHunk(expectedContent: string, nextContent: string) {
+    if (!selectedChange || !revertUpdateHunk || isReverting) {
+      return;
+    }
+    if (expectedContent !== selectedChange.currentContent) {
+      setContent(expectedContent);
+      setErrorMessage(t("skill.files.saveBeforeSwitch"));
+      return;
+    }
+
+    setIsReverting(true);
+    setErrorMessage("");
+    try {
+      const preview = await revertUpdateHunk(
+        selectedChange.path,
+        expectedContent,
+        nextContent,
+      );
+      setUpdateFiles(preview.changedFiles);
+      setHasLoadedUpdates(true);
+      const refreshedChange = preview.changedFiles.find(
+        (change) => change.path === selectedChange.path,
+      );
+      setContent(refreshedChange?.currentContent ?? nextContent);
+      setHasDirtyChanges(false);
+      setHasLoadedBrowser(false);
+      setBrowserRefreshVersion((current) => current + 1);
+      onLocalChangesChanged?.();
+    } catch (error) {
+      setContent(expectedContent);
+      setHasDirtyChanges(false);
+      setErrorMessage(error instanceof Error ? error.message : t("skill.changes.error.revert"));
+    } finally {
+      setIsReverting(false);
+    }
   }
 
   async function handleConfirmRevert() {
@@ -1120,15 +1221,25 @@ export function SkillFileDialog({
     setIsReverting(true);
     setErrorMessage("");
     try {
-      await revertSkillChange({
-        skillName: skill.name,
-        skillPath,
-        relativePath: pendingRevert.path,
-        ...pendingRevert.input,
-      });
-      setChangesRefreshVersion((current) => current + 1);
+      if (panelMode === "updates") {
+        if (!revertUpdateFile) {
+          throw new Error(t("skill.changes.error.revert"));
+        }
+        const preview = await revertUpdateFile(pendingRevert.path);
+        setUpdateFiles(preview.changedFiles);
+        setHasLoadedUpdates(true);
+      } else {
+        await revertSkillChange({
+          skillName: skill.name,
+          skillPath,
+          relativePath: pendingRevert.path,
+          ...pendingRevert.input,
+        });
+        setChangesRefreshVersion((current) => current + 1);
+      }
       setHasLoadedBrowser(false);
       setBrowserRefreshVersion((current) => current + 1);
+      onLocalChangesChanged?.();
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : t("skill.changes.error.revert"));
     } finally {
@@ -1158,9 +1269,12 @@ export function SkillFileDialog({
               <SkillFilePanelModeToggle
                 mode={panelMode}
                 changeCount={changeFiles.length}
-                updateCount={updateFiles.length}
+                updateCount={hasLoadedUpdates
+                  ? updateFiles.length
+                  : skill.updateFileCount ?? updateFiles.length}
                 canShowChanges={showChangesTab}
                 canShowUpdates={canShowUpdates}
+                updateLabel={updateLabel}
                 onModeChange={handlePanelModeChange}
               />
             ) : null}
@@ -1223,7 +1337,14 @@ export function SkillFileDialog({
                 onDisplayModeChange={setDiffDisplayMode}
                 onSave={() => void handleSave()}
                 onRevertFile={() => handleRequestRevert({})}
-                readOnly={panelMode === "updates"}
+                onRevertHunk={panelMode === "updates" && canEditUpdates
+                  ? (expectedContent, nextContent) => {
+                    void handleRevertUpdateHunk(expectedContent, nextContent);
+                  }
+                  : undefined}
+                readOnly={readOnly || (panelMode === "updates" && !canEditUpdates)}
+                isUpdatePreview={panelMode === "updates"}
+                canRevertFile={panelMode === "updates" && Boolean(revertUpdateFile)}
                 emptyLabel={panelMode === "updates" ? t("skill.updates.empty") : undefined}
               />
             ) : (

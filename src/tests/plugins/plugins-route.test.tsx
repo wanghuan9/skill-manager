@@ -52,6 +52,20 @@ function setWorkspaceLanguage(language: "zh-CN" | "en") {
   } as unknown as ReturnType<typeof useSkillWorkspace>);
 }
 
+test("places plugin batch selection after the filter and before refresh", async () => {
+  renderWithI18n(<PluginsRoute />);
+
+  await screen.findByText("Repo Scout");
+  const toolbar = screen.getByLabelText("插件工具栏");
+  const filter = within(toolbar).getByRole("combobox", { name: "筛选插件状态" })
+    .closest(".plugins-page__toolbar-filter");
+  const batchModeButton = within(toolbar).getByRole("button", { name: "批量选择" });
+  const refreshButton = within(toolbar).getByRole("button", { name: "刷新" });
+  const filterPosition = filter?.compareDocumentPosition(batchModeButton) ?? 0;
+  expect(filterPosition & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(batchModeButton.compareDocumentPosition(refreshButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+});
+
 test("hydrates plugins from runtime cache before the refresh request resolves", async () => {
   const fixtureSpy = vi.spyOn(skillClient, "shouldUseFixtureData").mockReturnValue(false);
   const cachedPlugins: PluginSummary[] = [
@@ -91,6 +105,56 @@ test("hydrates plugins from runtime cache before the refresh request resolves", 
   await screen.findByRole("tab", { name: /全部/ });
   startupSpy.mockRestore();
   fixtureSpy.mockRestore();
+});
+
+test("selects plugins without opening details and requires confirmation before batch deletion", async () => {
+  renderWithI18n(<PluginsRoute />);
+
+  await screen.findByText("Repo Scout");
+  await userEvent.click(screen.getByRole("button", { name: "批量选择" }));
+  await userEvent.click(screen.getByRole("checkbox", { name: "选择插件 Repo Scout" }));
+
+  expect(screen.queryByText("基本信息")).not.toBeInTheDocument();
+  expect(screen.getByLabelText("批量操作")).toHaveTextContent("已选 1 个");
+  await userEvent.click(screen.getByRole("button", { name: "删除 1 个" }));
+
+  expect(screen.getByRole("dialog", { name: "删除 1 个插件？" })).toHaveTextContent("关联宿主安装");
+});
+
+test("deduplicates batch plugin updates that share the same repository", async () => {
+  const sharedRoot = "/Users/demo/workspace/shared-plugin-repo";
+  const sharedPlugins: PluginSummary[] = [
+    {
+      ...pluginFixtures[0],
+      id: "shared-alpha",
+      packageId: "shared-alpha",
+      name: "Shared Alpha",
+      rootPath: sharedRoot,
+      repoRootPath: sharedRoot,
+      manifestPath: `${sharedRoot}/alpha/.codex-plugin/plugin.json`,
+    },
+    {
+      ...pluginFixtures[0],
+      id: "shared-beta",
+      packageId: "shared-beta",
+      name: "Shared Beta",
+      rootPath: sharedRoot,
+      repoRootPath: sharedRoot,
+      manifestPath: `${sharedRoot}/beta/.codex-plugin/plugin.json`,
+    },
+  ];
+  vi.spyOn(skillClient, "fetchStartupInstalledPlugins").mockResolvedValueOnce(sharedPlugins);
+  const updateSpy = vi.spyOn(skillClient, "updatePlugin").mockResolvedValue(sharedPlugins[0]);
+
+  renderWithI18n(<PluginsRoute />);
+
+  await screen.findByText("Shared Alpha");
+  await userEvent.click(screen.getByRole("button", { name: "批量选择" }));
+  await userEvent.click(screen.getByRole("checkbox", { name: "选择插件 Shared Alpha" }));
+  await userEvent.click(screen.getByRole("checkbox", { name: "选择插件 Shared Beta" }));
+  await userEvent.click(screen.getByRole("button", { name: "更新 2 个" }));
+
+  await waitFor(() => expect(updateSpy).toHaveBeenCalledTimes(1));
 });
 
 test("switches plugins to cards, opens details in a dialog, and restores the preference", async () => {
@@ -1924,6 +1988,49 @@ test("toggles Cursor plugin enabled state from the plugin list", async () => {
     enabled: false,
   });
   expect(await screen.findByRole("button", { name: "开启 Example Plugin 插件" })).toBeInTheDocument();
+});
+
+test("toggles OpenCode plugin enabled state from its host tab", async () => {
+  const opencodePlugin: PluginSummary = {
+    ...pluginFixtures[0],
+    id: "opencode:demo-opencode",
+    packageId: "demo-opencode",
+    manifestName: "demo-opencode",
+    name: "Demo OpenCode",
+    hostTool: "opencode",
+    relatedHostTools: [],
+    rootPath: "/Users/demo/.skilldock/plugins/demo-opencode",
+    displayRootPath: "/Users/demo/.config/opencode/plugins",
+    repoRootPath: "/Users/demo/.skilldock/plugins/demo-opencode",
+    manifestPath: "/Users/demo/.skilldock/plugins/demo-opencode/.opencode/plugins/demo.ts",
+    enabledState: "enabled",
+    scopes: [{
+      scopeId: "user",
+      scopeLabel: "用户级",
+      enabledState: "enabled",
+      location: "/Users/demo/.config/opencode/plugins",
+    }],
+  };
+  vi.spyOn(skillClient, "fetchStartupInstalledPlugins").mockResolvedValueOnce([opencodePlugin]);
+  const setPluginEnabledSpy = vi.spyOn(skillClient, "setPluginEnabled").mockResolvedValue({
+    ...opencodePlugin,
+    enabledState: "disabled",
+    scopes: opencodePlugin.scopes.map((scope) => ({ ...scope, enabledState: "disabled" })),
+  });
+
+  renderWithI18n(<PluginsRoute />);
+
+  await screen.findByRole("tab", { name: /全部/ });
+  await userEvent.click(screen.getByRole("tab", { name: /OpenCode/ }));
+  await userEvent.click(screen.getByRole("button", { name: "关闭 demo-opencode 插件" }));
+
+  expect(setPluginEnabledSpy).toHaveBeenCalledWith({
+    pluginId: opencodePlugin.id,
+    hostTool: "opencode",
+    rootPath: opencodePlugin.rootPath,
+    enabled: false,
+  });
+  expect(await screen.findByRole("button", { name: "开启 demo-opencode 插件" })).toBeInTheDocument();
 });
 
 test("keeps unknown plugins disabled from toggle actions", async () => {

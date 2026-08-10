@@ -1,4 +1,6 @@
 use chrono::NaiveDateTime;
+use jsonc_parser::cst::{CstInputValue, CstRootNode};
+use jsonc_parser::ParseOptions;
 use regex::Regex;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -17,11 +19,13 @@ use tauri::{AppHandle, Emitter};
 
 use crate::library::{command_for_executable, resolve_command_path};
 use crate::state::{load_app_settings, normalize_mcp_install_activation};
+use crate::tool_adapters;
 use crate::workspace::{
     self, remove_legacy_workspace_file, workspace_file_candidates, workspace_file_path,
 };
 
 const MCP_STATE_FILE_NAME: &str = "mcp-servers.json";
+const MCP_PERSISTENCE_SCHEMA_VERSION: u32 = 1;
 const MCP_PROTOCOL_VERSION: &str = "2024-11-05";
 const MCP_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(12);
 const MCP_LOCAL_APP_CONFIG_READ_CONCURRENCY: usize = 2;
@@ -54,6 +58,27 @@ const APP_ROO_CODE: &str = "roo-code";
 const APP_TRAE: &str = "trae";
 const APP_TRAE_CN: &str = "trae-cn";
 const APP_ZENCODER: &str = "zencoder";
+const PORTABLE_MCP_SCHEMA_VERSION: u32 = 1;
+const SENSITIVE_ARGUMENT_NAMES: [&str; 8] = [
+    "api-key",
+    "apikey",
+    "authorization",
+    "password",
+    "secret",
+    "token",
+    "access-token",
+    "auth-token",
+];
+#[cfg(test)]
+const APP_OMP: &str = "omp";
+#[cfg(test)]
+const APP_GROK: &str = "grok";
+#[cfg(test)]
+const APP_MIMO_CODE: &str = "mimo-code";
+#[cfg(test)]
+const APP_WORKBUDDY: &str = "workbuddy";
+#[cfg(test)]
+const APP_ZCODE: &str = "zcode";
 const MCP_IMPORT_PROGRESS_EVENT: &str = "mcp-import-progress";
 static MCP_NPM_METADATA_CACHE: OnceLock<Mutex<HashMap<String, McpResolvedMetadata>>> =
     OnceLock::new();
@@ -104,7 +129,7 @@ pub struct McpServerToolStatus {
     pub is_enabled: bool,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct McpServerRecord {
     pub id: String,
@@ -118,6 +143,8 @@ pub struct McpServerRecord {
     pub enabled_app_ids: Vec<String>,
     #[serde(default)]
     pub imported_from_app_ids: Vec<String>,
+    #[serde(default)]
+    pub managed_app_ids: Vec<String>,
     #[serde(default)]
     pub tools: Vec<McpServerToolStatus>,
     #[serde(default)]
@@ -133,6 +160,22 @@ pub struct McpServerRecord {
     pub owner_plugin_id: String,
     #[serde(default)]
     pub owner_plugin_name: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PortableMcpSecretRequirement {
+    pub server_id: String,
+    pub env_keys: Vec<String>,
+    pub header_keys: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PortableMcpState {
+    pub schema_version: u32,
+    pub servers: Vec<McpServerRecord>,
+    pub required_secrets: Vec<PortableMcpSecretRequirement>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -186,6 +229,8 @@ pub struct McpImportProgress {
 #[derive(Clone, Debug, Deserialize, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 struct McpPersistence {
+    #[serde(default)]
+    schema_version: u32,
     #[serde(default)]
     servers: Vec<McpServerRecord>,
 }
@@ -421,6 +466,7 @@ pub async fn install_mcp_server_from_marketplace(
         source_url,
         enabled_app_ids: Vec::new(),
         imported_from_app_ids: Vec::new(),
+        managed_app_ids: Vec::new(),
         tools: Vec::new(),
         tools_discovered_at: String::new(),
         tools_discovery_error: String::new(),
@@ -447,6 +493,7 @@ pub async fn install_mcp_server_from_marketplace(
         for app_id in &supported_app_ids {
             sync_record_to_app(app_id, &record)?;
         }
+        record.managed_app_ids = supported_app_ids.clone();
         record.enabled_app_ids = supported_app_ids;
     }
     records.push(record);
@@ -547,16 +594,41 @@ pub async fn upsert_mcp_server(server: McpServerRecord) -> Result<McpWorkspaceSn
         if normalized.imported_from_app_ids.is_empty() {
             normalized.imported_from_app_ids = previous.imported_from_app_ids.clone();
         }
+        if normalized.managed_app_ids.is_empty() {
+            normalized.managed_app_ids = previous.managed_app_ids.clone();
+        }
+        normalized.managed_app_ids.retain(|app_id| {
+            !normalized
+                .imported_from_app_ids
+                .iter()
+                .any(|imported_app_id| imported_app_id == app_id)
+        });
         if normalized.tools.is_empty() {
             normalized.tools = previous.tools.clone();
         }
     }
     normalized.imported_from_app_ids.retain(|app_id| {
-        normalized
-            .enabled_app_ids
-            .iter()
-            .any(|enabled_app_id| enabled_app_id == app_id)
+        app_id == APP_OPENCODE
+            || normalized
+                .enabled_app_ids
+                .iter()
+                .any(|enabled_app_id| enabled_app_id == app_id)
     });
+    if normalized
+        .enabled_app_ids
+        .iter()
+        .any(|app_id| app_id == APP_OPENCODE)
+        && !normalized
+            .imported_from_app_ids
+            .iter()
+            .any(|app_id| app_id == APP_OPENCODE)
+        && !normalized
+            .managed_app_ids
+            .iter()
+            .any(|app_id| app_id == APP_OPENCODE)
+    {
+        normalized.managed_app_ids.push(APP_OPENCODE.to_string());
+    }
     enrich_mcp_record_metadata(&mut normalized, mcp_metadata_client().as_ref()).await;
 
     for app_id in &normalized.enabled_app_ids {
@@ -571,7 +643,26 @@ pub async fn upsert_mcp_server(server: McpServerRecord) -> Result<McpWorkspaceSn
     if let Some(previous) = records.iter().find(|item| item.id == normalized.id) {
         for app_id in &previous.enabled_app_ids {
             if !enabled_ids.contains(app_id) {
-                remove_server_from_app(app_id, &normalized.id)?;
+                if app_id == APP_OPENCODE {
+                    let has_local_ownership = previous
+                        .imported_from_app_ids
+                        .iter()
+                        .chain(previous.managed_app_ids.iter())
+                        .any(|owned_app_id| owned_app_id == app_id);
+                    if has_local_ownership {
+                        let spec = find_app_spec(app_id)?;
+                        let config_path =
+                            opencode_config_path_for_server(&spec.config_dir, &normalized.id)?;
+                        set_agent_json_mcp_server_enabled(
+                            &config_path,
+                            &normalized.id,
+                            false,
+                            None,
+                        )?;
+                    }
+                } else {
+                    remove_server_from_app(app_id, &normalized.id)?;
+                }
             }
         }
     }
@@ -591,9 +682,28 @@ pub async fn delete_mcp_server(id: &str) -> Result<McpWorkspaceSnapshot, String>
     };
 
     for app_id in &record.enabled_app_ids {
-        if should_remove_server_from_app(&record, app_id) {
+        let can_remove = if app_id == APP_OPENCODE {
+            record
+                .managed_app_ids
+                .iter()
+                .any(|managed_app_id| managed_app_id == app_id)
+        } else {
+            should_remove_server_from_app(&record, app_id)
+        };
+        if can_remove {
             remove_server_from_app(app_id, id)?;
         }
+    }
+    if !record
+        .enabled_app_ids
+        .iter()
+        .any(|app_id| app_id == APP_OPENCODE)
+        && record
+            .managed_app_ids
+            .iter()
+            .any(|app_id| app_id == APP_OPENCODE)
+    {
+        remove_server_from_app(APP_OPENCODE, id)?;
     }
 
     records.retain(|item| item.id != id);
@@ -614,15 +724,53 @@ pub async fn toggle_mcp_server_app(
         .ok_or_else(|| format!("未找到 MCP 服务器：{server_id}"))?;
 
     if enabled {
-        sync_record_to_app(app_id, record)?;
+        if app_id == APP_OPENCODE {
+            let spec = find_app_spec(app_id)?;
+            validate_app_is_ready(&spec)?;
+            let config_path = opencode_config_path_for_server(&spec.config_dir, &record.id)?;
+            set_agent_json_mcp_server_enabled(
+                &config_path,
+                &record.id,
+                true,
+                Some(&record.server),
+            )?;
+        } else {
+            sync_record_to_app(app_id, record)?;
+        }
         if !record.enabled_app_ids.iter().any(|item| item == app_id) {
             record.enabled_app_ids.push(app_id.to_string());
             record.enabled_app_ids.sort();
         }
+        if app_id == APP_OPENCODE
+            && !record
+                .imported_from_app_ids
+                .iter()
+                .any(|item| item == app_id)
+            && !record.managed_app_ids.iter().any(|item| item == app_id)
+        {
+            record.managed_app_ids.push(app_id.to_string());
+            record.managed_app_ids.sort();
+        }
     } else {
-        remove_server_from_app(app_id, &record.id)?;
+        if app_id == APP_OPENCODE {
+            let has_local_ownership = record
+                .imported_from_app_ids
+                .iter()
+                .chain(record.managed_app_ids.iter())
+                .any(|item| item == app_id);
+            if has_local_ownership {
+                let spec = find_app_spec(app_id)?;
+                let config_path = opencode_config_path_for_server(&spec.config_dir, &record.id)?;
+                set_agent_json_mcp_server_enabled(&config_path, &record.id, false, None)?;
+            }
+        } else {
+            remove_server_from_app(app_id, &record.id)?;
+        }
         record.enabled_app_ids.retain(|item| item != app_id);
-        record.imported_from_app_ids.retain(|item| item != app_id);
+        if app_id != APP_OPENCODE {
+            record.imported_from_app_ids.retain(|item| item != app_id);
+            record.managed_app_ids.retain(|item| item != app_id);
+        }
     }
     record.updated_at = now_label();
 
@@ -858,7 +1006,7 @@ fn target_app_specs() -> Result<Vec<McpTargetAppSpec>, String> {
     let home_dir = home_dir()?;
     let application_support_dir = workspace::application_support_dir_for_home(&home_dir);
 
-    Ok(vec![
+    let mut specs = vec![
         supported_app_spec(
             APP_AUGMENT,
             "Augment",
@@ -886,7 +1034,7 @@ fn target_app_specs() -> Result<Vec<McpTargetAppSpec>, String> {
         supported_app_spec(
             APP_OPENCODE,
             "OpenCode",
-            home_dir.join(".config/opencode/opencode.json"),
+            workspace::opencode_config_path_for_home(&home_dir),
             home_dir.join(".config/opencode"),
         ),
         supported_app_spec(
@@ -1030,7 +1178,21 @@ fn target_app_specs() -> Result<Vec<McpTargetAppSpec>, String> {
             application_support_dir.join("Trae CN/User/mcp.json"),
             application_support_dir.join("Trae CN"),
         ),
-    ])
+    ];
+
+    for definition in tool_adapters::TOOL_ADAPTER_DEFINITIONS {
+        let Some(config_path) = tool_adapters::resolve_mcp_path(definition, &home_dir) else {
+            continue;
+        };
+        specs.push(supported_app_spec(
+            definition.id,
+            definition.name,
+            config_path,
+            home_dir.join(definition.install_probe_relative_path),
+        ));
+    }
+
+    Ok(specs)
 }
 
 fn supported_app_spec(
@@ -1048,6 +1210,82 @@ fn supported_app_spec(
     }
 }
 
+fn read_registered_mcp_servers(
+    app_id: &str,
+    config_path: &Path,
+) -> Result<Vec<(String, Value)>, String> {
+    let definition =
+        tool_adapters::definition(app_id).ok_or_else(|| format!("不支持的 MCP 应用：{app_id}"))?;
+    match definition.mcp_format {
+        tool_adapters::McpAdapterFormat::None => Ok(Vec::new()),
+        tool_adapters::McpAdapterFormat::JsonObject { field } => {
+            let mut servers = read_json_mcp_servers(config_path, field, false)?;
+            if let Some(enabled_field) = definition.mcp_enabled_field {
+                servers.retain(|(_, server)| {
+                    server.get(enabled_field).and_then(Value::as_bool) != Some(false)
+                });
+            }
+            Ok(servers)
+        }
+        tool_adapters::McpAdapterFormat::JsonObjectCommandArray { field } => {
+            read_json_object_command_array_mcp_servers(config_path, field)
+        }
+        tool_adapters::McpAdapterFormat::TomlTable { field } => {
+            read_toml_mcp_servers(config_path, field)
+        }
+    }
+}
+
+fn upsert_registered_mcp_server(
+    app_id: &str,
+    config_path: &Path,
+    server_id: &str,
+    server: &Value,
+) -> Result<(), String> {
+    let definition =
+        tool_adapters::definition(app_id).ok_or_else(|| format!("不支持的 MCP 应用：{app_id}"))?;
+    match definition.mcp_format {
+        tool_adapters::McpAdapterFormat::None => Err(format!("{app_id} 暂不支持 MCP 配置同步")),
+        tool_adapters::McpAdapterFormat::JsonObject { field } => {
+            let mut enabled_server = server.clone();
+            if let Some(enabled_field) = definition.mcp_enabled_field {
+                enabled_server
+                    .as_object_mut()
+                    .ok_or_else(|| "MCP 服务器定义必须为 JSON 对象".to_string())?
+                    .remove(enabled_field);
+            }
+            upsert_json_mcp_server(config_path, field, server_id, &enabled_server)
+        }
+        tool_adapters::McpAdapterFormat::JsonObjectCommandArray { field } => {
+            upsert_json_object_command_array_mcp_server(config_path, field, server_id, server)
+        }
+        tool_adapters::McpAdapterFormat::TomlTable { field } => {
+            upsert_toml_mcp_server(config_path, field, server_id, server)
+        }
+    }
+}
+
+fn remove_registered_mcp_server(
+    app_id: &str,
+    config_path: &Path,
+    server_id: &str,
+) -> Result<(), String> {
+    let definition =
+        tool_adapters::definition(app_id).ok_or_else(|| format!("不支持的 MCP 应用：{app_id}"))?;
+    match definition.mcp_format {
+        tool_adapters::McpAdapterFormat::None => Err(format!("{app_id} 暂不支持 MCP 配置同步")),
+        tool_adapters::McpAdapterFormat::JsonObject { field } => {
+            remove_json_mcp_server(config_path, field, server_id)
+        }
+        tool_adapters::McpAdapterFormat::JsonObjectCommandArray { field } => {
+            remove_json_mcp_server(config_path, field, server_id)
+        }
+        tool_adapters::McpAdapterFormat::TomlTable { field } => {
+            remove_toml_mcp_server(config_path, field, server_id)
+        }
+    }
+}
+
 fn read_servers_from_app(app: &McpTargetAppSpec) -> Result<Vec<(String, Value)>, String> {
     match app.id {
         APP_AUGMENT => read_json_mcp_servers(&app.config_path, "mcpServers", false),
@@ -1056,7 +1294,7 @@ fn read_servers_from_app(app: &McpTargetAppSpec) -> Result<Vec<(String, Value)>,
         APP_GEMINI | "antigravity" => read_gemini_mcp_servers(&app.config_path),
         APP_CODEX => read_codex_mcp_servers(&app.config_path),
         APP_CURSOR => read_json_mcp_servers(&app.config_path, "mcpServers", false),
-        APP_OPENCODE => read_agent_json_mcp_servers(&app.config_path),
+        APP_OPENCODE => read_opencode_mcp_servers(&app.config_dir),
         APP_WINDSURF => read_json_mcp_servers(&app.config_path, "mcpServers", false),
         APP_OPENCLAW => read_openclaw_mcp_servers(&app.config_path),
         APP_CLINE => read_json_mcp_servers(&app.config_path, "mcpServers", false),
@@ -1077,7 +1315,7 @@ fn read_servers_from_app(app: &McpTargetAppSpec) -> Result<Vec<(String, Value)>,
         APP_TRAE_CN => read_trae_cn_mcp_servers(),
         APP_DROID => read_json_mcp_servers(&app.config_path, "mcpServers", false),
         APP_CRUSH => read_json_mcp_servers(&app.config_path, "mcp", false),
-        _ => Ok(Vec::new()),
+        _ => read_registered_mcp_servers(app.id, &app.config_path),
     }
 }
 
@@ -1097,7 +1335,10 @@ fn sync_server_to_app(app_id: &str, server_id: &str, server: &Value) -> Result<(
         }
         APP_CODEX => upsert_codex_mcp_server(&spec.config_path, server_id, server),
         APP_CURSOR => upsert_json_mcp_server(&spec.config_path, "mcpServers", server_id, server),
-        APP_OPENCODE => upsert_agent_json_mcp_server(&spec.config_path, server_id, server),
+        APP_OPENCODE => {
+            let config_path = opencode_config_path_for_server(&spec.config_dir, server_id)?;
+            upsert_agent_json_mcp_server(&config_path, server_id, server)
+        }
         APP_WINDSURF => upsert_json_mcp_server(&spec.config_path, "mcpServers", server_id, server),
         APP_OPENCLAW => upsert_openclaw_mcp_server(&spec.config_path, server_id, server),
         APP_CLINE => upsert_json_mcp_server(&spec.config_path, "mcpServers", server_id, server),
@@ -1122,7 +1363,7 @@ fn sync_server_to_app(app_id: &str, server_id: &str, server: &Value) -> Result<(
         APP_TRAE_CN => upsert_trae_cn_mcp_server(server_id, server),
         APP_DROID => upsert_json_mcp_server(&spec.config_path, "mcpServers", server_id, server),
         APP_CRUSH => upsert_json_mcp_server(&spec.config_path, "mcp", server_id, server),
-        _ => Err(format!("不支持的 MCP 应用：{app_id}")),
+        _ => upsert_registered_mcp_server(app_id, &spec.config_path, server_id, server),
     }
 }
 
@@ -1142,7 +1383,7 @@ fn remove_server_from_app(app_id: &str, server_id: &str) -> Result<(), String> {
         }
         APP_CODEX => remove_codex_mcp_server(&spec.config_path, server_id),
         APP_CURSOR => remove_json_mcp_server(&spec.config_path, "mcpServers", server_id),
-        APP_OPENCODE => remove_agent_json_mcp_server(&spec.config_path, server_id),
+        APP_OPENCODE => remove_opencode_mcp_server(&spec.config_dir, server_id),
         APP_WINDSURF => remove_json_mcp_server(&spec.config_path, "mcpServers", server_id),
         APP_OPENCLAW => remove_openclaw_mcp_server(&spec.config_path, server_id),
         APP_CLINE => remove_json_mcp_server(&spec.config_path, "mcpServers", server_id),
@@ -1163,7 +1404,7 @@ fn remove_server_from_app(app_id: &str, server_id: &str) -> Result<(), String> {
         APP_TRAE_CN => remove_trae_cn_mcp_server(server_id),
         APP_DROID => remove_json_mcp_server(&spec.config_path, "mcpServers", server_id),
         APP_CRUSH => remove_json_mcp_server(&spec.config_path, "mcp", server_id),
-        _ => Err(format!("不支持的 MCP 应用：{app_id}")),
+        _ => remove_registered_mcp_server(app_id, &spec.config_path, server_id),
     }
 }
 
@@ -1192,7 +1433,7 @@ fn read_json_mcp_servers(
     }
 
     let root = read_json_value(path, allow_json5)?;
-    let mut servers = get_json_object_at_path(&root, field_name)
+    let mut servers = get_json_object_at_path_strict(&root, field_name)?
         .cloned()
         .unwrap_or_default();
     for spec in servers.values_mut() {
@@ -1238,7 +1479,7 @@ fn remove_json_mcp_server(path: &Path, field_name: &str, server_id: &str) -> Res
     }
 
     let mut root = read_json_value(path, false)?;
-    if let Some(servers) = get_json_object_mut_at_path(&mut root, field_name) {
+    if let Some(servers) = get_json_object_mut_at_path_strict(&mut root, field_name)? {
         servers.remove(server_id);
     }
     write_json_value(path, &root)
@@ -1259,15 +1500,56 @@ fn get_json_object_at_path<'a>(
     current.as_object()
 }
 
-fn get_json_object_mut_at_path<'a>(
+fn get_json_object_at_path_strict<'a>(
+    root: &'a Value,
+    field_name: &str,
+) -> Result<Option<&'a Map<String, Value>>, String> {
+    let segments = json_field_segments(field_name).collect::<Vec<_>>();
+    if segments.is_empty() {
+        return Err("JSON 字段路径不能为空".to_string());
+    }
+
+    let mut current = root;
+    for segment in segments {
+        let object = current
+            .as_object()
+            .ok_or_else(|| format!("{field_name} 必须是 JSON 对象路径"))?;
+        let Some(next) = object.get(segment) else {
+            return Ok(None);
+        };
+        current = next;
+    }
+
+    current
+        .as_object()
+        .map(Some)
+        .ok_or_else(|| format!("{field_name} 必须是 JSON 对象"))
+}
+
+fn get_json_object_mut_at_path_strict<'a>(
     root: &'a mut Value,
     field_name: &str,
-) -> Option<&'a mut Map<String, Value>> {
-    let mut current = root;
-    for segment in json_field_segments(field_name) {
-        current = current.get_mut(segment)?;
+) -> Result<Option<&'a mut Map<String, Value>>, String> {
+    let segments = json_field_segments(field_name).collect::<Vec<_>>();
+    if segments.is_empty() {
+        return Err("JSON 字段路径不能为空".to_string());
     }
-    current.as_object_mut()
+
+    let mut current = root;
+    for segment in segments {
+        let object = current
+            .as_object_mut()
+            .ok_or_else(|| format!("{field_name} 必须是 JSON 对象路径"))?;
+        let Some(next) = object.get_mut(segment) else {
+            return Ok(None);
+        };
+        current = next;
+    }
+
+    current
+        .as_object_mut()
+        .map(Some)
+        .ok_or_else(|| format!("{field_name} 必须是 JSON 对象"))
 }
 
 fn ensure_json_object_path<'a>(
@@ -1516,6 +1798,57 @@ fn read_codex_mcp_servers(path: &Path) -> Result<Vec<(String, Value)>, String> {
     Ok(servers)
 }
 
+fn read_toml_mcp_servers(path: &Path, field_name: &str) -> Result<Vec<(String, Value)>, String> {
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let doc = read_toml_document(path)?;
+    let Some(table) = doc.get(field_name).and_then(|item| item.as_table()) else {
+        return Ok(Vec::new());
+    };
+    let mut servers = Vec::new();
+    for (id, item) in table {
+        let Some(server_table) = item.as_table() else {
+            continue;
+        };
+        if server_table
+            .get("enabled")
+            .and_then(|value| value.as_bool())
+            == Some(false)
+        {
+            continue;
+        }
+        servers.push((id.to_string(), codex_table_to_json(server_table)));
+    }
+    Ok(servers)
+}
+
+fn upsert_toml_mcp_server(
+    path: &Path,
+    field_name: &str,
+    server_id: &str,
+    server: &Value,
+) -> Result<(), String> {
+    let mut doc = read_toml_document(path)?;
+    if !doc.as_table().contains_key(field_name) {
+        doc[field_name] = toml_edit::table();
+    }
+    let table = json_server_to_toml_table(server)?;
+    doc[field_name][server_id] = toml_edit::Item::Table(table);
+    write_text_value(path, &doc.to_string())
+}
+
+fn remove_toml_mcp_server(path: &Path, field_name: &str, server_id: &str) -> Result<(), String> {
+    if !path.exists() {
+        return Ok(());
+    }
+    let mut doc = read_toml_document(path)?;
+    if let Some(table) = doc.get_mut(field_name).and_then(|item| item.as_table_mut()) {
+        table.remove(server_id);
+    }
+    write_text_value(path, &doc.to_string())
+}
+
 fn upsert_codex_mcp_server(path: &Path, server_id: &str, server: &Value) -> Result<(), String> {
     let mut doc = read_toml_document(path)?;
     if !doc.as_table().contains_key("mcp_servers") {
@@ -1685,12 +2018,168 @@ fn json_server_to_toml_table(server: &Value) -> Result<toml_edit::Table, String>
     Ok(table)
 }
 
+#[cfg(test)]
 fn read_agent_json_mcp_servers(path: &Path) -> Result<Vec<(String, Value)>, String> {
-    let mut servers = read_json_mcp_servers(path, "mcp", true)?;
-    for (_, spec) in &mut servers {
-        *spec = agent_json_to_unified(spec)?;
+    read_agent_json_mcp_server_specs(path)?
+        .into_iter()
+        .filter(|(_, spec)| spec.get("enabled").and_then(Value::as_bool) != Some(false))
+        .map(|(server_id, spec)| agent_json_to_unified(&spec).map(|server| (server_id, server)))
+        .collect()
+}
+
+fn read_agent_json_mcp_server_specs(path: &Path) -> Result<Map<String, Value>, String> {
+    if !path.exists() {
+        return Ok(Map::new());
     }
-    Ok(servers)
+    let root = read_json_value(path, true)?;
+    Ok(get_json_object_at_path(&root, "mcp")
+        .cloned()
+        .unwrap_or_default())
+}
+
+fn merge_json_value(target: &mut Value, overlay: Value) {
+    match (target, overlay) {
+        (Value::Object(target), Value::Object(overlay)) => {
+            for (key, value) in overlay {
+                if let Some(current) = target.get_mut(&key) {
+                    merge_json_value(current, value);
+                } else {
+                    target.insert(key, value);
+                }
+            }
+        }
+        (target, overlay) => *target = overlay,
+    }
+}
+
+fn read_opencode_mcp_servers(config_dir: &Path) -> Result<Vec<(String, Value)>, String> {
+    let mut merged = BTreeMap::new();
+    for path in workspace::opencode_config_paths_in_dir(config_dir) {
+        for (server_id, spec) in read_agent_json_mcp_server_specs(&path)? {
+            if let Some(current) = merged.get_mut(&server_id) {
+                merge_json_value(current, spec);
+            } else {
+                merged.insert(server_id, spec);
+            }
+        }
+    }
+    merged
+        .into_iter()
+        .filter(|(_, spec)| spec.get("enabled").and_then(Value::as_bool) != Some(false))
+        .map(|(server_id, spec)| agent_json_to_unified(&spec).map(|server| (server_id, server)))
+        .collect()
+}
+
+fn opencode_config_path_for_server(config_dir: &Path, server_id: &str) -> Result<PathBuf, String> {
+    let config_paths = workspace::opencode_config_paths_in_dir(config_dir);
+    for path in config_paths.iter().rev() {
+        if read_agent_json_mcp_server_specs(path)?.contains_key(server_id) {
+            return Ok(path.clone());
+        }
+    }
+    Ok(config_paths
+        .into_iter()
+        .rev()
+        .find(|path| path.exists())
+        .unwrap_or_else(|| config_dir.join("opencode.json")))
+}
+
+fn serde_value_to_cst_input(value: &Value) -> Result<CstInputValue, String> {
+    match value {
+        Value::Null => Ok(CstInputValue::Null),
+        Value::Bool(value) => Ok(CstInputValue::Bool(*value)),
+        Value::Number(value) => Ok(CstInputValue::Number(value.to_string())),
+        Value::String(value) => Ok(CstInputValue::String(value.clone())),
+        Value::Array(values) => values
+            .iter()
+            .map(serde_value_to_cst_input)
+            .collect::<Result<Vec<_>, _>>()
+            .map(CstInputValue::Array),
+        Value::Object(values) => values
+            .iter()
+            .map(|(key, value)| Ok((key.clone(), serde_value_to_cst_input(value)?)))
+            .collect::<Result<Vec<_>, String>>()
+            .map(CstInputValue::Object),
+    }
+}
+
+fn set_cst_object_value(
+    object: &jsonc_parser::cst::CstObject,
+    key: &str,
+    value: &Value,
+) -> Result<(), String> {
+    let value = serde_value_to_cst_input(value)?;
+    if let Some(property) = object.get(key) {
+        property.set_value(value);
+    } else {
+        object.append(key, value);
+    }
+    Ok(())
+}
+
+fn sync_agent_json_managed_fields(
+    server_object: &jsonc_parser::cst::CstObject,
+    server: &Value,
+) -> Result<(), String> {
+    let native_server = unified_to_agent_json(server)?;
+    let native_object = native_server
+        .as_object()
+        .ok_or_else(|| "OpenCode MCP 配置必须是 JSON 对象".to_string())?;
+    for key in ["type", "command", "environment", "url", "headers"] {
+        if let Some(value) = native_object.get(key) {
+            set_cst_object_value(server_object, key, value)?;
+        } else if let Some(property) = server_object.get(key) {
+            property.remove();
+        }
+    }
+    Ok(())
+}
+
+fn edit_agent_json_mcp_server(
+    path: &Path,
+    server_id: &str,
+    server: Option<&Value>,
+    enabled: Option<bool>,
+) -> Result<bool, String> {
+    if !path.exists() && server.is_none() {
+        return Ok(false);
+    }
+    let content = if path.exists() {
+        fs::read_to_string(path)
+            .map_err(|error| format!("读取 JSONC 配置失败（{}）：{error}", path.display()))?
+    } else {
+        "{}\n".to_string()
+    };
+    let root = CstRootNode::parse(&content, &ParseOptions::default())
+        .map_err(|error| format!("解析 JSONC 配置失败（{}）：{error}", path.display()))?;
+    let root_object = root
+        .object_value_or_create()
+        .ok_or_else(|| format!("{} 根节点必须是 JSON 对象", path.display()))?;
+    let servers = root_object
+        .object_value_or_create("mcp")
+        .ok_or_else(|| format!("{} 的 mcp 字段必须是 JSON 对象", path.display()))?;
+
+    if let Some(server_object) = servers.object_value(server_id) {
+        if let Some(server) = server {
+            sync_agent_json_managed_fields(&server_object, server)?;
+        }
+        if let Some(enabled) = enabled {
+            set_cst_object_value(&server_object, "enabled", &Value::Bool(enabled))?;
+        }
+    } else if servers.get(server_id).is_some() {
+        return Err(format!("OpenCode MCP \"{server_id}\" 配置必须是 JSON 对象"));
+    } else if let Some(server) = server {
+        let mut native_server = unified_to_agent_json(server)?;
+        if let Some(enabled) = enabled {
+            native_server["enabled"] = Value::Bool(enabled);
+        }
+        servers.append(server_id, serde_value_to_cst_input(&native_server)?);
+    } else {
+        return Ok(false);
+    }
+
+    write_text_value(path, &root.to_string())?;
+    Ok(true)
 }
 
 fn upsert_agent_json_mcp_server(
@@ -1698,12 +2187,59 @@ fn upsert_agent_json_mcp_server(
     server_id: &str,
     server: &Value,
 ) -> Result<(), String> {
-    let agent_server = unified_to_agent_json(server)?;
-    upsert_json_mcp_server(path, "mcp", server_id, &agent_server)
+    edit_agent_json_mcp_server(path, server_id, Some(server), Some(true)).map(|_| ())
 }
 
 fn remove_agent_json_mcp_server(path: &Path, server_id: &str) -> Result<(), String> {
-    remove_json_mcp_server(path, "mcp", server_id)
+    if !path.exists() {
+        return Ok(());
+    }
+    let content = fs::read_to_string(path)
+        .map_err(|error| format!("读取 JSONC 配置失败（{}）：{error}", path.display()))?;
+    let root = CstRootNode::parse(&content, &ParseOptions::default())
+        .map_err(|error| format!("解析 JSONC 配置失败（{}）：{error}", path.display()))?;
+    if let Some(server) = root
+        .object_value()
+        .and_then(|root_object| root_object.object_value("mcp"))
+        .and_then(|servers| servers.get(server_id))
+    {
+        server.remove();
+        write_text_value(path, &root.to_string())?;
+    }
+    Ok(())
+}
+
+fn remove_opencode_mcp_server(config_dir: &Path, server_id: &str) -> Result<(), String> {
+    for config_path in workspace::opencode_config_paths_in_dir(config_dir) {
+        remove_agent_json_mcp_server(&config_path, server_id)?;
+    }
+    Ok(())
+}
+
+fn set_agent_json_mcp_server_enabled(
+    path: &Path,
+    server_id: &str,
+    enabled: bool,
+    fallback_server: Option<&Value>,
+) -> Result<(), String> {
+    edit_agent_json_mcp_server(path, server_id, fallback_server, Some(enabled)).map(|_| ())
+}
+
+fn read_json_object_command_array_mcp_servers(
+    path: &Path,
+    field_name: &str,
+) -> Result<Vec<(String, Value)>, String> {
+    read_json_mcp_servers(path, field_name, false)
+}
+
+fn upsert_json_object_command_array_mcp_server(
+    path: &Path,
+    field_name: &str,
+    server_id: &str,
+    server: &Value,
+) -> Result<(), String> {
+    let native_server = unified_to_agent_json(server)?;
+    upsert_json_mcp_server(path, field_name, server_id, &native_server)
 }
 
 fn read_openclaw_mcp_servers(path: &Path) -> Result<Vec<(String, Value)>, String> {
@@ -2193,12 +2729,13 @@ fn upsert_imported_record_basic(
     let was_created = existing_index.is_none();
     let previous_record = existing_index.and_then(|index| records.get(index).cloned());
     let mut next_record = if let Some(previous) = previous_record.clone() {
+        let is_managed = previous.managed_app_ids.iter().any(|item| item == app.id);
         let mut enabled_app_ids = previous.enabled_app_ids;
         if !enabled_app_ids.iter().any(|item| item == app.id) {
             enabled_app_ids.push(app.id.to_string());
         }
         let mut imported_from_app_ids = previous.imported_from_app_ids;
-        if !imported_from_app_ids.iter().any(|item| item == app.id) {
+        if !is_managed && !imported_from_app_ids.iter().any(|item| item == app.id) {
             imported_from_app_ids.push(app.id.to_string());
         }
         McpServerRecord {
@@ -2209,6 +2746,7 @@ fn upsert_imported_record_basic(
             source_url: previous.source_url,
             enabled_app_ids,
             imported_from_app_ids,
+            managed_app_ids: previous.managed_app_ids,
             tools: previous.tools,
             tools_discovered_at: previous.tools_discovered_at,
             tools_discovery_error: previous.tools_discovery_error,
@@ -2227,6 +2765,7 @@ fn upsert_imported_record_basic(
             source_url: String::new(),
             enabled_app_ids: vec![app.id.to_string()],
             imported_from_app_ids: vec![app.id.to_string()],
+            managed_app_ids: Vec::new(),
             tools: Vec::new(),
             tools_discovered_at: String::new(),
             tools_discovery_error: String::new(),
@@ -2247,6 +2786,8 @@ fn upsert_imported_record_basic(
                 || previous.description != next_record.description
                 || previous.source_url != next_record.source_url
                 || previous.enabled_app_ids != next_record.enabled_app_ids
+                || previous.imported_from_app_ids != next_record.imported_from_app_ids
+                || previous.managed_app_ids != next_record.managed_app_ids
                 || previous.tools != next_record.tools
                 || previous.tools_discovered_at != next_record.tools_discovered_at
                 || previous.tools_discovery_error != next_record.tools_discovery_error
@@ -2381,13 +2922,23 @@ fn normalize_record(mut record: McpServerRecord) -> Result<McpServerRecord, Stri
     record.enabled_app_ids.dedup();
     record.imported_from_app_ids.retain(|app_id| {
         supported_app_ids.contains(app_id)
-            && record
-                .enabled_app_ids
-                .iter()
-                .any(|enabled_app_id| enabled_app_id == app_id)
+            && (app_id == APP_OPENCODE
+                || record
+                    .enabled_app_ids
+                    .iter()
+                    .any(|enabled_app_id| enabled_app_id == app_id))
     });
     record.imported_from_app_ids.sort();
     record.imported_from_app_ids.dedup();
+    record.managed_app_ids.retain(|app_id| {
+        supported_app_ids.contains(app_id)
+            && !record
+                .imported_from_app_ids
+                .iter()
+                .any(|imported_app_id| imported_app_id == app_id)
+    });
+    record.managed_app_ids.sort();
+    record.managed_app_ids.dedup();
     normalize_mcp_tool_statuses(&mut record.tools);
     if !record.tools.is_empty() {
         record.tools_discovery_error.clear();
@@ -4238,6 +4789,333 @@ fn write_text_value(path: &Path, value: &str) -> Result<(), String> {
     fs::rename(&temp_path, path).map_err(|error| format!("替换配置文件失败: {error}"))
 }
 
+fn sanitized_portable_url(value: &str) -> String {
+    let Ok(mut parsed) = url::Url::parse(value.trim()) else {
+        return String::new();
+    };
+    let _ = parsed.set_username("");
+    let _ = parsed.set_password(None);
+    parsed.set_query(None);
+    parsed.set_fragment(None);
+    parsed.to_string()
+}
+
+fn is_sensitive_name(value: &str) -> bool {
+    let normalized = value
+        .trim()
+        .trim_start_matches('-')
+        .split('=')
+        .next()
+        .unwrap_or_default()
+        .to_ascii_lowercase()
+        .replace('_', "-");
+    SENSITIVE_ARGUMENT_NAMES
+        .iter()
+        .any(|name| normalized == *name || normalized.ends_with(&format!("-{name}")))
+}
+
+fn sanitize_portable_arguments(value: &Value) -> Value {
+    let Some(arguments) = value.as_array() else {
+        return Value::Array(Vec::new());
+    };
+    let mut sanitized = Vec::new();
+    let mut skip_next = false;
+    for argument in arguments {
+        if skip_next {
+            skip_next = false;
+            continue;
+        }
+        let Some(text) = argument.as_str() else {
+            sanitized.push(sanitize_portable_server_value(argument, None));
+            continue;
+        };
+        if is_sensitive_name(text) {
+            skip_next = !text.contains('=');
+            continue;
+        }
+        sanitized.push(Value::String(text.to_string()));
+    }
+    Value::Array(sanitized)
+}
+
+fn collect_secret_keys(value: &Value) -> Vec<String> {
+    let mut keys = value
+        .as_object()
+        .map(|object| object.keys().cloned().collect::<Vec<_>>())
+        .unwrap_or_default();
+    keys.sort();
+    keys
+}
+
+fn sanitize_portable_server_value(
+    value: &Value,
+    requirement: Option<&mut PortableMcpSecretRequirement>,
+) -> Value {
+    if let Some(items) = value.as_array() {
+        let mut requirement = requirement;
+        return Value::Array(
+            items
+                .iter()
+                .map(|item| sanitize_portable_server_value(item, requirement.as_deref_mut()))
+                .collect(),
+        );
+    }
+    let Some(object) = value.as_object() else {
+        return value.clone();
+    };
+    let mut sanitized = Map::new();
+    let mut requirement = requirement;
+    for (key, child) in object {
+        let normalized_key = key.to_ascii_lowercase().replace('_', "-");
+        if normalized_key == "env" || normalized_key == "headers" {
+            if let Some(requirement) = requirement.as_deref_mut() {
+                let keys = collect_secret_keys(child);
+                if normalized_key == "env" {
+                    requirement.env_keys.extend(keys);
+                } else {
+                    requirement.header_keys.extend(keys);
+                }
+            }
+            continue;
+        }
+        if is_sensitive_name(&normalized_key) {
+            continue;
+        }
+        if normalized_key == "cwd"
+            && child
+                .as_str()
+                .map(|path| Path::new(path).is_absolute())
+                .unwrap_or(false)
+        {
+            continue;
+        }
+        if normalized_key == "command" {
+            let command = child.as_str().unwrap_or_default();
+            let portable_command = if Path::new(command).is_absolute() {
+                Path::new(command)
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or_default()
+            } else {
+                command
+            };
+            sanitized.insert(key.clone(), Value::String(portable_command.to_string()));
+            continue;
+        }
+        if normalized_key == "args" {
+            sanitized.insert(key.clone(), sanitize_portable_arguments(child));
+            continue;
+        }
+        if normalized_key.contains("url") {
+            let portable_url = child
+                .as_str()
+                .map(sanitized_portable_url)
+                .unwrap_or_default();
+            sanitized.insert(key.clone(), Value::String(portable_url));
+            continue;
+        }
+        sanitized.insert(
+            key.clone(),
+            sanitize_portable_server_value(child, requirement.as_deref_mut()),
+        );
+    }
+    Value::Object(sanitized)
+}
+
+pub fn export_portable_mcp_state() -> Result<PortableMcpState, String> {
+    let mut requirements = Vec::new();
+    let servers = load_mcp_records()?
+        .into_iter()
+        .map(|mut record| {
+            let mut requirement = PortableMcpSecretRequirement {
+                server_id: record.id.clone(),
+                ..Default::default()
+            };
+            record.server = sanitize_portable_server_value(&record.server, Some(&mut requirement));
+            record.source_url = sanitized_portable_url(&record.source_url);
+            record.tools_discovery_error.clear();
+            record.managed_app_ids.clear();
+            requirement.env_keys.sort();
+            requirement.env_keys.dedup();
+            requirement.header_keys.sort();
+            requirement.header_keys.dedup();
+            if !requirement.env_keys.is_empty() || !requirement.header_keys.is_empty() {
+                requirements.push(requirement);
+            }
+            record
+        })
+        .collect::<Vec<_>>();
+    Ok(PortableMcpState {
+        schema_version: PORTABLE_MCP_SCHEMA_VERSION,
+        servers,
+        required_secrets: requirements,
+    })
+}
+
+fn sensitive_argument_tokens(value: &Value) -> Vec<Value> {
+    let Some(arguments) = value.as_array() else {
+        return Vec::new();
+    };
+    let mut result = Vec::new();
+    let mut index = 0;
+    while index < arguments.len() {
+        let Some(text) = arguments[index].as_str() else {
+            index += 1;
+            continue;
+        };
+        if is_sensitive_name(text) {
+            result.push(arguments[index].clone());
+            if !text.contains('=') && index + 1 < arguments.len() {
+                result.push(arguments[index + 1].clone());
+                index += 1;
+            }
+        }
+        index += 1;
+    }
+    result
+}
+
+fn preserve_local_mcp_exclusions(
+    portable: &Value,
+    current: &Value,
+    requirement: Option<&PortableMcpSecretRequirement>,
+) -> Value {
+    let (Some(portable_object), Some(current_object)) = (portable.as_object(), current.as_object())
+    else {
+        return portable.clone();
+    };
+    let mut restored = portable_object.clone();
+    for (key, current_value) in current_object {
+        let normalized_key = key.to_ascii_lowercase().replace('_', "-");
+        if normalized_key == "env" || normalized_key == "headers" {
+            let allowed_keys = if normalized_key == "env" {
+                requirement.map(|value| value.env_keys.as_slice())
+            } else {
+                requirement.map(|value| value.header_keys.as_slice())
+            }
+            .unwrap_or_default();
+            let preserved = current_value
+                .as_object()
+                .map(|values| {
+                    values
+                        .iter()
+                        .filter(|(name, _)| allowed_keys.contains(name))
+                        .map(|(name, value)| (name.clone(), value.clone()))
+                        .collect::<Map<_, _>>()
+                })
+                .unwrap_or_default();
+            if !preserved.is_empty() {
+                restored.insert(key.clone(), Value::Object(preserved));
+            }
+            continue;
+        }
+        if is_sensitive_name(&normalized_key) {
+            restored.insert(key.clone(), current_value.clone());
+            continue;
+        }
+        if normalized_key == "cwd"
+            && current_value
+                .as_str()
+                .is_some_and(|path| Path::new(path).is_absolute())
+        {
+            restored.insert(key.clone(), current_value.clone());
+            continue;
+        }
+        let Some(portable_value) = portable_object.get(key) else {
+            continue;
+        };
+        if normalized_key == "command"
+            && current_value
+                .as_str()
+                .is_some_and(|path| Path::new(path).is_absolute())
+        {
+            restored.insert(key.clone(), current_value.clone());
+        } else if normalized_key == "args" {
+            let mut arguments = portable_value.as_array().cloned().unwrap_or_default();
+            arguments.extend(sensitive_argument_tokens(current_value));
+            restored.insert(key.clone(), Value::Array(arguments));
+        } else if normalized_key.contains("url")
+            && current_value.as_str().is_some_and(|value| {
+                sanitized_portable_url(value) == portable_value.as_str().unwrap_or_default()
+            })
+        {
+            restored.insert(key.clone(), current_value.clone());
+        } else if portable_value.is_object() && current_value.is_object() {
+            restored.insert(
+                key.clone(),
+                preserve_local_mcp_exclusions(portable_value, current_value, requirement),
+            );
+        }
+    }
+    Value::Object(restored)
+}
+
+pub fn apply_portable_mcp_state(input: &PortableMcpState, overwrite: bool) -> Result<bool, String> {
+    if input.schema_version != PORTABLE_MCP_SCHEMA_VERSION {
+        return Err(format!("不支持的便携 MCP 版本: {}", input.schema_version));
+    }
+    let current = export_portable_mcp_state()?;
+    if current == *input {
+        return Ok(false);
+    }
+    if !overwrite && !current.servers.is_empty() {
+        return Ok(false);
+    }
+    let current_records = load_mcp_records()?;
+    let records = input
+        .servers
+        .iter()
+        .cloned()
+        .map(|mut record| {
+            record
+                .enabled_app_ids
+                .retain(|app_id| app_id != APP_OPENCODE);
+            record
+                .imported_from_app_ids
+                .retain(|app_id| app_id != APP_OPENCODE);
+            record.managed_app_ids.clear();
+            if let Some(current_record) = current_records
+                .iter()
+                .find(|current_record| current_record.id == record.id)
+            {
+                if current_record
+                    .enabled_app_ids
+                    .iter()
+                    .any(|app_id| app_id == APP_OPENCODE)
+                {
+                    record.enabled_app_ids.push(APP_OPENCODE.to_string());
+                }
+                if current_record
+                    .imported_from_app_ids
+                    .iter()
+                    .any(|app_id| app_id == APP_OPENCODE)
+                {
+                    record.imported_from_app_ids.push(APP_OPENCODE.to_string());
+                }
+                if current_record
+                    .managed_app_ids
+                    .iter()
+                    .any(|app_id| app_id == APP_OPENCODE)
+                {
+                    record.managed_app_ids.push(APP_OPENCODE.to_string());
+                }
+                let requirement = input
+                    .required_secrets
+                    .iter()
+                    .find(|requirement| requirement.server_id == record.id);
+                record.server = preserve_local_mcp_exclusions(
+                    &record.server,
+                    &current_record.server,
+                    requirement,
+                );
+            }
+            normalize_record(record)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    save_mcp_records(&records)?;
+    Ok(true)
+}
+
 fn load_mcp_records() -> Result<Vec<McpServerRecord>, String> {
     let Some(content) = load_mcp_state_content() else {
         return Ok(Vec::new());
@@ -4246,8 +5124,27 @@ fn load_mcp_records() -> Result<Vec<McpServerRecord>, String> {
         return Ok(Vec::new());
     }
 
-    let persistence = serde_json::from_str::<McpPersistence>(&content)
+    let mut persistence = serde_json::from_str::<McpPersistence>(&content)
         .map_err(|error| format!("解析 MCP 状态失败: {error}"))?;
+    if persistence.schema_version < MCP_PERSISTENCE_SCHEMA_VERSION {
+        for record in &mut persistence.servers {
+            if record
+                .enabled_app_ids
+                .iter()
+                .any(|app_id| app_id == APP_OPENCODE)
+                && !record
+                    .imported_from_app_ids
+                    .iter()
+                    .any(|app_id| app_id == APP_OPENCODE)
+                && !record
+                    .managed_app_ids
+                    .iter()
+                    .any(|app_id| app_id == APP_OPENCODE)
+            {
+                record.managed_app_ids.push(APP_OPENCODE.to_string());
+            }
+        }
+    }
     persistence
         .servers
         .into_iter()
@@ -4282,6 +5179,7 @@ pub(crate) fn upsert_project_mcp_record(
             source_url: String::new(),
             enabled_app_ids: Vec::new(),
             imported_from_app_ids: Vec::new(),
+            managed_app_ids: Vec::new(),
             tools: Vec::new(),
             tools_discovered_at: String::new(),
             tools_discovery_error: String::new(),
@@ -4319,6 +5217,7 @@ fn save_mcp_records(records: &[McpServerRecord]) -> Result<(), String> {
         .ok_or_else(|| "MCP 状态目录无效".to_string())?;
     fs::create_dir_all(parent).map_err(|error| format!("创建 MCP 状态目录失败: {error}"))?;
     let persistence = McpPersistence {
+        schema_version: MCP_PERSISTENCE_SCHEMA_VERSION,
         servers: records.to_vec(),
     };
     let payload = serde_json::to_string_pretty(&persistence)
@@ -5310,6 +6209,376 @@ fn base64_url_decode(value: &str) -> Option<Vec<u8>> {
 mod tests {
     use super::*;
 
+    fn opencode_test_record(
+        id: &str,
+        enabled_app_ids: Vec<String>,
+        imported_from_app_ids: Vec<String>,
+    ) -> McpServerRecord {
+        McpServerRecord {
+            id: id.to_string(),
+            name: id.to_string(),
+            server: json!({
+                "type": "stdio",
+                "command": "uvx",
+                "args": [id]
+            }),
+            description: String::new(),
+            source_url: String::new(),
+            enabled_app_ids,
+            imported_from_app_ids,
+            managed_app_ids: Vec::new(),
+            tools: Vec::new(),
+            tools_discovered_at: String::new(),
+            tools_discovery_error: String::new(),
+            installed_at: "2026/5/15 12:00:00".to_string(),
+            updated_at: "2026/5/15 12:00:00".to_string(),
+            lifecycle_source: "direct".to_string(),
+            owner_plugin_id: String::new(),
+            owner_plugin_name: String::new(),
+        }
+    }
+
+    #[test]
+    fn portable_mcp_sanitizer_removes_secrets_urls_and_machine_paths() {
+        let input = json!({
+            "type": "stdio",
+            "command": "/usr/local/bin/npx",
+            "cwd": "/Users/example/private",
+            "args": [
+                "-y",
+                "demo-mcp",
+                "--api-key=secret-token",
+                "--password",
+                "password-value",
+                "--safe",
+                "visible"
+            ],
+            "env": {
+                "API_TOKEN": "env-secret"
+            },
+            "headers": {
+                "Authorization": "Bearer abc"
+            },
+            "url": "https://user:pass@example.com/mcp?token=query-secret#fragment"
+        });
+        let mut requirement = PortableMcpSecretRequirement {
+            server_id: "demo".into(),
+            ..Default::default()
+        };
+        let sanitized = sanitize_portable_server_value(&input, Some(&mut requirement));
+        let payload = serde_json::to_string(&sanitized).expect("serialize sanitized MCP");
+
+        for secret in [
+            "secret-token",
+            "password-value",
+            "env-secret",
+            "Bearer abc",
+            "query-secret",
+            "/Users/example/private",
+            "user:pass",
+        ] {
+            assert!(!payload.contains(secret));
+        }
+        assert_eq!(
+            sanitized.get("command").and_then(Value::as_str),
+            Some("npx")
+        );
+        assert_eq!(requirement.env_keys, vec!["API_TOKEN"]);
+        assert_eq!(requirement.header_keys, vec!["Authorization"]);
+        assert_eq!(
+            sanitized.get("url").and_then(Value::as_str),
+            Some("https://example.com/mcp")
+        );
+        assert_eq!(
+            sanitized.get("args"),
+            Some(&json!(["-y", "demo-mcp", "--safe", "visible"]))
+        );
+    }
+
+    #[test]
+    fn mcp_restore_preserves_local_secrets_and_machine_paths() {
+        let current = json!({
+            "command": "/opt/homebrew/bin/npx",
+            "cwd": "/Users/example/project",
+            "args": ["demo-mcp", "--token", "local-token"],
+            "env": {
+                "API_TOKEN": "local-env-secret",
+                "UNRELATED": "do-not-restore"
+            },
+            "headers": {
+                "Authorization": "Bearer local-secret"
+            },
+            "url": "https://user:pass@example.com/mcp?token=local"
+        });
+        let portable = sanitize_portable_server_value(&current, None);
+        let restored = preserve_local_mcp_exclusions(
+            &portable,
+            &current,
+            Some(&PortableMcpSecretRequirement {
+                server_id: "demo".into(),
+                env_keys: vec!["API_TOKEN".into()],
+                header_keys: vec!["Authorization".into()],
+            }),
+        );
+
+        assert_eq!(
+            restored.get("command").and_then(Value::as_str),
+            Some("/opt/homebrew/bin/npx")
+        );
+        assert_eq!(
+            restored.get("cwd").and_then(Value::as_str),
+            Some("/Users/example/project")
+        );
+        assert_eq!(
+            restored.get("args"),
+            Some(&json!(["demo-mcp", "--token", "local-token"]))
+        );
+        assert_eq!(
+            restored.pointer("/env/API_TOKEN").and_then(Value::as_str),
+            Some("local-env-secret")
+        );
+        assert!(restored.pointer("/env/UNRELATED").is_none());
+        assert_eq!(
+            restored
+                .pointer("/headers/Authorization")
+                .and_then(Value::as_str),
+            Some("Bearer local-secret")
+        );
+        assert_eq!(
+            restored.get("url").and_then(Value::as_str),
+            Some("https://user:pass@example.com/mcp?token=local")
+        );
+    }
+
+    #[test]
+    fn registered_json_object_adapter_round_trips_omp_config() {
+        let temp_dir = env::temp_dir().join(format!(
+            "skilldock-omp-adapter-{}-{}",
+            std::process::id(),
+            unix_millis()
+        ));
+        fs::create_dir_all(&temp_dir).expect("create omp adapter directory");
+        let path = temp_dir.join("mcp.json");
+        fs::write(
+            &path,
+            r#"{"$schema":"keep","mcpServers":{"existing":{"command":"old"}},"other":true}"#,
+        )
+        .expect("write omp config");
+        let server = json!({"type":"stdio","command":"npx","args":["-y","demo-mcp"]});
+
+        upsert_registered_mcp_server(APP_OMP, &path, "demo", &server).expect("upsert omp server");
+        let servers = read_registered_mcp_servers(APP_OMP, &path).expect("read omp servers");
+        assert!(servers.iter().any(|(id, _)| id == "existing"));
+        assert!(servers.iter().any(|(id, _)| id == "demo"));
+        let root: Value = serde_json::from_str(&fs::read_to_string(&path).expect("read omp file"))
+            .expect("parse omp file");
+        assert_eq!(root.get("$schema").and_then(Value::as_str), Some("keep"));
+        assert_eq!(root.get("other").and_then(Value::as_bool), Some(true));
+
+        remove_registered_mcp_server(APP_OMP, &path, "demo").expect("remove omp server");
+        let servers = read_registered_mcp_servers(APP_OMP, &path).expect("read omp after remove");
+        assert_eq!(servers.len(), 1);
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn registered_toml_adapter_round_trips_grok_config() {
+        let temp_dir = env::temp_dir().join(format!(
+            "skilldock-grok-adapter-{}-{}",
+            std::process::id(),
+            unix_millis()
+        ));
+        fs::create_dir_all(&temp_dir).expect("create grok adapter directory");
+        let path = temp_dir.join("config.toml");
+        fs::write(&path, "[models]\ndefault = \"grok-4.5\"\n").expect("write grok config");
+        let server = json!({"type":"stdio","command":"npx","args":["-y","demo-mcp"]});
+
+        upsert_registered_mcp_server(APP_GROK, &path, "demo", &server).expect("upsert grok server");
+        let servers = read_registered_mcp_servers(APP_GROK, &path).expect("read grok servers");
+        assert_eq!(servers.len(), 1);
+        assert_eq!(servers[0].0, "demo");
+        assert_eq!(
+            servers[0].1.get("command").and_then(Value::as_str),
+            Some("npx")
+        );
+        let content = fs::read_to_string(&path).expect("read grok file");
+        assert!(content.contains("[models]"));
+        assert!(content.contains("[mcp_servers.demo]"));
+
+        remove_registered_mcp_server(APP_GROK, &path, "demo").expect("remove grok server");
+        assert!(read_registered_mcp_servers(APP_GROK, &path)
+            .expect("read grok after remove")
+            .is_empty());
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn registered_command_array_adapter_round_trips_mimo_config() {
+        let temp_dir = env::temp_dir().join(format!(
+            "skilldock-mimo-adapter-{}-{}",
+            std::process::id(),
+            unix_millis()
+        ));
+        fs::create_dir_all(&temp_dir).expect("create mimo adapter directory");
+        let path = temp_dir.join("mimocode.json");
+        fs::write(
+            &path,
+            r#"{"$schema":"keep","mcp":{"existing":{"type":"local","command":["old"]}},"other":true}"#,
+        )
+        .expect("write mimo config");
+        let server = json!({"type":"stdio","command":"npx","args":["-y","demo-mcp"]});
+
+        upsert_registered_mcp_server(APP_MIMO_CODE, &path, "demo", &server)
+            .expect("upsert mimo server");
+        let servers = read_registered_mcp_servers(APP_MIMO_CODE, &path).expect("read mimo servers");
+        assert_eq!(servers.len(), 2);
+        assert!(servers.iter().any(|(id, _)| id == "demo"));
+        let root: Value = serde_json::from_str(&fs::read_to_string(&path).expect("read mimo file"))
+            .expect("parse mimo file");
+        assert_eq!(root.get("$schema").and_then(Value::as_str), Some("keep"));
+        assert_eq!(root.get("other").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            root.pointer("/mcp/demo/type").and_then(Value::as_str),
+            Some("local")
+        );
+        assert_eq!(
+            root.pointer("/mcp/demo/command").and_then(Value::as_array),
+            Some(&vec![
+                Value::String("npx".to_string()),
+                Value::String("-y".to_string()),
+                Value::String("demo-mcp".to_string()),
+            ])
+        );
+
+        let remote_server = json!({"type":"http","url":"https://example.com/mcp"});
+        upsert_registered_mcp_server(APP_MIMO_CODE, &path, "remote", &remote_server)
+            .expect("mimo should support remote server");
+        let root: Value = serde_json::from_str(&fs::read_to_string(&path).expect("read mimo file"))
+            .expect("parse mimo file");
+        assert_eq!(
+            root.pointer("/mcp/remote/type").and_then(Value::as_str),
+            Some("remote")
+        );
+
+        remove_registered_mcp_server(APP_MIMO_CODE, &path, "demo").expect("remove mimo server");
+        assert_eq!(
+            read_registered_mcp_servers(APP_MIMO_CODE, &path)
+                .expect("read mimo after remove")
+                .len(),
+            2
+        );
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn registered_json_object_adapter_round_trips_workbuddy_config() {
+        let temp_dir = env::temp_dir().join(format!(
+            "skilldock-workbuddy-adapter-{}-{}",
+            std::process::id(),
+            unix_millis()
+        ));
+        fs::create_dir_all(&temp_dir).expect("create workbuddy adapter directory");
+        let path = temp_dir.join(".mcp.json");
+        fs::write(
+            &path,
+            r#"{"mcpServers":{"existing":{"command":"old"}},"other":true}"#,
+        )
+        .expect("write workbuddy config");
+        let server = json!({"type":"stdio","command":"npx","args":["-y","demo-mcp"]});
+
+        upsert_registered_mcp_server(APP_WORKBUDDY, &path, "demo", &server)
+            .expect("upsert workbuddy server");
+        let servers =
+            read_registered_mcp_servers(APP_WORKBUDDY, &path).expect("read workbuddy servers");
+        assert_eq!(servers.len(), 2);
+        let root: Value =
+            serde_json::from_str(&fs::read_to_string(&path).expect("read workbuddy file"))
+                .expect("parse workbuddy file");
+        assert_eq!(root.get("other").and_then(Value::as_bool), Some(true));
+
+        remove_registered_mcp_server(APP_WORKBUDDY, &path, "demo")
+            .expect("remove workbuddy server");
+        assert_eq!(
+            read_registered_mcp_servers(APP_WORKBUDDY, &path)
+                .expect("read workbuddy after remove")
+                .len(),
+            1
+        );
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn registered_json_object_adapter_round_trips_zcode_config() {
+        let temp_dir = env::temp_dir().join(format!(
+            "skilldock-zcode-adapter-{}-{}",
+            std::process::id(),
+            unix_millis()
+        ));
+        fs::create_dir_all(&temp_dir).expect("create zcode adapter directory");
+        let path = temp_dir.join("config.json");
+        fs::write(
+            &path,
+            r#"{"plugins":{"enabled":true},"mcp":{"servers":{"existing":{"command":"old"},"disabled":{"command":"off","enable":false}}}}"#,
+        )
+        .expect("write zcode config");
+        let server =
+            json!({"type":"stdio","command":"npx","args":["-y","demo-mcp"],"enable":false});
+
+        upsert_registered_mcp_server(APP_ZCODE, &path, "demo", &server)
+            .expect("upsert zcode server");
+        upsert_registered_mcp_server(APP_ZCODE, &path, "demo", &server)
+            .expect("update zcode server without duplication");
+        let remote_server = json!({"type":"http","url":"https://example.com/mcp"});
+        upsert_registered_mcp_server(APP_ZCODE, &path, "remote", &remote_server)
+            .expect("upsert zcode remote server");
+
+        let servers = read_registered_mcp_servers(APP_ZCODE, &path).expect("read zcode servers");
+        assert_eq!(servers.len(), 3);
+        assert!(servers.iter().all(|(id, _)| id != "disabled"));
+        let root: Value =
+            serde_json::from_str(&fs::read_to_string(&path).expect("read zcode file"))
+                .expect("parse zcode file");
+        assert_eq!(
+            root.pointer("/plugins/enabled").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            root.pointer("/mcp/servers/demo/command")
+                .and_then(Value::as_str),
+            Some("npx")
+        );
+        assert!(root.pointer("/mcp/servers/demo/enable").is_none());
+        assert_eq!(
+            root.pointer("/mcp/servers/remote/type")
+                .and_then(Value::as_str),
+            Some("http")
+        );
+
+        remove_registered_mcp_server(APP_ZCODE, &path, "demo").expect("remove zcode server");
+        let servers =
+            read_registered_mcp_servers(APP_ZCODE, &path).expect("read zcode after remove");
+        assert_eq!(servers.len(), 2);
+        assert!(servers.iter().all(|(id, _)| id != "demo"));
+        assert!(servers.iter().any(|(id, _)| id == "existing"));
+        assert!(servers.iter().any(|(id, _)| id == "remote"));
+        let root: Value =
+            serde_json::from_str(&fs::read_to_string(&path).expect("read zcode file"))
+                .expect("parse zcode file");
+        assert_eq!(
+            root.pointer("/plugins/enabled").and_then(Value::as_bool),
+            Some(true)
+        );
+
+        fs::write(&path, r#"{"mcp":{"servers":[]}}"#).expect("write invalid zcode config");
+        assert!(read_registered_mcp_servers(APP_ZCODE, &path)
+            .expect_err("reject non-object zcode servers while reading")
+            .contains("mcp.servers 必须是 JSON 对象"));
+        assert!(remove_registered_mcp_server(APP_ZCODE, &path, "existing")
+            .expect_err("reject non-object zcode servers while removing")
+            .contains("mcp.servers 必须是 JSON 对象"));
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
     #[test]
     fn codex_table_to_json_infers_http_from_url() {
         let mut table = toml_edit::Table::new();
@@ -5703,7 +6972,7 @@ A comprehensive GitLab MCP server for AI clients. Manage projects, merge request
             panic!("save empty mcp records failed: {error}");
         }
 
-        let state_file = temp_home.join(".skilldock").join(MCP_STATE_FILE_NAME);
+        let state_file = temp_home.join(".skilldock/config/mcp-servers.json");
         let content = match fs::read_to_string(&state_file) {
             Ok(content) => content,
             Err(error) => {
@@ -5711,7 +6980,10 @@ A comprehensive GitLab MCP server for AI clients. Manage projects, merge request
                 panic!("read saved mcp state failed: {error}");
             }
         };
-        assert_eq!(content.trim(), "{\n  \"servers\": []\n}");
+        assert_eq!(
+            content.trim(),
+            "{\n  \"schemaVersion\": 1,\n  \"servers\": []\n}"
+        );
 
         let snapshot = match build_mcp_workspace_snapshot() {
             Ok(snapshot) => snapshot,
@@ -5746,6 +7018,7 @@ A comprehensive GitLab MCP server for AI clients. Manage projects, merge request
             source_url: "https://github.com/modelcontextprotocol/servers".to_string(),
             enabled_app_ids: vec![APP_CODEX.to_string()],
             imported_from_app_ids: vec![APP_CODEX.to_string()],
+            managed_app_ids: Vec::new(),
             tools: Vec::new(),
             tools_discovered_at: String::new(),
             tools_discovery_error: String::new(),
@@ -5827,6 +7100,7 @@ A comprehensive GitLab MCP server for AI clients. Manage projects, merge request
             source_url: String::new(),
             enabled_app_ids: vec![APP_CODEX.to_string()],
             imported_from_app_ids: vec![APP_CODEX.to_string()],
+            managed_app_ids: Vec::new(),
             tools: Vec::new(),
             tools_discovered_at: String::new(),
             tools_discovery_error: String::new(),
@@ -5987,6 +7261,7 @@ enabled = false
             source_url: String::new(),
             enabled_app_ids: vec![APP_CODEX.to_string()],
             imported_from_app_ids: vec![APP_CODEX.to_string()],
+            managed_app_ids: Vec::new(),
             tools: Vec::new(),
             tools_discovered_at: String::new(),
             tools_discovery_error: String::new(),
@@ -6081,6 +7356,7 @@ enabled = false
             source_url: String::new(),
             enabled_app_ids: vec![APP_GEMINI.to_string()],
             imported_from_app_ids: Vec::new(),
+            managed_app_ids: Vec::new(),
             tools: Vec::new(),
             tools_discovered_at: String::new(),
             tools_discovery_error: String::new(),
@@ -6163,6 +7439,7 @@ enabled = false
             source_url: String::new(),
             enabled_app_ids: vec![APP_CODEX.to_string()],
             imported_from_app_ids: vec![APP_CODEX.to_string()],
+            managed_app_ids: Vec::new(),
             tools: Vec::new(),
             tools_discovered_at: String::new(),
             tools_discovery_error: String::new(),
@@ -6240,6 +7517,7 @@ enabled = false
             source_url: String::new(),
             enabled_app_ids: Vec::new(),
             imported_from_app_ids: vec![APP_GEMINI.to_string()],
+            managed_app_ids: Vec::new(),
             tools: Vec::new(),
             tools_discovered_at: String::new(),
             tools_discovery_error: String::new(),
@@ -6928,6 +8206,7 @@ mcpServers:
             source_url: "https://mcp.directory/servers/context7".to_string(),
             enabled_app_ids: Vec::new(),
             imported_from_app_ids: Vec::new(),
+            managed_app_ids: Vec::new(),
             tools: Vec::new(),
             tools_discovered_at: "2026/5/15 14:16:46".to_string(),
             tools_discovery_error: String::new(),
@@ -7289,5 +8568,585 @@ mcpServers:
         );
 
         let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn writes_and_reads_opencode_mcp_servers_without_double_normalizing() {
+        let temp_dir = unique_continue_test_dir("opencode-write-read");
+        let config_path = temp_dir.join("opencode.json");
+
+        upsert_agent_json_mcp_server(
+            &config_path,
+            "local-server",
+            &json!({
+                "type": "stdio",
+                "command": "uvx",
+                "args": ["local-server"],
+                "env": {
+                    "LOG_LEVEL": "info"
+                }
+            }),
+        )
+        .expect("write local OpenCode MCP server");
+        upsert_agent_json_mcp_server(
+            &config_path,
+            "remote-server",
+            &json!({
+                "type": "sse",
+                "url": "https://example.com/mcp",
+                "headers": {
+                    "Authorization": "Bearer demo"
+                }
+            }),
+        )
+        .expect("write remote OpenCode MCP server");
+        upsert_json_mcp_server(
+            &config_path,
+            "mcp",
+            "disabled-server",
+            &json!({
+                "type": "local",
+                "command": ["uvx", "disabled-server"],
+                "enabled": false
+            }),
+        )
+        .expect("write disabled OpenCode MCP server");
+
+        let loaded = read_agent_json_mcp_servers(&config_path)
+            .expect("read OpenCode MCP servers after writing native config");
+
+        assert_eq!(
+            loaded,
+            vec![
+                (
+                    "local-server".to_string(),
+                    json!({
+                        "type": "stdio",
+                        "command": "uvx",
+                        "args": ["local-server"],
+                        "env": {
+                            "LOG_LEVEL": "info"
+                        }
+                    })
+                ),
+                (
+                    "remote-server".to_string(),
+                    json!({
+                        "type": "sse",
+                        "url": "https://example.com/mcp",
+                        "headers": {
+                            "Authorization": "Bearer demo"
+                        }
+                    })
+                ),
+            ]
+        );
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn prefers_existing_opencode_jsonc_and_keeps_legacy_fallbacks() {
+        let temp_dir = unique_continue_test_dir("opencode-config-path");
+        let config_dir = temp_dir.join(".config/opencode");
+        fs::create_dir_all(&config_dir).expect("create OpenCode config directory");
+        let legacy_path = config_dir.join("config.json");
+        let json_path = config_dir.join("opencode.json");
+        let jsonc_path = config_dir.join("opencode.jsonc");
+
+        fs::write(&legacy_path, "{}").expect("write legacy OpenCode config");
+        assert_eq!(
+            workspace::opencode_config_path_for_home(&temp_dir),
+            legacy_path
+        );
+
+        fs::write(&json_path, "{}").expect("write OpenCode JSON config");
+        assert_eq!(
+            workspace::opencode_config_path_for_home(&temp_dir),
+            json_path
+        );
+
+        fs::write(&jsonc_path, "{}").expect("write OpenCode JSONC config");
+        assert_eq!(
+            workspace::opencode_config_path_for_home(&temp_dir),
+            jsonc_path
+        );
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn toggles_opencode_jsonc_server_without_losing_native_fields() {
+        let temp_dir = unique_continue_test_dir("opencode-jsonc-toggle");
+        fs::create_dir_all(&temp_dir).expect("create OpenCode test directory");
+        let config_path = temp_dir.join("opencode.jsonc");
+        fs::write(
+            &config_path,
+            r#"{
+                // Keep the native OpenCode fields when toggling.
+                mcp: {
+                    "native-server": {
+                        type: "local",
+                        command: ["uvx", "native-server"],
+                        cwd: "/tmp/project",
+                        timeout: 30000,
+                        enabled: true,
+                    },
+                },
+            }"#,
+        )
+        .expect("write OpenCode JSONC config");
+
+        set_agent_json_mcp_server_enabled(&config_path, "native-server", false, None)
+            .expect("disable OpenCode MCP server");
+        assert!(fs::read_to_string(&config_path)
+            .expect("read preserved OpenCode JSONC text")
+            .contains("// Keep the native OpenCode fields when toggling."));
+        let disabled = read_json_value(&config_path, true).expect("read disabled OpenCode config");
+        assert_eq!(
+            disabled.pointer("/mcp/native-server"),
+            Some(&json!({
+                "type": "local",
+                "command": ["uvx", "native-server"],
+                "cwd": "/tmp/project",
+                "timeout": 30000,
+                "enabled": false
+            }))
+        );
+
+        set_agent_json_mcp_server_enabled(
+            &config_path,
+            "native-server",
+            true,
+            Some(&json!({
+                "type": "stdio",
+                "command": "npx",
+                "args": ["-y", "new-server"]
+            })),
+        )
+        .expect("enable updated OpenCode MCP server");
+        let enabled = read_json_value(&config_path, true).expect("read enabled OpenCode config");
+        assert_eq!(
+            enabled.pointer("/mcp/native-server/enabled"),
+            Some(&json!(true))
+        );
+        assert_eq!(
+            enabled.pointer("/mcp/native-server/cwd"),
+            Some(&json!("/tmp/project"))
+        );
+        assert_eq!(
+            enabled.pointer("/mcp/native-server/timeout"),
+            Some(&json!(30000))
+        );
+        assert_eq!(
+            enabled.pointer("/mcp/native-server/command"),
+            Some(&json!(["npx", "-y", "new-server"]))
+        );
+        assert!(fs::read_to_string(&config_path)
+            .expect("read updated OpenCode JSONC text")
+            .contains("// Keep the native OpenCode fields when toggling."));
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn reads_and_updates_the_file_that_defines_each_opencode_server() {
+        let temp_dir = unique_continue_test_dir("opencode-multiple-configs");
+        let config_dir = temp_dir.join(".config/opencode");
+        fs::create_dir_all(&config_dir).expect("create OpenCode config directory");
+        let legacy_path = config_dir.join("config.json");
+        let jsonc_path = config_dir.join("opencode.jsonc");
+        fs::write(
+            &legacy_path,
+            r#"{"mcp":{"legacy-server":{"type":"local","command":["uvx","legacy"]}}}"#,
+        )
+        .expect("write legacy OpenCode config");
+        fs::write(
+            &jsonc_path,
+            r#"{
+                // Higher-precedence settings must not hide lower MCP entries.
+                "theme": "system",
+            }"#,
+        )
+        .expect("write higher-precedence OpenCode config");
+
+        let servers = read_opencode_mcp_servers(&config_dir).expect("read merged OpenCode configs");
+        assert_eq!(servers.len(), 1);
+        assert_eq!(servers[0].0, "legacy-server");
+        assert_eq!(
+            opencode_config_path_for_server(&config_dir, "legacy-server")
+                .expect("resolve defining OpenCode config"),
+            legacy_path
+        );
+
+        set_agent_json_mcp_server_enabled(&legacy_path, "legacy-server", false, None)
+            .expect("disable lower-precedence OpenCode MCP server");
+        assert!(read_opencode_mcp_servers(&config_dir)
+            .expect("read disabled merged OpenCode configs")
+            .is_empty());
+        assert!(fs::read_to_string(&jsonc_path)
+            .expect("read untouched higher-precedence config")
+            .contains("Higher-precedence settings"));
+
+        upsert_agent_json_mcp_server(
+            &jsonc_path,
+            "legacy-server",
+            &json!({
+                "type": "stdio",
+                "command": "uvx",
+                "args": ["higher-precedence"]
+            }),
+        )
+        .expect("write higher-precedence OpenCode override");
+        assert_eq!(
+            opencode_config_path_for_server(&config_dir, "legacy-server")
+                .expect("resolve higher-precedence OpenCode config"),
+            jsonc_path
+        );
+
+        remove_opencode_mcp_server(&config_dir, "legacy-server")
+            .expect("remove owned OpenCode MCP server from all configs");
+        assert!(read_agent_json_mcp_server_specs(&legacy_path)
+            .expect("read cleaned legacy config")
+            .is_empty());
+        assert!(read_agent_json_mcp_server_specs(&jsonc_path)
+            .expect("read cleaned higher-precedence config")
+            .is_empty());
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn deeply_merges_partial_opencode_server_overrides() {
+        let temp_dir = unique_continue_test_dir("opencode-deep-merge");
+        let config_dir = temp_dir.join(".config/opencode");
+        fs::create_dir_all(&config_dir).expect("create OpenCode config directory");
+        fs::write(
+            config_dir.join("config.json"),
+            r#"{"mcp":{"demo":{"type":"local","command":["uvx","demo"],"environment":{"TOKEN":"base"},"enabled":true}}}"#,
+        )
+        .expect("write base OpenCode config");
+        fs::write(
+            config_dir.join("opencode.jsonc"),
+            r#"{"mcp":{"demo":{"environment":{"MODE":"overlay"},"timeout":30000}}}"#,
+        )
+        .expect("write partial OpenCode override");
+
+        let servers = read_opencode_mcp_servers(&config_dir).expect("read merged OpenCode config");
+        assert_eq!(servers.len(), 1);
+        assert_eq!(servers[0].0, "demo");
+        assert_eq!(
+            servers[0].1,
+            json!({
+                "type": "stdio",
+                "command": "uvx",
+                "args": ["demo"],
+                "env": {
+                    "TOKEN": "base",
+                    "MODE": "overlay"
+                }
+            })
+        );
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn preserves_imported_opencode_config_after_disable_reload_and_delete() {
+        use crate::workspace::TEST_ENV_LOCK;
+
+        let _guard = TEST_ENV_LOCK
+            .lock()
+            .expect("test env lock should not be poisoned");
+        let temp_home = unique_continue_test_dir("opencode-imported-ownership");
+        let config_dir = temp_home.join(".config/opencode");
+        fs::create_dir_all(&config_dir).expect("create OpenCode config directory");
+        let config_path = config_dir.join("opencode.jsonc");
+        fs::write(
+            &config_path,
+            r#"{
+                // User-owned OpenCode entry.
+                "mcp": {
+                    "external": {
+                        "type": "local",
+                        "command": ["uvx", "external"],
+                        "cwd": "/tmp/external",
+                        "enabled": true
+                    }
+                }
+            }"#,
+        )
+        .expect("write imported OpenCode config");
+        let original_home = env::var_os("HOME");
+        env::set_var("HOME", &temp_home);
+
+        let result = (|| -> Result<(), String> {
+            save_mcp_records(&[opencode_test_record(
+                "external",
+                vec![APP_OPENCODE.to_string()],
+                vec![APP_OPENCODE.to_string()],
+            )])?;
+            tauri::async_runtime::block_on(upsert_mcp_server(opencode_test_record(
+                "external",
+                Vec::new(),
+                Vec::new(),
+            )))?;
+            let edited = load_mcp_records()?;
+            assert_eq!(
+                edited[0].imported_from_app_ids,
+                vec![APP_OPENCODE.to_string()]
+            );
+            assert_eq!(
+                read_json_value(&config_path, true)?.pointer("/mcp/external/enabled"),
+                Some(&Value::Bool(false))
+            );
+            tauri::async_runtime::block_on(toggle_mcp_server_app("external", APP_OPENCODE, true))?;
+            tauri::async_runtime::block_on(toggle_mcp_server_app("external", APP_OPENCODE, false))?;
+            let reloaded = load_mcp_records()?;
+            assert_eq!(
+                reloaded[0].imported_from_app_ids,
+                vec![APP_OPENCODE.to_string()]
+            );
+            tauri::async_runtime::block_on(delete_mcp_server("external"))?;
+            let root = read_json_value(&config_path, true)?;
+            assert_eq!(
+                root.pointer("/mcp/external/enabled"),
+                Some(&Value::Bool(false))
+            );
+            assert_eq!(
+                root.pointer("/mcp/external/cwd").and_then(Value::as_str),
+                Some("/tmp/external")
+            );
+            Ok(())
+        })();
+
+        if let Some(home) = original_home {
+            env::set_var("HOME", home);
+        } else {
+            env::remove_var("HOME");
+        }
+        let _ = fs::remove_dir_all(&temp_home);
+        result.expect("preserve imported OpenCode config");
+    }
+
+    #[test]
+    fn deletes_only_owned_disabled_opencode_config() {
+        use crate::workspace::TEST_ENV_LOCK;
+
+        let _guard = TEST_ENV_LOCK
+            .lock()
+            .expect("test env lock should not be poisoned");
+        let temp_home = unique_continue_test_dir("opencode-managed-ownership");
+        let config_dir = temp_home.join(".config/opencode");
+        fs::create_dir_all(&config_dir).expect("create OpenCode config directory");
+        let config_path = config_dir.join("opencode.json");
+        fs::write(
+            &config_path,
+            r#"{"mcp":{"owned":{"type":"local","command":["uvx","owned"],"enabled":true},"shared-name":{"type":"local","command":["uvx","external"],"enabled":true}}}"#,
+        )
+        .expect("write OpenCode configs");
+        let original_home = env::var_os("HOME");
+        env::set_var("HOME", &temp_home);
+
+        let result = (|| -> Result<(), String> {
+            let mut owned_record =
+                opencode_test_record("owned", vec![APP_OPENCODE.to_string()], Vec::new());
+            owned_record.managed_app_ids = vec![APP_OPENCODE.to_string()];
+            save_mcp_records(&[
+                owned_record,
+                opencode_test_record(
+                    "shared-name",
+                    vec![APP_CODEX.to_string()],
+                    vec![APP_CODEX.to_string()],
+                ),
+            ])?;
+            let mut scanned_records = load_mcp_records()?;
+            let app = find_app_spec(APP_OPENCODE)?;
+            let scanned_server = read_opencode_mcp_servers(&config_dir)?
+                .into_iter()
+                .find(|(id, _)| id == "owned")
+                .map(|(_, server)| server)
+                .ok_or_else(|| "missing scanned owned server".to_string())?;
+            upsert_imported_record_basic(&mut scanned_records, "owned", &app, scanned_server)?;
+            let scanned_owned = scanned_records
+                .iter()
+                .find(|record| record.id == "owned")
+                .ok_or_else(|| "missing managed record after scan".to_string())?;
+            assert!(scanned_owned.imported_from_app_ids.is_empty());
+            assert!(scanned_owned
+                .managed_app_ids
+                .iter()
+                .any(|app_id| app_id == APP_OPENCODE));
+            save_mcp_records(&scanned_records)?;
+            tauri::async_runtime::block_on(toggle_mcp_server_app("owned", APP_OPENCODE, false))?;
+            let reloaded = load_mcp_records()?;
+            assert!(reloaded
+                .iter()
+                .find(|record| record.id == "owned")
+                .expect("reload owned record")
+                .managed_app_ids
+                .iter()
+                .any(|app_id| app_id == APP_OPENCODE));
+            tauri::async_runtime::block_on(delete_mcp_server("owned"))?;
+            tauri::async_runtime::block_on(delete_mcp_server("shared-name"))?;
+            let specs = read_agent_json_mcp_server_specs(&config_path)?;
+            assert!(!specs.contains_key("owned"));
+            assert!(specs.contains_key("shared-name"));
+            Ok(())
+        })();
+
+        if let Some(home) = original_home {
+            env::set_var("HOME", home);
+        } else {
+            env::remove_var("HOME");
+        }
+        let _ = fs::remove_dir_all(&temp_home);
+        result.expect("delete only owned OpenCode config");
+    }
+
+    #[test]
+    fn portable_restore_preserves_local_opencode_ownership() {
+        use crate::workspace::TEST_ENV_LOCK;
+
+        let _guard = TEST_ENV_LOCK
+            .lock()
+            .expect("test env lock should not be poisoned");
+        let temp_home = unique_continue_test_dir("opencode-portable-ownership");
+        let config_dir = temp_home.join(".config/opencode");
+        fs::create_dir_all(&config_dir).expect("create OpenCode config directory");
+        let config_path = config_dir.join("opencode.json");
+        let codex_config_path = temp_home.join(".codex/config.toml");
+        fs::write(
+            &config_path,
+            r#"{"mcp":{"external":{"type":"local","command":["uvx","external"],"enabled":true},"remote-only":{"type":"local","command":["uvx","user-entry"],"enabled":true}}}"#,
+        )
+        .expect("write user-owned OpenCode config");
+        let original_home = env::var_os("HOME");
+        env::set_var("HOME", &temp_home);
+
+        let result = (|| -> Result<(), String> {
+            upsert_codex_mcp_server(
+                &codex_config_path,
+                "codex-external",
+                &json!({
+                    "type": "stdio",
+                    "command": "uvx",
+                    "args": ["codex-external"]
+                }),
+            )?;
+            save_mcp_records(&[opencode_test_record(
+                "external",
+                vec![APP_OPENCODE.to_string()],
+                vec![APP_OPENCODE.to_string()],
+            )])?;
+            let mut remote_record =
+                opencode_test_record("external", vec![APP_OPENCODE.to_string()], Vec::new());
+            remote_record.description = "remote snapshot".to_string();
+            let portable = PortableMcpState {
+                schema_version: PORTABLE_MCP_SCHEMA_VERSION,
+                servers: vec![
+                    remote_record,
+                    opencode_test_record("remote-only", vec![APP_OPENCODE.to_string()], Vec::new()),
+                    opencode_test_record(
+                        "codex-external",
+                        vec![APP_CODEX.to_string()],
+                        vec![APP_CODEX.to_string()],
+                    ),
+                ],
+                required_secrets: Vec::new(),
+            };
+            assert!(apply_portable_mcp_state(&portable, true)?);
+            let restored = load_mcp_records()?;
+            let restored_external = restored
+                .iter()
+                .find(|record| record.id == "external")
+                .ok_or_else(|| "missing restored external record".to_string())?;
+            assert_eq!(
+                restored_external.imported_from_app_ids,
+                vec![APP_OPENCODE.to_string()]
+            );
+            assert!(restored_external.managed_app_ids.is_empty());
+            let restored_remote_only = restored
+                .iter()
+                .find(|record| record.id == "remote-only")
+                .ok_or_else(|| "missing restored remote-only record".to_string())?;
+            assert!(!restored_remote_only
+                .enabled_app_ids
+                .iter()
+                .any(|app_id| app_id == APP_OPENCODE));
+            assert!(restored_remote_only.imported_from_app_ids.is_empty());
+            assert!(restored_remote_only.managed_app_ids.is_empty());
+            let restored_codex = restored
+                .iter()
+                .find(|record| record.id == "codex-external")
+                .ok_or_else(|| "missing restored Codex record".to_string())?;
+            assert_eq!(
+                restored_codex.imported_from_app_ids,
+                vec![APP_CODEX.to_string()]
+            );
+            tauri::async_runtime::block_on(toggle_mcp_server_app("external", APP_OPENCODE, false))?;
+            tauri::async_runtime::block_on(delete_mcp_server("external"))?;
+            tauri::async_runtime::block_on(delete_mcp_server("remote-only"))?;
+            tauri::async_runtime::block_on(delete_mcp_server("codex-external"))?;
+            let specs = read_agent_json_mcp_server_specs(&config_path)?;
+            assert!(specs.contains_key("external"));
+            assert!(specs.contains_key("remote-only"));
+            assert!(read_codex_mcp_servers(&codex_config_path)?
+                .iter()
+                .any(|(id, _)| id == "codex-external"));
+            Ok(())
+        })();
+
+        if let Some(home) = original_home {
+            env::set_var("HOME", home);
+        } else {
+            env::remove_var("HOME");
+        }
+        let _ = fs::remove_dir_all(&temp_home);
+        result.expect("preserve local OpenCode ownership during portable restore");
+    }
+
+    #[test]
+    fn migrates_legacy_enabled_opencode_records_to_managed_ownership() {
+        use crate::workspace::TEST_ENV_LOCK;
+
+        let _guard = TEST_ENV_LOCK
+            .lock()
+            .expect("test env lock should not be poisoned");
+        let temp_home = unique_continue_test_dir("opencode-ownership-migration");
+        let state_dir = temp_home.join(".skilldock");
+        fs::create_dir_all(&state_dir).expect("create legacy state directory");
+        fs::write(
+            state_dir.join(MCP_STATE_FILE_NAME),
+            serde_json::to_string(&json!({
+                "servers": [{
+                    "id": "legacy-owned",
+                    "name": "legacy-owned",
+                    "server": {
+                        "type": "stdio",
+                        "command": "uvx",
+                        "args": ["legacy-owned"]
+                    },
+                    "enabledAppIds": [APP_OPENCODE],
+                    "importedFromAppIds": [],
+                    "updatedAt": "2026/5/15 12:00:00"
+                }]
+            }))
+            .expect("serialize legacy MCP state"),
+        )
+        .expect("write legacy MCP state");
+        let original_home = env::var_os("HOME");
+        env::set_var("HOME", &temp_home);
+
+        let result = load_mcp_records();
+        if let Some(home) = original_home {
+            env::set_var("HOME", home);
+        } else {
+            env::remove_var("HOME");
+        }
+        let _ = fs::remove_dir_all(&temp_home);
+
+        let records = result.expect("load migrated legacy MCP state");
+        assert_eq!(records[0].managed_app_ids, vec![APP_OPENCODE.to_string()]);
     }
 }

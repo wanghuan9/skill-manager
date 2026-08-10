@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useEffect,
   useLayoutEffect,
   useRef,
@@ -30,10 +31,13 @@ import {
   type ProjectStatusFilter,
   type ProjectViewMode,
 } from "@/app/routes/projects";
+import { PublishRoute } from "@/app/routes/publish";
 import { AppI18nProvider, tx, useTranslate } from "@/app/i18n";
+import { subscribeOpenGithubSettings } from "@/app/github-settings-navigation";
 import { NotificationProvider, useNotifications } from "@/app/notifications";
 import { useFailureReporter } from "@/app/failure-feedback";
 import { FailureTracker } from "@/app/failure-tracker";
+import { formatHomePathForDisplay } from "@/app/path-utils";
 import { waitForNextPaint } from "@/app/utils/wait-for-next-paint";
 import { AppUpdateAutoPrompt } from "@/features/app-update/AppUpdateAutoPrompt";
 import { AppTooltip } from "@/app/components/AppTooltip";
@@ -79,6 +83,7 @@ type RouteKey =
   | "plugins"
   | "tools"
   | "install"
+  | "publish"
   | "settings"
   | "about";
 type SkillsSectionKey = "skills" | "mcp";
@@ -99,8 +104,9 @@ type RouteErrorBoundaryState = {
 };
 
 const ROUTE_LOCAL_ALIGN_COOLDOWN_MS = 10_000;
+const GITHUB_RATE_LIMIT_NOTICE_COOLDOWN_MS = 10_000;
 const AGENT_SKILLS_COMPATIBILITY_PROMPT_COUNT_KEY = "skilldock.agentSkillsCompatibilityPromptCount";
-const AGENT_SKILLS_COMPATIBILITY_PROMPT_MAX_COUNT = 3;
+const AGENT_SKILLS_COMPATIBILITY_PROMPT_MAX_COUNT = 5;
 
 class RouteErrorBoundary extends Component<
   RouteErrorBoundaryProps,
@@ -171,6 +177,11 @@ const routes: RouteDefinition[] = [
     descriptionKey: "app.nav.install.description",
   },
   {
+    key: "publish",
+    labelKey: "app.nav.publish.label",
+    descriptionKey: "app.nav.publish.description",
+  },
+  {
     key: "settings",
     labelKey: "app.nav.settings.label",
     descriptionKey: "app.nav.settings.description",
@@ -230,6 +241,20 @@ function NavRouteIcon(props: { route: RouteKey }) {
       <svg viewBox="0 0 24 24" aria-hidden="true">
         <path
           d="M12 4v10m0 0 4-4m-4 4-4-4M5 19h14"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.8"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+    );
+  }
+  if (route === "publish") {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path
+          d="M12 20V10m0 0-4 4m4-4 4 4M5 5h14"
           fill="none"
           stroke="currentColor"
           strokeWidth="1.8"
@@ -319,6 +344,8 @@ function renderRoute(
   skillOwnerFilter: ManagedSkillOwnerFilter,
   skillManagementFilter: ToolSkillManagementFilter,
   skillViewMode: SkillViewMode,
+  isSkillBatchSelecting: boolean,
+  onSkillBatchSelectingChange: (isSelecting: boolean) => void,
   activeInstallCategory: InstallCategory,
   activeInstallTab: InstallTab,
   onInstallCategoryChange: (category: InstallCategory) => void,
@@ -351,6 +378,9 @@ function renderRoute(
         onInstallTabChange={onInstallTabChange}
       />
     );
+  }
+  if (route === "publish") {
+    return <PublishRoute />;
   }
   if (route === "plugins") {
     return (
@@ -400,6 +430,8 @@ function renderRoute(
       ownerFilter={skillOwnerFilter}
       managementFilter={skillManagementFilter}
       viewMode={skillViewMode}
+      isBatchSelecting={isSkillBatchSelecting}
+      onBatchSelectingChange={onSkillBatchSelectingChange}
     />
   );
 }
@@ -623,6 +655,8 @@ function AppContent() {
   const {
     alignLocalWorkspaceState,
     appSettings,
+    githubConnection,
+    githubRateLimitNoticeVersion,
     installedSkills,
     isStartupGitStateRefreshComplete,
     didStartupGitStateRefreshSucceed,
@@ -630,6 +664,7 @@ function AppContent() {
     language,
     toolSkillEntries,
     refreshWorkspace,
+    setSkillLibraryProvider,
     toolConfigs,
   } = useSkillWorkspace();
   const { t } = useTranslate();
@@ -659,6 +694,7 @@ function AppContent() {
   const [skillViewMode, setSkillViewMode] = useState<SkillViewMode>(
     () => resolveSkillViewModePreference(initialSkillViewMode, installedSkills.length),
   );
+  const [isSkillBatchSelecting, setIsSkillBatchSelecting] = useState(false);
   const [hasSavedSkillViewPreference, setHasSavedSkillViewPreference] =
     useState(initialSkillViewMode !== null);
   const [activeInstallCategory, setActiveInstallCategory] =
@@ -683,6 +719,27 @@ function AppContent() {
   const routeLocalAlignInFlightRef = useRef(false);
   const lastRouteLocalAlignRef = useRef<{ key: string; timestamp: number } | null>(null);
   const compatibilityPromptCheckStartedRef = useRef(false);
+  const lastGithubRateLimitPromptAtRef = useRef(0);
+
+  const openGithubSettings = useCallback(() => {
+    setActiveRoute("settings");
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        document.getElementById("settings-github-api")?.scrollIntoView?.({
+          behavior: "smooth",
+          block: "center",
+        });
+      });
+    });
+  }, []);
+
+  useEffect(() => subscribeOpenGithubSettings(openGithubSettings), [openGithubSettings]);
+
+  useEffect(() => {
+    if (activeRoute !== "skills" || activeSkillsSection !== "skills") {
+      setIsSkillBatchSelecting(false);
+    }
+  }, [activeRoute, activeSkillsSection]);
 
   useEffect(() => {
     let isMounted = true;
@@ -708,7 +765,7 @@ function AppContent() {
 
   useEffect(() => {
     if (
-      appSettings.agentSkillsCompatibilityEnabled
+      appSettings.agentSkillsCompatibilityConfigured
       || appSettings.storagePath.trim().length === 0
       || compatibilityPromptCheckStartedRef.current
     ) {
@@ -724,28 +781,61 @@ function AppContent() {
     }
 
     compatibilityPromptCheckStartedRef.current = true;
-    void fetchAgentSkillsCliStatus()
-      .then((status) => {
-        if (!status.available) {
-          return;
-        }
+    const nextPromptCount = promptCount + 1;
+    window.localStorage.setItem(
+      AGENT_SKILLS_COMPATIBILITY_PROMPT_COUNT_KEY,
+      String(nextPromptCount),
+    );
+    notify({
+      message: t("settings.skillLibrary.startupPrompt"),
+      tone: "info",
+      actionLabel: t("settings.skillLibrary.openSettings"),
+      onAction: () => setActiveRoute("settings"),
+    });
 
-        const nextPromptCount = promptCount + 1;
+    if (nextPromptCount >= AGENT_SKILLS_COMPATIBILITY_PROMPT_MAX_COUNT) {
+      void setSkillLibraryProvider("skilldock").catch((error) => {
         window.localStorage.setItem(
           AGENT_SKILLS_COMPATIBILITY_PROMPT_COUNT_KEY,
-          String(nextPromptCount),
+          String(AGENT_SKILLS_COMPATIBILITY_PROMPT_MAX_COUNT - 1),
         );
-        notify({
-          message: t("settings.skillLibrary.startupPrompt"),
-          tone: "info",
-          actionLabel: t("settings.skillLibrary.openSettings"),
-          onAction: () => setActiveRoute("settings"),
-        });
-      })
-      .catch((error) => {
-        console.warn("Failed to detect Agent Skills CLI for startup prompt", error);
+        console.warn("Failed to finalize Agent Skills CLI compatibility prompt", error);
       });
-  }, [appSettings.agentSkillsCompatibilityEnabled, appSettings.storagePath, notify, t]);
+    }
+  }, [
+    appSettings.agentSkillsCompatibilityConfigured,
+    appSettings.storagePath,
+    notify,
+    setSkillLibraryProvider,
+    t,
+  ]);
+
+  useEffect(() => {
+    if (
+      githubRateLimitNoticeVersion === 0
+      || githubConnection.connected
+    ) {
+      return;
+    }
+
+    const now = Date.now();
+    if (now - lastGithubRateLimitPromptAtRef.current < GITHUB_RATE_LIMIT_NOTICE_COOLDOWN_MS) {
+      return;
+    }
+    lastGithubRateLimitPromptAtRef.current = now;
+    notify({
+      message: t("notifications.githubRateLimited"),
+      tone: "info",
+      actionLabel: t("notifications.configureGithubToken"),
+      onAction: openGithubSettings,
+    });
+  }, [
+    githubConnection.connected,
+    githubRateLimitNoticeVersion,
+    notify,
+    openGithubSettings,
+    t,
+  ]);
 
   const hasShownSkillUpdateNotificationRef = useRef(false);
   const activeDefinition =
@@ -754,13 +844,9 @@ function AppContent() {
     (project) => project.id === activeProjectId,
   ) ?? null;
   const activeProjectSkillGroups = groupProjectSkills(activeProject?.skills ?? []);
-  const updatableSkillCount = installedSkills.filter((skill) => (
-    skill.collabStatus === "update-available"
-    || (appSettings.skillLibraryProvider === "agent-skills"
-      && !skill.gitLinked
-      && skill.sourceUrl.trim().length === 0
-      && skill.localPath.startsWith(appSettings.skillLibraryPath))
-  )).length;
+  const updatableSkillCount = installedSkills.filter(
+    (skill) => skill.collabStatus === "update-available",
+  ).length;
   const pendingSkillCount = installedSkills.filter(
     (skill) => skill.collabStatus === "pending-commit" || skill.collabStatus === "pending-push",
   ).length;
@@ -794,13 +880,13 @@ function AppContent() {
       : activeRoute === "skills" && activeSkillsSection === "skills"
       ? activeSkillSourceTool && activeToolSkillCounts
         ? tx(language, "app.header.skills.sourceSummary", {
-            path: formatSkillDirectoryPath(activeSkillSourceTool.skillsPath),
+            path: formatHomePathForDisplay(activeSkillSourceTool.skillsPath),
             managed: activeToolSkillCounts.managed,
             unmanaged: activeToolSkillCounts.unmanaged,
             mismatch: activeToolSkillCounts.mismatch,
           })
         : tx(language, "app.header.skills.summary", {
-            path: formatSkillDirectoryPath(appSettings.skillLibraryPath),
+            path: formatHomePathForDisplay(appSettings.skillLibraryPath),
             installed: enabledManagedSkillCount,
             updatable: updatableSkillCount,
             pending: pendingSkillCount,
@@ -842,12 +928,14 @@ function AppContent() {
       pageContentRef.current.scrollTop = 0;
     }
     setActiveSkillSourceId(sourceId);
+    setIsSkillBatchSelecting(false);
     setFocusedManagedSkillName("");
     setSkillManagementFilter("all");
   }
 
   function handleShowManagedSkill(skillName: string) {
     setActiveSkillSourceId(MANAGED_SKILL_SOURCE_ID);
+    setIsSkillBatchSelecting(false);
     setFocusedManagedSkillName(skillName);
     setSkillQuery("");
     setSkillStatusFilter("all");
@@ -859,6 +947,7 @@ function AppContent() {
     setActiveRoute("skills");
     setActiveSkillsSection("skills");
     setActiveSkillSourceId(MANAGED_SKILL_SOURCE_ID);
+    setIsSkillBatchSelecting(false);
     setSkillStatusFilter("update-available");
     setSkillQuery("");
     setSkillManagementFilter("all");
@@ -1130,6 +1219,8 @@ function AppContent() {
       onManagementFilterChange={setSkillManagementFilter}
       viewMode={skillViewMode}
       onViewModeChange={handleSkillViewModeChange}
+      isBatchSelecting={isSkillBatchSelecting}
+      onBatchSelectingChange={setIsSkillBatchSelecting}
       onGoInstall={() => handleOpenSkillInstall("market")}
     />
   );
@@ -1560,6 +1651,34 @@ function AppContent() {
               </div>
               <p>{activeDescription}</p>
             </div>
+          ) : activeRoute === "publish" ? (
+            <div
+              key="publish"
+              className={`page-header--split${isCompactManagementHeader ? " management-page-header--compact" : ""}`}
+              data-tauri-drag-region={macOSDragRegion}
+            >
+              {isCompactManagementHeader ? (
+                <>
+                  <div className="management-page-header__identity" data-tauri-drag-region={macOSDragRegion}>
+                    <h1>{tx(language, activeDefinition.labelKey)}</h1>
+                    <p id="publish-header-summary-slot" />
+                  </div>
+                  <div className="management-page-header__toolbar-row">
+                    <div className="skills-source-header-slot management-page-header__source" id="publish-source-header-slot" />
+                    <div className="management-page-header__toolbar" id="publish-header-toolbar-slot" />
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="page-header__row" data-tauri-drag-region={macOSDragRegion}>
+                    <h1>{tx(language, activeDefinition.labelKey)}</h1>
+                    <div id="publish-header-toolbar-slot" />
+                  </div>
+                  <p id="publish-header-summary-slot" />
+                  <div className="skills-source-header-slot" id="publish-source-header-slot" />
+                </>
+              )}
+            </div>
           ) : activeRoute === "plugins" ? (
             <div
               key="plugins"
@@ -1620,7 +1739,7 @@ function AppContent() {
         <div
           className={`page-header-divider${
             (isCompactManagementHeader
-              && (activeRoute === "skills" || activeRoute === "plugins"))
+              && (activeRoute === "skills" || activeRoute === "plugins" || activeRoute === "publish"))
               || (activeRoute === "skills" && activeSkillsSection === "skills")
               || activeRoute === "plugins"
               ? " page-header-divider--skills"
@@ -1641,6 +1760,8 @@ function AppContent() {
               skillOwnerFilter,
               skillManagementFilter,
               skillViewMode,
+              isSkillBatchSelecting,
+              setIsSkillBatchSelecting,
               activeInstallCategory,
               activeInstallTab,
               setActiveInstallCategory,

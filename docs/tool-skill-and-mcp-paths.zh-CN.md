@@ -3,14 +3,14 @@
 本文档用于核对当前代码里已经建模的工具 `skills` 路径与 MCP 配置路径。
 
 - 核对基线：当前仓库实现
-- 代码来源：`src-tauri/src/commands.rs`、`src-tauri/src/mcp_manager.rs`
-- 更新时间：2026-05-15
+- 代码来源：`src-tauri/src/tool_adapters.rs`、`src-tauri/src/commands.rs`、`src-tauri/src/mcp_manager.rs`
+- 更新时间：2026-07-27
 
 ## 当前结论
 
-- 当前共建模了 29 个工具的 `skills` 路径。
-- 其中 28 个工具当前标记为 `支持 MCP，且路径已建模`。
-- 目前只有 `IntelliJ IDEA` 标记为 `不支持 MCP`。
+- 当前共建模了 35 个工具。
+- 其中 32 个工具当前标记为 `支持 MCP，且路径已建模`。
+- `IntelliJ IDEA`、`VS Code` 和 `Pi` 当前标记为 `不支持 MCP`。
 - 当前没有处于 `支持 MCP，但路径未建模` 的工具。
 
 ## 状态说明
@@ -24,9 +24,15 @@
 | --- | --- | --- | --- | --- |
 | Claude Code | `claude-code` | `~/.claude/skills` | 支持 | `~/.claude.json` |
 | Codex | `codex` | `~/.codex/skills` | 支持 | `~/.codex/config.toml` |
+| Pi | `pi` | `~/.pi/agent/skills` | 不支持 | - |
+| OMP | `omp` | `~/.omp/agent/skills` | 支持 | `~/.omp/agent/mcp.json` |
+| Grok Build | `grok` | `~/.grok/skills` | 支持 | `~/.grok/config.toml` |
+| MiMo Code | `mimo-code` | `~/.config/mimocode/skills` | 支持 | `~/.config/mimocode/mimocode.json` |
+| WorkBuddy | `workbuddy` | `~/.workbuddy/skills` | 支持 | `~/.workbuddy/.mcp.json` |
 | Cursor | `cursor` | `~/.cursor/skills` | 支持 | `~/.cursor/mcp.json` |
 | Windsurf | `windsurf` | `~/.codeium/windsurf/skills` | 支持 | `~/.codeium/windsurf/mcp_config.json` |
 | IntelliJ IDEA | `intellij` | `~/.junie/skills` | 不支持 | - |
+| VS Code | `vscode` | - | 不支持 | - |
 | OpenCode | `opencode` | `~/.config/opencode/skills` | 支持 | `~/.config/opencode/opencode.json` |
 | Gemini CLI | `gemini` | `~/.gemini/skills` | 支持 | `~/.gemini/settings.json` |
 | Antigravity | `antigravity` | `~/.gemini/config/skills` | 支持 | `~/.gemini/config/mcp_config.json` |
@@ -60,3 +66,6 @@
 - `Droid` 当前使用 `~/.factory/skills` 与 `~/.factory/mcp.json`。
 - `Antigravity` 当前使用 Gemini 新版共享 skills 目录：`~/.gemini/config/skills`；MCP 配置仍位于 `~/.gemini/config/mcp_config.json`。
 - `Goose` 当前以 `~/.agents/skills` 作为首选 skill 路径，同时兼容扫描旧路径 `~/.config/goose/skills`。
+- `Pi` 核心不内置 MCP；MCP 通常由第三方扩展提供，因此 SkillDock 不猜测或写入 Pi MCP 配置。
+- `MiMo Code` 路径与 MCP 格式依据官方文档：全局配置位于 `~/.config/mimocode/`，MCP 使用 `mcp` 对象，并支持本地与远程 server。
+- `WorkBuddy` 当前使用用户确认的 `~/.workbuddy/skills` 与 `~/.workbuddy/.mcp.json`；官网暂未公开这两个本地文件路径。

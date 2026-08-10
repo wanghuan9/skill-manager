@@ -1,6 +1,12 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { SearchFieldIcon } from "@/app/components/SearchFieldIcon";
+import {
+  BatchActionBar,
+  BatchDeleteDialog,
+  BatchModeButton,
+} from "@/app/components/BatchActions";
+import { useBatchSelection } from "@/app/hooks/useBatchSelection";
 import { useStableListOrder } from "@/app/hooks/useStableListOrder";
 import { useTranslate } from "@/app/i18n";
 import { ToolbarGoInstallButton } from "@/app/components/ToolbarGoInstallButton";
@@ -104,6 +110,7 @@ const pluginTabs: { key: PluginTabKey; label: string }[] = [
   { key: "claude-code", label: "Claude Code" },
   { key: "codex", label: "Codex" },
   { key: "cursor", label: "Cursor" },
+  { key: "opencode", label: "OpenCode" },
 ];
 const componentSections: ComponentSection[] = [
   { key: "skill", title: "Skills", summaryLabel: "skill" },
@@ -1021,7 +1028,12 @@ function getPluginCollabBadge(
 function canTogglePlugin(plugin: PluginSummary) {
   return (
     plugin.enabledState !== "unknown"
-    && (plugin.hostTool === "codex" || plugin.hostTool === "claude-code" || plugin.hostTool === "cursor")
+    && (
+      plugin.hostTool === "codex"
+      || plugin.hostTool === "claude-code"
+      || plugin.hostTool === "cursor"
+      || plugin.hostTool === "opencode"
+    )
   );
 }
 
@@ -1572,6 +1584,8 @@ export function PluginsRoute(props: PluginsRouteProps = {}) {
     () => new Set(),
   );
   const [deleteConfirmingPluginId, setDeleteConfirmingPluginId] = useState("");
+  const [batchAction, setBatchAction] = useState<"update" | "delete" | "toggle" | "">("");
+  const [isBatchDeleteConfirming, setIsBatchDeleteConfirming] = useState(false);
   const [updateConfirmingPlugin, setUpdateConfirmingPlugin] = useState<PluginSummary | null>(null);
   const [expandedComponentSections, setExpandedComponentSections] =
     useState<ExpandedComponentSections>({});
@@ -1599,6 +1613,7 @@ export function PluginsRoute(props: PluginsRouteProps = {}) {
     { key: "claude-code", label: "Claude Code" },
     { key: "codex", label: "Codex" },
     { key: "cursor", label: "Cursor" },
+    { key: "opencode", label: "OpenCode" },
   ];
   const pluginSourceOptions: PluginSourceOption[] = localizedPluginTabs.map((tab) => ({
     ...tab,
@@ -2127,32 +2142,6 @@ export function PluginsRoute(props: PluginsRouteProps = {}) {
     return () => document.removeEventListener("keydown", handleKeyDown);
   }, [deleteConfirmingPluginId]);
 
-  useEffect(() => {
-    if (plugins.length === 0) {
-      return;
-    }
-
-    if (activeHost === "all") {
-      return;
-    }
-
-    const hasActiveHostPlugins = plugins.some(
-      (plugin) => plugin.hostTool === activeHost,
-    );
-    if (hasActiveHostPlugins) {
-      return;
-    }
-
-    const firstHostWithPlugins = pluginTabs
-      .filter((tab) => tab.key !== "all")
-      .find((tab) =>
-      plugins.some((plugin) => plugin.hostTool === tab.key),
-    );
-    if (firstHostWithPlugins) {
-      setActiveHost(firstHostWithPlugins.key);
-    }
-  }, [activeHost, plugins]);
-
   const normalizedQuery = query.trim().toLowerCase();
   const statusSortedScopedPlugins = (activeHost === "all"
     ? buildAllTabPlugins(plugins)
@@ -2216,6 +2205,39 @@ export function PluginsRoute(props: PluginsRouteProps = {}) {
 
     return searchContent.includes(normalizedQuery);
   });
+  const visiblePluginKeys = useMemo(
+    () => filteredPlugins.map(getPluginInstanceKey),
+    [filteredPlugins],
+  );
+  const batchSelection = useBatchSelection(visiblePluginKeys);
+  const selectedPlugins = filteredPlugins.filter((plugin) => (
+    batchSelection.selectedIds.has(getPluginInstanceKey(plugin))
+  ));
+  const selectedPluginStates = selectedPlugins.map((plugin) => {
+    const targets = listPluginActionTargets(plugin, plugins, activeHost === "all");
+    const toggleTargets = targets.filter(canTogglePlugin);
+    const updateTargets = targets.filter((target) => target.collabStatus === "update-available");
+    const blocksBatchUpdate = updateTargets.some((target) => (
+      target.updateStrategy === "hash" && target.localModified
+    ));
+    const allEnabled = toggleTargets.length > 0
+      && toggleTargets.every((target) => target.enabledState === "enabled");
+    return { plugin, targets, toggleTargets, updateTargets, blocksBatchUpdate, allEnabled };
+  });
+  const actionableTogglePluginStates = selectedPluginStates.filter((item) => item.toggleTargets.length > 0);
+  const shouldBatchEnablePlugins = actionableTogglePluginStates.some((item) => !item.allEnabled);
+  const togglePluginStates = actionableTogglePluginStates.filter((item) => item.toggleTargets.some(
+    (target) => (target.enabledState === "enabled") !== shouldBatchEnablePlugins,
+  ));
+  const updatePluginStates = selectedPluginStates.filter((item) => (
+    item.updateTargets.length > 0 && !item.blocksBatchUpdate
+  ));
+  const isBatchBusy = batchAction !== "";
+
+  useEffect(() => {
+    batchSelection.exitSelection();
+    setIsBatchDeleteConfirming(false);
+  }, [activeHost, batchSelection.exitSelection]);
 
   const toolbar = (
     <section
@@ -2255,11 +2277,23 @@ export function PluginsRoute(props: PluginsRouteProps = {}) {
           minMenuWidth={96}
         />
       </div>
+      <BatchModeButton
+        isSelecting={batchSelection.isSelecting}
+        label={t(batchSelection.isSelecting ? "batch.mode.exit" : "batch.mode.enter")}
+        onClick={() => {
+          if (batchSelection.isSelecting) {
+            batchSelection.exitSelection();
+            return;
+          }
+          handleExpandedChange(expandedId, false);
+          batchSelection.enterSelection();
+        }}
+      />
       <button
         className={`secondary-button secondary-button--compact skills-toolbar-button skills-toolbar-button--refresh${isReloading ? " is-loading" : ""}`}
         type="button"
         onClick={() => void reloadPlugins()}
-        disabled={isReloading}
+        disabled={isReloading || batchSelection.isSelecting}
       >
         <span aria-hidden="true" className="skills-toolbar-button__icon">
           <RefreshIcon isSpinning={isReloading} />
@@ -2270,14 +2304,16 @@ export function PluginsRoute(props: PluginsRouteProps = {}) {
         className={`secondary-button secondary-button--compact skills-toolbar-button${isRefreshing ? " is-loading" : ""}`}
         type="button"
         onClick={() => void loadPlugins({ silent: true })}
-        disabled={isRefreshing}
+        disabled={isRefreshing || batchSelection.isSelecting}
       >
         <span aria-hidden="true" className="skills-toolbar-button__icon">
           <ImportIcon isSpinning={isRefreshing} />
         </span>
         <span>{isRefreshing ? t("plugins.toolbar.scanning") : t("plugins.toolbar.scanImport")}</span>
       </button>
-      {props.onGoInstall ? <ToolbarGoInstallButton onClick={props.onGoInstall} /> : null}
+      {!batchSelection.isSelecting && props.onGoInstall ? (
+        <ToolbarGoInstallButton onClick={props.onGoInstall} />
+      ) : null}
     </section>
   );
   const sourceHeader = isCompactHeader ? (
@@ -2794,6 +2830,183 @@ export function PluginsRoute(props: PluginsRouteProps = {}) {
     }
   }
 
+  function mergeBatchPluginUpdates(updatedPlugins: PluginSummary[]) {
+    if (updatedPlugins.length === 0) {
+      return;
+    }
+    const updatedPluginMap = new Map(
+      updatedPlugins.map((plugin) => [getPluginInstanceKey(plugin), plugin]),
+    );
+    setPlugins((current) => {
+      const nextPlugins = current.map((plugin) => (
+        updatedPluginMap.get(getPluginInstanceKey(plugin)) ?? plugin
+      ));
+      if (!shouldUseFixtureData()) {
+        cachePlugins(nextPlugins);
+      }
+      return nextPlugins;
+    });
+  }
+
+  function finishPluginBatch(
+    actionLabel: string,
+    targetIds: string[],
+    results: PromiseSettledResult<void>[],
+    skippedCount = 0,
+  ) {
+    const failedIds = results.flatMap((result, index) => (
+      result.status === "rejected" ? [targetIds[index]] : []
+    ));
+    const successCount = results.length - failedIds.length;
+    batchSelection.keepSelected(failedIds);
+    if (failedIds.length === 0) {
+      notify({
+        tone: "success",
+        message: t("batch.result.success", { action: actionLabel, count: successCount, skipped: skippedCount }),
+      });
+      batchSelection.exitSelection();
+      return;
+    }
+    notify({
+      tone: successCount > 0 ? "info" : "error",
+      message: t("batch.result.partial", {
+        action: actionLabel,
+        success: successCount,
+        failed: failedIds.length,
+        skipped: skippedCount,
+      }),
+    });
+  }
+
+  async function handleBatchTogglePlugins() {
+    if (isBatchBusy || togglePluginStates.length === 0) {
+      return;
+    }
+    setBatchAction("toggle");
+    const updatedPlugins: PluginSummary[] = [];
+    try {
+      const results = await Promise.allSettled(togglePluginStates.map(async (item) => {
+        const targets = item.toggleTargets.filter((target) => (
+          (target.enabledState === "enabled") !== shouldBatchEnablePlugins
+        ));
+        const targetResults = await Promise.allSettled(targets.map((target) => setPluginEnabled({
+          pluginId: target.id,
+          hostTool: target.hostTool,
+          rootPath: target.rootPath,
+          enabled: shouldBatchEnablePlugins,
+        })));
+        updatedPlugins.push(...targetResults.flatMap((result) => (
+          result.status === "fulfilled" ? [result.value] : []
+        )));
+        const failedResult = targetResults.find((result) => result.status === "rejected");
+        if (failedResult?.status === "rejected") {
+          throw failedResult.reason;
+        }
+      }));
+      mergeBatchPluginUpdates(updatedPlugins);
+      finishPluginBatch(
+        t(shouldBatchEnablePlugins ? "batch.action.enable" : "batch.action.disable"),
+        togglePluginStates.map((item) => getPluginInstanceKey(item.plugin)),
+        results,
+        selectedPlugins.length - togglePluginStates.length,
+      );
+    } finally {
+      setBatchAction("");
+    }
+  }
+
+  async function handleBatchUpdatePlugins() {
+    if (isBatchBusy || updatePluginStates.length === 0) {
+      return;
+    }
+    setBatchAction("update");
+    try {
+      const operationMap = new Map<string, { target: PluginSummary; ownerIds: Set<string> }>();
+      for (const item of updatePluginStates) {
+        const ownerId = getPluginInstanceKey(item.plugin);
+        for (const target of listUniquePluginUpdateTargets(item.updateTargets)) {
+          const operationKey = getPluginUpdateOperationKey(target);
+          const operation = operationMap.get(operationKey) ?? { target, ownerIds: new Set<string>() };
+          operation.ownerIds.add(ownerId);
+          operationMap.set(operationKey, operation);
+        }
+      }
+      const operations = [...operationMap.values()];
+      const operationResults = await Promise.allSettled(operations.map(({ target }) => updatePlugin({
+        pluginId: target.id,
+        hostTool: target.hostTool,
+        rootPath: target.rootPath,
+      })));
+      const failedOwnerIds = new Set<string>();
+      operationResults.forEach((result, index) => {
+        if (result.status === "rejected") {
+          operations[index].ownerIds.forEach((ownerId) => failedOwnerIds.add(ownerId));
+        }
+      });
+      const refreshTargets = updatePluginStates.flatMap((item) => item.updateTargets);
+      const refreshResults = await Promise.allSettled(refreshTargets.map((target) => refreshLocalPluginState({
+        hostTool: target.hostTool,
+        rootPath: target.rootPath,
+      })));
+      mergeBatchPluginUpdates(refreshResults.flatMap((result) => (
+        result.status === "fulfilled" ? [result.value] : []
+      )));
+      const results: PromiseSettledResult<void>[] = updatePluginStates.map((item) => (
+        failedOwnerIds.has(getPluginInstanceKey(item.plugin))
+          ? { status: "rejected", reason: new Error(t("plugins.error.update")) }
+          : { status: "fulfilled", value: undefined }
+      ));
+      finishPluginBatch(
+        t("batch.action.update"),
+        updatePluginStates.map((item) => getPluginInstanceKey(item.plugin)),
+        results,
+        selectedPlugins.length - updatePluginStates.length,
+      );
+    } finally {
+      setBatchAction("");
+    }
+  }
+
+  async function handleBatchDeletePlugins() {
+    if (isBatchBusy || selectedPluginStates.length === 0) {
+      return;
+    }
+    setIsBatchDeleteConfirming(false);
+    setBatchAction("delete");
+    const deletedPluginKeys = new Set<string>();
+    try {
+      const results = await Promise.allSettled(selectedPluginStates.map(async (item) => {
+        for (const target of item.targets) {
+          await deletePlugin({
+            pluginId: target.id,
+            hostTool: target.hostTool,
+            rootPath: target.rootPath,
+          });
+          deletedPluginKeys.add(getPluginInstanceKey(target));
+        }
+      }));
+      setPlugins((current) => {
+        const nextPlugins = current.filter((plugin) => !deletedPluginKeys.has(getPluginInstanceKey(plugin)));
+        if (!shouldUseFixtureData()) {
+          cachePlugins(nextPlugins);
+        }
+        return nextPlugins;
+      });
+      setExpandedComponentSections((current) => {
+        const next = { ...current };
+        deletedPluginKeys.forEach((pluginKey) => delete next[pluginKey]);
+        return next;
+      });
+      finishPluginBatch(
+        t("batch.action.delete"),
+        selectedPluginStates.map((item) => getPluginInstanceKey(item.plugin)),
+        results,
+      );
+    } finally {
+      setBatchAction("");
+    }
+  }
+
   function toggleComponentSection(plugin: PluginSummary, assetType: PluginAssetType) {
     const pluginKey = getPluginInstanceKey(plugin);
 
@@ -3017,6 +3230,46 @@ export function PluginsRoute(props: PluginsRouteProps = {}) {
           {actionErrorMessage}
         </div>
       ) : null}
+      {batchSelection.isSelecting ? (
+        <BatchActionBar
+          actions={selectedPlugins.length > 0 ? [
+            ...(updatePluginStates.length > 0 ? [{
+              key: "update",
+              label: t("batch.action.updateCount", { count: updatePluginStates.length }),
+              tone: "accent" as const,
+              isBusy: batchAction === "update",
+              onClick: () => void handleBatchUpdatePlugins(),
+            }] : []),
+            {
+              key: "delete",
+              label: t("batch.action.deleteCount", { count: selectedPlugins.length }),
+              tone: "danger" as const,
+              isBusy: batchAction === "delete",
+              onClick: () => setIsBatchDeleteConfirming(true),
+            },
+            ...(togglePluginStates.length > 0 ? [{
+              key: "toggle",
+              label: t(shouldBatchEnablePlugins ? "batch.action.enableCount" : "batch.action.disableCount", {
+                count: togglePluginStates.length,
+              }),
+              tone: shouldBatchEnablePlugins ? "success" as const : "warning" as const,
+              isBusy: batchAction === "toggle",
+              onClick: () => void handleBatchTogglePlugins(),
+            }] : []),
+          ] : []}
+          ariaLabel={t("batch.toolbar.aria")}
+          cancelLabel={t("batch.cancel")}
+          deselectAllLabel={t("batch.deselectAll")}
+          hint={t("batch.hint")}
+          isAllVisibleSelected={batchSelection.isAllVisibleSelected}
+          isBusy={isBatchBusy}
+          selectedLabel={selectedPlugins.length > 0 ? t("batch.selected", { count: selectedPlugins.length }) : ""}
+          selectAllDisabled={filteredPlugins.length === 0}
+          selectAllLabel={t("batch.selectAll")}
+          onCancel={batchSelection.exitSelection}
+          onToggleSelectAll={batchSelection.toggleSelectAll}
+        />
+      ) : null}
       <div className={`card-list${viewMode === "grid" ? " tool-card-grid" : ""}`}>
         {errorMessage ? (
           <div className="panel-card empty-state">
@@ -3110,6 +3363,10 @@ export function PluginsRoute(props: PluginsRouteProps = {}) {
                 )}
                 details={renderPluginDetails(plugin)}
                 expanded={expandedId === pluginKey}
+                selectionMode={batchSelection.isSelecting}
+                selected={batchSelection.selectedIds.has(pluginKey)}
+                selectionLabel={t("batch.item.plugin", { name: pluginDisplayName })}
+                onSelectionToggle={() => batchSelection.toggleSelection(pluginKey)}
                 onExpandedChange={(expanded, summaryElement) =>
                   handleExpandedChange(pluginKey, expanded, summaryElement)
                 }
@@ -3217,6 +3474,16 @@ export function PluginsRoute(props: PluginsRouteProps = {}) {
           })
         )}
       </div>
+      <BatchDeleteDialog
+        cancelLabel={t("batch.cancel")}
+        confirmLabel={t("batch.delete.confirm")}
+        description={t("batch.delete.description.plugin", { count: selectedPlugins.length })}
+        isBusy={batchAction === "delete"}
+        isOpen={isBatchDeleteConfirming}
+        title={t("batch.delete.title.plugin", { count: selectedPlugins.length })}
+        onCancel={() => setIsBatchDeleteConfirming(false)}
+        onConfirm={() => void handleBatchDeletePlugins()}
+      />
       {previewState ? (
         <div
           className="dialog-backdrop plugins-page__preview-backdrop"

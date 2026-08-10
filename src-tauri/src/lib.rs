@@ -1,15 +1,27 @@
 mod agent_skills_cli;
+mod backup_merge;
+mod backup_repository;
+mod backup_snapshot;
+mod clawhub_market;
 mod commands;
 mod diagnostics;
 mod git_state;
+mod github_api;
+mod github_connection;
+mod github_credentials;
 mod library;
+mod marketplace_package;
 mod mcp_manager;
 mod models;
 mod plugin_manager;
 mod plugin_watcher;
 mod project_manager;
+mod publishing_rules;
 mod skill_watcher;
+mod skillhub_market;
+mod skillhub_publishing;
 mod state;
+mod tool_adapters;
 mod workspace;
 
 #[cfg(windows)]
@@ -41,6 +53,10 @@ pub fn run() {
                 .plugin(tauri_plugin_updater::Builder::new().build())?;
             let _ = library::migrate_legacy_skill_symlinks_from_all_tools();
             let _ = library::remove_reserved_workspace_symlinks_from_all_tools();
+            let app_handle = app.handle().clone();
+            tauri::async_runtime::spawn(github_connection::migrate_legacy_token_on_startup(
+                app_handle,
+            ));
             if let Err(error) = skill_watcher::start_skill_library_watcher(app.handle().clone()) {
                 log::warn!("Failed to start skill library watcher: {error}");
             }
@@ -55,15 +71,41 @@ pub fn run() {
             commands::get_workspace_snapshot,
             commands::list_startup_installed_skills,
             commands::list_installed_skills,
-            commands::list_marketplace_skills,
+            commands::list_marketplace_skills_page,
             commands::get_marketplace_skill_description,
+            commands::get_marketplace_skill_detail,
             commands::get_marketplace_skill_file_browser,
             commands::get_marketplace_skill_file_content,
+            skillhub_publishing::get_skillhub_auth_status,
+            skillhub_publishing::save_skillhub_auth_token,
+            skillhub_publishing::clear_skillhub_auth_token,
+            skillhub_publishing::list_skillhub_publishable_skills,
+            skillhub_publishing::reconcile_skillhub_publishable_skills,
+            skillhub_publishing::get_skillhub_publish_update_preview,
+            skillhub_publishing::revert_skillhub_publish_update_file,
+            skillhub_publishing::revert_skillhub_publish_update_hunk,
+            skillhub_publishing::publish_skillhub_skill,
             commands::list_local_skill_candidates,
             commands::list_tool_skill_entries,
             commands::list_tool_configs,
             commands::get_git_account_summary,
             commands::get_app_settings,
+            github_connection::get_github_connection,
+            github_connection::start_github_device_flow,
+            github_connection::poll_github_device_flow,
+            github_connection::connect_github_token,
+            github_connection::disconnect_github,
+            backup_repository::get_backup_status,
+            backup_repository::enable_github_backup,
+            backup_repository::disconnect_github_backup,
+            backup_repository::run_backup_sync,
+            backup_repository::sync_backup_to_local,
+            backup_repository::list_cloud_backup_nodes,
+            backup_repository::delete_cloud_backup_node,
+            backup_repository::preview_cloud_backup_node,
+            backup_repository::restore_cloud_backup_node,
+            backup_repository::list_backup_conflicts,
+            backup_repository::resolve_backup_conflict,
             commands::get_agent_skills_cli_status,
             commands::update_app_settings,
             commands::detect_preferred_app_language,

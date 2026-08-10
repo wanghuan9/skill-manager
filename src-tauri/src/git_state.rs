@@ -1660,9 +1660,11 @@ mod tests {
             "existing-skill"
         );
 
-        let persisted_cache: GitUpdateCache =
-            serde_json::from_str(&fs::read_to_string(&cache_path).expect("read persisted cache"))
-                .expect("parse persisted cache");
+        let migrated_cache_path = temp_home.join(".skilldock/cache/git-update.json");
+        let persisted_cache: GitUpdateCache = serde_json::from_str(
+            &fs::read_to_string(migrated_cache_path).expect("read persisted cache"),
+        )
+        .expect("parse persisted cache");
         assert_eq!(persisted_cache.entries.len(), 1);
         assert_eq!(persisted_cache.pending_push_entries.len(), 1);
 

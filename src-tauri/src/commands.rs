@@ -10,8 +10,9 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use regex::{Regex, RegexBuilder};
-use reqwest::Client;
-use serde::{Deserialize, Deserializer, Serialize};
+use reqwest::header::HeaderMap;
+use reqwest::{Client, RequestBuilder, StatusCode};
+use serde::{Deserialize, Serialize};
 use zip::ZipArchive;
 
 use crate::git_state::{
@@ -33,15 +34,16 @@ use crate::library::{
 };
 use crate::models::{
     AppSettings, GitAccountSummary, GitBranchOption, GitChangeFile, LocalInstallSkillCandidate,
-    LocalSkillCandidate, MarketplaceSkill, PushBranchOption, PushPreviewSnapshot,
-    PushTargetSnapshot, RepoSkillCandidate, SkillFileBrowserSnapshot, SkillFileDocument,
-    SkillFileEntry, SkillSummary, ToolConfig, ToolSkillEntry, ToolSyncStatus,
+    LocalSkillCandidate, MarketplaceSkill, MarketplaceSkillsPage, PushBranchOption,
+    PushPreviewSnapshot, PushTargetSnapshot, RepoSkillCandidate, SkillFileBrowserSnapshot,
+    SkillFileDocument, SkillFileEntry, SkillSummary, ToolConfig, ToolSkillEntry, ToolSyncStatus,
     UpdatePreviewSnapshot, WorkspaceSnapshot,
 };
 use crate::state::{
     load_app_settings, load_installed_skills, normalize_skill_install_activation,
     save_app_settings, save_installed_skills, scan_local_skill_candidates,
 };
+use crate::tool_adapters;
 use crate::workspace::{self, APP_BRAND_NAME};
 
 const REFRESH_GIT_STATES_CONCURRENCY: usize = 5;
@@ -52,8 +54,9 @@ const AGENT_CLI_UP_TO_DATE_TEXT: &str = "Agent CLI Skill 已是最新版本。";
 const SKILL_LIBRARY_REFRESHED_EVENT: &str = "skill-library-refreshed";
 const LOCAL_SKILL_TOOL_STATE_CONCURRENCY: usize = 2;
 const PACKAGE_ID_HASH_LEN: usize = 8;
+const LOCAL_IMPORT_SOURCE_BACKUP_SUFFIX: &str = ".skilldock-import-backup";
 
-fn default_installed_skills() -> Vec<SkillSummary> {
+pub(crate) fn default_installed_skills() -> Vec<SkillSummary> {
     Vec::new()
 }
 
@@ -164,16 +167,23 @@ fn source_label_for_type(source_type: &str) -> &'static str {
 }
 
 const MARKETPLACE_FETCH_LIMIT: usize = 36;
-const MARKETPLACE_CACHE_VERSION: u64 = 3;
+const MARKETPLACE_CACHE_VERSION: u64 = 7;
 const MARKETPLACE_SKILL_FILE_LIMIT: usize = 200;
 const MARKETPLACE_SKILL_FILE_SIZE_LIMIT: u64 = 512 * 1024;
 const MARKETPLACE_SKILL_ROOT_CACHE_LIMIT: usize = 64;
+const MARKETPLACE_GITHUB_TREE_CACHE_TTL: Duration = Duration::from_secs(10 * 60);
+const MARKETPLACE_GITHUB_TREE_CACHE_LIMIT: usize = 64;
+const MARKETPLACE_PREVIEW_MODE_FULL: &str = "full";
+const GITHUB_RATE_LIMIT_ERROR: &str = "GitHub API 请求受限，请稍后重试";
 static SKILLS_SH_DESCRIPTION_CACHE: OnceLock<HashMap<String, String>> = OnceLock::new();
 static SKILLS_SH_LIVE_DESCRIPTION_CACHE: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
 static SKILLS_SH_HOMEPAGE_CACHE: OnceLock<Mutex<Option<Vec<SkillsShSkill>>>> = OnceLock::new();
 static SKILLS_SH_PAGE_CACHE: OnceLock<Mutex<HashMap<usize, SkillsShPagePayload>>> = OnceLock::new();
 static SKILLS_MANAGER_SKILLS_CACHE: OnceLock<Vec<SkillsManagerCachedSkill>> = OnceLock::new();
 static MARKETPLACE_SKILL_ROOT_CACHE: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
+static MARKETPLACE_GITHUB_TREE_CACHE: OnceLock<
+    Mutex<HashMap<String, CachedMarketplaceGitHubTree>>,
+> = OnceLock::new();
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -218,7 +228,11 @@ struct SkillsMpSkill {
     github_url: String,
     #[serde(default, deserialize_with = "deserialize_u64_or_string")]
     stars: u64,
-    #[serde(default, alias = "updated_at")]
+    #[serde(
+        default,
+        alias = "updated_at",
+        deserialize_with = "deserialize_string_or_number"
+    )]
     updated_at: String,
 }
 
@@ -230,6 +244,26 @@ struct GitHubContentEntry {
     entry_type: String,
 }
 
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+struct GitHubTreeEntry {
+    path: String,
+    #[serde(rename = "type")]
+    entry_type: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct GitHubTreeResponse {
+    #[serde(default)]
+    truncated: bool,
+    tree: Vec<GitHubTreeEntry>,
+}
+
+#[derive(Clone, Debug)]
+struct CachedMarketplaceGitHubTree {
+    fetched_at: Instant,
+    entries: Vec<GitHubTreeEntry>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct GitHubMarketplaceSource {
     owner: String,
@@ -237,17 +271,76 @@ struct GitHubMarketplaceSource {
     branch: Option<String>,
 }
 
+#[derive(Debug)]
+enum MarketplaceGitHubApiError {
+    RateLimited(String),
+    Other(String),
+}
+
+impl MarketplaceGitHubApiError {
+    fn message(self) -> String {
+        match self {
+            Self::RateLimited(message) | Self::Other(message) => message,
+        }
+    }
+}
+
 fn default_marketplace_skills() -> Vec<MarketplaceSkill> {
     Vec::new()
 }
 
-fn marketplace_http_client() -> Result<Client, String> {
+pub(crate) fn marketplace_http_client() -> Result<Client, String> {
     Client::builder()
         .user_agent("skilldock/0.1 (+https://github.com/wanghuan)")
         .connect_timeout(Duration::from_secs(8))
         .timeout(Duration::from_secs(12))
         .build()
         .map_err(|error| format!("创建市场请求客户端失败: {error}"))
+}
+
+fn github_api_request(client: &Client, url: url::Url, github_token: &str) -> RequestBuilder {
+    let request = client.get(url.clone());
+    let github_token = github_token.trim();
+    // Keep credentials scoped to GitHub API requests; Raw content requests never pass here.
+    if url.host_str() == Some("api.github.com") && !github_token.is_empty() {
+        request.bearer_auth(github_token)
+    } else {
+        request
+    }
+}
+
+fn is_github_api_rate_limited(status: StatusCode, headers: &HeaderMap) -> bool {
+    if status == StatusCode::TOO_MANY_REQUESTS {
+        return true;
+    }
+    if status != StatusCode::FORBIDDEN {
+        return false;
+    }
+
+    let has_retry_after = headers.contains_key(reqwest::header::RETRY_AFTER);
+    let remaining_is_zero = headers
+        .get("x-ratelimit-remaining")
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.trim() == "0");
+    has_retry_after || remaining_is_zero
+}
+
+fn github_api_response_error(
+    response: &reqwest::Response,
+    operation: &str,
+) -> Option<MarketplaceGitHubApiError> {
+    if is_github_api_rate_limited(response.status(), response.headers()) {
+        return Some(MarketplaceGitHubApiError::RateLimited(
+            GITHUB_RATE_LIMIT_ERROR.to_string(),
+        ));
+    }
+    if !response.status().is_success() {
+        return Some(MarketplaceGitHubApiError::Other(format!(
+            "{operation}: HTTP {}",
+            response.status()
+        )));
+    }
+    None
 }
 
 fn format_compact_number(value: u64) -> String {
@@ -262,7 +355,7 @@ fn format_compact_number(value: u64) -> String {
 
 fn deserialize_u64_or_string<'de, D>(deserializer: D) -> Result<u64, D::Error>
 where
-    D: Deserializer<'de>,
+    D: serde::Deserializer<'de>,
 {
     let value = serde_json::Value::deserialize(deserializer)?;
     if let Some(number) = value.as_u64() {
@@ -277,6 +370,18 @@ where
     }
 
     Ok(0)
+}
+
+fn deserialize_string_or_number<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    match value {
+        serde_json::Value::String(value) => Ok(value),
+        serde_json::Value::Number(value) => Ok(value.to_string()),
+        _ => Ok(String::new()),
+    }
 }
 
 fn source_type_for_url(source_url: &str) -> &'static str {
@@ -404,18 +509,57 @@ fn cache_marketplace_skill_root(cache_key: String, root_path: String) {
     }
 }
 
+fn marketplace_github_tree_cache_key(source: &GitHubMarketplaceSource) -> String {
+    format!(
+        "{}/{}#{}",
+        source.owner,
+        source.repository,
+        source.branch.as_deref().unwrap_or("HEAD")
+    )
+}
+
+fn cached_marketplace_github_tree(cache_key: &str) -> Option<Vec<GitHubTreeEntry>> {
+    let cache = MARKETPLACE_GITHUB_TREE_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut guard = cache.lock().ok()?;
+    let cached = guard.get(cache_key)?.clone();
+    if cached.fetched_at.elapsed() > MARKETPLACE_GITHUB_TREE_CACHE_TTL {
+        guard.remove(cache_key);
+        return None;
+    }
+    Some(cached.entries)
+}
+
+fn cache_marketplace_github_tree(cache_key: String, entries: Vec<GitHubTreeEntry>) {
+    let cache = MARKETPLACE_GITHUB_TREE_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Ok(mut guard) = cache.lock() {
+        if guard.len() >= MARKETPLACE_GITHUB_TREE_CACHE_LIMIT && !guard.contains_key(&cache_key) {
+            guard.clear();
+        }
+        guard.insert(
+            cache_key,
+            CachedMarketplaceGitHubTree {
+                fetched_at: Instant::now(),
+                entries,
+            },
+        );
+    }
+}
+
 fn marketplace_skill_root_from_tree(
     tree_output: &str,
     skill_path: &str,
     skill_name: &str,
 ) -> Option<String> {
+    let has_root_skill = tree_output
+        .lines()
+        .any(|entry_path| entry_path.eq_ignore_ascii_case("SKILL.md"));
     let normalized_path = normalize_marketplace_file_path(skill_path, true).ok()?;
     let expected_name = normalized_path
         .rsplit('/')
         .find(|segment| !segment.is_empty())
         .unwrap_or_else(|| skill_name.trim());
     if expected_name.is_empty() {
-        return None;
+        return has_root_skill.then(String::new);
     }
 
     let normalized_path_lower = normalized_path.to_lowercase();
@@ -454,7 +598,87 @@ fn marketplace_skill_root_from_tree(
         })
         .collect::<Vec<_>>();
     candidates.sort();
-    candidates.into_iter().next().map(|(_, _, _, path)| path)
+    candidates
+        .into_iter()
+        .next()
+        .map(|(_, _, _, path)| path)
+        .or_else(|| has_root_skill.then(String::new))
+}
+
+fn marketplace_skill_root_from_github_tree(
+    entries: &[GitHubTreeEntry],
+    skill_path: &str,
+    skill_name: &str,
+) -> Option<String> {
+    let tree_output = entries
+        .iter()
+        .filter(|entry| entry.entry_type == "blob")
+        .map(|entry| entry.path.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    marketplace_skill_root_from_tree(&tree_output, skill_path, skill_name)
+}
+
+fn marketplace_skill_entries_from_github_tree(
+    tree_entries: &[GitHubTreeEntry],
+    root_path: &str,
+    root_name: &str,
+) -> Result<Vec<SkillFileEntry>, String> {
+    let normalized_root = root_path.trim_matches('/');
+    let root_prefix = if normalized_root.is_empty() {
+        String::new()
+    } else {
+        format!("{normalized_root}/")
+    };
+    let mut entries = vec![SkillFileEntry {
+        path: String::new(),
+        name: root_name.to_string(),
+        entry_type: "directory".into(),
+        depth: 0,
+    }];
+
+    for tree_entry in tree_entries {
+        if !matches!(tree_entry.entry_type.as_str(), "blob" | "tree") {
+            continue;
+        }
+        let full_path = tree_entry.path.trim_matches('/');
+        let relative_path = if normalized_root.is_empty() {
+            full_path
+        } else if let Some(path) = full_path.strip_prefix(&root_prefix) {
+            path
+        } else {
+            continue;
+        };
+        if relative_path.is_empty() {
+            continue;
+        }
+        let relative_path = normalize_marketplace_file_path(relative_path, false)?;
+        let name = relative_path
+            .rsplit('/')
+            .next()
+            .unwrap_or(&relative_path)
+            .to_string();
+        let depth = relative_path.split('/').count();
+        entries.push(SkillFileEntry {
+            path: relative_path,
+            name,
+            entry_type: if tree_entry.entry_type == "tree" {
+                "directory"
+            } else {
+                "file"
+            }
+            .into(),
+            depth,
+        });
+        if entries.len() > MARKETPLACE_SKILL_FILE_LIMIT + 1 {
+            return Err(format!(
+                "Skill 文件数量超过 {} 个，暂不支持在线预览",
+                MARKETPLACE_SKILL_FILE_LIMIT
+            ));
+        }
+    }
+
+    Ok(entries)
 }
 
 fn github_contents_api_url(
@@ -482,6 +706,76 @@ fn github_contents_api_url(
     Ok(api_url)
 }
 
+fn github_tree_api_url(source: &GitHubMarketplaceSource) -> Result<url::Url, String> {
+    let mut api_url = url::Url::parse("https://api.github.com")
+        .map_err(|error| format!("构建 GitHub 请求地址失败: {error}"))?;
+    {
+        let mut segments = api_url
+            .path_segments_mut()
+            .map_err(|_| "构建 GitHub 请求地址失败".to_string())?;
+        segments.push("repos");
+        segments.push(&source.owner);
+        segments.push(&source.repository);
+        segments.push("git");
+        segments.push("trees");
+        segments.push(source.branch.as_deref().unwrap_or("HEAD"));
+    }
+    api_url.query_pairs_mut().append_pair("recursive", "1");
+    Ok(api_url)
+}
+
+fn github_raw_file_url(source: &GitHubMarketplaceSource, path: &str) -> Result<url::Url, String> {
+    let mut raw_url = url::Url::parse("https://raw.githubusercontent.com")
+        .map_err(|error| format!("构建 GitHub Raw 请求地址失败: {error}"))?;
+    {
+        let mut segments = raw_url
+            .path_segments_mut()
+            .map_err(|_| "构建 GitHub Raw 请求地址失败".to_string())?;
+        segments.push(&source.owner);
+        segments.push(&source.repository);
+        segments.push(source.branch.as_deref().unwrap_or("HEAD"));
+        for segment in path.split('/').filter(|segment| !segment.is_empty()) {
+            segments.push(segment);
+        }
+    }
+    Ok(raw_url)
+}
+
+async fn fetch_marketplace_github_tree(
+    client: &Client,
+    source: &GitHubMarketplaceSource,
+    github_token: &str,
+) -> Result<Vec<GitHubTreeEntry>, MarketplaceGitHubApiError> {
+    let cache_key = marketplace_github_tree_cache_key(source);
+    if let Some(entries) = cached_marketplace_github_tree(&cache_key) {
+        return Ok(entries);
+    }
+
+    let api_url = github_tree_api_url(source).map_err(MarketplaceGitHubApiError::Other)?;
+    let response = github_api_request(client, api_url, github_token)
+        .send()
+        .await
+        .map_err(|error| {
+            MarketplaceGitHubApiError::Other(format!("读取 GitHub 文件树失败: {error}"))
+        })?;
+    if let Some(error) = github_api_response_error(&response, "读取 GitHub 文件树失败") {
+        return Err(error);
+    }
+    let payload = response
+        .json::<GitHubTreeResponse>()
+        .await
+        .map_err(|error| {
+            MarketplaceGitHubApiError::Other(format!("解析 GitHub 文件树失败: {error}"))
+        })?;
+    if payload.truncated {
+        return Err(MarketplaceGitHubApiError::Other(
+            "GitHub 文件树过大，改用兼容模式读取".into(),
+        ));
+    }
+    cache_marketplace_github_tree(cache_key, payload.tree.clone());
+    Ok(payload.tree)
+}
+
 fn github_clone_url(source: &GitHubMarketplaceSource) -> Result<String, String> {
     let mut clone_url = url::Url::parse("https://github.com")
         .map_err(|error| format!("构建 GitHub 仓库地址失败: {error}"))?;
@@ -500,24 +794,26 @@ async fn fetch_github_directory_entries(
     client: &Client,
     source: &GitHubMarketplaceSource,
     path: &str,
-) -> Result<Vec<GitHubContentEntry>, String> {
-    let api_url = github_contents_api_url(source, path)?;
-    let response = client
-        .get(api_url)
+    github_token: &str,
+) -> Result<Vec<GitHubContentEntry>, MarketplaceGitHubApiError> {
+    let api_url =
+        github_contents_api_url(source, path).map_err(MarketplaceGitHubApiError::Other)?;
+    let response = github_api_request(client, api_url, github_token)
         .send()
         .await
-        .map_err(|error| format!("读取 GitHub Skill 目录失败: {error}"))?;
-    if response.status().as_u16() == 403 {
-        return Err("GitHub API 请求受限，请稍后重试".into());
+        .map_err(|error| {
+            MarketplaceGitHubApiError::Other(format!("读取 GitHub Skill 目录失败: {error}"))
+        })?;
+    if let Some(error) = github_api_response_error(&response, "读取 GitHub Skill 目录失败") {
+        return Err(error);
     }
-    let response = response
-        .error_for_status()
-        .map_err(|error| format!("读取 GitHub Skill 目录失败: {error}"))?;
 
     response
         .json::<Vec<GitHubContentEntry>>()
         .await
-        .map_err(|error| format!("解析 GitHub Skill 目录失败: {error}"))
+        .map_err(|error| {
+            MarketplaceGitHubApiError::Other(format!("解析 GitHub Skill 目录失败: {error}"))
+        })
 }
 
 fn discover_marketplace_skill_root_blocking(
@@ -638,7 +934,8 @@ async fn fetch_marketplace_skill_entries(
     source: &GitHubMarketplaceSource,
     root_path: &str,
     root_name: &str,
-) -> Result<Vec<SkillFileEntry>, String> {
+    github_token: &str,
+) -> Result<Vec<SkillFileEntry>, MarketplaceGitHubApiError> {
     let mut pending_directories = VecDeque::from([root_path.to_string()]);
     let mut entries = vec![SkillFileEntry {
         path: String::new(),
@@ -648,10 +945,12 @@ async fn fetch_marketplace_skill_entries(
     }];
 
     while let Some(directory_path) = pending_directories.pop_front() {
-        let mut children = fetch_github_directory_entries(client, source, &directory_path).await?;
+        let mut children =
+            fetch_github_directory_entries(client, source, &directory_path, github_token).await?;
         sort_github_content_entries(&mut children);
         for child in children {
-            let relative_path = marketplace_entry_relative_path(&child.path, root_path)?;
+            let relative_path = marketplace_entry_relative_path(&child.path, root_path)
+                .map_err(MarketplaceGitHubApiError::Other)?;
             let is_directory = child.entry_type == "dir";
             let depth = relative_path.split('/').count();
             entries.push(SkillFileEntry {
@@ -661,10 +960,10 @@ async fn fetch_marketplace_skill_entries(
                 depth,
             });
             if entries.len() > MARKETPLACE_SKILL_FILE_LIMIT + 1 {
-                return Err(format!(
+                return Err(MarketplaceGitHubApiError::Other(format!(
                     "Skill 文件数量超过 {} 个，暂不支持在线预览",
                     MARKETPLACE_SKILL_FILE_LIMIT
-                ));
+                )));
             }
             if is_directory {
                 pending_directories.push_back(child.path);
@@ -686,16 +985,12 @@ async fn fetch_marketplace_skill_file_document(
         .filter(|segment| !segment.is_empty())
         .collect::<Vec<_>>()
         .join("/");
-    let api_url = github_contents_api_url(source, &full_path)?;
+    let raw_url = github_raw_file_url(source, &full_path)?;
     let response = client
-        .get(api_url)
-        .header("Accept", "application/vnd.github.raw+json")
+        .get(raw_url)
         .send()
         .await
         .map_err(|error| format!("读取 GitHub Skill 文件失败: {error}"))?;
-    if response.status().as_u16() == 403 {
-        return Err("GitHub API 请求受限，请稍后重试".into());
-    }
     let response = response
         .error_for_status()
         .map_err(|error| format!("读取 GitHub Skill 文件失败: {error}"))?;
@@ -716,6 +1011,28 @@ async fn fetch_marketplace_skill_file_document(
     Ok(SkillFileDocument {
         path: relative_path.to_string(),
         content,
+    })
+}
+
+fn build_marketplace_skill_browser_snapshot(
+    skill_name: String,
+    mut entries: Vec<SkillFileEntry>,
+    preview_mode: &str,
+) -> Result<SkillFileBrowserSnapshot, String> {
+    if entries.len() <= 1 {
+        return Err("Skill 目录中没有可预览文件".into());
+    }
+
+    let root_entry = entries.remove(0);
+    entries.sort_by_key(marketplace_entry_sort_key);
+    entries.insert(0, root_entry);
+    let initial_file_path = marketplace_initial_file_path(&entries);
+    Ok(SkillFileBrowserSnapshot {
+        skill_name,
+        root_name: entries[0].name.clone(),
+        entries,
+        initial_file_path,
+        preview_mode: preview_mode.to_string(),
     })
 }
 
@@ -879,8 +1196,18 @@ fn map_skills_sh_items_to_marketplace(paged_items: Vec<SkillsShSkill>) -> Vec<Ma
             install_label: "按安装量排序".into(),
             source_url,
             popularity_label: format_compact_number(item.installs),
+            topic_label: String::new(),
             avatar_url: None,
             skill_path: resolved_skill_id.clone(),
+            installed: false,
+            update_available: false,
+            current_version: String::new(),
+            category_label: String::new(),
+            marketplace_url: String::new(),
+            owner: String::new(),
+            slug: String::new(),
+            version: String::new(),
+            install_driver: "git".to_string(),
         });
     }
 
@@ -1459,11 +1786,11 @@ fn normalize_repo_key_from_url(url: &str) -> String {
     )
 }
 
-fn persist_skill_timestamps(_skill: &SkillSummary) {
+pub(crate) fn persist_skill_timestamps(_skill: &SkillSummary) {
     // 预留钩子：后续可把安装/更新时间落盘到独立缓存文件。
 }
 
-fn now_timestamp_label() -> String {
+pub(crate) fn now_timestamp_label() -> String {
     format_system_time_label(SystemTime::now()).unwrap_or_else(|| "刚刚".into())
 }
 
@@ -1597,17 +1924,26 @@ fn map_skillsmp_items_to_marketplace(items: Vec<SkillsMpSkill>) -> Vec<Marketpla
                 install_label: "默认按热度排序".into(),
                 source_url: source_url.to_string(),
                 popularity_label: format_compact_number(item.stars),
+                topic_label: String::new(),
                 avatar_url: if avatar_url.is_empty() {
                     None
                 } else {
                     Some(avatar_url.to_string())
                 },
                 skill_path,
+                installed: false,
+                update_available: false,
+                current_version: String::new(),
+                category_label: String::new(),
+                marketplace_url: String::new(),
+                owner: String::new(),
+                slug: String::new(),
+                version: String::new(),
+                install_driver: "git".to_string(),
             })
         })
         .collect()
 }
-
 fn marketplace_cache_file() -> Option<PathBuf> {
     workspace::managed_workspace_root()
         .ok()
@@ -1623,6 +1959,20 @@ fn marketplace_cache_key(source: &str) -> String {
 }
 
 fn load_marketplace_cache(source: &str) -> Option<Vec<MarketplaceSkill>> {
+    let source_entry = load_marketplace_cache_source_entry(source)?;
+    let skills_array = source_entry
+        .get("skills")
+        .and_then(|value| value.as_array())?;
+    Some(
+        skills_array
+            .iter()
+            .filter_map(|skill| serde_json::from_value(skill.clone()).ok())
+            .map(normalize_cached_marketplace_skill)
+            .collect(),
+    )
+}
+
+fn load_marketplace_cache_source_entry(source: &str) -> Option<serde_json::Value> {
     let cache_path = marketplace_cache_file()?;
     let content = fs::read_to_string(cache_path).ok()?;
     let cached: serde_json::Value = serde_json::from_str(&content).ok()?;
@@ -1635,15 +1985,13 @@ fn load_marketplace_cache(source: &str) -> Option<Vec<MarketplaceSkill>> {
         return None;
     }
     let sources = cached.get("sources")?.as_object()?;
-    let source_entry = sources.get(&source_key)?;
-    let skills_array = source_entry.get("skills").and_then(|v| v.as_array())?;
-    Some(
-        skills_array
-            .iter()
-            .filter_map(|skill| serde_json::from_value(skill.clone()).ok())
-            .map(normalize_cached_marketplace_skill)
-            .collect(),
-    )
+    sources.get(&source_key).cloned()
+}
+
+fn load_marketplace_cache_has_more(source: &str) -> Option<bool> {
+    load_marketplace_cache_source_entry(source)?
+        .get("hasMore")
+        .and_then(|value| value.as_bool())
 }
 
 fn load_marketplace_cache_page(
@@ -1689,7 +2037,7 @@ fn normalize_cached_marketplace_skill(mut skill: MarketplaceSkill) -> Marketplac
     skill
 }
 
-fn save_marketplace_cache(source: &str, skills: &[MarketplaceSkill]) {
+fn save_marketplace_cache(source: &str, skills: &[MarketplaceSkill], has_more: Option<bool>) {
     let cache_path = match marketplace_cache_file() {
         Some(path) => path,
         None => return,
@@ -1726,13 +2074,14 @@ fn save_marketplace_cache(source: &str, skills: &[MarketplaceSkill]) {
     let Some(sources_object) = sources_value.as_object_mut() else {
         return;
     };
-    sources_object.insert(
-        source_key,
-        serde_json::json!({
-            "timestamp": timestamp,
-            "skills": skills
-        }),
-    );
+    let mut source_entry = serde_json::json!({
+        "timestamp": timestamp,
+        "skills": skills
+    });
+    if let (Some(has_more), Some(source_object)) = (has_more, source_entry.as_object_mut()) {
+        source_object.insert("hasMore".to_string(), serde_json::json!(has_more));
+    }
+    sources_object.insert(source_key, source_entry);
 
     let _ = fs::write(
         cache_path,
@@ -1769,7 +2118,7 @@ async fn build_marketplace_skills(
                 if !homepage_skills.is_empty() {
                     let homepage_page = paginate_marketplace_skills(&homepage_skills, page, limit);
                     if page == 1 && !homepage_page.is_empty() {
-                        save_marketplace_cache(source, &homepage_page);
+                        save_marketplace_cache(source, &homepage_page, None);
                     }
                     if should_use_skills_sh_homepage_page(page, homepage_page.len(), limit) {
                         return homepage_page;
@@ -1819,6 +2168,15 @@ async fn build_marketplace_skills(
         }
     }
 
+    if source.is_empty() || source == crate::skillhub_market::SOURCE {
+        let normalized_query = normalize_marketplace_query(query);
+        if let Ok(mut skillhub) =
+            crate::skillhub_market::list_skills(&client, page, limit, normalized_query.as_deref())
+                .await
+        {
+            skills.append(&mut skillhub);
+        }
+    }
     if !is_searching {
         skills.retain(|skill| matches_marketplace_query(skill, query));
     }
@@ -1842,13 +2200,18 @@ async fn build_marketplace_skills(
 
     // 如果是第一页且不是搜索，保存到缓存
     if page == 1 && !is_searching && !result.is_empty() {
-        save_marketplace_cache(source, &result);
+        save_marketplace_cache(source, &result, None);
     }
 
     result
 }
 
 fn build_local_candidates(installed_skills: &[SkillSummary]) -> Vec<LocalSkillCandidate> {
+    let tool_ids_by_skills_path = build_tool_configs()
+        .into_iter()
+        .filter(|tool| !tool.skills_path.is_empty())
+        .map(|tool| (tool.skills_path, tool.id))
+        .collect::<HashMap<_, _>>();
     scan_local_skill_candidates(installed_skills)
         .into_iter()
         .map(|(name, detected_from)| {
@@ -1857,9 +2220,20 @@ fn build_local_candidates(installed_skills: &[SkillSummary]) -> Vec<LocalSkillCa
                 .to_string_lossy()
                 .to_string();
             let source_hint = local_candidate_source_hint(&local_path).to_string();
+            let tool_id = tool_ids_by_skills_path
+                .get(&detected_from)
+                .cloned()
+                .unwrap_or_default();
+            let resolved_path = Path::new(&local_path)
+                .canonicalize()
+                .unwrap_or_else(|_| PathBuf::from(&local_path))
+                .to_string_lossy()
+                .to_string();
             LocalSkillCandidate {
                 description: read_skill_description(&Path::new(&local_path).join("SKILL.md")),
                 source_hint,
+                tool_id,
+                resolved_path,
                 name,
                 local_path,
                 detected_from,
@@ -1870,9 +2244,10 @@ fn build_local_candidates(installed_skills: &[SkillSummary]) -> Vec<LocalSkillCa
 
 fn build_tool_skill_entries(
     tool_configs: &[ToolConfig],
-    _installed_skills: &[SkillSummary],
+    installed_skills: &[SkillSummary],
 ) -> Vec<ToolSkillEntry> {
     let mut entries = Vec::new();
+    let agent_cli_status = agent_cli_status_for_skills(installed_skills);
 
     for tool in tool_configs {
         let skills_root = PathBuf::from(tool.skills_path.trim());
@@ -1902,7 +2277,17 @@ fn build_tool_skill_entries(
             let resolved_path = local_path
                 .canonicalize()
                 .unwrap_or_else(|_| local_path.clone());
-            let managed_root = managed_root_for_path(&resolved_path);
+            let mut managed_root = managed_root_for_path(&resolved_path);
+            if managed_root.is_empty()
+                && !is_skill_link_entry(&local_path)
+                && installed_skills.iter().any(|skill| {
+                    skill.name == name
+                        && agent_cli_reports_tool_installation(&agent_cli_status, skill, &tool.name)
+                            .unwrap_or(false)
+                })
+            {
+                managed_root = "agent-skills-cli".into();
+            }
             let management_status = if managed_root.is_empty() {
                 "unmanaged"
             } else {
@@ -2111,25 +2496,34 @@ fn software_exists(spec: &SoftwareDetectionSpec) -> bool {
             .any(|executable_name| executable_exists(executable_name))
 }
 
+fn detect_tool_installation(
+    config_paths: &[PathBuf],
+    software_spec: &SoftwareDetectionSpec,
+    requires_software_detection: bool,
+) -> bool {
+    if config_paths.is_empty() {
+        return software_exists(software_spec);
+    }
+
+    let has_config = config_paths.iter().any(|path| path.exists());
+    has_config && (!requires_software_detection || software_exists(software_spec))
+}
+
+fn tool_installation_label(installed: bool) -> String {
+    if installed { "已安装" } else { "未安装" }.to_string()
+}
+
+#[cfg(test)]
 fn detect_tool_installation_label(
     config_paths: &[PathBuf],
     software_spec: &SoftwareDetectionSpec,
     requires_software_detection: bool,
 ) -> String {
-    if config_paths.is_empty() {
-        return if software_exists(software_spec) {
-            "已安装".to_string()
-        } else {
-            "未安装".to_string()
-        };
-    }
-
-    let has_config = config_paths.iter().any(|path| path.exists());
-    if has_config && (!requires_software_detection || software_exists(software_spec)) {
-        "已安装".to_string()
-    } else {
-        "未安装".to_string()
-    }
+    tool_installation_label(detect_tool_installation(
+        config_paths,
+        software_spec,
+        requires_software_detection,
+    ))
 }
 
 fn mcp_config_path_for_tool(tool_id: &str, home_path: &Path) -> PathBuf {
@@ -2152,7 +2546,7 @@ fn mcp_config_path_for_tool(tool_id: &str, home_path: &Path) -> PathBuf {
         "kilo-code" => application_support_dir
             .join("Code/User/globalStorage/kilocode.kilo-code/settings/mcp_settings.json"),
         "kiro" => home_path.join(".kiro/settings/mcp.json"),
-        "opencode" => home_path.join(".config/opencode/opencode.json"),
+        "opencode" => workspace::opencode_config_path_for_home(home_path),
         "qoder" => home_path.join(".config/Qoder/SharedClientCache/mcp.json"),
         "qwen-code" => home_path.join(".qwen/settings.json"),
         "roo-code" => application_support_dir
@@ -2165,11 +2559,17 @@ fn mcp_config_path_for_tool(tool_id: &str, home_path: &Path) -> PathBuf {
         "continue" => home_path.join(".continue/config.yaml"),
         "crush" => home_path.join(".config/crush/crush.json"),
         "zencoder" => home_path.join(".zencoder/settings.json"),
-        _ => PathBuf::new(),
+        _ => tool_adapters::definition(tool_id)
+            .and_then(|definition| tool_adapters::resolve_mcp_path(definition, home_path))
+            .unwrap_or_default(),
     }
 }
 
 fn supports_mcp_for_tool(tool_id: &str) -> bool {
+    if let Some(definition) = tool_adapters::definition(tool_id) {
+        return !matches!(definition.mcp_format, tool_adapters::McpAdapterFormat::None);
+    }
+
     matches!(
         tool_id,
         "augment"
@@ -2554,7 +2954,7 @@ fn build_tool_configs() -> Vec<ToolConfig> {
         ),
     ];
 
-    tool_specs
+    let mut configs = tool_specs
         .into_iter()
         .map(
             |(
@@ -2571,6 +2971,11 @@ fn build_tool_configs() -> Vec<ToolConfig> {
                 let mcp_config_path = mcp_config_path_for_tool(id, &home_path);
                 let supports_mcp = supports_mcp_for_tool(id);
                 let mcp_config_path_recognized = !mcp_config_path.as_os_str().is_empty();
+                let installed = detect_tool_installation(
+                    &config_paths,
+                    &software_spec,
+                    primary_type == "editor",
+                );
 
                 ToolConfig {
                     id: id.into(),
@@ -2579,11 +2984,8 @@ fn build_tool_configs() -> Vec<ToolConfig> {
                     mcp_config_path: mcp_config_path.to_string_lossy().to_string(),
                     supports_mcp,
                     mcp_config_path_recognized,
-                    status_label: detect_tool_installation_label(
-                        &config_paths,
-                        &software_spec,
-                        primary_type == "editor",
-                    ),
+                    status_label: tool_installation_label(installed),
+                    is_installed: installed,
                     is_enabled,
                     primary_type: primary_type.into(),
                     surface_types: surface_types.into_iter().map(|item| item.into()).collect(),
@@ -2591,6 +2993,49 @@ fn build_tool_configs() -> Vec<ToolConfig> {
                 }
             },
         )
+        .collect::<Vec<_>>();
+    configs.extend(build_registered_tool_configs(&home_path));
+    configs
+}
+
+fn build_registered_tool_configs(home_path: &Path) -> Vec<ToolConfig> {
+    tool_adapters::TOOL_ADAPTER_DEFINITIONS
+        .iter()
+        .map(|definition| {
+            let skills_path = tool_adapters::resolve_skills_path(definition, home_path);
+            let mcp_config_path = tool_adapters::resolve_mcp_path(definition, home_path);
+            let install_probe_path = home_path.join(definition.install_probe_relative_path);
+            let detection_spec = software_spec(
+                definition.software_app_names,
+                definition.software_executable_names,
+            );
+            let installed = install_probe_path.exists() || software_exists(&detection_spec);
+
+            ToolConfig {
+                id: definition.id.into(),
+                name: definition.name.into(),
+                skills_path: skills_path.to_string_lossy().to_string(),
+                mcp_config_path: mcp_config_path
+                    .as_ref()
+                    .map(|path| path.to_string_lossy().to_string())
+                    .unwrap_or_default(),
+                supports_mcp: !matches!(
+                    definition.mcp_format,
+                    tool_adapters::McpAdapterFormat::None
+                ),
+                mcp_config_path_recognized: mcp_config_path.is_some(),
+                status_label: tool_installation_label(installed),
+                is_installed: installed,
+                is_enabled: true,
+                primary_type: definition.primary_type.into(),
+                surface_types: definition
+                    .surface_types
+                    .iter()
+                    .map(|surface| (*surface).into())
+                    .collect(),
+                supports_direct_open: definition.supports_direct_open,
+            }
+        })
         .collect()
 }
 
@@ -2609,6 +3054,57 @@ fn canonical_tool_display_name(tool_name: &str) -> String {
     }
 }
 
+fn agent_cli_names_for_tool(tool_name: &str) -> Vec<&str> {
+    match tool_name.trim() {
+        "Devin" | "Windsurf" => vec!["Devin", "Windsurf"],
+        value => vec![value],
+    }
+}
+
+fn agent_cli_skill_source_path(skill: &SkillSummary) -> PathBuf {
+    PathBuf::from(if skill.instance.canonical_path.trim().is_empty() {
+        &skill.local_path
+    } else {
+        &skill.instance.canonical_path
+    })
+}
+
+fn is_agent_cli_managed_skill(skill: &SkillSummary) -> bool {
+    skill.instance.management_owner == "agent-skills-cli"
+        || skill.instance.update_driver == "agent-skills-cli"
+}
+
+fn agent_cli_status_for_skills(
+    skills: &[SkillSummary],
+) -> crate::agent_skills_cli::AgentSkillsCliStatus {
+    if skills.iter().any(is_agent_cli_managed_skill) {
+        return crate::agent_skills_cli::global_status();
+    }
+    crate::agent_skills_cli::AgentSkillsCliStatus {
+        available: false,
+        global_path: String::new(),
+        entries: Vec::new(),
+        error: "没有需要确认的 Agent CLI Skill。".into(),
+    }
+}
+
+fn agent_cli_reports_tool_installation(
+    status: &crate::agent_skills_cli::AgentSkillsCliStatus,
+    skill: &SkillSummary,
+    tool_name: &str,
+) -> Result<bool, String> {
+    if !is_agent_cli_managed_skill(skill) {
+        return Ok(false);
+    }
+    let agent_names = agent_cli_names_for_tool(tool_name);
+    crate::agent_skills_cli::confirms_global_agent_installation(
+        status,
+        &skill.name,
+        &agent_cli_skill_source_path(skill),
+        &agent_names,
+    )
+}
+
 fn supports_skill_sync_for_tool(tool_id: &str) -> bool {
     !matches!(tool_id, "intellij" | "vscode")
 }
@@ -2624,45 +3120,88 @@ fn installed_tool_sync_entries_from_configs(tool_configs: &[ToolConfig]) -> Vec<
         .collect()
 }
 
-fn inspect_skill_tool_status(skill: &SkillSummary, tool_name: &str) -> String {
+enum SkillToolState {
+    Disabled,
+    Enabled,
+    Synced,
+    NeedsResync,
+}
+
+impl SkillToolState {
+    fn is_enabled(&self) -> bool {
+        !matches!(self, Self::Disabled)
+    }
+
+    fn status_label(&self) -> &'static str {
+        match self {
+            Self::Disabled => "未启用",
+            Self::Enabled => "已启用",
+            Self::Synced => "已同步",
+            Self::NeedsResync => "需要重同步",
+        }
+    }
+}
+
+fn inspect_skill_tool_state(
+    skill: &SkillSummary,
+    tool_name: &str,
+    agent_cli_status: &crate::agent_skills_cli::AgentSkillsCliStatus,
+) -> SkillToolState {
     let Ok(tool_id) = tool_name_to_id(tool_name) else {
-        return "未启用".into();
+        return SkillToolState::Disabled;
     };
     let Ok(tool_skills_path) = get_tool_skills_path(&tool_id) else {
-        return "未启用".into();
+        return SkillToolState::Disabled;
     };
 
     let symlink_path = PathBuf::from(tool_skills_path).join(&skill.name);
     let Ok(metadata) = fs::symlink_metadata(&symlink_path) else {
-        return "未启用".into();
+        return SkillToolState::Disabled;
     };
     if !metadata.file_type().is_symlink() {
-        return "需要重同步".into();
+        if metadata.is_dir()
+            && agent_cli_reports_tool_installation(agent_cli_status, skill, tool_name)
+                .unwrap_or(false)
+        {
+            return SkillToolState::Enabled;
+        }
+        return SkillToolState::NeedsResync;
     }
 
     let Ok(target_path) = fs::canonicalize(&symlink_path) else {
-        return "需要重同步".into();
+        return SkillToolState::NeedsResync;
     };
     let Ok(expected_path) = fs::canonicalize(&skill.local_path) else {
-        return "需要重同步".into();
+        return SkillToolState::NeedsResync;
     };
     if target_path != expected_path {
-        return "未启用".into();
+        return SkillToolState::Disabled;
     }
 
-    "已同步".into()
+    SkillToolState::Synced
+}
+
+fn inspect_skill_tool_status(
+    skill: &SkillSummary,
+    tool_name: &str,
+    agent_cli_status: &crate::agent_skills_cli::AgentSkillsCliStatus,
+) -> String {
+    inspect_skill_tool_state(skill, tool_name, agent_cli_status)
+        .status_label()
+        .into()
 }
 
 fn installed_tool_sync_entries_for_skill(
     skill: &SkillSummary,
     tool_configs: &[ToolConfig],
+    agent_cli_status: &crate::agent_skills_cli::AgentSkillsCliStatus,
 ) -> Vec<ToolSyncStatus> {
     tool_configs
         .iter()
         .filter(|tool| tool.status_label == "已安装" && supports_skill_sync_for_tool(&tool.id))
         .map(|tool| ToolSyncStatus {
             name: canonical_tool_display_name(&tool.name),
-            status_label: inspect_skill_tool_status(skill, &tool.name),
+            status_label: inspect_skill_tool_status(skill, &tool.name, agent_cli_status),
         })
         .collect()
 }
@@ -2725,16 +3264,25 @@ fn reconcile_skill_tools_with_entries(
     }
 }
 
-fn normalize_skill_tools(skill: &SkillSummary) -> SkillSummary {
+pub(crate) fn normalize_skill_tools(skill: &SkillSummary) -> SkillSummary {
     let tool_configs = build_tool_configs();
     let installed_tool_entries = installed_tool_sync_entries_from_configs(&tool_configs);
     normalize_skill_tools_with_entries(skill, &installed_tool_entries)
 }
 
-fn normalize_skill_tools_from_local_state(skill: &SkillSummary) -> SkillSummary {
+fn normalize_skill_tools_from_local_state_with_agent_status(
+    skill: &SkillSummary,
+    agent_cli_status: &crate::agent_skills_cli::AgentSkillsCliStatus,
+) -> SkillSummary {
     let tool_configs = build_tool_configs();
-    let installed_tool_entries = installed_tool_sync_entries_for_skill(skill, &tool_configs);
+    let installed_tool_entries =
+        installed_tool_sync_entries_for_skill(skill, &tool_configs, agent_cli_status);
     reconcile_skill_tools_with_entries(skill, &installed_tool_entries)
+}
+
+fn normalize_skill_tools_from_local_state(skill: &SkillSummary) -> SkillSummary {
+    let agent_cli_status = agent_cli_status_for_skills(std::slice::from_ref(skill));
+    normalize_skill_tools_from_local_state_with_agent_status(skill, &agent_cli_status)
 }
 
 fn normalize_git_remote_repository_url(remote_url: &str) -> Option<String> {
@@ -2874,7 +3422,7 @@ fn normalize_installed_skill_source_url(skill: &SkillSummary) -> SkillSummary {
     normalized
 }
 
-fn apply_skill_install_activation(
+pub(crate) fn apply_skill_install_activation(
     skill: SkillSummary,
     installed_skills: &[SkillSummary],
 ) -> Result<SkillSummary, String> {
@@ -2945,6 +3493,7 @@ fn enable_skill_for_all_installed_tools(
 fn recover_missing_managed_skills(
     mut installed_skills: Vec<SkillSummary>,
     tool_configs: &[ToolConfig],
+    agent_cli_status: &crate::agent_skills_cli::AgentSkillsCliStatus,
 ) -> Vec<SkillSummary> {
     let Ok(managed_root) = workspace::managed_skill_library_root() else {
         return installed_skills;
@@ -3047,7 +3596,8 @@ fn recover_missing_managed_skills(
             instance: Default::default(),
             tools: Vec::new(),
         };
-        let tool_entries = installed_tool_sync_entries_for_skill(&recovered, tool_configs);
+        let tool_entries =
+            installed_tool_sync_entries_for_skill(&recovered, tool_configs, agent_cli_status);
         installed_skills.push(reconcile_skill_tools_with_entries(
             &recovered,
             &tool_entries,
@@ -3063,10 +3613,10 @@ fn recover_missing_managed_skills(
 
 fn resolve_startup_installed_skills() -> Vec<SkillSummary> {
     let tool_configs = build_tool_configs();
-    let installed_skills = recover_missing_managed_skills(
-        load_installed_skills(&default_installed_skills()),
-        &tool_configs,
-    );
+    let installed_skills = load_installed_skills(&default_installed_skills());
+    let agent_cli_status = agent_cli_status_for_skills(&installed_skills);
+    let installed_skills =
+        recover_missing_managed_skills(installed_skills, &tool_configs, &agent_cli_status);
     let normalized_skills = installed_skills
         .iter()
         .map(normalize_installed_skill_source_url)
@@ -3088,7 +3638,7 @@ fn resolve_startup_installed_skills() -> Vec<SkillSummary> {
         LOCAL_SKILL_TOOL_STATE_CONCURRENCY,
         |skill| {
             let installed_tool_entries =
-                installed_tool_sync_entries_for_skill(skill, &tool_configs);
+                installed_tool_sync_entries_for_skill(skill, &tool_configs, &agent_cli_status);
             reconcile_skill_tools_with_entries(skill, &installed_tool_entries)
         },
     )
@@ -3104,16 +3654,37 @@ fn resolve_installed_skills() -> Vec<SkillSummary> {
 }
 
 fn load_interactive_installed_skills() -> Vec<SkillSummary> {
-    load_installed_skills(&default_installed_skills())
+    let installed_skills = load_installed_skills(&default_installed_skills());
+    let agent_cli_status = crate::agent_skills_cli::AgentSkillsCliStatus {
+        available: false,
+        global_path: String::new(),
+        entries: Vec::new(),
+        error: String::new(),
+    };
+    installed_skills
         .iter()
-        .map(normalize_skill_tools_from_local_state)
+        .map(|skill| {
+            normalize_skill_tools_from_local_state_with_agent_status(skill, &agent_cli_status)
+        })
         .collect()
 }
 
 const ORIGIN_REMOTE: &str = "origin";
 const REMOTE_PREFIX: &str = "origin/";
-const RESERVED_WORKSPACE_NAMES: [&str; 5] =
-    ["state.json", "skills", "repo-cache", "cache", "imports"];
+const RESERVED_WORKSPACE_NAMES: [&str; 12] = [
+    "state.json",
+    "config",
+    "data",
+    "credentials",
+    "skills",
+    "repositories",
+    "repo-cache",
+    "cache",
+    "plugins",
+    "imports",
+    "backup",
+    "logs",
+];
 
 fn is_reserved_workspace_name(name: &str) -> bool {
     RESERVED_WORKSPACE_NAMES.contains(&name)
@@ -3121,6 +3692,41 @@ fn is_reserved_workspace_name(name: &str) -> bool {
 
 fn tool_status_is_enabled(status_label: &str) -> bool {
     matches!(status_label, "已同步" | "已启用" | "需要重同步")
+}
+
+pub(crate) fn backup_skill_tool_states(
+    skills: &[&SkillSummary],
+) -> Vec<Vec<(String, String, bool)>> {
+    let tool_configs: Vec<_> = build_tool_configs()
+        .into_iter()
+        .filter(|tool| tool.is_installed && supports_skill_sync_for_tool(&tool.id))
+        .collect();
+    let agent_cli_status = if skills.iter().any(|skill| is_agent_cli_managed_skill(skill)) {
+        crate::agent_skills_cli::global_status()
+    } else {
+        crate::agent_skills_cli::AgentSkillsCliStatus {
+            available: false,
+            global_path: String::new(),
+            entries: Vec::new(),
+            error: "没有需要确认的 Agent CLI Skill。".into(),
+        }
+    };
+    skills
+        .iter()
+        .map(|skill| {
+            tool_configs
+                .iter()
+                .map(|tool| {
+                    let state = inspect_skill_tool_state(skill, &tool.name, &agent_cli_status);
+                    (
+                        tool.id.clone(),
+                        canonical_tool_display_name(&tool.name),
+                        state.is_enabled(),
+                    )
+                })
+                .collect()
+        })
+        .collect()
 }
 
 fn set_skill_tool_enabled_status(
@@ -3465,7 +4071,11 @@ fn tool_name_to_id(tool_name: &str) -> Result<String, String> {
         "Trae CN" => Ok("trae-cn".to_string()),
         "Hermes" => Ok("hermes".to_string()),
         "GitHub Copilot" => Ok("github-copilot".to_string()),
-        _ => Err(format!("未知的工具名称: {tool_name}")),
+        _ => tool_adapters::TOOL_ADAPTER_DEFINITIONS
+            .iter()
+            .find(|definition| definition.name == tool_name)
+            .map(|definition| definition.id.to_string())
+            .ok_or_else(|| format!("未知的工具名称: {tool_name}")),
     }
 }
 
@@ -4098,11 +4708,26 @@ fn refresh_and_persist_local_git_skill(
     Ok(refreshed_skill)
 }
 
+#[cfg(test)]
 fn refresh_installed_skill_git_state(skill: &SkillSummary) -> SkillSummary {
+    let agent_cli_status = agent_cli_status_for_skills(std::slice::from_ref(skill));
+    refresh_installed_skill_git_state_with_agent_status(skill, &agent_cli_status)
+}
+
+fn refresh_installed_skill_git_state_with_agent_status(
+    skill: &SkillSummary,
+    agent_cli_status: &crate::agent_skills_cli::AgentSkillsCliStatus,
+) -> SkillSummary {
     let normalized_skill = normalize_installed_skill_source_url(skill);
-    let normalized_skill = normalize_skill_tools_from_local_state(&normalized_skill);
+    let normalized_skill = normalize_skill_tools_from_local_state_with_agent_status(
+        &normalized_skill,
+        agent_cli_status,
+    );
     if normalized_skill.instance.update_driver == "agent-skills-cli" && !normalized_skill.git_linked
     {
+        return normalized_skill;
+    }
+    if normalized_skill.instance.update_driver == crate::clawhub_market::UPDATE_DRIVER {
         return normalized_skill;
     }
     enrich_skill_with_git_state(&normalized_skill)
@@ -4140,11 +4765,10 @@ where
 }
 
 fn refresh_installed_skill_git_states(skills: &[SkillSummary]) -> Vec<SkillSummary> {
-    map_in_parallel_preserving_order(
-        skills,
-        REFRESH_GIT_STATES_CONCURRENCY,
-        refresh_installed_skill_git_state,
-    )
+    let agent_cli_status = agent_cli_status_for_skills(skills);
+    map_in_parallel_preserving_order(skills, REFRESH_GIT_STATES_CONCURRENCY, |skill| {
+        refresh_installed_skill_git_state_with_agent_status(skill, &agent_cli_status)
+    })
 }
 
 fn apply_agent_cli_update_statuses(
@@ -5705,7 +6329,7 @@ fn collect_repo_skill_candidates(
     Ok(())
 }
 
-fn read_skill_description(skill_file: &Path) -> String {
+pub(crate) fn read_skill_description(skill_file: &Path) -> String {
     let Ok(content) = fs::read_to_string(skill_file) else {
         return "未提供简介".into();
     };
@@ -5843,24 +6467,51 @@ pub fn list_installed_skills() -> Vec<SkillSummary> {
 }
 
 #[tauri::command]
-pub async fn list_marketplace_skills(
+pub async fn list_marketplace_skills_page(
     source_site: Option<String>,
     page: Option<usize>,
     limit: Option<usize>,
     query: Option<String>,
     refresh: Option<bool>,
-) -> Vec<MarketplaceSkill> {
+) -> Result<MarketplaceSkillsPage, String> {
+    let source = source_site.as_deref().unwrap_or_default().trim();
     let page = page.unwrap_or(1).max(1);
     let limit = limit.unwrap_or(MARKETPLACE_FETCH_LIMIT).max(1);
-    build_marketplace_skills(
+    let refresh = refresh.unwrap_or(false);
+    let is_searching = query
+        .as_deref()
+        .is_some_and(|value| !value.trim().is_empty());
+
+    if source == crate::clawhub_market::SOURCE_SITE {
+        if !refresh && !is_searching && page == 1 {
+            if let Some(skills) = load_marketplace_cache_page(source, page, limit) {
+                return Ok(MarketplaceSkillsPage {
+                    has_more: load_marketplace_cache_has_more(source).unwrap_or(false),
+                    skills,
+                });
+            }
+        }
+        let result =
+            crate::clawhub_market::list_page(page, limit, query.as_deref(), refresh).await?;
+        if page == 1 && !is_searching && !result.skills.is_empty() {
+            save_marketplace_cache(source, &result.skills, Some(result.has_more));
+        }
+        return Ok(result);
+    }
+
+    let skills = build_marketplace_skills(
         source_site.as_deref(),
         page,
         limit,
         query.as_deref(),
         true,
-        refresh.unwrap_or(false),
+        refresh,
     )
-    .await
+    .await;
+    Ok(MarketplaceSkillsPage {
+        has_more: skills.len() >= limit,
+        skills,
+    })
 }
 
 #[tauri::command]
@@ -5877,6 +6528,17 @@ pub async fn get_marketplace_skill_description(
         .filter(|value| !value.is_empty() && *value != "---" && *value != "...")
         .map(ToOwned::to_owned)
         .unwrap_or_else(|| format!("来自 {} 的公开 skill（{}）", source_site, skill_name));
+
+    if source_site == crate::skillhub_market::SOURCE {
+        let client = match marketplace_http_client() {
+            Ok(client) => client,
+            Err(_) => return fallback,
+        };
+        let slug = skill_id
+            .strip_prefix("skillhub-")
+            .unwrap_or(skill_id.as_str());
+        return crate::skillhub_market::get_description(&client, slug, fallback).await;
+    }
 
     if source_site != "skills.sh" {
         return fallback;
@@ -5917,38 +6579,90 @@ pub async fn get_marketplace_skill_description(
 
 #[tauri::command]
 pub async fn get_marketplace_skill_file_browser(
+    source_site: Option<String>,
     source_url: String,
     skill_path: String,
     skill_name: String,
+    skill_id: Option<String>,
+    owner: Option<String>,
+    slug: Option<String>,
+    version: Option<String>,
 ) -> Result<SkillFileBrowserSnapshot, String> {
+    if source_site.as_deref() == Some(crate::skillhub_market::SOURCE) {
+        let skillhub_slug = skill_id
+            .as_deref()
+            .and_then(|value| value.strip_prefix("skillhub-"))
+            .or_else(|| (!skill_path.trim().is_empty()).then_some(skill_path.as_str()))
+            .ok_or_else(|| "SkillHub Skill 标识无效".to_string())?;
+        let client = marketplace_http_client()?;
+        return crate::skillhub_market::get_file_browser(
+            &client,
+            skillhub_slug,
+            &skill_name,
+            version.as_deref(),
+        )
+        .await;
+    }
+    if source_site.as_deref() == Some(crate::clawhub_market::SOURCE_SITE) {
+        return crate::clawhub_market::get_file_browser(
+            owner.as_deref().unwrap_or_default(),
+            slug.as_deref().unwrap_or_default(),
+            version.as_deref().unwrap_or_default(),
+            &skill_name,
+        )
+        .await;
+    }
     let source = parse_github_marketplace_source(&source_url)?;
     let cache_key = marketplace_skill_root_cache_key(&source, &skill_path);
+    let client = marketplace_http_client()?;
+    let github_token = crate::github_credentials::active_token().unwrap_or_default();
+    let mut last_error = match fetch_marketplace_github_tree(&client, &source, &github_token).await
+    {
+        Ok(tree_entries) => {
+            let root_path =
+                marketplace_skill_root_from_github_tree(&tree_entries, &skill_path, &skill_name)
+                    .ok_or_else(|| format!("未在 GitHub 仓库中找到 {skill_name}/SKILL.md"))?;
+            let entries =
+                marketplace_skill_entries_from_github_tree(&tree_entries, &root_path, &skill_name)?;
+            cache_marketplace_skill_root(cache_key.clone(), root_path);
+            return build_marketplace_skill_browser_snapshot(
+                skill_name,
+                entries,
+                MARKETPLACE_PREVIEW_MODE_FULL,
+            );
+        }
+        Err(MarketplaceGitHubApiError::RateLimited(error)) => return Err(error),
+        Err(MarketplaceGitHubApiError::Other(error)) => error,
+    };
+
     let mut root_paths = marketplace_skill_path_candidates(&skill_path)?;
     if let Some(cached_root) = cached_marketplace_skill_root(&cache_key) {
         if !root_paths.contains(&cached_root) {
             root_paths.insert(0, cached_root);
         }
     }
-    let client = marketplace_http_client()?;
-    let mut last_error = "Skill 目录中没有可预览文件".to_string();
 
     for root_path in &root_paths {
-        match fetch_marketplace_skill_entries(&client, &source, &root_path, &skill_name).await {
-            Ok(mut entries) if entries.len() > 1 => {
+        match fetch_marketplace_skill_entries(
+            &client,
+            &source,
+            root_path,
+            &skill_name,
+            &github_token,
+        )
+        .await
+        {
+            Ok(entries) if entries.len() > 1 => {
                 cache_marketplace_skill_root(cache_key, root_path.clone());
-                let root_entry = entries.remove(0);
-                entries.sort_by_key(marketplace_entry_sort_key);
-                entries.insert(0, root_entry);
-                let initial_file_path = marketplace_initial_file_path(&entries);
-                return Ok(SkillFileBrowserSnapshot {
+                return build_marketplace_skill_browser_snapshot(
                     skill_name,
-                    root_name: entries[0].name.clone(),
                     entries,
-                    initial_file_path,
-                });
+                    MARKETPLACE_PREVIEW_MODE_FULL,
+                );
             }
             Ok(_) => {}
-            Err(error) => last_error = error,
+            Err(MarketplaceGitHubApiError::RateLimited(error)) => return Err(error),
+            Err(MarketplaceGitHubApiError::Other(error)) => last_error = error,
         }
     }
 
@@ -5958,42 +6672,100 @@ pub async fn get_marketplace_skill_file_browser(
     if root_paths.contains(&discovered_root) {
         return Err(last_error);
     }
-    let mut entries =
-        fetch_marketplace_skill_entries(&client, &source, &discovered_root, &skill_name).await?;
-    if entries.len() <= 1 {
-        return Err("Skill 目录中没有可预览文件".into());
-    }
+    let entries = match fetch_marketplace_skill_entries(
+        &client,
+        &source,
+        &discovered_root,
+        &skill_name,
+        &github_token,
+    )
+    .await
+    {
+        Ok(entries) => entries,
+        Err(MarketplaceGitHubApiError::RateLimited(error)) => return Err(error),
+        Err(MarketplaceGitHubApiError::Other(error)) => return Err(error),
+    };
     cache_marketplace_skill_root(cache_key, discovered_root);
-    let root_entry = entries.remove(0);
-    entries.sort_by_key(marketplace_entry_sort_key);
-    entries.insert(0, root_entry);
-    let initial_file_path = marketplace_initial_file_path(&entries);
+    build_marketplace_skill_browser_snapshot(skill_name, entries, MARKETPLACE_PREVIEW_MODE_FULL)
+}
 
-    Ok(SkillFileBrowserSnapshot {
-        skill_name,
-        root_name: entries[0].name.clone(),
-        entries,
-        initial_file_path,
-    })
+#[tauri::command]
+pub async fn get_marketplace_skill_detail(
+    skill: MarketplaceSkill,
+) -> Result<MarketplaceSkill, String> {
+    if skill.source_site == crate::clawhub_market::SOURCE_SITE {
+        return crate::clawhub_market::hydrate_skill_metadata(skill).await;
+    }
+    Ok(skill)
 }
 
 #[tauri::command]
 pub async fn get_marketplace_skill_file_content(
+    source_site: Option<String>,
     source_url: String,
     skill_path: String,
     relative_path: String,
+    skill_id: Option<String>,
+    owner: Option<String>,
+    slug: Option<String>,
+    version: Option<String>,
 ) -> Result<SkillFileDocument, String> {
+    if source_site.as_deref() == Some(crate::skillhub_market::SOURCE) {
+        let skillhub_slug = skill_id
+            .as_deref()
+            .and_then(|value| value.strip_prefix("skillhub-"))
+            .or_else(|| (!skill_path.trim().is_empty()).then_some(skill_path.as_str()))
+            .ok_or_else(|| "SkillHub Skill 标识无效".to_string())?;
+        let client = marketplace_http_client()?;
+        return crate::skillhub_market::get_file_content(
+            &client,
+            skillhub_slug,
+            &relative_path,
+            version.as_deref(),
+        )
+        .await;
+    }
+    if source_site.as_deref() == Some(crate::clawhub_market::SOURCE_SITE) {
+        return crate::clawhub_market::get_file_content(
+            owner.as_deref().unwrap_or_default(),
+            slug.as_deref().unwrap_or_default(),
+            version.as_deref().unwrap_or_default(),
+            &relative_path,
+        )
+        .await;
+    }
     let source = parse_github_marketplace_source(&source_url)?;
     let cache_key = marketplace_skill_root_cache_key(&source, &skill_path);
-    let mut root_paths = marketplace_skill_path_candidates(&skill_path)?;
-    if let Some(cached_root) = cached_marketplace_skill_root(&cache_key) {
-        if !root_paths.contains(&cached_root) {
-            root_paths.insert(0, cached_root);
-        }
-    }
     let relative_path = normalize_marketplace_file_path(&relative_path, false)?;
     let client = marketplace_http_client()?;
-    let mut last_error = "Skill 文件不存在或路径无效".to_string();
+    let github_token = crate::github_credentials::active_token().unwrap_or_default();
+    if let Some(cached_root) = cached_marketplace_skill_root(&cache_key) {
+        return fetch_marketplace_skill_file_document(
+            &client,
+            &source,
+            &cached_root,
+            &relative_path,
+        )
+        .await;
+    }
+
+    let skill_name = skill_path.rsplit('/').next().unwrap_or_default();
+    let mut last_error = match fetch_marketplace_github_tree(&client, &source, &github_token).await
+    {
+        Ok(tree_entries) => {
+            let root_path =
+                marketplace_skill_root_from_github_tree(&tree_entries, &skill_path, skill_name)
+                    .ok_or_else(|| format!("未在 GitHub 仓库中找到 {skill_name}/SKILL.md"))?;
+            let document =
+                fetch_marketplace_skill_file_document(&client, &source, &root_path, &relative_path)
+                    .await?;
+            cache_marketplace_skill_root(cache_key, root_path);
+            return Ok(document);
+        }
+        Err(error) => error.message(),
+    };
+
+    let root_paths = marketplace_skill_path_candidates(&skill_path)?;
     for root_path in &root_paths {
         match fetch_marketplace_skill_file_document(&client, &source, &root_path, &relative_path)
             .await
@@ -6006,7 +6778,6 @@ pub async fn get_marketplace_skill_file_content(
         }
     }
 
-    let skill_name = skill_path.rsplit('/').next().unwrap_or_default();
     let discovered_root = discover_marketplace_skill_root(&source, &skill_path, skill_name)
         .await
         .map_err(|error| format!("{last_error}；{error}"))?;
@@ -6108,6 +6879,36 @@ fn refresh_skill_library_in_background(app_handle: tauri::AppHandle) {
     });
 }
 
+pub(crate) fn refresh_backup_library(
+    app_handle: &tauri::AppHandle,
+    installed_skills: &[SkillSummary],
+) -> Result<(), String> {
+    use tauri::Emitter;
+
+    let tool_configs = build_tool_configs();
+    for tool in tool_configs
+        .iter()
+        .filter(|tool| tool.status_label == "已安装" && supports_skill_sync_for_tool(&tool.id))
+    {
+        if tool.skills_path.trim().is_empty() {
+            continue;
+        }
+        let tool_name = canonical_tool_display_name(&tool.name);
+        let enabled_skills = enabled_skills_for_tool(installed_skills, &tool_name);
+        remove_reserved_workspace_entries(&tool.skills_path)?;
+        reconcile_tool_skill_symlinks(&tool.skills_path, &enabled_skills)?;
+    }
+
+    let payload = SkillLibraryRefreshedEvent {
+        local_candidates: build_local_candidates(installed_skills),
+        tool_skill_entries: build_tool_skill_entries(&tool_configs, installed_skills),
+        installed_skills: installed_skills.to_vec(),
+    };
+    app_handle
+        .emit(SKILL_LIBRARY_REFRESHED_EVENT, payload)
+        .map_err(|error| format!("发送 Skill 库刷新事件失败: {error}"))
+}
+
 #[tauri::command]
 pub fn update_app_settings(
     app_handle: tauri::AppHandle,
@@ -6202,47 +7003,62 @@ fn parse_apple_languages_output(output: &str) -> Option<&'static str> {
 }
 
 #[tauri::command]
-pub async fn refresh_git_states() -> Vec<SkillSummary> {
-    let (refresh_started_skills, refreshed_skills) = tauri::async_runtime::spawn_blocking(|| {
-        let skills = load_installed_skills(&default_installed_skills());
-        let refreshed_git_skills = refresh_installed_skill_git_states(&skills);
-        let agent_skill_paths = refreshed_git_skills
-            .iter()
-            .filter(|skill| skill.instance.update_driver == "agent-skills-cli")
-            .map(|skill| {
-                let path = if skill.instance.canonical_path.trim().is_empty() {
-                    &skill.local_path
-                } else {
-                    &skill.instance.canonical_path
+pub async fn refresh_git_states() -> GitStateRefreshResult {
+    let (refresh_started_skills, refreshed_skills, github_rate_limited) =
+        tauri::async_runtime::spawn_blocking(|| {
+            let skills = load_installed_skills(&default_installed_skills());
+            let refreshed_git_skills = refresh_installed_skill_git_states(&skills);
+            let agent_skill_paths = refreshed_git_skills
+                .iter()
+                .filter(|skill| skill.instance.update_driver == "agent-skills-cli")
+                .map(|skill| {
+                    let path = if skill.instance.canonical_path.trim().is_empty() {
+                        &skill.local_path
+                    } else {
+                        &skill.instance.canonical_path
+                    };
+                    (skill.name.clone(), PathBuf::from(path))
+                })
+                .collect::<BTreeMap<_, _>>();
+            let github_token = crate::github_credentials::active_token().unwrap_or_default();
+            let (refreshed_skills, github_rate_limited) =
+                match crate::agent_skills_cli::detect_global_updates(
+                    &agent_skill_paths,
+                    &github_token,
+                ) {
+                    Ok(check) => {
+                        let github_rate_limited = check.github_rate_limited;
+                        (
+                            apply_agent_cli_update_statuses(refreshed_git_skills, &check),
+                            github_rate_limited,
+                        )
+                    }
+                    Err(error) => {
+                        log::warn!("Agent Skills CLI update check skipped: {error}");
+                        (refreshed_git_skills, false)
+                    }
                 };
-                (skill.name.clone(), PathBuf::from(path))
-            })
-            .collect::<BTreeMap<_, _>>();
-        let refreshed_skills =
-            match crate::agent_skills_cli::detect_global_updates(&agent_skill_paths) {
-                Ok(check) => apply_agent_cli_update_statuses(refreshed_git_skills, &check),
-                Err(error) => {
-                    log::warn!("Agent Skills CLI update check skipped: {error}");
-                    refreshed_git_skills
+            if sync_trace_enabled() {
+                for skill in &refreshed_skills {
+                    let tool_statuses = skill
+                        .tools
+                        .iter()
+                        .map(|tool| format!("{}={}", tool.name, tool.status_label))
+                        .collect::<Vec<_>>();
+                    eprintln!(
+                        "[sync-trace] refreshed git skill {} tools {:?}",
+                        skill.name, tool_statuses
+                    );
                 }
-            };
-        if sync_trace_enabled() {
-            for skill in &refreshed_skills {
-                let tool_statuses = skill
-                    .tools
-                    .iter()
-                    .map(|tool| format!("{}={}", tool.name, tool.status_label))
-                    .collect::<Vec<_>>();
-                eprintln!(
-                    "[sync-trace] refreshed git skill {} tools {:?}",
-                    skill.name, tool_statuses
-                );
             }
-        }
-        (skills, refreshed_skills)
-    })
-    .await
-    .unwrap_or_default();
+            (skills, refreshed_skills, github_rate_limited)
+        })
+        .await
+        .unwrap_or_default();
+    let refreshed_skills =
+        crate::skillhub_market::refresh_installed_skill_update_states(refreshed_skills).await;
+    let refreshed_skills =
+        crate::clawhub_market::refresh_installed_skill_update_states(refreshed_skills).await;
     let latest_skills = load_installed_skills(&default_installed_skills());
     let refreshed_skills = merge_refreshed_skill_states_with_latest_state(
         refreshed_skills,
@@ -6250,7 +7066,17 @@ pub async fn refresh_git_states() -> Vec<SkillSummary> {
         latest_skills,
     );
     let _ = save_installed_skills(&refreshed_skills);
-    refreshed_skills
+    GitStateRefreshResult {
+        skills: refreshed_skills,
+        github_rate_limited,
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitStateRefreshResult {
+    pub skills: Vec<SkillSummary>,
+    pub github_rate_limited: bool,
 }
 
 #[tauri::command]
@@ -6281,9 +7107,40 @@ pub async fn refresh_local_git_state(
 
 #[tauri::command]
 pub async fn install_skill_from_market(skill: MarketplaceSkill) -> Result<SkillSummary, String> {
+    if skill.source_site == crate::skillhub_market::SOURCE {
+        return crate::skillhub_market::install_skill(skill).await;
+    }
+    if skill.source_site == crate::clawhub_market::SOURCE_SITE {
+        let resolved_skill = crate::clawhub_market::hydrate_skill(skill).await?;
+        if resolved_skill.install_driver != crate::clawhub_market::UPDATE_DRIVER {
+            return tauri::async_runtime::spawn_blocking(move || {
+                install_skill_from_market_blocking(resolved_skill)
+            })
+            .await
+            .map_err(|error| format!("后台安装 marketplace skill 失败: {error}"))?;
+        }
+        let installed_skill = crate::clawhub_market::install_skill(resolved_skill).await?;
+        return finalize_clawhub_market_install(installed_skill);
+    }
     tauri::async_runtime::spawn_blocking(move || install_skill_from_market_blocking(skill))
         .await
         .map_err(|error| format!("后台安装 marketplace skill 失败: {error}"))?
+}
+
+fn finalize_clawhub_market_install(installed_skill: SkillSummary) -> Result<SkillSummary, String> {
+    let mut installed_skills = load_installed_skills(&default_installed_skills());
+    let normalized_skill = normalize_skill_tools(&installed_skill);
+    let installed_skill = apply_skill_install_activation(normalized_skill, &installed_skills)?;
+    persist_skill_timestamps(&installed_skill);
+    installed_skills.retain(|skill| {
+        skill.name != installed_skill.name
+            && !(skill.instance.update_driver == crate::clawhub_market::UPDATE_DRIVER
+                && skill.instance.marketplace_owner == installed_skill.instance.marketplace_owner
+                && skill.instance.marketplace_slug == installed_skill.instance.marketplace_slug)
+    });
+    installed_skills.insert(0, installed_skill.clone());
+    save_installed_skills(&installed_skills)?;
+    Ok(installed_skill)
 }
 
 fn install_skill_from_market_blocking(skill: MarketplaceSkill) -> Result<SkillSummary, String> {
@@ -7185,6 +8042,86 @@ fn collect_local_skill_dirs(
     Ok(skill_dirs)
 }
 
+fn is_direct_tool_skill_source(source_path: &Path, skill_name: &str) -> bool {
+    if source_path.file_name().and_then(|value| value.to_str()) != Some(skill_name) {
+        return false;
+    }
+    let Some(source_parent) = source_path.parent() else {
+        return false;
+    };
+    let resolved_source_parent = source_parent
+        .canonicalize()
+        .unwrap_or_else(|_| source_parent.to_path_buf());
+
+    build_tool_configs().into_iter().any(|tool| {
+        if tool.status_label != "已安装" || !supports_skill_sync_for_tool(&tool.id) {
+            return false;
+        }
+        let tool_skills_path = PathBuf::from(tool.skills_path);
+        tool_skills_path.canonicalize().unwrap_or(tool_skills_path) == resolved_source_parent
+    })
+}
+
+fn stage_import_source_link(
+    source_path: &Path,
+    target_dir: &Path,
+    skill_name: &str,
+) -> Result<Option<PathBuf>, String> {
+    if !is_direct_tool_skill_source(source_path, skill_name) {
+        return Ok(None);
+    }
+    let source_canonical = source_path
+        .canonicalize()
+        .map_err(|error| format!("解析导入来源目录失败: {error}"))?;
+    let target_canonical = target_dir
+        .canonicalize()
+        .map_err(|error| format!("解析托管目录失败: {error}"))?;
+    if source_canonical == target_canonical {
+        return Ok(None);
+    }
+
+    let backup_path =
+        source_path.with_file_name(format!(".{skill_name}{LOCAL_IMPORT_SOURCE_BACKUP_SUFFIX}"));
+    if fs::symlink_metadata(&backup_path).is_ok() {
+        return Err(format!(
+            "导入来源临时备份已存在，请先处理 {}",
+            backup_path.to_string_lossy()
+        ));
+    }
+    fs::rename(source_path, &backup_path)
+        .map_err(|error| format!("暂存原 Skill 目录失败: {error}"))?;
+    let tool_skills_path = source_path
+        .parent()
+        .map(|path| path.to_string_lossy().to_string())
+        .unwrap_or_default();
+    if let Err(error) = create_skill_symlink(
+        target_dir.to_string_lossy().as_ref(),
+        skill_name,
+        &tool_skills_path,
+    ) {
+        let _ = fs::rename(&backup_path, source_path);
+        return Err(error);
+    }
+
+    Ok(Some(backup_path))
+}
+
+fn rollback_import_source_link(source_path: &Path, backup_path: &Path) {
+    let _ = remove_skill_link_entry(source_path);
+    let _ = fs::rename(backup_path, source_path);
+}
+
+fn discard_import_source_backup(backup_path: &Path) {
+    let Ok(metadata) = fs::symlink_metadata(backup_path) else {
+        return;
+    };
+    if metadata.file_type().is_symlink() || metadata.is_file() {
+        let _ = fs::remove_file(backup_path);
+    } else if metadata.is_dir() {
+        let _ = fs::remove_dir_all(backup_path);
+    }
+}
+
 fn copy_local_skill_dir(source_dir: &Path, target_dir: &Path) -> Result<String, String> {
     let source_canonical = source_dir
         .canonicalize()
@@ -7308,44 +8245,57 @@ pub fn import_local_skill(local_path: &str) -> Result<SkillSummary, String> {
         (Ok(source_canonical), Some(Ok(target_canonical))) if source_canonical == target_canonical
     );
     let installed_local_path = copy_local_skill_dir(&source_path, &target_dir)?;
-    cleanup_local_skill_install_on_error(&target_dir, cleanup_on_error, || {
-        let installed_at = now_timestamp_label();
-        let mut installed_skills = load_installed_skills(&default_installed_skills());
-        let installed_skill = SkillSummary {
-            name: skill_name,
-            source_label: "本地导入".into(),
-            source_type: "local".into(),
-            source_url: local_path.into(),
-            description: read_skill_description(&Path::new(&installed_local_path).join("SKILL.md")),
-            local_path: installed_local_path,
-            branch: "local".into(),
-            collab_status: "clean".into(),
-            status_text: format!("本地技能已复制到 {APP_BRAND_NAME} 并纳入统一管理。"),
-            remote_updated_at: String::new(),
-            local_updated_at: installed_at.clone(),
-            last_synced_at: installed_at.clone(),
-            last_checked_at: "刚刚".into(),
-            synced_tool_count: 0,
-            last_editor: "".into(),
-            commit_label: "local-only".into(),
-            git_linked: false,
-            local_change_count: 0,
-            lifecycle_source: String::new(),
-            owner_plugin_id: String::new(),
-            owner_plugin_name: String::new(),
-            instance: Default::default(),
-            tools: vec![],
-        };
+    let mut source_backup = None;
+    let install_result =
+        cleanup_local_skill_install_on_error(&target_dir, cleanup_on_error, || {
+            source_backup = stage_import_source_link(&source_path, &target_dir, &skill_name)?;
+            let installed_at = now_timestamp_label();
+            let mut installed_skills = load_installed_skills(&default_installed_skills());
+            let installed_skill = SkillSummary {
+                name: skill_name,
+                source_label: "本地导入".into(),
+                source_type: "local".into(),
+                source_url: local_path.into(),
+                description: read_skill_description(
+                    &Path::new(&installed_local_path).join("SKILL.md"),
+                ),
+                local_path: installed_local_path,
+                branch: "local".into(),
+                collab_status: "clean".into(),
+                status_text: format!("本地技能已复制到 {APP_BRAND_NAME} 并纳入统一管理。"),
+                remote_updated_at: String::new(),
+                local_updated_at: installed_at.clone(),
+                last_synced_at: installed_at.clone(),
+                last_checked_at: "刚刚".into(),
+                synced_tool_count: 0,
+                last_editor: "".into(),
+                commit_label: "local-only".into(),
+                git_linked: false,
+                local_change_count: 0,
+                lifecycle_source: String::new(),
+                owner_plugin_id: String::new(),
+                owner_plugin_name: String::new(),
+                instance: Default::default(),
+                tools: vec![],
+            };
 
-        let installed_skill = enrich_skill_with_git_state(&normalize_skill_tools(&installed_skill));
-        let installed_skill = apply_skill_install_activation(installed_skill, &installed_skills)?;
-        persist_skill_timestamps(&installed_skill);
-        installed_skills.retain(|skill| skill.name != installed_skill.name);
-        installed_skills.insert(0, installed_skill.clone());
-        save_installed_skills(&installed_skills)?;
+            let installed_skill =
+                enrich_skill_with_git_state(&normalize_skill_tools(&installed_skill));
+            let installed_skill =
+                apply_skill_install_activation(installed_skill, &installed_skills)?;
+            persist_skill_timestamps(&installed_skill);
+            installed_skills.retain(|skill| skill.name != installed_skill.name);
+            installed_skills.insert(0, installed_skill.clone());
+            save_installed_skills(&installed_skills)?;
 
-        Ok(installed_skill)
-    })
+            Ok(installed_skill)
+        });
+    match (&install_result, source_backup) {
+        (Ok(_), Some(backup_path)) => discard_import_source_backup(&backup_path),
+        (Err(_), Some(backup_path)) => rollback_import_source_link(&source_path, &backup_path),
+        _ => {}
+    }
+    install_result
 }
 
 #[tauri::command]
@@ -7485,9 +8435,11 @@ fn get_update_preview_snapshot_blocking(
     let (installed_skills, skill_index) = find_skill_instance(skill_name, skill_path)?;
     let skill = &installed_skills[skill_index];
     if skill.instance.update_driver == "agent-skills-cli" && !skill.git_linked {
+        let github_token = crate::github_credentials::active_token().unwrap_or_default();
         return crate::agent_skills_cli::preview_global_skill_update(
             &skill.name,
             Path::new(&skill.local_path),
+            &github_token,
         );
     }
     let current_branch = current_branch_name(&skill.local_path)?;
@@ -7511,6 +8463,14 @@ pub async fn get_update_preview_snapshot(
     local_path: String,
 ) -> Result<UpdatePreviewSnapshot, String> {
     let skill_path = (!local_path.trim().is_empty()).then_some(local_path);
+    let (installed_skills, skill_index) = find_skill_instance(&skill_name, skill_path.as_deref())?;
+    let skill = installed_skills[skill_index].clone();
+    if crate::skillhub_market::is_installed_skillhub_skill(&skill) {
+        return crate::skillhub_market::preview_installed_skill_update(skill).await;
+    }
+    if crate::clawhub_market::is_installed_skill(&skill) {
+        return crate::clawhub_market::preview_installed_skill_update(skill).await;
+    }
     tauri::async_runtime::spawn_blocking(move || {
         get_update_preview_snapshot_blocking(&skill_name, skill_path.as_deref())
     })
@@ -7639,6 +8599,20 @@ pub async fn update_skill(
     skill_name: String,
     skill_path: Option<String>,
 ) -> Result<SkillSummary, String> {
+    let (installed_skills, skill_index) = find_skill_instance(&skill_name, skill_path.as_deref())?;
+    let skill = installed_skills[skill_index].clone();
+    if crate::skillhub_market::is_installed_skillhub_skill(&skill) {
+        return crate::skillhub_market::update_installed_skill(skill).await;
+    }
+    if crate::clawhub_market::is_installed_skill(&skill) {
+        let updated_skill = crate::clawhub_market::update_installed_skill(skill).await?;
+        clear_skill_update_cache(&updated_skill);
+        let (mut latest_skills, latest_index) =
+            find_skill_instance(&updated_skill.name, Some(&updated_skill.local_path))?;
+        latest_skills[latest_index] = updated_skill.clone();
+        save_installed_skills(&latest_skills)?;
+        return Ok(updated_skill);
+    }
     tauri::async_runtime::spawn_blocking(move || {
         update_skill_blocking(&skill_name, skill_path.as_deref())
     })
@@ -7657,7 +8631,11 @@ fn update_skill_blocking(
         clear_skill_update_cache(skill);
 
         let (mut latest_skills, latest_index) = find_skill_instance(skill_name, skill_path)?;
-        let mut refreshed = latest_skills[latest_index].clone();
+        let agent_cli_status = agent_cli_status_for_skills(&latest_skills);
+        let mut refreshed = normalize_skill_tools_from_local_state_with_agent_status(
+            &latest_skills[latest_index],
+            &agent_cli_status,
+        );
         refreshed.collab_status = SKILL_STATUS_CLEAN.into();
         refreshed.status_text = "Agent CLI Skill 已更新。".into();
         refreshed.last_checked_at = "刚刚检查".into();
@@ -7702,6 +8680,7 @@ pub fn get_skill_file_browser(
         root_name,
         entries,
         initial_file_path,
+        preview_mode: MARKETPLACE_PREVIEW_MODE_FULL.into(),
     })
 }
 
@@ -7744,6 +8723,7 @@ pub fn get_tool_skill_file_browser(
         root_name: skill_name.into(),
         entries,
         initial_file_path,
+        preview_mode: MARKETPLACE_PREVIEW_MODE_FULL.into(),
     })
 }
 
@@ -7973,6 +8953,56 @@ fn remove_matching_skill_link(tool_skills_path: &str, skill: &SkillSummary) -> R
     Ok(())
 }
 
+fn remove_matching_skill_distribution(
+    tool_skills_path: &str,
+    skill: &SkillSummary,
+) -> Result<(), String> {
+    let skill_name_path = Path::new(&skill.name);
+    if skill.name.trim().is_empty()
+        || !matches!(
+            skill_name_path.components().next(),
+            Some(std::path::Component::Normal(_))
+        )
+        || skill_name_path.components().count() != 1
+    {
+        return Err("Skill 名称无效，不能删除工具目录。".into());
+    }
+
+    let tool_root = PathBuf::from(tool_skills_path);
+    let entry_path = tool_root.join(&skill.name);
+    let Ok(metadata) = fs::symlink_metadata(&entry_path) else {
+        return Ok(());
+    };
+    if is_skill_link_entry(&entry_path) {
+        return remove_matching_skill_link(tool_skills_path, skill);
+    }
+    if !is_agent_cli_managed_skill(skill) {
+        return Ok(());
+    }
+    if !metadata.is_dir() || !entry_path.join("SKILL.md").is_file() {
+        return Err(format!(
+            "{} 不是可确认的 Agent CLI Skill 副本，已保留。",
+            entry_path.to_string_lossy()
+        ));
+    }
+    if entry_path.parent() != Some(tool_root.as_path()) {
+        return Err("工具 Skill 路径越过了配置根目录，已拒绝删除。".into());
+    }
+
+    let global_root = crate::agent_skills_cli::global_skill_root()?;
+    let resolved_tool_root = tool_root
+        .canonicalize()
+        .unwrap_or_else(|_| tool_root.clone());
+    let resolved_global_root = global_root
+        .canonicalize()
+        .unwrap_or_else(|_| global_root.clone());
+    if resolved_tool_root == resolved_global_root {
+        return Err("不能通过关闭工具删除 ~/.agents/skills 中的 Agent CLI 全局 Skill。".into());
+    }
+
+    remove_tool_skill_entry(tool_skills_path, &skill.name)
+}
+
 #[tauri::command]
 pub async fn toggle_skill_tool_status(
     skill_name: String,
@@ -8017,7 +9047,6 @@ fn toggle_skill_tool_status_blocking(
         .iter()
         .find(|tool| tool.name == tool_name)
         .is_none_or(|tool| !tool_status_is_enabled(&tool.status_label));
-
     let updated_skill = set_skill_tool_enabled_status_at_index(
         &mut installed_skills,
         skill_index,
@@ -8027,7 +9056,7 @@ fn toggle_skill_tool_status_blocking(
     if is_enabling {
         create_skill_symlink(&updated_skill.local_path, skill_name, &tool_skills_path)?;
     } else {
-        remove_matching_skill_link(&tool_skills_path, &updated_skill)?;
+        remove_matching_skill_distribution(&tool_skills_path, &updated_skill)?;
     }
 
     save_installed_skills(&installed_skills)?;
@@ -8081,9 +9110,9 @@ fn set_tool_skill_statuses_blocking(
     for skill_name in &target_skill_names {
         let updated =
             set_skill_tool_enabled_status(&mut installed_skills, skill_name, tool_name, enabled)?;
-        updated_skill_names.insert(updated.name);
+        updated_skill_names.insert(updated.name.clone());
         if !enabled {
-            remove_skill_symlink(&tool_skills_path, skill_name)?;
+            remove_matching_skill_distribution(&tool_skills_path, &updated)?;
             let skill_path = PathBuf::from(&updated.local_path);
             if let Some(legacy_skill_dir_name) =
                 skill_path.file_name().and_then(|name| name.to_str())
@@ -8095,7 +9124,15 @@ fn set_tool_skill_statuses_blocking(
         }
     }
 
-    let enabled_skills = enabled_skills_for_tool(&installed_skills, tool_name);
+    let enabled_skills = enabled_skills_for_tool(&installed_skills, tool_name)
+        .into_iter()
+        .filter(|skill| {
+            let entry_path = PathBuf::from(&tool_skills_path).join(&skill.name);
+            is_skill_link_entry(&entry_path)
+                || !entry_path.is_dir()
+                || !is_agent_cli_managed_skill(skill)
+        })
+        .collect::<Vec<_>>();
     reconcile_tool_skill_symlinks(&tool_skills_path, &enabled_skills)?;
     save_installed_skills(&installed_skills)?;
 
@@ -8173,7 +9210,7 @@ fn set_skill_all_tool_statuses_blocking(
         if enabled {
             create_skill_symlink(&updated_skill.local_path, skill_name, &tool_skills_path)?;
         } else {
-            remove_matching_skill_link(&tool_skills_path, &updated_skill)?;
+            remove_matching_skill_distribution(&tool_skills_path, &updated_skill)?;
         }
     }
 
@@ -8205,22 +9242,25 @@ mod tests {
         delete_skill_blocking, detect_preferred_app_language_from_system,
         ensure_intellij_git_project_files, import_local_skill, insert_trusted_project_path,
         inspect_skill_tool_status, install_selected_local_skill_dirs,
-        intellij_trusted_locations_for_project, load_marketplace_cache_page,
-        map_in_parallel_preserving_order, map_skillsmp_items_to_marketplace,
-        merge_refreshed_skill_states_with_latest_state, normalize_installed_skill_source_url,
-        normalize_skill_tools, open_target_path_for_skill, parse_apple_languages_output,
-        parse_repo_install_spec, parse_skills_sh_homepage_items, recover_missing_managed_skills,
-        refresh_installed_skill_git_state, remove_trusted_project_paths, repo_clone_candidates,
+        intellij_trusted_locations_for_project, load_marketplace_cache_has_more,
+        load_marketplace_cache_page, map_in_parallel_preserving_order,
+        map_skillsmp_items_to_marketplace, merge_refreshed_skill_states_with_latest_state,
+        normalize_installed_skill_source_url, normalize_skill_tools, open_target_path_for_skill,
+        parse_apple_languages_output, parse_repo_install_spec, parse_skills_sh_homepage_items,
+        recover_missing_managed_skills, refresh_installed_skill_git_state,
+        remove_matching_skill_distribution, remove_trusted_project_paths, repo_clone_candidates,
         resolve_skill_install_name, resolve_startup_installed_skills, run_git_command,
         save_marketplace_cache, scan_local_install_skill_candidates, scan_repo_skill_candidates,
-        selected_repo_path_hint, should_use_skills_sh_homepage_page, tool_name_to_id,
-        update_skill_blocking, update_skill_repo, REFRESH_GIT_STATES_CONCURRENCY,
+        selected_repo_path_hint, set_skill_all_tool_statuses_blocking,
+        set_tool_skill_statuses_blocking, should_use_skills_sh_homepage_page, tool_name_to_id,
+        update_skill_blocking, update_skill_repo, MARKETPLACE_CACHE_VERSION,
+        REFRESH_GIT_STATES_CONCURRENCY,
     };
-    use crate::agent_skills_cli::AgentSkillUpdateCheck;
+    use crate::agent_skills_cli::{AgentSkillUpdateCheck, AgentSkillsCliStatus, CliSkillEntry};
     #[cfg(windows)]
     use crate::library::create_windows_directory_junction;
     use crate::models::{
-        AppSettings, MarketplaceSkill, SkillFileEntry, SkillSummary, ToolConfig,
+        AppSettings, MarketplaceSkill, SkillFileEntry, SkillSummary, ToolConfig, ToolSyncStatus,
         WorkspacePersistence,
     };
     use crate::state::{load_installed_skills, save_installed_skills};
@@ -8244,6 +9284,7 @@ mod tests {
             skill_library_path: "/tmp/.skilldock/skills".into(),
             skill_library_provider: "skilldock".into(),
             agent_skills_compatibility_enabled: false,
+            agent_skills_compatibility_configured: true,
             default_open_tool_id: "cursor".into(),
             skill_install_activation: "apply-all-tools".into(),
             mcp_install_activation: "apply-all-tools".into(),
@@ -8252,6 +9293,70 @@ mod tests {
             language_source: "manual".into(),
             theme: "system".into(),
         }
+    }
+
+    fn unavailable_agent_cli_status() -> AgentSkillsCliStatus {
+        AgentSkillsCliStatus {
+            available: false,
+            global_path: String::new(),
+            entries: Vec::new(),
+            error: "skills unavailable".into(),
+        }
+    }
+
+    fn agent_cli_status_for(
+        skill_name: &str,
+        skill_path: &Path,
+        agents: &[&str],
+    ) -> AgentSkillsCliStatus {
+        AgentSkillsCliStatus {
+            available: true,
+            global_path: skill_path
+                .parent()
+                .unwrap_or(skill_path)
+                .to_string_lossy()
+                .to_string(),
+            entries: vec![CliSkillEntry {
+                name: skill_name.into(),
+                path: skill_path.to_string_lossy().to_string(),
+                scope: "global".into(),
+                agents: agents.iter().map(|agent| (*agent).to_string()).collect(),
+            }],
+            error: String::new(),
+        }
+    }
+
+    #[cfg(unix)]
+    fn prepend_fake_skills_cli(
+        temp_home: &Path,
+        entries: &[CliSkillEntry],
+    ) -> Option<std::ffi::OsString> {
+        let fake_bin_dir = temp_home.join("bin");
+        fs::create_dir_all(&fake_bin_dir).expect("create fake Agent CLI bin directory");
+        let payload = serde_json::to_string(entries).expect("serialize fake Agent CLI entries");
+        let script = format!(
+            "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then exit 0; fi\nif [ \"$1\" = \"ls\" ]; then printf '%s' '{payload}'; exit 0; fi\nexit 1\n"
+        );
+        let fake_skills = fake_bin_dir.join("skills");
+        fs::write(&fake_skills, script).expect("write fake Agent CLI executable");
+        fs::set_permissions(&fake_skills, fs::Permissions::from_mode(0o755))
+            .expect("make fake Agent CLI executable");
+        fs::write(fake_bin_dir.join("claude"), "").expect("write fake Claude executable");
+        fs::write(fake_bin_dir.join("codex"), "").expect("write fake Codex executable");
+
+        let original_path = env::var_os("PATH");
+        let next_path = original_path
+            .as_ref()
+            .map(|path| {
+                let mut paths = env::split_paths(path).collect::<Vec<_>>();
+                paths.insert(0, fake_bin_dir);
+                env::join_paths(paths).expect("join fake Agent CLI PATH")
+            })
+            .unwrap_or_else(|| temp_home.join("bin").into_os_string());
+        unsafe {
+            env::set_var("PATH", next_path);
+        }
+        original_path
     }
 
     #[test]
@@ -8331,12 +9436,79 @@ mod tests {
         .expect("parse GitHub marketplace source");
         let api_url =
             super::github_contents_api_url(&source, "skills/demo").expect("build API url");
+        let tree_url = super::github_tree_api_url(&source).expect("build tree API url");
+        let raw_url =
+            super::github_raw_file_url(&source, "skills/demo/SKILL.md").expect("build raw URL");
 
         assert_eq!(source.branch, None);
         assert_eq!(
             api_url.as_str(),
             "https://api.github.com/repos/example/skills/contents/skills/demo"
         );
+        assert_eq!(
+            tree_url.as_str(),
+            "https://api.github.com/repos/example/skills/git/trees/HEAD?recursive=1"
+        );
+        assert_eq!(
+            raw_url.as_str(),
+            "https://raw.githubusercontent.com/example/skills/HEAD/skills/demo/SKILL.md"
+        );
+    }
+
+    #[test]
+    fn detects_only_confirmed_github_api_rate_limits() {
+        let mut exhausted_headers = reqwest::header::HeaderMap::new();
+        exhausted_headers.insert("x-ratelimit-remaining", "0".parse().unwrap());
+        let mut retry_headers = reqwest::header::HeaderMap::new();
+        retry_headers.insert(reqwest::header::RETRY_AFTER, "60".parse().unwrap());
+
+        assert!(super::is_github_api_rate_limited(
+            reqwest::StatusCode::TOO_MANY_REQUESTS,
+            &reqwest::header::HeaderMap::new(),
+        ));
+        assert!(super::is_github_api_rate_limited(
+            reqwest::StatusCode::FORBIDDEN,
+            &exhausted_headers,
+        ));
+        assert!(super::is_github_api_rate_limited(
+            reqwest::StatusCode::FORBIDDEN,
+            &retry_headers,
+        ));
+        assert!(!super::is_github_api_rate_limited(
+            reqwest::StatusCode::FORBIDDEN,
+            &reqwest::header::HeaderMap::new(),
+        ));
+        assert!(!super::is_github_api_rate_limited(
+            reqwest::StatusCode::NOT_FOUND,
+            &exhausted_headers,
+        ));
+    }
+
+    #[test]
+    fn scopes_github_token_to_api_requests() {
+        let client = reqwest::Client::new();
+        let api_url = url::Url::parse("https://api.github.com/repos/example/skills").unwrap();
+        let raw_url =
+            url::Url::parse("https://raw.githubusercontent.com/example/skills/HEAD/SKILL.md")
+                .unwrap();
+
+        let api_request = super::github_api_request(&client, api_url, " secret-token ")
+            .build()
+            .unwrap();
+        let raw_request = super::github_api_request(&client, raw_url, "secret-token")
+            .build()
+            .unwrap();
+
+        assert_eq!(
+            api_request
+                .headers()
+                .get(reqwest::header::AUTHORIZATION)
+                .and_then(|value| value.to_str().ok()),
+            Some("Bearer secret-token"),
+        );
+        assert!(!raw_request
+            .headers()
+            .contains_key(reqwest::header::AUTHORIZATION));
     }
 
     #[test]
@@ -8405,6 +9577,98 @@ mod tests {
             )
             .as_deref(),
             Some("plugins/languages/skills/typescript-advanced-types")
+        );
+    }
+
+    #[test]
+    fn discovers_marketplace_skill_at_repository_root() {
+        let tree_output = concat!(
+            "SKILL.md\n",
+            "examples/adler-perspective/SKILL.md\n",
+            "examples/paul-graham-perspective/SKILL.md\n",
+        );
+
+        assert_eq!(
+            super::marketplace_skill_root_from_tree(tree_output, "cangjie", "cangjie").as_deref(),
+            Some("")
+        );
+    }
+
+    #[test]
+    fn builds_root_marketplace_preview_from_github_tree() {
+        let tree_entries = vec![
+            super::GitHubTreeEntry {
+                path: "SKILL.md".into(),
+                entry_type: "blob".into(),
+            },
+            super::GitHubTreeEntry {
+                path: "examples".into(),
+                entry_type: "tree".into(),
+            },
+            super::GitHubTreeEntry {
+                path: "examples/adler-perspective/SKILL.md".into(),
+                entry_type: "blob".into(),
+            },
+        ];
+
+        let root =
+            super::marketplace_skill_root_from_github_tree(&tree_entries, "cangjie", "cangjie")
+                .expect("discover repository root skill");
+        let entries =
+            super::marketplace_skill_entries_from_github_tree(&tree_entries, &root, "cangjie")
+                .expect("build root preview entries");
+
+        assert_eq!(root, "");
+        assert!(entries.iter().any(|entry| entry.path == "SKILL.md"));
+        assert!(entries
+            .iter()
+            .any(|entry| entry.path == "examples/adler-perspective/SKILL.md"));
+    }
+
+    #[test]
+    fn github_tree_preview_only_includes_selected_nested_skill() {
+        let tree_entries = vec![
+            super::GitHubTreeEntry {
+                path: "skills/demo/SKILL.md".into(),
+                entry_type: "blob".into(),
+            },
+            super::GitHubTreeEntry {
+                path: "skills/demo/reference.md".into(),
+                entry_type: "blob".into(),
+            },
+            super::GitHubTreeEntry {
+                path: "skills/other/SKILL.md".into(),
+                entry_type: "blob".into(),
+            },
+        ];
+
+        let entries =
+            super::marketplace_skill_entries_from_github_tree(&tree_entries, "skills/demo", "demo")
+                .expect("build nested preview entries");
+
+        assert!(entries.iter().any(|entry| entry.path == "SKILL.md"));
+        assert!(entries.iter().any(|entry| entry.path == "reference.md"));
+        assert!(!entries.iter().any(|entry| entry.path.contains("other")));
+    }
+
+    #[test]
+    fn caches_marketplace_github_tree_by_repository_and_branch() {
+        let source = super::GitHubMarketplaceSource {
+            owner: "cache-test-owner".into(),
+            repository: "cache-test-repo".into(),
+            branch: Some("main".into()),
+        };
+        let cache_key = super::marketplace_github_tree_cache_key(&source);
+        let entries = vec![super::GitHubTreeEntry {
+            path: "SKILL.md".into(),
+            entry_type: "blob".into(),
+        }];
+
+        super::cache_marketplace_github_tree(cache_key.clone(), entries.clone());
+
+        assert_eq!(
+            super::cached_marketplace_github_tree(&cache_key),
+            Some(entries)
         );
     }
 
@@ -8492,7 +9756,8 @@ mod tests {
             env::set_var("HOME", &home_dir);
         }
 
-        let recovered = recover_missing_managed_skills(Vec::new(), &[]);
+        let recovered =
+            recover_missing_managed_skills(Vec::new(), &[], &unavailable_agent_cli_status());
 
         restore_env_var("HOME", previous_home);
         assert_eq!(
@@ -8505,7 +9770,7 @@ mod tests {
         assert_eq!(recovered[0].description, "Direct recovery");
         assert_eq!(recovered[1].description, "Nested recovery");
         let persisted: WorkspacePersistence = serde_json::from_str(
-            &fs::read_to_string(home_dir.join(".skilldock/state.json"))
+            &fs::read_to_string(home_dir.join(".skilldock/data/state.json"))
                 .expect("read recovered state"),
         )
         .expect("parse recovered state");
@@ -8846,6 +10111,7 @@ mod tests {
         let check = AgentSkillUpdateCheck {
             checked_names: BTreeSet::from(["agent-skill".to_string()]),
             updated_names: BTreeSet::from(["agent-skill".to_string()]),
+            github_rate_limited: false,
         };
 
         let refreshed = apply_agent_cli_update_statuses(vec![agent_skill, git_skill], &check);
@@ -8867,6 +10133,7 @@ mod tests {
         let check = AgentSkillUpdateCheck {
             checked_names: BTreeSet::from(["checked".to_string()]),
             updated_names: BTreeSet::new(),
+            github_rate_limited: false,
         };
 
         let refreshed = apply_agent_cli_update_statuses(vec![checked_skill, failed_skill], &check);
@@ -9145,6 +10412,7 @@ mod tests {
             supports_mcp: true,
             mcp_config_path_recognized: true,
             status_label: "已安装".into(),
+            is_installed: true,
             is_enabled: true,
             primary_type: "cli".into(),
             surface_types: vec!["cli".into()],
@@ -9627,7 +10895,7 @@ mod tests {
                     "description": "Use for ClawSweeper work.",
                     "githubUrl": "https://github.com/openclaw/openclaw/tree/main/.agents/skills/clawsweeper",
                     "stars": 370546,
-                    "updatedAt": "1778307787"
+                    "updatedAt": 1778307787
                 }
             ]
         });
@@ -9643,6 +10911,7 @@ mod tests {
         assert_eq!(skills[0].source_site, "skillsmp");
         assert_eq!(skills[0].maintainer, "openclaw");
         assert_eq!(skills[0].popularity_label, "370.5K");
+        assert_eq!(skills[0].updated_at, "1778307787");
         assert_eq!(skills[0].skill_path, ".agents/skills/clawsweeper");
     }
 
@@ -9678,6 +10947,7 @@ mod tests {
         );
         assert_eq!(skills[0].maintainer, "team");
         assert_eq!(skills[0].popularity_label, "1.0K");
+        assert_eq!(skills[0].updated_at, "2026-05-14");
         assert_eq!(skills[0].avatar_url, None);
     }
 
@@ -9706,11 +10976,21 @@ mod tests {
             install_label: "默认按热度排序".into(),
             source_url: "https://github.com/team/repo/tree/main/skills/demo".into(),
             popularity_label: "1.0K".into(),
+            topic_label: String::new(),
             avatar_url: None,
             skill_path: "skills/demo".into(),
+            installed: false,
+            update_available: false,
+            current_version: String::new(),
+            category_label: String::new(),
+            marketplace_url: String::new(),
+            owner: String::new(),
+            slug: String::new(),
+            version: String::new(),
+            install_driver: "git".into(),
         }];
 
-        save_marketplace_cache("skillsmp", &skills);
+        save_marketplace_cache("skillsmp", &skills, None);
         let cached = load_marketplace_cache_page("skillsmp", 1, 18).expect("load cache page");
 
         restore_env_var("HOME", original_home);
@@ -9745,6 +11025,41 @@ mod tests {
 
         restore_env_var("HOME", original_home);
         assert!(cached.is_none());
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn reads_cached_marketplace_has_more_without_guessing_from_page_size() {
+        let _guard = TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let temp_dir = temp_test_dir("marketplace-cache-has-more");
+        let home_dir = temp_dir.join("home");
+        let cache_dir = home_dir.join(".skilldock/cache");
+        fs::create_dir_all(&cache_dir).expect("create marketplace cache dir");
+        fs::write(
+            cache_dir.join("marketplace.json"),
+            serde_json::json!({
+                "version": MARKETPLACE_CACHE_VERSION,
+                "sources": {
+                    "clawhub": {
+                        "skills": [],
+                        "hasMore": false
+                    }
+                }
+            })
+            .to_string(),
+        )
+        .expect("write marketplace cache");
+        let original_home = env::var_os("HOME");
+        unsafe {
+            env::set_var("HOME", &home_dir);
+        }
+
+        let has_more = load_marketplace_cache_has_more("clawhub");
+
+        restore_env_var("HOME", original_home);
+        assert_eq!(has_more, Some(false));
         let _ = fs::remove_dir_all(temp_dir);
     }
 
@@ -10321,7 +11636,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn local_import_preserves_existing_tool_directory_on_activation_conflict() {
+    fn local_import_replaces_source_tool_directory_with_managed_link() {
         let _guard = TEST_ENV_LOCK
             .lock()
             .unwrap_or_else(|error| error.into_inner());
@@ -10354,12 +11669,19 @@ mod tests {
             managed_skill_dir.to_string_lossy().to_string()
         );
         assert!(managed_skill_dir.join("SKILL.md").is_file());
-        assert!(cursor_skill_dir.is_dir());
-        assert!(!cursor_skill_dir.is_symlink());
+        assert!(cursor_skill_dir.is_symlink());
+        assert_eq!(
+            cursor_skill_dir
+                .canonicalize()
+                .expect("resolve imported tool Skill link"),
+            managed_skill_dir
+                .canonicalize()
+                .expect("resolve managed Skill directory")
+        );
         assert!(imported
             .tools
             .iter()
-            .any(|tool| { tool.name == "Cursor" && tool.status_label == "未启用" }));
+            .any(|tool| { tool.name == "Cursor" && tool.status_label == "已启用" }));
 
         let _ = fs::remove_dir_all(temp_dir);
     }
@@ -10764,8 +12086,9 @@ mod tests {
         run_git_test(&repo_path, &["add", "."]);
         run_git_test(&repo_path, &["commit", "-m", "init"]);
 
-        let state_file = temp_home.join(".skilldock/state.json");
-        fs::create_dir_all(state_file.parent().expect("state parent exists"))
+        let legacy_state_file = temp_home.join(".skilldock/state.json");
+        let state_file = temp_home.join(".skilldock/data/state.json");
+        fs::create_dir_all(legacy_state_file.parent().expect("state parent exists"))
             .expect("create state parent");
         let persisted = WorkspacePersistence {
             installed_skills: vec![SkillSummary {
@@ -10795,7 +12118,7 @@ mod tests {
             }],
         };
         fs::write(
-            &state_file,
+            &legacy_state_file,
             serde_json::to_string_pretty(&persisted).expect("serialize state"),
         )
         .expect("write state file");
@@ -10864,7 +12187,8 @@ mod tests {
             env::set_var("HOME", &temp_home);
         }
 
-        let status = inspect_skill_tool_status(&skill, "Claude Code");
+        let status =
+            inspect_skill_tool_status(&skill, "Claude Code", &unavailable_agent_cli_status());
 
         restore_env_var("HOME", original_home);
 
@@ -10946,6 +12270,355 @@ mod tests {
         let _ = fs::remove_dir_all(temp_home);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn confirmed_agent_cli_copy_can_be_disabled_and_reenabled_as_link() {
+        let _guard = TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let original_home = env::var_os("HOME");
+        let temp_home = temp_test_dir("agent-cli-copy-toggle-home");
+        let agent_skill_path = temp_home.join(".agents/skills/tdd");
+        let tool_skills_path = temp_home.join(".claude/skills");
+        let copied_skill_path = tool_skills_path.join("tdd");
+        fs::create_dir_all(&agent_skill_path).expect("create Agent CLI skill");
+        fs::create_dir_all(&copied_skill_path).expect("create Agent CLI tool copy");
+        fs::write(agent_skill_path.join("SKILL.md"), "# canonical\n")
+            .expect("write canonical Agent CLI skill");
+        fs::write(copied_skill_path.join("SKILL.md"), "# copied\n")
+            .expect("write copied Agent CLI skill");
+        fs::write(
+            temp_home.join(".agents/.skill-lock.json"),
+            r#"{"version":3,"skills":{"tdd":{"sourceType":"github"}}}"#,
+        )
+        .expect("write Agent CLI lock");
+
+        let mut skill = installed_skill_fixture(
+            "tdd",
+            "https://github.com/example/tdd.git",
+            agent_skill_path.to_string_lossy().as_ref(),
+        );
+        skill.instance.entry_path = agent_skill_path.to_string_lossy().to_string();
+        skill.instance.canonical_path = agent_skill_path.to_string_lossy().to_string();
+        skill.instance.management_owner = "agent-skills-cli".into();
+        skill.instance.update_driver = "agent-skills-cli".into();
+        let status = agent_cli_status_for("tdd", &agent_skill_path, &["Claude Code"]);
+
+        unsafe {
+            env::set_var("HOME", &temp_home);
+        }
+
+        assert_eq!(
+            inspect_skill_tool_status(&skill, "Claude Code", &status),
+            "已启用"
+        );
+        remove_matching_skill_distribution(tool_skills_path.to_string_lossy().as_ref(), &skill)
+            .expect("disable confirmed Agent CLI copy");
+
+        assert!(!copied_skill_path.exists());
+        assert!(agent_skill_path.join("SKILL.md").is_file());
+        assert!(temp_home.join(".agents/.skill-lock.json").is_file());
+
+        crate::library::create_skill_symlink(
+            agent_skill_path.to_string_lossy().as_ref(),
+            "tdd",
+            tool_skills_path.to_string_lossy().as_ref(),
+        )
+        .expect("re-enable Agent CLI skill as link");
+        assert!(copied_skill_path.is_symlink());
+        remove_matching_skill_distribution(tool_skills_path.to_string_lossy().as_ref(), &skill)
+            .expect("disable existing link without CLI confirmation");
+        assert!(fs::symlink_metadata(&copied_skill_path).is_err());
+        assert!(agent_skill_path.exists());
+
+        restore_env_var("HOME", original_home);
+        let _ = fs::remove_dir_all(temp_home);
+    }
+
+    #[test]
+    fn toggle_disables_agent_cli_copy_without_cli_command() {
+        let _guard = TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let original_home = env::var_os("HOME");
+        let original_path = env::var_os("PATH");
+        let temp_home = temp_test_dir("agent-cli-copy-toggle-without-cli-home");
+        let agent_skill_path = temp_home.join(".agents/skills/tdd");
+        let copied_skill_path = temp_home.join(".claude/skills/tdd");
+        fs::create_dir_all(&agent_skill_path).expect("create Agent CLI skill");
+        fs::create_dir_all(&copied_skill_path).expect("create Agent CLI tool copy");
+        fs::create_dir_all(temp_home.join(".skilldock"))
+            .expect("create SkillDock settings directory");
+        fs::create_dir_all(temp_home.join("empty-bin")).expect("create empty PATH directory");
+        fs::write(agent_skill_path.join("SKILL.md"), "# canonical\n")
+            .expect("write canonical Agent CLI skill");
+        fs::write(copied_skill_path.join("SKILL.md"), "# copied\n")
+            .expect("write copied Agent CLI skill");
+        fs::write(
+            temp_home.join(".agents/.skill-lock.json"),
+            r#"{"version":3,"skills":{"tdd":{"sourceType":"github"}}}"#,
+        )
+        .expect("write Agent CLI lock");
+        fs::write(temp_home.join(".claude.json"), "{}").expect("write Claude marker");
+        fs::write(
+            temp_home.join(".skilldock/settings.json"),
+            r#"{"agentSkillsCompatibilityEnabled":true}"#,
+        )
+        .expect("enable Agent CLI compatibility");
+
+        let mut skill = installed_skill_fixture(
+            "tdd",
+            "https://github.com/example/tdd.git",
+            agent_skill_path.to_string_lossy().as_ref(),
+        );
+        skill.instance.entry_path = agent_skill_path.to_string_lossy().to_string();
+        skill.instance.canonical_path = agent_skill_path.to_string_lossy().to_string();
+        skill.instance.management_owner = "agent-skills-cli".into();
+        skill.instance.update_driver = "agent-skills-cli".into();
+        skill.tools = vec![ToolSyncStatus {
+            name: "Claude Code".into(),
+            status_label: "已启用".into(),
+        }];
+
+        unsafe {
+            env::set_var("HOME", &temp_home);
+            env::set_var("PATH", temp_home.join("empty-bin"));
+        }
+        save_installed_skills(&[skill]).expect("save Agent CLI skill");
+
+        let updated = super::toggle_skill_tool_status_blocking(
+            "tdd",
+            Some(agent_skill_path.to_string_lossy().as_ref()),
+            "Claude Code",
+            &["Claude Code".into()],
+        )
+        .expect("disable Agent CLI copy without skills command");
+
+        assert!(updated
+            .tools
+            .iter()
+            .any(|tool| tool.name == "Claude Code" && tool.status_label == "未启用"));
+        assert!(!copied_skill_path.exists());
+        assert!(agent_skill_path.join("SKILL.md").is_file());
+        assert!(temp_home.join(".agents/.skill-lock.json").is_file());
+
+        restore_env_var("HOME", original_home);
+        restore_env_var("PATH", original_path);
+        let _ = fs::remove_dir_all(temp_home);
+    }
+
+    #[test]
+    fn unmanaged_real_directory_and_agent_cli_global_source_are_preserved() {
+        let _guard = TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let original_home = env::var_os("HOME");
+        let temp_home = temp_test_dir("agent-cli-copy-refusal-home");
+        let agent_skill_path = temp_home.join(".agents/skills/tdd");
+        let tool_skills_path = temp_home.join(".claude/skills");
+        let copied_skill_path = tool_skills_path.join("tdd");
+        fs::create_dir_all(&agent_skill_path).expect("create Agent CLI skill");
+        fs::create_dir_all(&copied_skill_path).expect("create unconfirmed tool copy");
+        fs::write(agent_skill_path.join("SKILL.md"), "# canonical\n")
+            .expect("write canonical Agent CLI skill");
+        fs::write(copied_skill_path.join("SKILL.md"), "# copied\n")
+            .expect("write copied Agent CLI skill");
+
+        let mut skill = installed_skill_fixture(
+            "tdd",
+            "https://github.com/example/tdd.git",
+            agent_skill_path.to_string_lossy().as_ref(),
+        );
+        skill.instance.canonical_path = agent_skill_path.to_string_lossy().to_string();
+
+        unsafe {
+            env::set_var("HOME", &temp_home);
+        }
+
+        remove_matching_skill_distribution(tool_skills_path.to_string_lossy().as_ref(), &skill)
+            .expect("preserve unmanaged real directory");
+        assert!(copied_skill_path.is_dir());
+
+        skill.instance.management_owner = "agent-skills-cli".into();
+        skill.instance.update_driver = "agent-skills-cli".into();
+        assert!(remove_matching_skill_distribution(
+            temp_home.join(".agents/skills").to_string_lossy().as_ref(),
+            &skill,
+        )
+        .is_err());
+        assert!(agent_skill_path.join("SKILL.md").is_file());
+
+        restore_env_var("HOME", original_home);
+        let _ = fs::remove_dir_all(temp_home);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn batch_disable_removes_only_selected_agent_cli_copy() {
+        let _guard = TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let original_home = env::var_os("HOME");
+        let temp_home = temp_test_dir("agent-cli-copy-batch-home");
+        let tool_skills_path = temp_home.join(".claude/skills");
+        let mut skills = Vec::new();
+        let mut cli_entries = Vec::new();
+        for name in ["one", "two"] {
+            let source = temp_home.join(".agents/skills").join(name);
+            let copy = tool_skills_path.join(name);
+            fs::create_dir_all(&source).expect("create Agent CLI source");
+            fs::create_dir_all(&copy).expect("create Agent CLI copy");
+            fs::write(source.join("SKILL.md"), format!("# {name}\n"))
+                .expect("write Agent CLI source");
+            fs::write(copy.join("SKILL.md"), format!("# copied {name}\n"))
+                .expect("write Agent CLI copy");
+
+            let mut skill = installed_skill_fixture(
+                name,
+                &format!("https://github.com/example/{name}.git"),
+                source.to_string_lossy().as_ref(),
+            );
+            skill.instance.entry_path = source.to_string_lossy().to_string();
+            skill.instance.canonical_path = source.to_string_lossy().to_string();
+            skill.instance.management_owner = "agent-skills-cli".into();
+            skill.instance.update_driver = "agent-skills-cli".into();
+            skill.tools = vec![ToolSyncStatus {
+                name: "Claude Code".into(),
+                status_label: "已启用".into(),
+            }];
+            skills.push(skill);
+            cli_entries.push(CliSkillEntry {
+                name: name.into(),
+                path: source.to_string_lossy().to_string(),
+                scope: "global".into(),
+                agents: vec!["Claude Code".into()],
+            });
+        }
+        fs::write(temp_home.join(".claude.json"), "{}").expect("write Claude installation marker");
+        fs::create_dir_all(temp_home.join(".skilldock"))
+            .expect("create SkillDock settings directory");
+        fs::write(
+            temp_home.join(".skilldock/settings.json"),
+            r#"{"agentSkillsCompatibilityEnabled":true}"#,
+        )
+        .expect("enable Agent CLI compatibility");
+
+        unsafe {
+            env::set_var("HOME", &temp_home);
+        }
+        let original_path = prepend_fake_skills_cli(&temp_home, &cli_entries);
+        save_installed_skills(&skills).expect("save Agent CLI skills");
+        let tool_entries = build_tool_skill_entries(
+            &[ToolConfig {
+                id: "claude-code".into(),
+                name: "Claude Code".into(),
+                skills_path: tool_skills_path.to_string_lossy().to_string(),
+                mcp_config_path: String::new(),
+                supports_mcp: true,
+                mcp_config_path_recognized: true,
+                status_label: "已安装".into(),
+                is_installed: true,
+                is_enabled: true,
+                primary_type: "agent".into(),
+                surface_types: vec!["agent".into()],
+                supports_direct_open: true,
+            }],
+            &skills,
+        );
+        assert!(tool_entries.iter().all(|entry| {
+            entry.management_status == "managed" && entry.managed_root == "agent-skills-cli"
+        }));
+
+        set_tool_skill_statuses_blocking(
+            "Claude Code",
+            vec!["one".into()],
+            false,
+            &["Claude Code".into()],
+        )
+        .expect("batch disable Agent CLI copy");
+
+        assert!(!tool_skills_path.join("one").exists());
+        assert!(tool_skills_path.join("two/SKILL.md").is_file());
+        assert!(temp_home.join(".agents/skills/one/SKILL.md").is_file());
+        assert!(temp_home.join(".agents/skills/two/SKILL.md").is_file());
+
+        restore_env_var("HOME", original_home);
+        restore_env_var("PATH", original_path);
+        let _ = fs::remove_dir_all(temp_home);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn all_tools_disable_removes_each_confirmed_copy_but_keeps_global_source() {
+        let _guard = TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let original_home = env::var_os("HOME");
+        let temp_home = temp_test_dir("agent-cli-copy-all-tools-home");
+        let source = temp_home.join(".agents/skills/tdd");
+        let claude_copy = temp_home.join(".claude/skills/tdd");
+        let codex_copy = temp_home.join(".codex/skills/tdd");
+        for path in [&source, &claude_copy, &codex_copy] {
+            fs::create_dir_all(path).expect("create Agent CLI Skill directory");
+            fs::write(path.join("SKILL.md"), "# tdd\n").expect("write Agent CLI Skill");
+        }
+        fs::write(temp_home.join(".claude.json"), "{}").expect("write Claude installation marker");
+        fs::create_dir_all(temp_home.join(".skilldock"))
+            .expect("create SkillDock settings directory");
+        fs::write(
+            temp_home.join(".skilldock/settings.json"),
+            r#"{"agentSkillsCompatibilityEnabled":true}"#,
+        )
+        .expect("enable Agent CLI compatibility");
+
+        let mut skill = installed_skill_fixture(
+            "tdd",
+            "https://github.com/example/tdd.git",
+            source.to_string_lossy().as_ref(),
+        );
+        skill.instance.entry_path = source.to_string_lossy().to_string();
+        skill.instance.canonical_path = source.to_string_lossy().to_string();
+        skill.instance.management_owner = "agent-skills-cli".into();
+        skill.instance.update_driver = "agent-skills-cli".into();
+        skill.tools = vec![
+            ToolSyncStatus {
+                name: "Claude Code".into(),
+                status_label: "已启用".into(),
+            },
+            ToolSyncStatus {
+                name: "Codex".into(),
+                status_label: "已启用".into(),
+            },
+        ];
+        let cli_entries = vec![CliSkillEntry {
+            name: "tdd".into(),
+            path: source.to_string_lossy().to_string(),
+            scope: "global".into(),
+            agents: vec!["Claude Code".into(), "Codex".into()],
+        }];
+        unsafe {
+            env::set_var("HOME", &temp_home);
+        }
+        let original_path = prepend_fake_skills_cli(&temp_home, &cli_entries);
+        save_installed_skills(&[skill]).expect("save Agent CLI skill");
+
+        set_skill_all_tool_statuses_blocking(
+            "tdd",
+            Some(source.to_string_lossy().as_ref()),
+            false,
+            &["Claude Code".into(), "Codex".into()],
+        )
+        .expect("disable Agent CLI copies for all tools");
+
+        assert!(!claude_copy.exists());
+        assert!(!codex_copy.exists());
+        assert!(source.join("SKILL.md").is_file());
+
+        restore_env_var("HOME", original_home);
+        restore_env_var("PATH", original_path);
+        let _ = fs::remove_dir_all(temp_home);
+    }
+
     #[test]
     fn toggling_agent_cli_skill_preserves_other_enabled_tools() {
         let _guard = TEST_ENV_LOCK
@@ -11018,7 +12691,7 @@ mod tests {
 
         let loaded = resolve_startup_installed_skills();
         let persisted: WorkspacePersistence = serde_json::from_str(
-            &fs::read_to_string(temp_home.join(".skilldock/state.json"))
+            &fs::read_to_string(temp_home.join(".skilldock/data/state.json"))
                 .expect("read persisted startup state"),
         )
         .expect("deserialize persisted startup state");
@@ -11066,6 +12739,29 @@ mod tests {
     }
 
     #[test]
+    fn opencode_mcp_path_prefers_existing_jsonc_config() {
+        let home = env::temp_dir().join(format!(
+            "skilldock-opencode-tool-path-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|duration| duration.as_nanos())
+                .unwrap_or_default()
+        ));
+        let config_dir = home.join(".config/opencode");
+        fs::create_dir_all(&config_dir).expect("create OpenCode config directory");
+        let jsonc_path = config_dir.join("opencode.jsonc");
+        fs::write(&jsonc_path, "{}").expect("write OpenCode JSONC config");
+
+        assert_eq!(
+            super::mcp_config_path_for_tool("opencode", &home),
+            jsonc_path
+        );
+
+        let _ = fs::remove_dir_all(home);
+    }
+
+    #[test]
     fn application_support_mcp_paths_follow_platform_location() {
         let home = PathBuf::from(if cfg!(windows) {
             r"C:\Users\demo"
@@ -11089,6 +12785,97 @@ mod tests {
                 "Code/User/globalStorage/RooVeterinaryInc.roo-cline/settings/mcp_settings.json"
             )
         );
+    }
+
+    #[test]
+    fn registered_tool_configs_expose_new_skill_and_mcp_paths() {
+        let home = PathBuf::from(if cfg!(windows) {
+            r"C:\Users\demo"
+        } else {
+            "/Users/demo"
+        });
+        let configs = super::build_registered_tool_configs(&home);
+        let pi = configs
+            .iter()
+            .find(|tool| tool.id == "pi")
+            .expect("pi config");
+        assert_eq!(
+            pi.skills_path,
+            home.join(".pi/agent/skills").to_string_lossy()
+        );
+        assert!(!pi.supports_mcp);
+        let omp = configs
+            .iter()
+            .find(|tool| tool.id == "omp")
+            .expect("omp config");
+        assert_eq!(
+            omp.mcp_config_path,
+            home.join(".omp/agent/mcp.json").to_string_lossy()
+        );
+        assert!(omp.supports_mcp);
+        let grok = configs
+            .iter()
+            .find(|tool| tool.id == "grok")
+            .expect("grok config");
+        assert_eq!(
+            grok.mcp_config_path,
+            home.join(".grok/config.toml").to_string_lossy()
+        );
+        let mimo = configs
+            .iter()
+            .find(|tool| tool.id == "mimo-code")
+            .expect("mimo config");
+        assert_eq!(
+            mimo.skills_path,
+            home.join(".config/mimocode/skills").to_string_lossy()
+        );
+        assert_eq!(
+            mimo.mcp_config_path,
+            home.join(".config/mimocode/mimocode.json")
+                .to_string_lossy()
+        );
+        let workbuddy = configs
+            .iter()
+            .find(|tool| tool.id == "workbuddy")
+            .expect("workbuddy config");
+        assert_eq!(
+            workbuddy.skills_path,
+            home.join(".workbuddy/skills").to_string_lossy()
+        );
+        assert_eq!(
+            workbuddy.mcp_config_path,
+            home.join(".workbuddy/.mcp.json").to_string_lossy()
+        );
+        let zcode = configs
+            .iter()
+            .find(|tool| tool.id == "zcode")
+            .expect("zcode config");
+        assert_eq!(
+            zcode.skills_path,
+            home.join(".zcode/skills").to_string_lossy()
+        );
+        assert_eq!(
+            zcode.mcp_config_path,
+            home.join(".zcode/cli/config.json").to_string_lossy()
+        );
+        assert!(zcode.supports_mcp);
+        assert_eq!(zcode.primary_type, "desktop");
+        assert_eq!(zcode.surface_types, vec!["desktop"]);
+    }
+
+    #[test]
+    fn registered_tool_installation_uses_mimocode_install_root() {
+        let home = temp_test_dir("mimocode-installation-detection");
+        fs::create_dir_all(home.join(".mimocode/bin")).expect("create mimocode install root");
+
+        let configs = super::build_registered_tool_configs(&home);
+        let mimo = configs
+            .iter()
+            .find(|tool| tool.id == "mimo-code")
+            .expect("mimo config");
+        assert_eq!(mimo.status_label, "已安装");
+
+        let _ = fs::remove_dir_all(home);
     }
 
     #[test]
@@ -11308,6 +13095,7 @@ mod tests {
                 supports_mcp: false,
                 mcp_config_path_recognized: false,
                 status_label: "已安装".into(),
+                is_installed: true,
                 is_enabled: true,
                 primary_type: "editor".into(),
                 surface_types: vec!["editor".into()],
@@ -11321,6 +13109,7 @@ mod tests {
                 supports_mcp: false,
                 mcp_config_path_recognized: false,
                 status_label: "已安装".into(),
+                is_installed: true,
                 is_enabled: true,
                 primary_type: "editor".into(),
                 surface_types: vec!["editor".into()],

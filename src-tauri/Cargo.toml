@@ -1,6 +1,6 @@
 [package]
 name = "skilldock"
-version = "1.0.3"
+version = "1.0.8"
 description = "SkillDock desktop app"
 authors = ["SkillDock"]
 license = ""
@@ -26,10 +26,11 @@ tauri = { version = "2.10.3", features = [] }
 tauri-plugin-log = "2"
 tauri-plugin-dialog = "2"
 url = "2.5"
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "multipart", "rustls-tls"] }
 regex = "1.11"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 json5 = "0.4"
+jsonc-parser = { version = "0.33", features = ["cst"] }
 toml_edit = "0.22"
 base64 = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
@@ -37,3 +38,5 @@ sha2 = "0.10"
 tauri-plugin-updater = "2.10.1"
 tauri-plugin-process = "2.3.1"
 notify = "6.1"
+uuid = { version = "1", features = ["v4"] }
+fs2 = "0.4"

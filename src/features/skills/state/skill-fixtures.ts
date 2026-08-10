@@ -151,30 +151,38 @@ export const marketplaceSkillFixtures: MarketplaceSkill[] = [
   {
     id: "skill-market-003",
     name: "release-guardian",
-    sourceType: "gitlab",
-    sourceSite: "skillsmp",
+    sourceType: "well-known",
+    sourceSite: "clawhub",
     description: "在发布前聚合变更、风险和回滚信息，生成一次性发布清单。",
-    maintainer: "skillsmp",
+    maintainer: "release-team",
     updatedAt: "昨天 16:10",
-    installLabel: "适合团队使用",
-    sourceUrl: "https://gitlab.com/release-team/release-guardian",
-    marketplaceUrl: "https://skillsmp.com/skills/release-guardian",
+    installLabel: "ClawHub 1.2.0",
+    sourceUrl: "https://clawhub.ai/release-team/skills/release-guardian",
+    marketplaceUrl: "https://clawhub.ai/release-team/skills/release-guardian",
     popularityLabel: "531.0K",
     avatarUrl: null,
+    owner: "release-team",
+    slug: "release-guardian",
+    version: "1.2.0",
+    installDriver: "clawhub",
   },
   {
     id: "skill-market-004",
     name: "repo-guardian",
     sourceType: "github",
-    sourceSite: "skillsmp",
+    sourceSite: "clawhub",
     description: "针对多仓库团队的变更同步、提交规范和发布前检查。",
-    maintainer: "skillsmp",
+    maintainer: "collab-team",
     updatedAt: "今天 09:40",
     installLabel: "适合协作场景",
     sourceUrl: "https://github.com/collab-team/repo-guardian",
-    marketplaceUrl: "https://skillsmp.com/skills/repo-guardian",
+    marketplaceUrl: "https://clawhub.ai/collab-team/skills/repo-guardian",
     popularityLabel: "155.0K",
     avatarUrl: null,
+    owner: "collab-team",
+    slug: "repo-guardian",
+    version: "1.0.0",
+    installDriver: "git",
   },
 ];
 
@@ -366,6 +374,12 @@ export const toolConfigFixtures: ToolConfig[] = [
   { id: "trae-cn", name: "Trae CN", skillsPath: "/Users/demo/.trae-cn/skills", mcpConfigPath: "/Users/demo/Library/Application Support/Trae CN/User/mcp.json", supportsMcp: true, mcpConfigPathRecognized: true, statusLabel: "未安装", isEnabled: false, primaryType: "editor", surfaceTypes: ["editor"], supportsDirectOpen: false },
   { id: "hermes", name: "Hermes", skillsPath: "/Users/demo/.hermes/skills", mcpConfigPath: "/Users/demo/.hermes/config.yaml", supportsMcp: true, mcpConfigPathRecognized: true, statusLabel: "未安装", isEnabled: false, primaryType: "cli", surfaceTypes: ["cli"], supportsDirectOpen: false },
   { id: "github-copilot", name: "GitHub Copilot", skillsPath: "/Users/demo/.copilot/skills", mcpConfigPath: "/Users/demo/.copilot/mcp-config.json", supportsMcp: true, mcpConfigPathRecognized: true, statusLabel: "未安装", isEnabled: false, primaryType: "editor", surfaceTypes: ["editor", "ide-plugin"], supportsDirectOpen: false },
+  { id: "pi", name: "Pi", skillsPath: "/Users/demo/.pi/agent/skills", mcpConfigPath: "", supportsMcp: false, mcpConfigPathRecognized: false, statusLabel: "未安装", isEnabled: false, primaryType: "cli", surfaceTypes: ["cli"], supportsDirectOpen: false },
+  { id: "omp", name: "OMP", skillsPath: "/Users/demo/.omp/agent/skills", mcpConfigPath: "/Users/demo/.omp/agent/mcp.json", supportsMcp: true, mcpConfigPathRecognized: true, statusLabel: "未安装", isEnabled: false, primaryType: "cli", surfaceTypes: ["cli"], supportsDirectOpen: false },
+  { id: "grok", name: "Grok Build", skillsPath: "/Users/demo/.grok/skills", mcpConfigPath: "/Users/demo/.grok/config.toml", supportsMcp: true, mcpConfigPathRecognized: true, statusLabel: "未安装", isEnabled: false, primaryType: "cli", surfaceTypes: ["cli"], supportsDirectOpen: false },
+  { id: "mimo-code", name: "MiMo Code", skillsPath: "/Users/demo/.config/mimocode/skills", mcpConfigPath: "/Users/demo/.config/mimocode/mimocode.json", supportsMcp: true, mcpConfigPathRecognized: true, statusLabel: "未安装", isEnabled: false, primaryType: "cli", surfaceTypes: ["cli"], supportsDirectOpen: false },
+  { id: "workbuddy", name: "WorkBuddy", skillsPath: "/Users/demo/.workbuddy/skills", mcpConfigPath: "/Users/demo/.workbuddy/.mcp.json", supportsMcp: true, mcpConfigPathRecognized: true, statusLabel: "未安装", isEnabled: false, primaryType: "desktop", surfaceTypes: ["desktop"], supportsDirectOpen: false },
+  { id: "zcode", name: "ZCode", skillsPath: "/Users/demo/.zcode/skills", mcpConfigPath: "/Users/demo/.zcode/cli/config.json", supportsMcp: true, mcpConfigPathRecognized: true, statusLabel: "未安装", isEnabled: false, primaryType: "desktop", surfaceTypes: ["desktop"], supportsDirectOpen: false },
 ];
 
 const projectSkillRelativePaths: Record<string, string> = {
@@ -991,10 +1005,11 @@ export const gitAccountFixture: GitAccountSummary = {
 };
 
 export const appSettingsFixture: AppSettings = {
-  storagePath: "/Users/demo/.skilldock/settings.json",
+  storagePath: "/Users/demo/.skilldock/config/settings.json",
   skillLibraryPath: "/Users/demo/.skilldock/skills",
   skillLibraryProvider: "skilldock",
   agentSkillsCompatibilityEnabled: false,
+  agentSkillsCompatibilityConfigured: true,
   defaultOpenToolId: "",
   skillInstallActivation: "apply-all-tools",
   mcpInstallActivation: "apply-all-tools",
@@ -1002,6 +1017,16 @@ export const appSettingsFixture: AppSettings = {
   language: "zh-CN",
   languageSource: "user",
   theme: "system",
+};
+
+export const githubConnectionFixture = {
+  connected: false,
+  authMethod: "",
+  userId: null,
+  username: "",
+  avatarUrl: "",
+  credentialPersisted: false,
+  warning: "",
 };
 
 export const pushTargetFixtures: Record<string, PushTargetSnapshot> = {
@@ -1071,6 +1096,7 @@ export const skillFileBrowserFixtures: Record<string, SkillFileBrowserSnapshot> 
     skillName: "drawio-diagram",
     rootName: "drawio-diagram",
     initialFilePath: "SKILL.md",
+    previewMode: "full",
     entries: [
       { path: "", name: "drawio-diagram", entryType: "directory", depth: 0 },
       { path: "reference", name: "reference", entryType: "directory", depth: 1 },
@@ -1082,6 +1108,7 @@ export const skillFileBrowserFixtures: Record<string, SkillFileBrowserSnapshot> 
     skillName: "skill-publisher",
     rootName: "skill-publisher",
     initialFilePath: "SKILL.md",
+    previewMode: "full",
     entries: [
       { path: "", name: "skill-publisher", entryType: "directory", depth: 0 },
       { path: "reference", name: "reference", entryType: "directory", depth: 1 },

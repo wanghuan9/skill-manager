@@ -6,6 +6,7 @@ import {
   appSettingsFixture,
   cliToolFixtures,
   gitAccountFixture,
+  githubConnectionFixture,
   installedSkillFixtures,
   localSkillFixtures,
   localInstallSkillCandidateFixtures,
@@ -28,15 +29,23 @@ import type {
   AppLanguage,
   AgentSkillsCliStatus,
   AppSettings,
+  BackupConflict,
+  BackupStatus,
+  BackupSyncResult,
+  CloudBackupNode,
   CliToolSummary,
   FailureFeedbackInput,
   FeedbackIssueDraft,
   GitAccountSummary,
   GitBranchOption,
   GitChangeFile,
+  GithubConnection,
+  GithubDeviceFlowStart,
+  GithubDevicePollResult,
   LocalSkillCandidate,
   LocalInstallSkillCandidate,
   MarketplaceSkill,
+  MarketplaceSkillsPage,
   MarketplaceSourceSite,
   McpMarketplaceServer,
   McpMarketplaceSourceSite,
@@ -70,6 +79,7 @@ import type {
   ToolConfig,
   ToolSkillEntry,
   UpdatePreviewSnapshot,
+  WorkspaceRestorePreview,
   WorkspaceSnapshot,
 } from "@/features/skills/state/skill-store";
 import {
@@ -212,15 +222,17 @@ type SaveSkillFileInput = SkillFileInput & {
 };
 
 type MarketplaceSkillFileInput = {
+  sourceSite?: MarketplaceSourceSite;
   sourceUrl: string;
   skillPath: string;
   skillName: string;
+  skillId?: string;
+  owner?: string;
+  slug?: string;
+  version?: string;
 };
 
-type MarketplaceSkillFileContentInput = Pick<
-  MarketplaceSkillFileInput,
-  "sourceUrl" | "skillPath"
-> & {
+type MarketplaceSkillFileContentInput = Omit<MarketplaceSkillFileInput, "skillName"> & {
   relativePath: string;
 };
 
@@ -329,7 +341,7 @@ function pluginSourceCandidateFixtures(input: ProbePluginSourceInput): LegacyPlu
   const sparsePath = input.sparsePath?.trim() ?? "";
   const agenticEngineeringProbe: LegacyPluginProbeResult = {
     tool: "codex",
-    compatibleHostTools: ["codex", "claude-code", "cursor"],
+    compatibleHostTools: ["codex", "claude-code", "cursor", "opencode"],
     kind: "plugin-repo",
     description: "基于 Skill 的模块化 Example Plugin 框架",
     pluginRoot: "/tmp/example-repo/example-plugin",
@@ -587,12 +599,18 @@ function normalizeSkillSummary(skill: LegacySkillSummary): SkillSummary {
     lifecycleSource,
     ownerPluginId,
     ownerPluginName,
+    backupId: skill.backupId ?? "",
     entryPath: skill.entryPath ?? skill.localPath ?? "",
     canonicalPath: skill.canonicalPath ?? skill.localPath ?? "",
     managementOwner: skill.managementOwner ?? "skilldock",
     updateDriver: skill.updateDriver ?? (skill.gitLinked ? "git" : "none"),
     skillEntries: skill.skillEntries ?? [skill.entryPath ?? skill.localPath ?? ""].filter(Boolean),
     pathError: skill.pathError ?? "",
+    contentHash: skill.contentHash ?? "",
+    marketplaceOwner: skill.marketplaceOwner ?? "",
+    marketplaceSlug: skill.marketplaceSlug ?? "",
+    marketplaceVersion: skill.marketplaceVersion ?? "",
+    marketplaceContentHash: skill.marketplaceContentHash ?? "",
     tools: (skill.tools ?? []).map((tool) => ({
       ...tool,
       statusLabel: localizeToolStatusLabel(tool.statusLabel, language),
@@ -604,8 +622,12 @@ function normalizeSkillSummaryList(skills: LegacySkillSummary[]): SkillSummary[]
   return skills.map((skill) => normalizeSkillSummary(skill));
 }
 
+function isPluginHostTool(tool: string | undefined): tool is PluginHostTool {
+  return tool === "claude-code" || tool === "cursor" || tool === "codex" || tool === "opencode";
+}
+
 function normalizePluginHostTool(tool: string | undefined): PluginHostTool {
-  if (tool === "claude-code" || tool === "cursor" || tool === "codex") {
+  if (isPluginHostTool(tool)) {
     return tool;
   }
 
@@ -724,7 +746,7 @@ function normalizePluginSummary(plugin: LegacyPluginSummary): PluginSummary {
     description: plugin.description ?? "",
     hostTool: normalizePluginHostTool(plugin.hostTool),
     relatedHostTools: Array.isArray(plugin.relatedHostTools)
-      ? plugin.relatedHostTools.filter((tool): tool is PluginHostTool => tool === "claude-code" || tool === "cursor" || tool === "codex")
+      ? plugin.relatedHostTools.filter(isPluginHostTool)
       : [],
     kind: normalizePluginKind(plugin.kind),
     rootPath: plugin.rootPath ?? "",
@@ -776,15 +798,9 @@ function normalizePluginSummaryList(plugins: LegacyPluginSummary[]): PluginSumma
 
 function normalizePluginProbeResult(probe: LegacyPluginProbeResult): PluginProbeResult {
   const compatibleHostTools = Array.isArray(probe.compatibleHostTools)
-    ? probe.compatibleHostTools.filter(
-        (tool): tool is PluginHostTool =>
-          tool === "claude-code" || tool === "cursor" || tool === "codex",
-      )
+    ? probe.compatibleHostTools.filter(isPluginHostTool)
     : [];
-  const tool =
-    probe.tool === "claude-code" || probe.tool === "cursor" || probe.tool === "codex"
-      ? probe.tool
-      : "unknown";
+  const tool = isPluginHostTool(probe.tool) ? probe.tool : "unknown";
 
   return {
     tool,
@@ -813,6 +829,7 @@ function normalizePluginProbeResult(probe: LegacyPluginProbeResult): PluginProbe
       probe.installStrategy === "codex-marketplace"
       || probe.installStrategy === "claude-plugin-dir"
       || probe.installStrategy === "cursor-registration"
+      || probe.installStrategy === "opencode-plugin-link"
       || probe.installStrategy === "unsupported"
         ? probe.installStrategy
         : "unsupported",
@@ -1119,13 +1136,30 @@ export async function fetchStartupInstalledSkills(): Promise<SkillSummary[]> {
   return normalizeSkillSummaryList(skills);
 }
 
-export async function fetchGitStates(): Promise<SkillSummary[]> {
-  const skills = await invokeOrFallback<LegacySkillSummary[]>(
+type GitStateRefreshResult = {
+  skills: LegacySkillSummary[];
+  githubRateLimited: boolean;
+};
+
+export async function fetchGitStates(): Promise<{
+  skills: SkillSummary[];
+  githubRateLimited: boolean;
+}> {
+  const result = await invokeOrFallback<LegacySkillSummary[] | GitStateRefreshResult>(
     "refresh_git_states",
     {},
     installedSkillFixtures,
   );
-  return normalizeSkillSummaryList(skills);
+  if (Array.isArray(result)) {
+    return {
+      skills: normalizeSkillSummaryList(result),
+      githubRateLimited: false,
+    };
+  }
+  return {
+    skills: normalizeSkillSummaryList(result.skills),
+    githubRateLimited: result.githubRateLimited,
+  };
 }
 
 export async function refreshLocalGitState(skillName: string, skillPath?: string): Promise<SkillSummary> {
@@ -1203,17 +1237,13 @@ export async function refreshLocalPluginState(input: {
   return normalizePluginSummary(updatedPlugin);
 }
 
-export async function fetchMarketplaceSkills(): Promise<MarketplaceSkill[]> {
-  return invokeOrFallback("list_marketplace_skills", {}, marketplaceSkillFixtures);
-}
-
 export async function fetchMarketplaceSkillsByPage(input: {
   sourceSite?: MarketplaceSourceSite;
   page: number;
   limit: number;
   query?: string;
   refresh?: boolean;
-}): Promise<MarketplaceSkill[]> {
+}): Promise<MarketplaceSkillsPage> {
   const { sourceSite, page, limit, query, refresh } = input;
   const normalizedQuery = query?.trim().toLowerCase() ?? "";
   const filteredBySource = sourceSite
@@ -1226,11 +1256,14 @@ export async function fetchMarketplaceSkillsByPage(input: {
     })
     : filteredBySource;
   const start = Math.max(0, (page - 1) * limit);
-  const fallback = filtered.slice(start, start + limit);
-  return invokeOrFallback(
-    "list_marketplace_skills",
+  const fallbackSkills = filtered.slice(start, start + limit);
+  return invokeOrFallback<MarketplaceSkillsPage>(
+    "list_marketplace_skills_page",
     { sourceSite, page, limit, query, refresh },
-    fallback,
+    {
+      skills: fallbackSkills,
+      hasMore: start + limit < filtered.length,
+    },
   );
 }
 
@@ -1270,8 +1303,13 @@ export async function fetchMarketplaceSkillFileBrowser(
       rootName: input.skillName,
       entries: [],
       initialFilePath: null,
+      previewMode: "full",
     },
   );
+}
+
+export async function fetchMarketplaceSkillDetail(skill: MarketplaceSkill): Promise<MarketplaceSkill> {
+  return invokeOrFallback("get_marketplace_skill_detail", { skill }, skill);
 }
 
 export async function fetchMarketplaceSkillFileContent(
@@ -1315,7 +1353,150 @@ export async function fetchAppSettings(): Promise<AppSettings> {
     ...settings,
     agentSkillsCompatibilityEnabled:
       settings.agentSkillsCompatibilityEnabled ?? settings.skillLibraryProvider === "agent-skills",
+    agentSkillsCompatibilityConfigured: settings.agentSkillsCompatibilityConfigured ?? true,
   };
+}
+
+export async function fetchGithubConnection(): Promise<GithubConnection> {
+  const connection = await invokeOrFallback<GithubConnection | null>(
+    "get_github_connection",
+    {},
+    githubConnectionFixture,
+  );
+  return {
+    ...githubConnectionFixture,
+    ...(connection ?? {}),
+  };
+}
+
+export async function startGithubDeviceFlow(backupScope = false): Promise<GithubDeviceFlowStart> {
+  return invoke("start_github_device_flow", { backupScope });
+}
+
+export async function pollGithubDeviceFlow(deviceCode: string): Promise<GithubDevicePollResult> {
+  return invoke("poll_github_device_flow", { deviceCode });
+}
+
+export async function connectGithubToken(token: string): Promise<GithubConnection> {
+  if (shouldUseFixtureData()) {
+    Object.assign(githubConnectionFixture, {
+      connected: token.trim().length > 0,
+      authMethod: "pat",
+      userId: 1,
+      username: "octocat",
+      avatarUrl: "",
+      credentialPersisted: true,
+      warning: "",
+    });
+    return { ...githubConnectionFixture };
+  }
+  return invoke("connect_github_token", { token });
+}
+
+export async function disconnectGithub(): Promise<GithubConnection> {
+  if (shouldUseFixtureData()) {
+    Object.assign(githubConnectionFixture, {
+      connected: false,
+      authMethod: "",
+      userId: null,
+      username: "",
+      avatarUrl: "",
+      credentialPersisted: false,
+      warning: "",
+    });
+    return { ...githubConnectionFixture };
+  }
+  return invoke("disconnect_github", {});
+}
+
+const backupStatusFixture: BackupStatus = {
+  enabled: false,
+  repositoryOwner: "",
+  repositoryName: "",
+  repositoryUrl: "",
+  lastSyncAt: "",
+  lastOperation: "",
+  lastError: "",
+  phase: "disabled",
+  syncing: false,
+  pendingConflicts: 0,
+  progressStage: "",
+  progressPercent: 0,
+};
+
+export async function fetchBackupStatus(): Promise<BackupStatus> {
+  return invokeOrFallback("get_backup_status", {}, backupStatusFixture);
+}
+
+export async function enableGithubBackup(): Promise<BackupStatus> {
+  return invoke("enable_github_backup", {});
+}
+
+export async function disconnectGithubBackup(): Promise<BackupStatus> {
+  if (shouldUseFixtureData()) {
+    return { ...backupStatusFixture };
+  }
+  return invoke("disconnect_github_backup", {});
+}
+
+export async function runBackupSync(): Promise<BackupStatus> {
+  return invoke("run_backup_sync", {});
+}
+
+export async function syncBackupToLocal(): Promise<BackupStatus> {
+  return invoke("sync_backup_to_local", {});
+}
+
+export async function listCloudBackupNodes(): Promise<CloudBackupNode[]> {
+  return invokeOrFallback("list_cloud_backup_nodes", {}, []);
+}
+
+export async function deleteCloudBackupNode(commitId: string): Promise<void> {
+  return invoke("delete_cloud_backup_node", { commitId });
+}
+
+export async function restoreCloudBackupNode(commitId: string): Promise<BackupStatus> {
+  return invoke("restore_cloud_backup_node", { commitId });
+}
+
+export async function previewCloudBackupNode(
+  commitId: string,
+): Promise<WorkspaceRestorePreview> {
+  return invoke("preview_cloud_backup_node", { commitId });
+}
+
+export async function subscribeBackupStatusChanges(
+  handler: (status: BackupStatus) => void,
+): Promise<UnlistenFn> {
+  if (shouldUseFixtureData()) {
+    return () => undefined;
+  }
+  return listen<BackupStatus>("backup-status-changed", (event) => {
+    handler(event.payload);
+  });
+}
+
+export async function fetchBackupConflicts(): Promise<BackupConflict[]> {
+  return invokeOrFallback("list_backup_conflicts", {}, []);
+}
+
+export async function resolveBackupConflict(
+  conflictId: string,
+  resolution: "keepLocal" | "useRemote" | "keepBoth",
+): Promise<BackupSyncResult> {
+  return invoke("resolve_backup_conflict", { conflictId, resolution });
+}
+
+export async function subscribeGithubConnectionChanges(
+  handler: (connection: GithubConnection) => void,
+): Promise<UnlistenFn> {
+  if (shouldUseFixtureData()) {
+    return () => undefined;
+  }
+
+  return listen<GithubConnection>("github-connection-changed", (event) => {
+    handler(event.payload);
+  });
 }
 
 export async function fetchAgentSkillsCliStatus(): Promise<AgentSkillsCliStatus> {
@@ -1765,6 +1946,7 @@ export async function fetchSkillFileBrowser(
         { path: "SKILL.md", name: "SKILL.md", entryType: "file", depth: 1 },
       ],
       initialFilePath: "SKILL.md",
+      previewMode: "full",
     };
 
   return invokeOrFallback("get_skill_file_browser", { skillName, skillPath }, fallback);
@@ -1790,6 +1972,7 @@ export async function fetchToolSkillFileBrowser(input: ToolSkillInput): Promise<
         { path: "SKILL.md", name: "SKILL.md", entryType: "file" as const, depth: 1 },
       ],
       initialFilePath: "SKILL.md",
+      previewMode: "full",
     };
 
   return invokeOrFallback("get_tool_skill_file_browser", input, fallback);

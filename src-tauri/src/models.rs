@@ -206,6 +206,8 @@ pub struct SkillSummary {
 #[serde(rename_all = "camelCase")]
 pub struct SkillInstanceMetadata {
     #[serde(default)]
+    pub backup_id: String,
+    #[serde(default)]
     pub entry_path: String,
     #[serde(default)]
     pub canonical_path: String,
@@ -217,6 +219,15 @@ pub struct SkillInstanceMetadata {
     pub skill_entries: Vec<String>,
     #[serde(default)]
     pub path_error: String,
+    #[serde(default)]
+    pub content_hash: String,
+    pub marketplace_owner: String,
+    #[serde(default)]
+    pub marketplace_slug: String,
+    #[serde(default)]
+    pub marketplace_version: String,
+    #[serde(default)]
+    pub marketplace_content_hash: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -232,9 +243,35 @@ pub struct MarketplaceSkill {
     pub install_label: String,
     pub source_url: String,
     pub popularity_label: String,
+    #[serde(default)]
+    pub topic_label: String,
     pub avatar_url: Option<String>,
     #[serde(default)]
     pub skill_path: String,
+    #[serde(default)]
+    pub installed: bool,
+    #[serde(default)]
+    pub update_available: bool,
+    #[serde(default)]
+    pub current_version: String,
+    #[serde(default)]
+    pub category_label: String,
+    pub marketplace_url: String,
+    #[serde(default)]
+    pub owner: String,
+    #[serde(default)]
+    pub slug: String,
+    #[serde(default)]
+    pub version: String,
+    #[serde(default)]
+    pub install_driver: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MarketplaceSkillsPage {
+    pub skills: Vec<MarketplaceSkill>,
+    pub has_more: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -245,6 +282,10 @@ pub struct LocalSkillCandidate {
     pub local_path: String,
     pub detected_from: String,
     pub source_hint: String,
+    #[serde(default)]
+    pub tool_id: String,
+    #[serde(default)]
+    pub resolved_path: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -299,6 +340,8 @@ pub struct ToolConfig {
     pub supports_mcp: bool,
     pub mcp_config_path_recognized: bool,
     pub status_label: String,
+    #[serde(default)]
+    pub is_installed: bool,
     pub is_enabled: bool,
     pub primary_type: String,
     pub surface_types: Vec<String>,
@@ -332,6 +375,8 @@ pub struct AppSettings {
     pub skill_library_provider: String,
     #[serde(default)]
     pub agent_skills_compatibility_enabled: bool,
+    #[serde(default)]
+    pub agent_skills_compatibility_configured: bool,
     pub default_open_tool_id: String,
     pub skill_install_activation: String,
     pub mcp_install_activation: String,
@@ -340,6 +385,79 @@ pub struct AppSettings {
     pub language: String,
     pub language_source: String,
     pub theme: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GithubConnectionMetadata {
+    pub auth_method: String,
+    pub user_id: Option<u64>,
+    pub username: String,
+    pub avatar_url: String,
+    pub credential_persisted: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GithubConnection {
+    pub connected: bool,
+    pub auth_method: String,
+    pub user_id: Option<u64>,
+    pub username: String,
+    pub avatar_url: String,
+    pub credential_persisted: bool,
+    pub warning: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GithubBackupSettings {
+    pub enabled: bool,
+    #[serde(default)]
+    pub account_user_id: Option<u64>,
+    pub repository_owner: String,
+    pub repository_name: String,
+    pub repository_url: String,
+    pub last_sync_at: String,
+    #[serde(default)]
+    pub last_operation: String,
+    pub last_error: String,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum BackupPhase {
+    Disabled,
+    Enabling,
+    BackingUp,
+    Restoring,
+    Enabled,
+    Error,
+}
+
+impl Default for BackupPhase {
+    fn default() -> Self {
+        Self::Disabled
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupStatus {
+    pub enabled: bool,
+    pub repository_owner: String,
+    pub repository_name: String,
+    pub repository_url: String,
+    pub last_sync_at: String,
+    pub last_operation: String,
+    pub last_error: String,
+    pub phase: BackupPhase,
+    pub syncing: bool,
+    pub pending_conflicts: usize,
+    #[serde(default)]
+    pub progress_stage: String,
+    #[serde(default)]
+    pub progress_percent: u8,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -410,6 +528,7 @@ pub struct SkillFileBrowserSnapshot {
     pub root_name: String,
     pub entries: Vec<SkillFileEntry>,
     pub initial_file_path: Option<String>,
+    pub preview_mode: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

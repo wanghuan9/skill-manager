@@ -2,6 +2,7 @@ import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { SearchFieldIcon } from "@/app/components/SearchFieldIcon";
 import { useTranslate } from "@/app/i18n";
 import { useFailureReporter } from "@/app/failure-feedback";
+import { useNotifications } from "@/app/notifications";
 import { openExternalLink } from "@/features/skills/api/skill-client";
 import {
   filterSkills,
@@ -22,6 +23,13 @@ import { getMonogramLabel } from "@/features/skills/utils/monogram";
 import { ToolbarGoInstallButton } from "@/app/components/ToolbarGoInstallButton";
 import { useStableListOrder } from "@/app/hooks/useStableListOrder";
 import { AppSelect } from "@/app/components/AppSelect";
+import {
+  BatchActionBar,
+  BatchDeleteDialog,
+  BatchModeButton,
+  BatchSelectionMark,
+} from "@/app/components/BatchActions";
+import { useBatchSelection } from "@/app/hooks/useBatchSelection";
 import type {
   ManagedSkillOwnerFilter,
   SkillStatusFilter,
@@ -32,6 +40,9 @@ import {
   type SkillSourceId,
   type ToolSkillManagementFilter,
 } from "@/features/skills/utils/skill-source-view";
+import { setSkillAllToolsEnabled } from "@/features/skills/utils/skill-bulk-status";
+import { mergeSkillToolsWithInstalledTools } from "@/features/skills/utils/skill-tools";
+import { isToolEnabledStatus } from "@/features/skills/utils/tool-status";
 
 type SkillToolbarProps = {
   activeSourceId?: SkillSourceId;
@@ -47,6 +58,8 @@ type SkillToolbarProps = {
   viewMode: SkillViewMode;
   onViewModeChange: (value: SkillViewMode) => void;
   onGoInstall?: () => void;
+  isBatchSelecting?: boolean;
+  onBatchSelectingChange?: (isSelecting: boolean) => void;
 };
 
 function ListIcon() {
@@ -183,6 +196,8 @@ export function SkillListToolbar(props: SkillToolbarProps) {
     viewMode,
     onViewModeChange,
     onGoInstall,
+    isBatchSelecting = false,
+    onBatchSelectingChange = () => undefined,
   } = props;
   const {
     installedSkills,
@@ -394,11 +409,16 @@ export function SkillListToolbar(props: SkillToolbarProps) {
           />
         )}
       </div>
+      <BatchModeButton
+        isSelecting={isBatchSelecting}
+        label={t(isBatchSelecting ? "batch.mode.exit" : "batch.mode.enter")}
+        onClick={() => onBatchSelectingChange(!isBatchSelecting)}
+      />
       <button
         className={`secondary-button secondary-button--compact skills-toolbar-button skills-toolbar-button--refresh${isRefreshLoading ? " is-loading" : ""}`}
         type="button"
         onClick={() => void handleRefreshWorkspace()}
-        disabled={isRefreshLoading}
+        disabled={isRefreshLoading || isBatchSelecting}
       >
         <span aria-hidden="true" className="skills-toolbar-button__icon">
           <RefreshIcon isSpinning={isRefreshLoading} />
@@ -406,19 +426,21 @@ export function SkillListToolbar(props: SkillToolbarProps) {
         <span>{t("skills.refresh")}</span>
       </button>
       {activeSourceId === MANAGED_SKILL_SOURCE_ID ? (
-        <button
-          className={`secondary-button secondary-button--compact skills-toolbar-button skills-toolbar-button--update-all${isUpdatingAllSkills ? " is-loading" : ""}`}
-          type="button"
-          onClick={() => void handleUpdateAllSkills()}
-          disabled={isLoading || isUpdatingAllSkills || updatableSkillCount === 0}
-        >
-          <span aria-hidden="true" className="skills-toolbar-button__icon">
-            <UpdateAllIcon isSpinning={isUpdatingAllSkills} />
-          </span>
-          <span>{isUpdatingAllSkills ? t("skills.updating") : updateAllButtonLabel}</span>
-        </button>
+        <>
+          <button
+            className={`secondary-button secondary-button--compact skills-toolbar-button skills-toolbar-button--update-all${isUpdatingAllSkills ? " is-loading" : ""}`}
+            type="button"
+            onClick={() => void handleUpdateAllSkills()}
+            disabled={isLoading || isUpdatingAllSkills || updatableSkillCount === 0 || isBatchSelecting}
+          >
+            <span aria-hidden="true" className="skills-toolbar-button__icon">
+              <UpdateAllIcon isSpinning={isUpdatingAllSkills} />
+            </span>
+            <span>{isUpdatingAllSkills ? t("skills.updating") : updateAllButtonLabel}</span>
+          </button>
+        </>
       ) : null}
-      {onGoInstall ? <ToolbarGoInstallButton onClick={onGoInstall} /> : null}
+      {!isBatchSelecting && onGoInstall ? <ToolbarGoInstallButton onClick={onGoInstall} /> : null}
     </div>
   );
 }
@@ -436,6 +458,8 @@ type SkillListPageProps = {
   ownerFilter?: ManagedSkillOwnerFilter;
   managementFilter?: ToolSkillManagementFilter;
   viewMode: SkillViewMode;
+  isBatchSelecting?: boolean;
+  onBatchSelectingChange?: (isSelecting: boolean) => void;
 };
 
 const SKILL_GRID_COLUMN_COUNT = 3;
@@ -446,6 +470,7 @@ function getSkillOrderKey(skill: SkillSummary) {
 
 export function SkillListPage(props: SkillListPageProps) {
   const { t } = useTranslate();
+  const { notify } = useNotifications();
   const {
     onImportFromLocal,
     onInstallFromGit,
@@ -455,16 +480,29 @@ export function SkillListPage(props: SkillListPageProps) {
     ownerFilter = "all",
     managementFilter = "all",
     viewMode,
+    isBatchSelecting = false,
+    onBatchSelectingChange = () => undefined,
     activeSourceId = MANAGED_SKILL_SOURCE_ID,
     onActiveSourceIdChange = () => undefined,
     focusedManagedSkillName = "",
     onShowManagedSkill = () => undefined,
   } = props;
-  const { installedSkills, isLoading, isWorkspaceRefreshing } = useSkillWorkspace();
+  const {
+    deleteSkill,
+    installedSkills,
+    isLoading,
+    isWorkspaceRefreshing,
+    setSkillAllToolStatuses,
+    setToolSkillStatuses,
+    toolConfigs,
+    updateSkill,
+  } = useSkillWorkspace();
   const deferredQuery = useDeferredValue(query);
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>(readSkillGroupCollapsedState);
   const [expandedSkillIdentity, setExpandedSkillIdentity] = useState("");
   const [skillOrderRevision, setSkillOrderRevision] = useState(0);
+  const [batchAction, setBatchAction] = useState<"update" | "delete" | "enable" | "disable" | "">("");
+  const [isBatchDeleteConfirming, setIsBatchDeleteConfirming] = useState(false);
   const handledFocusedSkillRef = useRef("");
   const wasWorkspaceRefreshingRef = useRef(isWorkspaceRefreshing);
   const sortedSkills = useMemo(
@@ -483,6 +521,23 @@ export function SkillListPage(props: SkillListPageProps) {
     );
     return orderedInstalledSkills.filter((skill) => visibleSkillIdentities.has(getSkillIdentity(skill)));
   }, [deferredQuery, installedSkills, orderedInstalledSkills, ownerFilter, statusFilter]);
+  const visibleSkillIds = useMemo(() => skills.map(getSkillIdentity), [skills]);
+  const batchSelection = useBatchSelection(visibleSkillIds);
+  const selectedSkills = useMemo(
+    () => skills.filter((skill) => batchSelection.selectedIds.has(getSkillIdentity(skill))),
+    [batchSelection.selectedIds, skills],
+  );
+  const selectedSkillToolStates = useMemo(() => selectedSkills.map((skill) => {
+    const tools = mergeSkillToolsWithInstalledTools(skill.tools, toolConfigs);
+    const hasEnabledTool = tools.some((tool) => isToolEnabledStatus(tool.statusLabel));
+    const hasDisabledTool = tools.some((tool) => !isToolEnabledStatus(tool.statusLabel));
+    return { skill, tools, hasDisabledTool, hasEnabledTool };
+  }), [selectedSkills, toolConfigs]);
+  const actionableSkillToolStates = selectedSkillToolStates.filter((item) => item.tools.length > 0);
+  const enableSkillToolStates = actionableSkillToolStates.filter((item) => item.hasDisabledTool);
+  const disableSkillToolStates = actionableSkillToolStates.filter((item) => item.hasEnabledTool);
+  const updatableSelectedSkills = selectedSkills.filter((skill) => skill.collabStatus === "update-available");
+  const isBatchBusy = batchAction !== "";
   const groupedSkills = useMemo(
     () => groupSkillsBySource(skills, { localLabel: t("skills.source.local") }),
     [skills, t],
@@ -505,6 +560,16 @@ export function SkillListPage(props: SkillListPageProps) {
     }
     wasWorkspaceRefreshingRef.current = isWorkspaceRefreshing;
   }, [isWorkspaceRefreshing]);
+
+  useEffect(() => {
+    if (isBatchSelecting && activeSourceId === MANAGED_SKILL_SOURCE_ID) {
+      batchSelection.enterSelection();
+      setExpandedSkillIdentity("");
+      return;
+    }
+    batchSelection.exitSelection();
+    setIsBatchDeleteConfirming(false);
+  }, [activeSourceId, batchSelection.enterSelection, batchSelection.exitSelection, isBatchSelecting]);
 
   useEffect(() => {
     if (activeSourceId !== MANAGED_SKILL_SOURCE_ID || !focusedManagedSkillName) {
@@ -563,17 +628,182 @@ export function SkillListPage(props: SkillListPageProps) {
     setExpandedSkillIdentity(expanded ? skillIdentity : "");
   }
 
+  function finishBatchAction(
+    actionLabel: string,
+    targetIds: string[],
+    results: PromiseSettledResult<void>[],
+    skippedCount = 0,
+  ) {
+    const failedIds = results.flatMap((result, index) => (
+      result.status === "rejected" ? [targetIds[index]] : []
+    ));
+    const successCount = results.length - failedIds.length;
+    batchSelection.keepSelected(failedIds);
+
+    if (failedIds.length === 0) {
+      notify({
+        tone: "success",
+        message: t("batch.result.success", { action: actionLabel, count: successCount, skipped: skippedCount }),
+      });
+      onBatchSelectingChange(false);
+      return;
+    }
+
+    notify({
+      tone: successCount > 0 ? "info" : "error",
+      message: t("batch.result.partial", {
+        action: actionLabel,
+        success: successCount,
+        failed: failedIds.length,
+        skipped: skippedCount,
+      }),
+    });
+  }
+
+  async function runSkillBatch(
+    action: "update" | "delete" | "enable" | "disable",
+    actionLabel: string,
+    targets: SkillSummary[],
+    operation: (skill: SkillSummary) => Promise<void>,
+    skippedCount = 0,
+  ) {
+    if (isBatchBusy || targets.length === 0) {
+      return;
+    }
+    setBatchAction(action);
+    try {
+      const results = await Promise.allSettled(targets.map(operation));
+      finishBatchAction(actionLabel, targets.map(getSkillIdentity), results, skippedCount);
+    } finally {
+      setBatchAction("");
+    }
+  }
+
+  async function handleBatchUpdateSkills() {
+    await runSkillBatch(
+      "update",
+      t("batch.action.update"),
+      updatableSelectedSkills,
+      (skill) => updateSkill(skill.name, skill.canonicalPath ?? skill.localPath),
+      selectedSkills.length - updatableSelectedSkills.length,
+    );
+  }
+
+  async function handleBatchSetSkillsEnabled(enabled: boolean) {
+    const action = enabled ? "enable" : "disable";
+    const targetStates = enabled ? enableSkillToolStates : disableSkillToolStates;
+    const targets = targetStates.map((item) => item.skill);
+    await runSkillBatch(
+      action,
+      t(enabled ? "batch.action.enable" : "batch.action.disable"),
+      targets,
+      async (skill) => {
+        const state = targetStates.find((item) => getSkillIdentity(item.skill) === getSkillIdentity(skill));
+        if (!state) {
+          return;
+        }
+        const failedToolNames = await setSkillAllToolsEnabled({
+          skillName: skill.name,
+          skillPath: skill.canonicalPath ?? skill.localPath,
+          enabled,
+          toolNames: state.tools.map((tool) => tool.name),
+          setSkillAllToolStatuses,
+          setToolSkillStatuses,
+        });
+        if (failedToolNames.length > 0) {
+          throw new Error(failedToolNames.join("、"));
+        }
+      },
+      selectedSkills.length - targets.length,
+    );
+  }
+
+  async function handleBatchDeleteSkills() {
+    setIsBatchDeleteConfirming(false);
+    await runSkillBatch(
+      "delete",
+      t("batch.action.delete"),
+      selectedSkills,
+      (skill) => deleteSkill(skill.name, skill.canonicalPath ?? skill.localPath),
+    );
+  }
+
+  function renderSkillCard(skill: SkillSummary, layout: "list" | "grid" = "list") {
+    const skillIdentity = getSkillIdentity(skill);
+    return (
+      <SkillCard
+        key={skillIdentity}
+        skill={skill}
+        layout={layout}
+        expanded={expandedSkillIdentity === skillIdentity}
+        autoAlignWhenExpanded={focusedManagedSkillName === skill.name}
+        selectionMode={batchSelection.isSelecting}
+        selected={batchSelection.selectedIds.has(skillIdentity)}
+        onSelectionToggle={() => batchSelection.toggleSelection(skillIdentity)}
+        onExpandedChange={(expanded) => handleSkillExpandedChange(skillIdentity, expanded)}
+      />
+    );
+  }
+
   return (
     <div className="skills-page">
       <SkillSourceView
         activeSourceId={activeSourceId}
+        isBatchSelecting={isBatchSelecting}
         onActiveSourceIdChange={onActiveSourceIdChange}
+        onBatchSelectingChange={onBatchSelectingChange}
         onShowManagedSkill={onShowManagedSkill}
         managementFilter={managementFilter}
         query={deferredQuery}
         viewMode={viewMode}
       />
       {activeSourceId === MANAGED_SKILL_SOURCE_ID ? (
+        <>
+        {batchSelection.isSelecting ? (
+          <BatchActionBar
+            actions={selectedSkills.length > 0 ? [
+              ...(updatableSelectedSkills.length > 0 ? [{
+                key: "update",
+                label: t("batch.action.updateCount", { count: updatableSelectedSkills.length }),
+                tone: "accent" as const,
+                isBusy: batchAction === "update",
+                onClick: () => void handleBatchUpdateSkills(),
+              }] : []),
+              {
+                key: "delete",
+                label: t("batch.action.deleteCount", { count: selectedSkills.length }),
+                tone: "danger" as const,
+                isBusy: batchAction === "delete",
+                onClick: () => setIsBatchDeleteConfirming(true),
+              },
+              ...(enableSkillToolStates.length > 0 ? [{
+                key: "enable",
+                label: t("batch.action.enableCount", { count: enableSkillToolStates.length }),
+                tone: "success" as const,
+                isBusy: batchAction === "enable",
+                onClick: () => void handleBatchSetSkillsEnabled(true),
+              }] : []),
+              ...(disableSkillToolStates.length > 0 ? [{
+                key: "disable",
+                label: t("batch.action.disableCount", { count: disableSkillToolStates.length }),
+                tone: "warning" as const,
+                isBusy: batchAction === "disable",
+                onClick: () => void handleBatchSetSkillsEnabled(false),
+              }] : []),
+            ] : []}
+            ariaLabel={t("batch.toolbar.aria")}
+            cancelLabel={t("batch.cancel")}
+            deselectAllLabel={t("batch.deselectAll")}
+            hint={t("batch.hint")}
+            isAllVisibleSelected={batchSelection.isAllVisibleSelected}
+            isBusy={isBatchBusy}
+            selectedLabel={selectedSkills.length > 0 ? t("batch.selected", { count: selectedSkills.length }) : ""}
+            selectAllDisabled={skills.length === 0}
+            selectAllLabel={t("batch.selectAll")}
+            onCancel={() => onBatchSelectingChange(false)}
+            onToggleSelectAll={batchSelection.toggleSelectAll}
+          />
+        ) : null}
         <div className={`card-list${viewMode === "grid" ? " skill-card-grid" : ""}`}>
         {isLoading ? (
           <div className="panel-card empty-state">
@@ -586,26 +816,32 @@ export function SkillListPage(props: SkillListPageProps) {
             const updateCount = group.skills.filter((skill) => skill.collabStatus === "update-available").length;
             const pendingCommitCount = group.skills.filter((skill) => skill.collabStatus === "pending-commit").length;
             const pendingPushCount = group.skills.filter((skill) => skill.collabStatus === "pending-push").length;
-            const isCollapsed = isGroupCollapsed(group.id);
+            const isCollapsed = batchSelection.isSelecting ? false : isGroupCollapsed(group.id);
             const groupTone = resolveSkillGroupTone(group.skills[0]?.sourceType);
             const groupSourceUrl = formatGroupSourceUrl(group.skills[0]?.sourceUrl ?? group.label);
             const isGroupSourceLinkable = isHttpUrl(groupSourceUrl);
+            const groupSkillIds = group.skills.map(getSkillIdentity);
+            const selectedGroupSkillCount = groupSkillIds.filter((id) => batchSelection.selectedIds.has(id)).length;
+            const isGroupSelected = groupSkillIds.length > 0 && selectedGroupSkillCount === groupSkillIds.length;
+            const isGroupPartiallySelected = selectedGroupSkillCount > 0 && !isGroupSelected;
 
             return (
               <section key={group.id} className={`skill-group-section skill-group-section--${groupTone}`}>
                 <div
-                  className="skill-group-section__header"
-                  role="button"
-                  tabIndex={0}
-                  onClick={() => toggleGroup(group.id)}
+                  className={`skill-group-section__header${batchSelection.isSelecting ? " is-selecting" : ""}`}
+                  role={batchSelection.isSelecting ? undefined : "button"}
+                  tabIndex={batchSelection.isSelecting ? undefined : 0}
+                  onClick={batchSelection.isSelecting ? undefined : () => toggleGroup(group.id)}
                   onKeyDown={(event) => {
-                    if (event.key === "Enter" || event.key === " ") {
+                    if (!batchSelection.isSelecting && (event.key === "Enter" || event.key === " ")) {
                       event.preventDefault();
                       toggleGroup(group.id);
                     }
                   }}
-                  aria-expanded={!isCollapsed}
-                  aria-label={t(isCollapsed ? "skills.group.expand" : "skills.group.collapse", { label: group.label })}
+                  aria-expanded={batchSelection.isSelecting ? undefined : !isCollapsed}
+                  aria-label={batchSelection.isSelecting
+                    ? undefined
+                    : t(isCollapsed ? "skills.group.expand" : "skills.group.collapse", { label: group.label })}
                 >
                   <div className="skill-group-section__title">
                     <SkillGroupMonogram label={group.label} />
@@ -649,26 +885,42 @@ export function SkillListPage(props: SkillListPageProps) {
                         {t("skills.group.pendingCount", { count: pendingPushCount })}
                       </span>
                     ) : null}
-                    <span
-                      className="skill-group-section__toggle"
-                      aria-hidden="true"
-                    >
-                      <span className={`skill-group-section__chevron${isCollapsed ? " is-collapsed" : ""}`}>
-                        ⌄
+                    {batchSelection.isSelecting ? (
+                      <button
+                        className="skill-group-selection-action"
+                        type="button"
+                        disabled={isBatchBusy}
+                        aria-label={t(
+                          isGroupSelected ? "batch.group.deselectAllAria" : "batch.group.selectAllAria",
+                          { name: group.label },
+                        )}
+                        aria-pressed={isGroupPartiallySelected ? "mixed" : isGroupSelected}
+                        onClick={() => batchSelection.toggleSelections(groupSkillIds)}
+                      >
+                        <BatchSelectionMark
+                          checked={isGroupSelected}
+                          indeterminate={isGroupPartiallySelected}
+                        />
+                        <span>
+                          {t(isGroupSelected ? "batch.group.deselectAll" : "batch.group.selectAll")}
+                        </span>
+                      </button>
+                    ) : (
+                      <span
+                        className="skill-group-section__toggle"
+                        aria-hidden="true"
+                      >
+                        <span className={`skill-group-section__chevron${isCollapsed ? " is-collapsed" : ""}`}>
+                          ⌄
+                        </span>
                       </span>
-                    </span>
+                    )}
                   </div>
                 </div>
                 {!isCollapsed ? (
                   <div className="skill-group-section__list">
                     {group.skills.map((skill) => (
-                      <SkillCard
-                        key={getSkillIdentity(skill)}
-                        skill={skill}
-                        expanded={expandedSkillIdentity === getSkillIdentity(skill)}
-                        autoAlignWhenExpanded={focusedManagedSkillName === skill.name}
-                        onExpandedChange={(expanded) => handleSkillExpandedChange(getSkillIdentity(skill), expanded)}
-                      />
+                      renderSkillCard(skill)
                     ))}
                   </div>
                 ) : null}
@@ -681,27 +933,14 @@ export function SkillListPage(props: SkillListPageProps) {
                 return (
                   <div key={getSkillIdentity(row[0])} className="skill-card-grid__row">
                     {row.map((skill) => (
-                      <SkillCard
-                        key={getSkillIdentity(skill)}
-                        skill={skill}
-                        layout="grid"
-                        expanded={expandedSkillIdentity === getSkillIdentity(skill)}
-                        autoAlignWhenExpanded={focusedManagedSkillName === skill.name}
-                        onExpandedChange={(expanded) => handleSkillExpandedChange(getSkillIdentity(skill), expanded)}
-                      />
+                      renderSkillCard(skill, "grid")
                     ))}
                   </div>
                 );
               })
             ) : (
               skills.map((skill) => (
-                <SkillCard
-                  key={getSkillIdentity(skill)}
-                  skill={skill}
-                  expanded={expandedSkillIdentity === getSkillIdentity(skill)}
-                  autoAlignWhenExpanded={focusedManagedSkillName === skill.name}
-                  onExpandedChange={(expanded) => handleSkillExpandedChange(getSkillIdentity(skill), expanded)}
-                />
+                renderSkillCard(skill)
               ))
             )
           )
@@ -732,6 +971,17 @@ export function SkillListPage(props: SkillListPageProps) {
           </div>
         )}
         </div>
+        <BatchDeleteDialog
+          cancelLabel={t("batch.cancel")}
+          confirmLabel={t("batch.delete.confirm")}
+          description={t("batch.delete.description.skill", { count: selectedSkills.length })}
+          isBusy={batchAction === "delete"}
+          isOpen={isBatchDeleteConfirming}
+          title={t("batch.delete.title.skill", { count: selectedSkills.length })}
+          onCancel={() => setIsBatchDeleteConfirming(false)}
+          onConfirm={() => void handleBatchDeleteSkills()}
+        />
+        </>
       ) : null}
     </div>
   );

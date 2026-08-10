@@ -53,7 +53,10 @@ type SkillDiffViewProps = {
   onDisplayModeChange: (mode: SkillDiffDisplayMode) => void;
   onSave: () => void;
   onRevertFile: () => void;
+  onRevertHunk?: (expectedContent: string, content: string) => void;
   readOnly?: boolean;
+  isUpdatePreview?: boolean;
+  canRevertFile?: boolean;
   emptyLabel?: string;
 };
 
@@ -159,6 +162,7 @@ class RevertChunkGutterMarker extends GutterMarker {
   constructor(
     private readonly position: number,
     private readonly label: string,
+    private readonly onRevert?: (expectedContent: string, content: string) => void,
   ) {
     super();
   }
@@ -203,7 +207,9 @@ class RevertChunkGutterMarker extends GutterMarker {
     button.append(icon);
     button.onmousedown = (event) => {
       event.preventDefault();
+      const expectedContent = view.state.doc.toString();
       rejectChunk(view, this.position);
+      this.onRevert?.(expectedContent, view.state.doc.toString());
     };
     return button;
   }
@@ -298,7 +304,10 @@ function buildDiffLineNumberExtensions() {
   ];
 }
 
-function buildRevertChunkGutter(label: string) {
+function buildRevertChunkGutter(
+  label: string,
+  onRevert?: (expectedContent: string, content: string) => void,
+) {
   return gutter({
     class: "skill-diff__revert-gutter-column",
     markers: (view) => {
@@ -310,7 +319,7 @@ function buildRevertChunkGutter(label: string) {
       const builder = new RangeSetBuilder<GutterMarker>();
       for (const chunk of chunkInfo.chunks) {
         const line = view.state.doc.lineAt(chunk.fromB).from;
-        builder.add(line, line, new RevertChunkGutterMarker(chunk.fromB, label));
+        builder.add(line, line, new RevertChunkGutterMarker(chunk.fromB, label, onRevert));
       }
       return builder.finish();
     },
@@ -322,22 +331,31 @@ function SkillDiffEditor({
   content,
   displayMode,
   onContentChange,
+  onRevertHunk,
   readOnly,
+  isUpdatePreview,
 }: {
   change: GitChangeFile;
   content: string;
   displayMode: SkillDiffDisplayMode;
   onContentChange: (content: string) => void;
+  onRevertHunk?: (expectedContent: string, content: string) => void;
   readOnly: boolean;
+  isUpdatePreview: boolean;
 }) {
   const { t } = useTranslate();
   const editorHostRef = useRef<HTMLDivElement | null>(null);
   const editorViewRef = useRef<EditorView | null>(null);
   const onContentChangeRef = useRef(onContentChange);
+  const onRevertHunkRef = useRef(onRevertHunk);
 
   useEffect(() => {
     onContentChangeRef.current = onContentChange;
   }, [onContentChange]);
+
+  useEffect(() => {
+    onRevertHunkRef.current = onRevertHunk;
+  }, [onRevertHunk]);
 
   useEffect(() => {
     const editorHost = editorHostRef.current;
@@ -350,7 +368,12 @@ function SkillDiffEditor({
       doc: content,
       extensions: [
         minimalSetup,
-        readOnly ? [] : Prec.highest(buildRevertChunkGutter(t("skill.changes.revertHunk"))),
+        readOnly ? [] : Prec.highest(buildRevertChunkGutter(
+          t("skill.changes.revertHunk"),
+          (expectedContent, nextContent) => {
+            onRevertHunkRef.current?.(expectedContent, nextContent);
+          },
+        )),
         lineNumbers(),
         EditorState.readOnly.of(readOnly),
         EditorView.editable.of(!readOnly),
@@ -358,7 +381,7 @@ function SkillDiffEditor({
           "$ unchanged lines": t("skill.changes.unchangedLines"),
         }),
         EditorView.contentAttributes.of({
-          "aria-label": t(readOnly ? "skill.updates.editor" : "skill.changes.editor"),
+          "aria-label": t(isUpdatePreview ? "skill.updates.editor" : "skill.changes.editor"),
         }),
         unifiedMergeView({
           original: change.originalContent,
@@ -391,7 +414,7 @@ function SkillDiffEditor({
       }
       editorView.destroy();
     };
-  }, [change.currentContent, change.originalContent, change.path, displayMode, readOnly, t]);
+  }, [change.currentContent, change.originalContent, change.path, displayMode, isUpdatePreview, readOnly, t]);
 
   useEffect(() => {
     const editorView = editorViewRef.current;
@@ -421,7 +444,10 @@ export function SkillDiffView({
   onDisplayModeChange,
   onSave,
   onRevertFile,
+  onRevertHunk,
   readOnly = false,
+  isUpdatePreview = false,
+  canRevertFile = false,
   emptyLabel,
 }: SkillDiffViewProps) {
   const { t } = useTranslate();
@@ -480,7 +506,7 @@ export function SkillDiffView({
               {isSaving ? t("skill.files.saving") : t("skill.files.save")}
             </button>
           ) : null}
-          {!readOnly ? (
+          {!readOnly || canRevertFile ? (
             <button
               className="secondary-button secondary-button--compact skill-diff__revert-file"
               type="button"
@@ -498,7 +524,9 @@ export function SkillDiffView({
           content={content}
           displayMode={displayMode}
           onContentChange={onContentChange}
+          onRevertHunk={onRevertHunk}
           readOnly={readOnly}
+          isUpdatePreview={isUpdatePreview}
         />
       ) : (
         <div className="skill-diff skill-file-dialog__empty">

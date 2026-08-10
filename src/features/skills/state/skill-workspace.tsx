@@ -9,14 +9,17 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { BusinessError } from "@/app/errors";
+import { BusinessError, normalizeErrorMessage } from "@/app/errors";
 import {
   detectPreferredAppLanguage,
+  connectGithubToken as connectGithubTokenRequest,
+  disconnectGithub as disconnectGithubRequest,
   fetchAppSettings,
   deleteSkill,
   deleteToolSkill,
   discoverLocalInstallSkills,
   fetchGitAccount,
+  fetchGithubConnection,
   fetchGitStates,
   fetchLocalSkillCandidates,
   fetchMarketplaceSkillsByPage,
@@ -40,6 +43,7 @@ import {
   openSkillInEditor,
   openPathInFinder,
   openSkillRepository,
+  pollGithubDeviceFlow as pollGithubDeviceFlowRequest,
   refreshLocalGitState,
   revertSkillChange as revertSkillChangeRequest,
   saveSkillFileContent,
@@ -48,16 +52,26 @@ import {
   shouldUseFixtureData,
   subscribeSkillLibraryChanges,
   subscribeSkillLibraryRefreshes,
+  subscribeGithubConnectionChanges,
+  startGithubDeviceFlow as startGithubDeviceFlowRequest,
   toggleSkillTool,
   updateAppSettings,
   updateSkill,
 } from "@/features/skills/api/skill-client";
 import { waitForNextPaint } from "@/app/utils/wait-for-next-paint";
-import { appSettingsFixture, workspaceSnapshotFixture } from "@/features/skills/state/skill-fixtures";
+import {
+  appSettingsFixture,
+  githubConnectionFixture,
+  workspaceSnapshotFixture,
+} from "@/features/skills/state/skill-fixtures";
 import {
   dedupeMarketplaceSkills,
   sortMarketplaceSkillsByPopularity,
 } from "@/features/skills/utils/marketplace-skills";
+import {
+  createMarketplaceSourceRecord,
+  VISIBLE_MARKETPLACE_SOURCE_SITES,
+} from "@/features/skills/utils/marketplace-sources";
 import type {
   AppLanguage,
   AppLanguageSource,
@@ -66,6 +80,9 @@ import type {
   SkillLibraryProvider,
   GitAccountSummary,
   GitChangeFile,
+  GithubConnection,
+  GithubDeviceFlowStart,
+  GithubDevicePollResult,
   InstallActivationMode,
   LocalSkillCandidate,
   LocalInstallSkillCandidate,
@@ -97,7 +114,6 @@ const APP_THEME_STORAGE_KEY = "skilldock.settings.theme";
 const APP_SKILL_SOURCE_VIEW_STYLE_STORAGE_KEY = "skilldock.settings.skillSourceViewStyle";
 const FALLBACK_OPEN_TOOL_ID = "finder";
 const MARKETPLACE_PAGE_SIZE = 18;
-const MARKETPLACE_SOURCE_SITES: MarketplaceSourceSite[] = ["skills.sh", "skillsmp"];
 const STARTUP_LOAD_DELAY_MS = 0;
 const AUTO_GIT_STATE_REFRESH_INTERVAL_MS = 10 * 60 * 1000;
 const AUTO_GIT_STATE_REFRESH_COOLDOWN_MS = 60 * 1000;
@@ -125,13 +141,15 @@ type SkillWorkspaceContextValue = {
   isWorkspaceRefreshing: boolean;
   isUpdatingAllSkills: boolean;
   isMarketplaceLoadingBySource: Record<MarketplaceSourceSite, boolean>;
+  marketplaceErrorBySource: Record<MarketplaceSourceSite, string>;
+  marketplaceSearchError: string;
   isSearchLoading: boolean;
   installingMarketplaceSkillIds: Set<string>;
   hasMoreMarketplaceSkillsBySource: Record<MarketplaceSourceSite, boolean>;
   installFromMarket: (skill: MarketplaceSkill) => Promise<void>;
   loadInitialMarketplaceSkills: (sourceSite: MarketplaceSourceSite) => Promise<void>;
   loadMoreMarketplaceSkills: (sourceSite: MarketplaceSourceSite) => Promise<void>;
-  searchMarketplaceSkills: (query: string) => Promise<MarketplaceSkill[]>;
+  searchMarketplaceSkills: (query: string, sourceSite?: MarketplaceSourceSite) => Promise<MarketplaceSkill[]>;
   discoverRepoSkills: (repoUrl: string, gitRef?: string) => Promise<RepoSkillCandidate[]>;
   installFromRepo: (repoUrl: string, selectedPaths: string[], gitRef?: string) => Promise<void>;
   discoverLocalInstallSkills: (localPath: string) => Promise<LocalInstallSkillCandidate[]>;
@@ -209,9 +227,16 @@ type SkillWorkspaceContextValue = {
   defaultOpenToolId: string;
   setDefaultOpenToolId: (toolId: string) => Promise<void>;
   appSettings: AppSettings;
+  githubConnection: GithubConnection;
+  githubRateLimitNoticeVersion: number;
+  reportGithubRateLimit: () => void;
   language: AppLanguage;
   setLanguage: (language: AppLanguage) => Promise<void>;
   setTheme: (theme: AppTheme) => Promise<void>;
+  startGithubDeviceFlow: (backupScope?: boolean) => Promise<GithubDeviceFlowStart>;
+  pollGithubDeviceFlow: (deviceCode: string) => Promise<GithubDevicePollResult>;
+  connectGithubToken: (token: string) => Promise<GithubConnection>;
+  disconnectGithub: () => Promise<void>;
   setSkillLibraryProvider: (provider: SkillLibraryProvider) => Promise<void>;
   setSkillInstallActivation: (mode: InstallActivationMode) => Promise<void>;
   setMcpInstallActivation: (mode: InstallActivationMode) => Promise<void>;
@@ -360,6 +385,12 @@ function getMarketplaceSearchFailedMessage(language: AppLanguage) {
   return language === "en" ? "Failed to search sources" : "搜索安装源失败";
 }
 
+function getMarketplaceLoadFailedMessage(language: AppLanguage, sourceSite: MarketplaceSourceSite) {
+  return language === "en"
+    ? `Failed to load skills from ${sourceSite}`
+    : `加载 ${sourceSite} 技能失败`;
+}
+
 function getPartialSkillUpdateFailedMessage(input: {
   language: AppLanguage;
   updated: number;
@@ -415,6 +446,10 @@ function normalizeCachedSkillSummary(skill: CachedSkillSummary): SkillSummary {
     updateDriver: skill.updateDriver ?? (skill.gitLinked ? "git" : "none"),
     skillEntries: skill.skillEntries ?? [skill.entryPath ?? skill.localPath ?? ""].filter(Boolean),
     pathError: skill.pathError ?? "",
+    marketplaceOwner: skill.marketplaceOwner ?? "",
+    marketplaceSlug: skill.marketplaceSlug ?? "",
+    marketplaceVersion: skill.marketplaceVersion ?? "",
+    marketplaceContentHash: skill.marketplaceContentHash ?? "",
     tools: skill.tools ?? [],
   };
 }
@@ -550,6 +585,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
           skillLibraryPath: "",
           skillLibraryProvider: "skilldock",
           agentSkillsCompatibilityEnabled: false,
+          agentSkillsCompatibilityConfigured: false,
           defaultOpenToolId: "",
           skillInstallActivation: "apply-all-tools",
           mcpInstallActivation: "apply-all-tools",
@@ -559,6 +595,9 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
           theme: readStoredAppTheme(),
         },
   );
+  const [githubConnection, setGithubConnection] = useState<GithubConnection>(
+    githubConnectionFixture,
+  );
   const [isLoading, setIsLoading] = useState(!usesFixtureData && startupCache === null);
   const [isStartupGitStateRefreshComplete, setIsStartupGitStateRefreshComplete] =
     useState(usesFixtureData);
@@ -566,33 +605,26 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
     useState(usesFixtureData);
   const [isMarketplaceLoadingBySource, setIsMarketplaceLoadingBySource] = useState<
     Record<MarketplaceSourceSite, boolean>
-  >({
-    "skills.sh": false,
-    skillsmp: false,
-  });
+  >(() => createMarketplaceSourceRecord(() => false));
+  const [marketplaceErrorBySource, setMarketplaceErrorBySource] = useState<
+    Record<MarketplaceSourceSite, string>
+  >(() => createMarketplaceSourceRecord(() => ""));
+  const [marketplaceSearchError, setMarketplaceSearchError] = useState("");
   const [isSearchLoading, setIsSearchLoading] = useState(false);
   const [installingMarketplaceSkillIds, setInstallingMarketplaceSkillIds] = useState<Set<string>>(new Set());
   const installingMarketplaceSkillIdsRef = useRef(new Set<string>());
-  const marketplaceLoadingBySourceRef = useRef<Record<MarketplaceSourceSite, boolean>>({
-    "skills.sh": false,
-    skillsmp: false,
-  });
+  const marketplaceLoadingBySourceRef = useRef<Record<MarketplaceSourceSite, boolean>>(
+    createMarketplaceSourceRecord(() => false),
+  );
   const [marketplacePageBySource, setMarketplacePageBySource] = useState<
     Record<MarketplaceSourceSite, number>
-  >({
-    "skills.sh": 0,
-    skillsmp: 0,
-  });
+  >(() => createMarketplaceSourceRecord(() => 0));
   const [hasMoreMarketplaceSkillsBySource, setHasMoreMarketplaceSkillsBySource] = useState<
     Record<MarketplaceSourceSite, boolean>
-  >({
-    "skills.sh": true,
-    skillsmp: true,
-  });
-  const marketplaceHasMoreBySourceRef = useRef<Record<MarketplaceSourceSite, boolean>>({
-    "skills.sh": true,
-    skillsmp: true,
-  });
+  >(() => createMarketplaceSourceRecord(() => true));
+  const marketplaceHasMoreBySourceRef = useRef<Record<MarketplaceSourceSite, boolean>>(
+    createMarketplaceSourceRecord(() => true),
+  );
   const gitStateRefreshInFlightRef = useRef<Promise<void> | null>(null);
   const startupGitStateRefreshCompletedRef = useRef(usesFixtureData);
   const workspaceMutationVersionRef = useRef(0);
@@ -600,6 +632,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
   const lastLocalWorkspaceAlignAtRef = useRef(0);
   const [isWorkspaceRefreshing, setIsWorkspaceRefreshing] = useState(false);
   const [isUpdatingAllSkills, setIsUpdatingAllSkills] = useState(false);
+  const [githubRateLimitNoticeVersion, setGithubRateLimitNoticeVersion] = useState(0);
   const updateAllSkillsInFlightRef = useRef<Promise<void> | null>(null);
   const visibleGitStateRefreshInFlightRef = useRef<Promise<void> | null>(null);
   const localWorkspaceAlignInFlightRef = useRef<Promise<void> | null>(null);
@@ -610,6 +643,9 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
   const defaultOpenToolId = appSettings.defaultOpenToolId;
   const language = appSettings.language;
   const skillSourceViewStyle = appSettings.skillSourceViewStyle ?? "select";
+  const reportGithubRateLimit = useCallback(() => {
+    setGithubRateLimitNoticeVersion((current) => current + 1);
+  }, []);
 
   useEffect(() => {
     installedSkillsRef.current = installedSkills;
@@ -689,12 +725,36 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
     });
   }
 
+  async function handleStartGithubDeviceFlow(backupScope = false) {
+    return startGithubDeviceFlowRequest(backupScope);
+  }
+
+  async function handlePollGithubDeviceFlow(deviceCode: string) {
+    const result = await pollGithubDeviceFlowRequest(deviceCode);
+    if (result.connection) {
+      setGithubConnection(result.connection);
+    }
+    return result;
+  }
+
+  async function handleConnectGithubToken(token: string) {
+    const connection = await connectGithubTokenRequest(token);
+    setGithubConnection(connection);
+    return connection;
+  }
+
+  async function handleDisconnectGithub() {
+    const connection = await disconnectGithubRequest();
+    setGithubConnection(connection);
+  }
+
   async function handleSetSkillLibraryProvider(provider: SkillLibraryProvider) {
     const previousSettings = appSettings;
     const nextSettings = {
       ...appSettings,
       skillLibraryProvider: provider,
       agentSkillsCompatibilityEnabled: provider === "agent-skills",
+      agentSkillsCompatibilityConfigured: true,
     };
     setAppSettings(nextSettings);
     try {
@@ -774,6 +834,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
     toolSkills?: ToolSkillEntry[];
     account?: GitAccountSummary | null;
     settings?: AppSettings;
+    githubConnection?: GithubConnection;
   }) {
     if (input.candidates) {
       setLocalCandidates(input.candidates);
@@ -790,16 +851,20 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
     if (input.settings) {
       setAppSettings(input.settings);
     }
+    if (input.githubConnection) {
+      setGithubConnection(input.githubConnection);
+    }
   }
 
   async function loadWorkspaceCore() {
-    const [skills, candidates, tools, toolSkills, account, settings] = await Promise.all([
+    const [skills, candidates, tools, toolSkills, account, settings, connection] = await Promise.all([
       fetchStartupInstalledSkills(),
       fetchLocalSkillCandidates(),
       fetchToolConfigs(),
       fetchToolSkillEntries().catch(() => []),
       fetchGitAccount(),
       fetchAppSettings(),
+      fetchGithubConnection().catch(() => githubConnectionFixture),
     ]);
 
     return {
@@ -809,6 +874,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       toolSkills,
       account,
       settings,
+      connection,
     };
   }
 
@@ -852,6 +918,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
           toolSkills: workspace.toolSkills,
           account: workspace.account,
           settings: resolvedSettings,
+          githubConnection: workspace.connection,
         });
       } finally {
         localWorkspaceAlignInFlightRef.current = null;
@@ -905,6 +972,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
         toolSkills: workspace.toolSkills,
         account: workspace.account,
         settings: resolvedSettings,
+        githubConnection: workspace.connection,
       });
       void refreshGitStatesInBackground(undefined, {
         showRefreshing: false,
@@ -944,11 +1012,14 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
     let nextRefreshPromise: Promise<void> | null = null;
     nextRefreshPromise = (async () => {
       try {
-        const skillsWithGitState = await fetchGitStates();
+        const gitStateResult = await fetchGitStates();
         if (!shouldApply() || refreshMutationVersion !== workspaceMutationVersionRef.current) {
           return;
         }
-        setInstalledSkills(skillsWithGitState);
+        setInstalledSkills(gitStateResult.skills);
+        if (gitStateResult.githubRateLimited) {
+          reportGithubRateLimit();
+        }
         if (!startupGitStateRefreshCompletedRef.current) {
           setDidStartupGitStateRefreshSucceed(true);
         }
@@ -1092,6 +1163,33 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
 
     let active = true;
     let unlisten: (() => void) | null = null;
+    void subscribeGithubConnectionChanges((connection) => {
+      if (active) {
+        setGithubConnection(connection);
+      }
+    }).then((cleanup) => {
+      if (!active) {
+        releaseEventListener(cleanup);
+        return;
+      }
+      unlisten = cleanup;
+    }).catch((error) => {
+      console.error("Failed to subscribe to GitHub connection changes:", error);
+    });
+
+    return () => {
+      active = false;
+      releaseEventListener(unlisten);
+    };
+  }, [usesFixtureData]);
+
+  useEffect(() => {
+    if (usesFixtureData) {
+      return;
+    }
+
+    let active = true;
+    let unlisten: (() => void) | null = null;
 
     void subscribeSkillLibraryChanges(({ skillName }) => {
       if (!active) {
@@ -1204,13 +1302,18 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       [sourceSite]: true,
     };
     setIsMarketplaceLoadingBySource(marketplaceLoadingBySourceRef.current);
+    setMarketplaceErrorBySource((current) => ({
+      ...current,
+      [sourceSite]: "",
+    }));
     try {
-      const pageSkills = await fetchMarketplaceSkillsByPage({
+      const pageResult = await fetchMarketplaceSkillsByPage({
         sourceSite,
         page,
         limit: MARKETPLACE_PAGE_SIZE,
         refresh: options?.refresh,
       });
+      const pageSkills = pageResult.skills;
       setMarketplaceSkills((current) => {
         const base = current.filter((item) => item.sourceSite !== sourceSite);
         const currentSourceSkills = current.filter((item) => item.sourceSite === sourceSite);
@@ -1224,10 +1327,17 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       }));
       const nextHasMoreBySource = {
         ...marketplaceHasMoreBySourceRef.current,
-        [sourceSite]: pageSkills.length >= MARKETPLACE_PAGE_SIZE,
+        [sourceSite]: pageResult.hasMore,
       };
       marketplaceHasMoreBySourceRef.current = nextHasMoreBySource;
       setHasMoreMarketplaceSkillsBySource(nextHasMoreBySource);
+    } catch (error) {
+      const fallbackMessage = getMarketplaceLoadFailedMessage(language, sourceSite);
+      setMarketplaceErrorBySource((current) => ({
+        ...current,
+        [sourceSite]: normalizeErrorMessage(error, fallbackMessage),
+      }));
+      throw error;
     } finally {
       marketplaceLoadingBySourceRef.current = {
         ...marketplaceLoadingBySourceRef.current,
@@ -1255,18 +1365,20 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
     await loadMarketplacePage(sourceSite, nextPage <= 1 ? 1 : nextPage, nextPage > 1);
   }
 
-  async function handleSearchMarketplaceSkills(query: string) {
+  async function handleSearchMarketplaceSkills(query: string, sourceSite?: MarketplaceSourceSite) {
     const normalizedQuery = query.trim();
     if (!normalizedQuery) {
       return [];
     }
 
     setIsSearchLoading(true);
+    setMarketplaceSearchError("");
     try {
+      const searchSourceSites = sourceSite ? [sourceSite] : VISIBLE_MARKETPLACE_SOURCE_SITES;
       const searchResults = await Promise.allSettled(
-        MARKETPLACE_SOURCE_SITES.map((sourceSite) =>
+        searchSourceSites.map((searchSourceSite) =>
           fetchMarketplaceSkillsByPage({
-            sourceSite,
+            sourceSite: searchSourceSite,
             page: 1,
             limit: MARKETPLACE_PAGE_SIZE * 3,
             query: normalizedQuery,
@@ -1274,10 +1386,16 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
         ),
       );
       const fulfilledResults = searchResults.flatMap((result) =>
-        result.status === "fulfilled" ? result.value : []
+        result.status === "fulfilled" ? result.value.skills : []
       );
-      if (fulfilledResults.length === 0 && searchResults.some((result) => result.status === "rejected")) {
-        throw new BusinessError(getMarketplaceSearchFailedMessage(language));
+      const firstFailure = searchResults.find((result) => result.status === "rejected");
+      if (firstFailure?.status === "rejected") {
+        const fallbackMessage = getMarketplaceSearchFailedMessage(language);
+        const errorMessage = normalizeErrorMessage(firstFailure.reason, fallbackMessage);
+        setMarketplaceSearchError(errorMessage);
+        if (fulfilledResults.length === 0) {
+          throw new BusinessError(errorMessage);
+        }
       }
 
       const mergedSkills = dedupeMarketplaceSkills(fulfilledResults);
@@ -1636,6 +1754,8 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       isWorkspaceRefreshing,
       isUpdatingAllSkills,
       isMarketplaceLoadingBySource,
+      marketplaceErrorBySource,
+      marketplaceSearchError,
       isSearchLoading,
       installingMarketplaceSkillIds,
       hasMoreMarketplaceSkillsBySource,
@@ -1677,9 +1797,16 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       defaultOpenToolId,
       setDefaultOpenToolId: handleSetDefaultOpenToolId,
       appSettings,
+      githubConnection,
+      githubRateLimitNoticeVersion,
+      reportGithubRateLimit,
       language,
       setLanguage: handleSetLanguage,
       setTheme: handleSetTheme,
+      startGithubDeviceFlow: handleStartGithubDeviceFlow,
+      pollGithubDeviceFlow: handlePollGithubDeviceFlow,
+      connectGithubToken: handleConnectGithubToken,
+      disconnectGithub: handleDisconnectGithub,
       setSkillLibraryProvider: handleSetSkillLibraryProvider,
       setSkillInstallActivation: handleSetSkillInstallActivation,
       setMcpInstallActivation: handleSetMcpInstallActivation,
@@ -1689,6 +1816,8 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
     }),
     [
       appSettings,
+      githubConnection,
+      githubRateLimitNoticeVersion,
       language,
       defaultOpenToolId,
       gitAccount,
@@ -1700,10 +1829,13 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       isWorkspaceRefreshing,
       isUpdatingAllSkills,
       isMarketplaceLoadingBySource,
+      marketplaceErrorBySource,
+      marketplaceSearchError,
       isSearchLoading,
       localCandidates,
       marketplacePageBySource,
       marketplaceSkills,
+      reportGithubRateLimit,
       refreshToolSkillEntries,
       toolConfigs,
       toolSkillEntries,

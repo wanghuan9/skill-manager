@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from "react";
-import type { MouseEvent as ReactMouseEvent } from "react";
+import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent } from "react";
 import { createPortal } from "react-dom";
 import { alignExpandedRowIntoView } from "@/app/utils/align-expanded-row";
 import { useTranslate } from "@/app/i18n";
 import { useNotifications } from "@/app/notifications";
 import { useFailureReporter } from "@/app/failure-feedback";
+import { formatPathForDisplay } from "@/app/path-utils";
 import { waitForNextPaint } from "@/app/utils/wait-for-next-paint";
+import { BatchSelectionMark } from "@/app/components/BatchActions";
 import { PowerToggleIcon } from "@/features/skills/components/PowerToggleIcon";
 import { SkillStatusBadge } from "@/features/skills/components/SkillStatusBadge";
 import { SkillFileDialog, type SkillFilePanelMode } from "@/features/skills/components/SkillFileDialog";
@@ -28,6 +30,9 @@ type SkillCardProps = {
   expanded?: boolean;
   autoAlignWhenExpanded?: boolean;
   onExpandedChange?: (expanded: boolean, rowElement?: HTMLElement | null) => void;
+  selectionMode?: boolean;
+  selected?: boolean;
+  onSelectionToggle?: () => void;
 };
 
 const GRID_SUMMARY_TOOL_LIMIT = 6;
@@ -261,6 +266,9 @@ export function SkillCard({
   expanded: expandedProp,
   autoAlignWhenExpanded = false,
   onExpandedChange,
+  selectionMode = false,
+  selected = false,
+  onSelectionToggle = () => undefined,
 }: SkillCardProps) {
   const { language, t } = useTranslate();
   const { notify } = useNotifications();
@@ -312,22 +320,45 @@ export function SkillCard({
       : t("skill.card.owner.skilldock");
   const sourceMethodLabel = skill.sourceType === "well-known"
     ? t("skill.card.sourceMethod.remote")
+    : skill.sourceType === "marketplace"
+      ? t("skill.card.sourceMethod.remote")
     : skill.gitLinked || skill.sourceType !== "local"
       ? t("skill.card.sourceMethod.git")
       : t("skill.card.sourceMethod.local");
   const managedPath = skill.canonicalPath ?? skill.localPath;
+  const managedPathLabel = formatPathForDisplay(managedPath);
   const gridSourceSummary = `${sourceMethodLabel} · ${managementOwnerLabel}`;
   const showDetailAction = skill.collabStatus === "update-available";
   const canPreviewUpdates = showDetailAction
-    && (skill.gitLinked || skill.updateDriver === "agent-skills-cli");
+    && (skill.gitLinked
+      || skill.updateDriver === "agent-skills-cli"
+      || skill.updateDriver === "clawhub"
+      || skill.sourceType === "marketplace");
   const previewMode: SkillFilePanelMode = (skill.localChangeCount ?? 0) > 0
     ? "changes"
     : canPreviewUpdates
       ? "updates"
       : "files";
-  const showRemoteMetadata = skill.gitLinked && skill.sourceType !== "local";
+  const showRemoteMetadata = skill.sourceType === "marketplace"
+    || (skill.gitLinked && skill.sourceType !== "local");
   const expanded = expandedProp ?? expandedState;
   const isGridLayout = layout === "grid";
+
+  function handleSummaryClick() {
+    if (selectionMode) {
+      onSelectionToggle();
+      return;
+    }
+    void handleExpandedChange(!expanded);
+  }
+
+  function handleSummaryKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
+    if (!selectionMode || (event.key !== "Enter" && event.key !== " ")) {
+      return;
+    }
+    event.preventDefault();
+    onSelectionToggle();
+  }
 
   useEffect(() => {
     if (autoAlignWhenExpanded && expanded) {
@@ -623,15 +654,15 @@ export function SkillCard({
             <dd className="skill-source-card__directory-value">
               <span
                 className="skill-source-card__directory-path detail-grid__single-line"
-                data-tooltip={managedPath}
+                data-tooltip={managedPathLabel}
               >
-                {managedPath}
+                {managedPathLabel}
               </span>
               <button
                 className="skill-card__icon-button skill-source-card__directory-open-button"
                 type="button"
                 onClick={() => void handleOpenManagedFolder()}
-                aria-label={t("skills.source.openPath", { path: managedPath })}
+                aria-label={t("skills.source.openPath", { path: managedPathLabel })}
                 data-tooltip={t("skills.source.openFolder")}
               >
                 <FolderIcon />
@@ -672,13 +703,18 @@ export function SkillCard({
     <>
       <article
         ref={cardRef}
-        className={`skill-card skill-card--${layout}${expanded ? " is-expanded" : ""}`}
+        className={`skill-card skill-card--${layout}${expanded ? " is-expanded" : ""}${selectionMode ? " is-selecting" : ""}${selected ? " is-selected" : ""}`}
         aria-label={skill.name}
       >
         <div className="skill-card__header">
           <div
             className="skill-card__summary-button"
-            onClick={() => handleExpandedChange(!expanded)}
+            role={selectionMode ? "checkbox" : undefined}
+            tabIndex={selectionMode ? 0 : undefined}
+            aria-checked={selectionMode ? selected : undefined}
+            aria-label={selectionMode ? t("batch.item.skill", { name: skill.name }) : undefined}
+            onClick={handleSummaryClick}
+            onKeyDown={handleSummaryKeyDown}
           >
             <div className="skill-card__summary-content">
               <div className="skill-card__summary-top">
@@ -688,6 +724,7 @@ export function SkillCard({
                   </div>
                 ) : null}
                 <div className="skill-card__identity">
+                  {selectionMode ? <BatchSelectionMark checked={selected} /> : null}
                   <SkillMonogram name={skill.name} />
                   <div className="skill-card__title-stack">
                     <div className="skill-card__title-row">
@@ -741,6 +778,8 @@ export function SkillCard({
             </div>
           </div>
           <div className="skill-card__list-actions">
+            {!selectionMode ? (
+              <>
             {isGridLayout ? (
               <span className="skill-card__grid-source-label">
                 <span className="skill-card__grid-source-text">{gridSourceSummary}</span>
@@ -795,6 +834,8 @@ export function SkillCard({
                   {expanded ? "⌄" : "›"}
                 </span>
               </button>
+            ) : null}
+              </>
             ) : null}
           </div>
         </div>

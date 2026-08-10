@@ -30,10 +30,46 @@ test("renders MCP toolbar in the page header and hides the app matrix", async ()
   expect(screen.queryByLabelText("MCP 目标软件")).not.toBeInTheDocument();
   expect(toolbar).not.toHaveTextContent("工具可同步");
   expect(screen.getByRole("searchbox", { name: "搜索 MCP" })).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "刷新" })).toBeInTheDocument();
+  const batchModeButton = within(toolbar).getByRole("button", { name: "批量选择" });
+  const refreshButton = within(toolbar).getByRole("button", { name: "刷新" });
+  expect(batchModeButton.compareDocumentPosition(refreshButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   const goInstallButton = within(toolbar).getByRole("button", { name: "去安装" });
   expect(goInstallButton).toHaveClass("skills-toolbar-button--go-install");
   expect(toolbar.lastElementChild).toBe(goInstallButton);
+});
+
+test("batch enables the selected MCP across supported installed apps", async () => {
+  const toggleSpy = vi.spyOn(skillClient, "toggleMcpServerApp");
+  render(<App />);
+
+  await userEvent.click(screen.getByRole("button", { name: "MCP" }));
+  await userEvent.click(await screen.findByRole("button", { name: "批量选择" }));
+  await userEvent.click(screen.getByRole("checkbox", { name: "选择 MCP context7" }));
+
+  const enableButton = screen.getByRole("button", { name: "启用 1 个" });
+  expect(screen.getByLabelText("批量操作")).toHaveTextContent("已选 1 个");
+  await userEvent.click(enableButton);
+
+  await waitFor(() => {
+    expect(toggleSpy).toHaveBeenCalledWith(expect.objectContaining({
+      serverId: "context7",
+      enabled: true,
+    }));
+  });
+  await waitFor(() => {
+    expect(screen.queryByRole("checkbox", { name: "选择 MCP context7" })).not.toBeInTheDocument();
+  });
+});
+
+test("shows a confirmation dialog before batch deleting MCP servers", async () => {
+  render(<App />);
+
+  await userEvent.click(screen.getByRole("button", { name: "MCP" }));
+  await userEvent.click(await screen.findByRole("button", { name: "批量选择" }));
+  await userEvent.click(screen.getByRole("checkbox", { name: "选择 MCP context7" }));
+  await userEvent.click(screen.getByRole("button", { name: "删除 1 个" }));
+
+  expect(screen.getByRole("dialog", { name: "删除 1 个 MCP？" })).toHaveTextContent("此操作无法撤销");
 });
 
 test("switches MCP servers to cards, opens details in a dialog, and restores the preference", async () => {

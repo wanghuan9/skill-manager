@@ -20,6 +20,10 @@ function resolveSourceLabelFromType(sourceType?: string) {
     return "远程";
   }
 
+  if (sourceType === "marketplace") {
+    return "市场";
+  }
+
   if (sourceType === "local") {
     return "本地";
   }

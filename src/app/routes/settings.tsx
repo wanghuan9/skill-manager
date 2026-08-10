@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { getDirectoryPath } from "@/app/path-utils";
+import { getWorkspaceDirectoryPath } from "@/app/path-utils";
 import { useTranslate } from "@/app/i18n";
 import { useFailureReporter } from "@/app/failure-feedback";
 import { AppSelect } from "@/app/components/AppSelect";
@@ -26,12 +26,49 @@ import {
   sortToolCards,
 } from "@/features/skills/utils/open-tools";
 import { getToolLogoUrl } from "@/features/skills/utils/tool-logo";
-import { clearRepoCache, getRepoCacheSize } from "@/features/skills/api/skill-client";
-import type { AppTheme } from "@/features/skills/state/skill-store";
+import {
+  clearRepoCache,
+  deleteCloudBackupNode,
+  disconnectGithubBackup,
+  enableGithubBackup,
+  fetchBackupConflicts,
+  fetchBackupStatus,
+  getRepoCacheSize,
+  listCloudBackupNodes,
+  openExternalLink,
+  previewCloudBackupNode,
+  resolveBackupConflict,
+  restoreCloudBackupNode,
+  runBackupSync,
+  subscribeBackupStatusChanges,
+  syncBackupToLocal,
+} from "@/features/skills/api/skill-client";
+import type {
+  AppTheme,
+  BackupConflict,
+  BackupStatus,
+  CloudBackupNode,
+  WorkspaceRestorePreview,
+} from "@/features/skills/state/skill-store";
 import {
   applyGlobalListGridViewPreference,
   readGlobalListGridViewPreference,
 } from "@/features/skills/utils/list-grid-view-preference";
+
+const GITHUB_TOKEN_CREATION_URL = "https://github.com/settings/tokens/new?description=SkillDock&scopes=repo";
+const GITHUB_COPY_FEEDBACK_DURATION_MS = 1_500;
+const SHOW_GITHUB_PAT_LOGIN = false;
+
+function formatBackupTimestamp(value: string, language: string) {
+  if (!value) {
+    return "—";
+  }
+  const timestamp = new Date(value);
+  if (Number.isNaN(timestamp.getTime())) {
+    return value;
+  }
+  return timestamp.toLocaleString(language === "en" ? "en-US" : "zh-CN");
+}
 
 function FolderOpenIcon() {
   return (
@@ -49,6 +86,14 @@ function FolderOpenIcon() {
         strokeLinecap="round"
         strokeLinejoin="round"
       />
+    </svg>
+  );
+}
+
+function BackupNodeTrashIcon() {
+  return (
+    <svg viewBox="0 0 18 18" fill="none" aria-hidden="true">
+      <path d="M4.75 5.75h8.5M7 3.75h4M6 5.75l.5 8h5l.5-8" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }
@@ -165,8 +210,12 @@ export function SettingsRoute() {
   const { language, t } = useTranslate();
   const {
     appSettings,
+    connectGithubToken,
     defaultOpenToolId,
+    disconnectGithub,
+    githubConnection,
     openPathInFinder,
+    pollGithubDeviceFlow,
     setLanguage,
     setTheme,
     setSkillLibraryProvider,
@@ -174,6 +223,7 @@ export function SettingsRoute() {
     setDefaultOpenToolId,
     setSkillInstallActivation,
     setSkillSourceViewStyle,
+    startGithubDeviceFlow,
     toolConfigs,
   } = useSkillWorkspace();
   const openToolOptions = useMemo(
@@ -195,6 +245,28 @@ export function SettingsRoute() {
   const [isOpeningStoragePath, setIsOpeningStoragePath] = useState(false);
   const [repoCacheSize, setRepoCacheSize] = useState<number | null>(null);
   const [isClearingCache, setIsClearingCache] = useState(false);
+  const [githubTokenDraft, setGithubTokenDraft] = useState("");
+  const [isGithubTokenVisible, setIsGithubTokenVisible] = useState(false);
+  const [githubAuthMode, setGithubAuthMode] = useState<"idle" | "device" | "pat">("idle");
+  const [githubDeviceFlow, setGithubDeviceFlow] = useState<Awaited<
+    ReturnType<typeof startGithubDeviceFlow>
+  > | null>(null);
+  const [githubPollInterval, setGithubPollInterval] = useState(5_000);
+  const [githubPollVersion, setGithubPollVersion] = useState(0);
+  const [isConnectingGithub, setIsConnectingGithub] = useState(false);
+  const [isGithubDeviceCodeCopied, setIsGithubDeviceCodeCopied] = useState(false);
+  const [hasCopiedGithubDeviceCode, setHasCopiedGithubDeviceCode] = useState(false);
+  const [backupStatus, setBackupStatus] = useState<BackupStatus | null>(null);
+  const [backupConflicts, setBackupConflicts] = useState<BackupConflict[]>([]);
+  const [cloudBackupNodes, setCloudBackupNodes] = useState<CloudBackupNode[]>([]);
+  const [isBackupNodeDialogOpen, setIsBackupNodeDialogOpen] = useState(false);
+  const [isLoadingBackupNodes, setIsLoadingBackupNodes] = useState(false);
+  const [pendingRestoreBackupNode, setPendingRestoreBackupNode] = useState<{
+    node: CloudBackupNode;
+    preview: WorkspaceRestorePreview;
+  } | null>(null);
+  const [pendingDeleteBackupNode, setPendingDeleteBackupNode] = useState<CloudBackupNode | null>(null);
+  const [activeBackupAction, setActiveBackupAction] = useState("");
   const [currentAppVersion, setCurrentAppVersion] = useState("");
   const [appUpdate, setAppUpdate] = useState<AppUpdateCheckResult | null>(null);
   const [appUpdateStatus, setAppUpdateStatus] = useState<
@@ -203,10 +275,11 @@ export function SettingsRoute() {
   const [isAppUpdateReleaseNotesOpen, setIsAppUpdateReleaseNotesOpen] = useState(false);
   const [appUpdateMessage, setAppUpdateMessage] = useState(t("settings.update.status.idle"));
   const [appUpdateProgress, setAppUpdateProgress] = useState<AppUpdateProgress | null>(null);
+  const githubCopyFeedbackTimerRef = useRef<number | null>(null);
   const toolStatusGroupRef = useRef<HTMLElement | null>(null);
   const reportFailure = useFailureReporter();
   const toolStatusPanelClassName = "panel-card placeholder-panel settings-panel settings-panel--tool-status";
-  const storageDirectoryPath = getDirectoryPath(appSettings.storagePath);
+  const storageDirectoryPath = getWorkspaceDirectoryPath(appSettings.storagePath);
   const isCheckingAppUpdate = appUpdateStatus === "checking";
   const isInstallingAppUpdate = appUpdateStatus === "installing";
   const appUpdateReleaseNoteEntries = useMemo(
@@ -228,6 +301,393 @@ export function SettingsRoute() {
         ? t("settings.cache.empty")
         : formatBytes(repoCacheSize);
   const canClearRepoCache = !isClearingCache && repoCacheSize !== null && repoCacheSize > 0;
+  const normalizedGithubTokenDraft = githubTokenDraft.trim();
+  const isBackupOperationActive = backupStatus
+    ? ["enabling", "backingUp", "restoring"].includes(backupStatus.phase)
+    : false;
+  const isBackupInteractionBlocked = isBackupOperationActive || Boolean(activeBackupAction);
+  const backupRepositoryLabel = backupStatus?.repositoryOwner && backupStatus.repositoryName
+    ? `${backupStatus.repositoryOwner}/${backupStatus.repositoryName}`
+    : "";
+  const backupRepositoryPageUrl = backupStatus?.repositoryUrl.replace(/\.git$/u, "") ?? "";
+  const isBackupTransferActive = backupStatus
+    ? ["backingUp", "restoring"].includes(backupStatus.phase)
+    : false;
+  const backupProgressPercent = Math.min(100, Math.max(0, backupStatus?.progressPercent ?? 0));
+  const lastBackupOperationLabel = backupStatus?.lastOperation === "backup"
+    ? t("settings.backup.operation.backup")
+    : backupStatus?.lastOperation === "restore"
+      ? t("settings.backup.operation.restore")
+      : "";
+  const backupProgressStageLabel = (() => {
+    switch (backupStatus?.progressStage) {
+      case "preparing":
+        return t("settings.backup.progress.preparing");
+      case "collecting":
+        return t("settings.backup.progress.collecting");
+      case "committing":
+        return t("settings.backup.progress.committing");
+      case "uploading":
+        return t("settings.backup.progress.uploading");
+      case "downloading":
+        return t("settings.backup.progress.downloading");
+      case "preserving":
+        return t("settings.backup.progress.preserving");
+      case "restoring":
+        return t("settings.backup.progress.restoring");
+      case "refreshing":
+        return t("settings.backup.progress.refreshing");
+      case "finalizing":
+        return t("settings.backup.progress.finalizing");
+      case "completed":
+        return t("settings.backup.progress.completed");
+      default:
+        return t("settings.backup.progress.unknown");
+    }
+  })();
+  const backupProgressLabel = `${backupProgressStageLabel} · ${backupProgressPercent}%`;
+
+  useEffect(() => {
+    return () => {
+      if (githubCopyFeedbackTimerRef.current !== null) {
+        window.clearTimeout(githubCopyFeedbackTimerRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    let unsubscribe: (() => void) | undefined;
+    if (!githubConnection.connected) {
+      setBackupStatus(null);
+      setBackupConflicts([]);
+      return () => {
+        active = false;
+      };
+    }
+
+    void fetchBackupStatus().then(async (status) => {
+      if (!active) {
+        return;
+      }
+      setBackupStatus(status);
+      const conflicts = status.enabled && status.pendingConflicts > 0
+        ? await fetchBackupConflicts()
+        : [];
+      if (active) {
+        setBackupConflicts(conflicts);
+      }
+    }).catch((error) => {
+      reportFailure(error, {
+        operation: "load_github_backup_status",
+        fallbackMessage: t("settings.backup.loadFailed"),
+      });
+    });
+    void subscribeBackupStatusChanges((status) => {
+      if (active) {
+        void updateBackupState(status);
+      }
+    }).then((unlisten) => {
+      if (active) {
+        unsubscribe = unlisten;
+      } else {
+        unlisten();
+      }
+    });
+
+    return () => {
+      active = false;
+      unsubscribe?.();
+    };
+  }, [githubConnection.connected, reportFailure, t]);
+
+  async function updateBackupState(status: BackupStatus) {
+    setBackupStatus(status);
+    const conflicts = status.enabled && status.pendingConflicts > 0
+      ? await fetchBackupConflicts()
+      : [];
+    setBackupConflicts(conflicts);
+  }
+
+  async function handleBackupToggle() {
+    if (!backupStatus || activeBackupAction) {
+      return;
+    }
+    setActiveBackupAction("toggle");
+    try {
+      if (backupStatus.enabled) {
+        const status = await disconnectGithubBackup();
+        await updateBackupState(status);
+      } else {
+        const status = await enableGithubBackup();
+        await updateBackupState(status);
+      }
+    } catch (error) {
+      reportFailure(error, {
+        operation: "toggle_github_backup",
+        fallbackMessage: t("settings.backup.toggleFailed"),
+      });
+    } finally {
+      setActiveBackupAction("");
+    }
+  }
+
+  async function handleBackupOperation(operation: "backup" | "sync") {
+    if (!backupStatus?.enabled || activeBackupAction) {
+      return;
+    }
+    setActiveBackupAction(operation);
+    try {
+      if (operation === "sync") {
+        const status = await syncBackupToLocal();
+        await updateBackupState(status);
+        return;
+      }
+      const status = await runBackupSync();
+      await updateBackupState(status);
+    } catch (error) {
+      reportFailure(error, {
+        operation: operation === "backup" ? "run_github_backup" : "sync_github_backup_to_local",
+        fallbackMessage: t("settings.backup.operationFailed"),
+      });
+    } finally {
+      setActiveBackupAction("");
+    }
+  }
+
+  async function refreshCloudBackupNodes() {
+    setIsLoadingBackupNodes(true);
+    try {
+      setCloudBackupNodes(await listCloudBackupNodes());
+    } catch (error) {
+      reportFailure(error, {
+        operation: "list_cloud_backup_nodes",
+        fallbackMessage: t("settings.backup.nodesLoadFailed"),
+      });
+    } finally {
+      setIsLoadingBackupNodes(false);
+    }
+  }
+
+  async function handleOpenBackupNodes() {
+    setIsBackupNodeDialogOpen(true);
+    await refreshCloudBackupNodes();
+  }
+
+  async function handleRestoreBackupNode(node: CloudBackupNode) {
+    setActiveBackupAction(node.commitId);
+    try {
+      const preview = await previewCloudBackupNode(node.commitId);
+      setPendingRestoreBackupNode({ node, preview });
+    } catch (error) {
+      reportFailure(error, {
+        operation: "preview_cloud_backup_node",
+        fallbackMessage: t("settings.backup.restoreFailed"),
+      });
+    } finally {
+      setActiveBackupAction("");
+    }
+  }
+
+  async function handleConfirmRestoreBackupNode() {
+    if (!pendingRestoreBackupNode || activeBackupAction) {
+      return;
+    }
+    const { node } = pendingRestoreBackupNode;
+    setActiveBackupAction(node.commitId);
+    try {
+      const status = await restoreCloudBackupNode(node.commitId);
+      setPendingRestoreBackupNode(null);
+      setIsBackupNodeDialogOpen(false);
+      await updateBackupState(status);
+    } catch (error) {
+      reportFailure(error, {
+        operation: "restore_cloud_backup_node",
+        fallbackMessage: t("settings.backup.restoreFailed"),
+      });
+    } finally {
+      setActiveBackupAction("");
+    }
+  }
+
+  async function handleConfirmDeleteBackupNode() {
+    if (!pendingDeleteBackupNode || activeBackupAction) {
+      return;
+    }
+    const { commitId } = pendingDeleteBackupNode;
+    const actionId = `delete:${commitId}`;
+    setActiveBackupAction(actionId);
+    try {
+      await deleteCloudBackupNode(commitId);
+      setPendingDeleteBackupNode(null);
+      await refreshCloudBackupNodes();
+    } catch (error) {
+      reportFailure(error, {
+        operation: "delete_cloud_backup_node",
+        fallbackMessage: t("settings.backup.deleteFailed"),
+      });
+    } finally {
+      setActiveBackupAction("");
+    }
+  }
+
+  async function handleBackupConflict(
+    conflictId: string,
+    resolution: "keepLocal" | "useRemote" | "keepBoth",
+  ) {
+    if (activeBackupAction) {
+      return;
+    }
+    setActiveBackupAction(conflictId);
+    try {
+      const result = await resolveBackupConflict(conflictId, resolution);
+      await updateBackupState(result.status);
+    } catch (error) {
+      reportFailure(error, {
+        operation: "resolve_github_backup_conflict",
+        fallbackMessage: t("settings.backup.conflictFailed"),
+      });
+    } finally {
+      setActiveBackupAction("");
+    }
+  }
+
+  async function copyGithubDeviceCode(userCode: string, shouldReportFailure: boolean) {
+    try {
+      await navigator.clipboard.writeText(userCode);
+      setHasCopiedGithubDeviceCode(true);
+      setIsGithubDeviceCodeCopied(true);
+      if (githubCopyFeedbackTimerRef.current !== null) {
+        window.clearTimeout(githubCopyFeedbackTimerRef.current);
+      }
+      githubCopyFeedbackTimerRef.current = window.setTimeout(() => {
+        setIsGithubDeviceCodeCopied(false);
+        githubCopyFeedbackTimerRef.current = null;
+      }, GITHUB_COPY_FEEDBACK_DURATION_MS);
+    } catch (error) {
+      if (!shouldReportFailure) {
+        return;
+      }
+      reportFailure(error, {
+        operation: "copy_github_device_code",
+        fallbackMessage: t("settings.github.copyFailed"),
+      });
+    }
+  }
+
+  async function handleStartGithubLogin() {
+    if (isConnectingGithub) {
+      return;
+    }
+    setIsConnectingGithub(true);
+    try {
+      const flow = await startGithubDeviceFlow(true);
+      setGithubDeviceFlow(flow);
+      setGithubPollInterval(Math.max(flow.interval, 1) * 1_000);
+      setGithubPollVersion(0);
+      setIsGithubDeviceCodeCopied(false);
+      setHasCopiedGithubDeviceCode(false);
+      setGithubAuthMode("device");
+      await copyGithubDeviceCode(flow.userCode, false);
+      await openExternalLink(flow.verificationUri);
+    } catch (error) {
+      reportFailure(error, {
+        operation: "start_github_login",
+        fallbackMessage: t("settings.github.connectFailed"),
+      });
+    } finally {
+      setIsConnectingGithub(false);
+    }
+  }
+
+  async function handleCopyGithubDeviceCode() {
+    if (!githubDeviceFlow) {
+      return;
+    }
+    await copyGithubDeviceCode(githubDeviceFlow.userCode, true);
+  }
+
+  useEffect(() => {
+    if (!githubDeviceFlow || githubAuthMode !== "device") {
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      void pollGithubDeviceFlow(githubDeviceFlow.deviceCode).then((result) => {
+        if (result.status === "authorized") {
+          setGithubDeviceFlow(null);
+          setGithubAuthMode("idle");
+          return;
+        }
+        if (result.status === "slowDown") {
+          setGithubPollInterval((current) => current + 5_000);
+        }
+        setGithubPollVersion((current) => current + 1);
+      }).catch((error) => {
+        setGithubDeviceFlow(null);
+        setGithubAuthMode("idle");
+        reportFailure(error, {
+          operation: "poll_github_login",
+          fallbackMessage: t("settings.github.connectFailed"),
+        });
+      });
+    }, githubPollInterval);
+
+    return () => window.clearTimeout(timer);
+  }, [
+    githubAuthMode,
+    githubDeviceFlow,
+    githubPollInterval,
+    githubPollVersion,
+    pollGithubDeviceFlow,
+    reportFailure,
+    t,
+  ]);
+
+  async function handleConnectGithubToken() {
+    if (isConnectingGithub || !normalizedGithubTokenDraft) {
+      return;
+    }
+    setIsConnectingGithub(true);
+    try {
+      await connectGithubToken(normalizedGithubTokenDraft);
+      setGithubTokenDraft("");
+      setGithubAuthMode("idle");
+    } catch (error) {
+      reportFailure(error, {
+        operation: "connect_github_token",
+        fallbackMessage: t("settings.github.connectFailed"),
+      });
+    } finally {
+      setIsConnectingGithub(false);
+    }
+  }
+
+  async function handleDisconnectGithub() {
+    try {
+      await disconnectGithub();
+      setBackupStatus(null);
+      setBackupConflicts([]);
+      setGithubDeviceFlow(null);
+      setGithubTokenDraft("");
+      setGithubAuthMode("idle");
+    } catch (error) {
+      reportFailure(error, {
+        operation: "disconnect_github",
+        fallbackMessage: t("settings.github.disconnectFailed"),
+      });
+    }
+  }
+
+  async function handleOpenGithubTokenCreation() {
+    try {
+      await openExternalLink(GITHUB_TOKEN_CREATION_URL);
+    } catch (error) {
+      reportFailure(error, {
+        operation: "open_github_token_creation",
+        fallbackMessage: t("settings.githubApi.openFailed"),
+      });
+    }
+  }
 
   async function handleAgentSkillsCompatibilityToggle() {
     const provider = appSettings.agentSkillsCompatibilityEnabled ? "skilldock" : "agent-skills";
@@ -831,19 +1291,526 @@ export function SettingsRoute() {
         </section>
       </section>
 
-      <section className="settings-group">
+      <section id="settings-github-api" className="settings-group">
         <div className="settings-group__heading">
           <span className="settings-group__bar" aria-hidden="true" />
           <h2 className="settings-group__title">{t("settings.group.github")}</h2>
         </div>
-        <div className="panel-card placeholder-panel settings-panel settings-panel--git-account">
-          <div className="settings-row settings-row--account">
-            <span className="settings-row__title">{t("settings.github.provider")}</span>
-            <span>{t("settings.github.placeholder")}</span>
-            <span className="status-badge tone-info">{t("settings.github.badge")}</span>
-          </div>
+        <div className="panel-card settings-panel settings-panel--github-api settings-github-connect">
+          {githubConnection.connected ? (
+            <div className="settings-github-connected">
+              <div className="settings-github-account">
+                <div className="settings-github-account__identity">
+                  {githubConnection.avatarUrl ? (
+                    <img
+                      className="settings-github-account__avatar"
+                      src={githubConnection.avatarUrl}
+                      alt=""
+                    />
+                  ) : null}
+                  <div className="settings-form-item__copy">
+                    <div className="settings-github-token-title-row">
+                      <span className="settings-form-item__title">{githubConnection.username}</span>
+                      <span className="status-badge tone-success">
+                        {t("settings.github.connected")}
+                      </span>
+                    </div>
+                    <span className="settings-form-item__description">
+                      {t(
+                        githubConnection.authMethod === "oauth"
+                          ? "settings.github.connectedOauth"
+                          : "settings.github.connectedPat",
+                      )}
+                    </span>
+                    {githubConnection.warning ? (
+                      <span className="settings-form-item__description tone-warning">
+                        {githubConnection.warning}
+                      </span>
+                    ) : null}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className="secondary-button secondary-button--compact"
+                  onClick={() => void handleDisconnectGithub()}
+                >
+                  {t("settings.github.disconnect")}
+                </button>
+              </div>
+
+              <div className="settings-github-backup">
+                <div className="settings-github-backup__toggle-row">
+                  <div className="settings-form-item__copy">
+                    <span className="settings-form-item__title">{t("settings.backup.title")}</span>
+                    <span className="settings-form-item__description">
+                      {t("settings.backup.description")}
+                    </span>
+                  </div>
+                  <div className="settings-toggle-control">
+                    <span className="settings-toggle-control__state">
+                      {backupStatus?.phase === "enabling"
+                        ? t("settings.backup.enabling")
+                        : backupStatus?.enabled
+                          ? t("settings.toggle.on")
+                          : t("settings.toggle.off")}
+                    </span>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={Boolean(backupStatus?.enabled)}
+                      aria-label={t("settings.backup.title")}
+                      className={`switch-button${backupStatus?.enabled ? " is-enabled" : ""}`}
+                      disabled={!backupStatus || isBackupInteractionBlocked}
+                      onClick={() => void handleBackupToggle()}
+                    >
+                      <span className="switch-button__thumb" />
+                    </button>
+                  </div>
+                </div>
+
+                {backupStatus && (
+                  backupStatus.enabled
+                  || backupStatus.phase === "enabling"
+                  || backupStatus.phase === "error"
+                ) ? (
+                  <div className="settings-github-backup__content">
+                    <div className="settings-github-backup__footer">
+                      <div className="settings-github-backup__meta">
+                        {backupRepositoryLabel ? (
+                          <div className="settings-github-backup__repository">
+                            <span>{t("settings.backup.repository")}</span>
+                            <button
+                              type="button"
+                              className="settings-github-backup__repository-link"
+                              onClick={() => void openExternalLink(backupRepositoryPageUrl)}
+                            >
+                              {backupRepositoryLabel}
+                            </button>
+                          </div>
+                        ) : null}
+                        <div
+                          className={`settings-github-backup__status${isBackupTransferActive ? " is-active" : ""}`}
+                        >
+                          <span>{t("settings.backup.lastOperation")}</span>
+                          <strong>
+                            {backupStatus.phase === "enabling"
+                              ? t("settings.backup.enabling")
+                              : isBackupTransferActive
+                                ? backupProgressLabel
+                              : backupStatus.phase === "error"
+                                ? t("settings.backup.failed")
+                                : backupStatus.lastSyncAt
+                                  ? t(
+                                      lastBackupOperationLabel
+                                        ? "settings.backup.completedWithOperation"
+                                        : "settings.backup.completed",
+                                      {
+                                        operation: lastBackupOperationLabel,
+                                        time: formatBackupTimestamp(
+                                          backupStatus.lastSyncAt,
+                                          language,
+                                        ),
+                                      },
+                                    )
+                                  : t("settings.backup.notBackedUp")}
+                          </strong>
+                        </div>
+                      </div>
+                      {backupStatus.enabled ? (
+                        <div className="settings-github-backup__actions">
+                          <button
+                            type="button"
+                            className="settings-github-backup__action settings-github-backup__action--secondary"
+                            disabled={isBackupInteractionBlocked}
+                            onClick={() => void handleBackupOperation("sync")}
+                          >
+                            {backupStatus.phase === "restoring"
+                              ? t("settings.backup.syncing", {
+                                  percent: backupProgressPercent,
+                                })
+                              : t("settings.backup.sync")}
+                          </button>
+                          <button
+                            type="button"
+                            className="settings-github-backup__action settings-github-backup__action--primary"
+                            disabled={isBackupInteractionBlocked}
+                            onClick={() => void handleBackupOperation("backup")}
+                          >
+                            {backupStatus.phase === "backingUp"
+                              ? t("settings.backup.backingUp", {
+                                  percent: backupProgressPercent,
+                                })
+                              : t("settings.backup.backup")}
+                          </button>
+                          <button
+                            type="button"
+                            className="settings-github-backup__action settings-github-backup__action--ghost"
+                            disabled={isBackupInteractionBlocked}
+                            onClick={() => void handleOpenBackupNodes()}
+                          >
+                            {t("settings.backup.nodes")}
+                          </button>
+                        </div>
+                      ) : null}
+                    </div>
+                    {backupStatus.lastError ? (
+                      <div className="settings-github-backup__error">{backupStatus.lastError}</div>
+                    ) : null}
+                    {backupConflicts.length > 0 ? (
+                      <div className="settings-github-backup__conflicts">
+                        <span className="settings-form-item__description">
+                          {t("settings.backup.conflictDescription")}
+                        </span>
+                        {backupConflicts.map((conflict) => (
+                          <div className="settings-github-backup__conflict" key={conflict.conflictId}>
+                            <strong>{conflict.skillName}</strong>
+                            <div>
+                              {(["keepLocal", "useRemote", "keepBoth"] as const).map((resolution) => (
+                                <button
+                                  type="button"
+                                  className="settings-github-token-generate"
+                                  disabled={Boolean(activeBackupAction)}
+                                  onClick={() => void handleBackupConflict(conflict.conflictId, resolution)}
+                                  key={resolution}
+                                >
+                                  {t(`settings.backup.${resolution}`)}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          ) : (
+            <div className="settings-github-connect__content">
+              <div className="settings-form-item__copy">
+                <div className="settings-github-token-title-row">
+                  <span className="settings-form-item__title">{t("settings.github.connectTitle")}</span>
+                  <span className="status-badge tone-info">{t("settings.github.notConnected")}</span>
+                </div>
+                <span className="settings-form-item__description">
+                  {t("settings.github.connectDescription")}
+                </span>
+              </div>
+              {githubAuthMode === "device" && githubDeviceFlow ? (
+                <div className="settings-github-device-flow">
+                  <div className="settings-github-device-flow__code-block">
+                    <button
+                      type="button"
+                      className="settings-github-device-flow__code"
+                      onClick={() => void handleCopyGithubDeviceCode()}
+                    >
+                      <strong>{githubDeviceFlow.userCode}</strong>
+                      <span className="settings-github-device-flow__copy">
+                        <span className="settings-github-device-flow__copy-icon" aria-hidden="true" />
+                        {t(
+                          isGithubDeviceCodeCopied
+                            ? "settings.github.copiedCode"
+                            : "settings.github.copyCode",
+                        )}
+                      </span>
+                    </button>
+                    <span className="settings-github-device-flow__hint">
+                      {t(
+                        hasCopiedGithubDeviceCode
+                          ? "settings.github.deviceCopiedHint"
+                          : "settings.github.deviceHint",
+                      )}
+                    </span>
+                  </div>
+                  <span className="settings-github-device-flow__waiting">
+                    <span className="settings-github-device-flow__waiting-dot" aria-hidden="true" />
+                    {t("settings.github.waiting")}
+                  </span>
+                  <button
+                    type="button"
+                    className="primary-button primary-button--compact settings-github-device-flow__open"
+                    onClick={() => void openExternalLink(githubDeviceFlow.verificationUri)}
+                  >
+                    {t("settings.github.openAuthorization")}
+                  </button>
+                </div>
+              ) : githubAuthMode === "pat" ? (
+                <div className="settings-github-token-control">
+                  <div className="settings-github-token-input-wrap">
+                    <div className="settings-github-token-input-shell">
+                      <input
+                        className="settings-github-token-input"
+                        aria-label={t("settings.githubApi.provider")}
+                        type={isGithubTokenVisible ? "text" : "password"}
+                        value={githubTokenDraft}
+                        placeholder={t("settings.githubApi.placeholder")}
+                        autoComplete="off"
+                        spellCheck={false}
+                        onChange={(event) => setGithubTokenDraft(event.target.value)}
+                      />
+                      <button
+                        type="button"
+                        className="settings-github-token-visibility"
+                        onClick={() => setIsGithubTokenVisible((current) => !current)}
+                      >
+                        {t(isGithubTokenVisible ? "settings.githubApi.hide" : "settings.githubApi.show")}
+                      </button>
+                    </div>
+                    <button
+                      type="button"
+                      className="primary-button primary-button--compact"
+                      disabled={isConnectingGithub || !normalizedGithubTokenDraft}
+                      onClick={() => void handleConnectGithubToken()}
+                    >
+                      {t(isConnectingGithub ? "settings.github.connecting" : "settings.github.connect")}
+                    </button>
+                  </div>
+                  <div className="settings-github-token-helper">
+                    <span>{t("settings.githubApi.generateHint")}</span>
+                    <button
+                      type="button"
+                      className="settings-github-token-generate"
+                      onClick={() => void handleOpenGithubTokenCreation()}
+                    >
+                      {t("settings.githubApi.generate")}
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="settings-github-connect__actions">
+                  <button
+                    type="button"
+                    className={[
+                      "primary-button primary-button--compact",
+                      "settings-github-connect__action settings-github-connect__login",
+                    ].join(" ")}
+                    disabled={isConnectingGithub || githubAuthMode === "device"}
+                    onClick={() => void handleStartGithubLogin()}
+                  >
+                    <svg
+                      className="settings-github-connect__login-icon"
+                      viewBox="0 0 24 24"
+                      aria-hidden="true"
+                    >
+                      <path d="M12 .7a11.6 11.6 0 0 0-3.7 22.6c.6.1.8-.3.8-.6v-2.2c-3.4.7-4.1-1.4-4.1-1.4-.5-1.4-1.3-1.8-1.3-1.8-1.1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1.1 1.8 2.8 1.3 3.5 1 .1-.8.4-1.3.8-1.6-2.7-.3-5.5-1.4-5.5-5.8 0-1.3.5-2.3 1.2-3.2-.1-.3-.5-1.5.1-3.1 0 0 1-.3 3.2 1.2a11 11 0 0 1 5.8 0c2.2-1.5 3.2-1.2 3.2-1.2.6 1.6.2 2.8.1 3.1.8.9 1.2 1.9 1.2 3.2 0 4.5-2.8 5.5-5.5 5.8.4.4.8 1.1.8 2.2v3.2c0 .3.2.7.8.6A11.6 11.6 0 0 0 12 .7Z" />
+                    </svg>
+                    {t(isConnectingGithub ? "settings.github.connecting" : "settings.github.login")}
+                  </button>
+                  {SHOW_GITHUB_PAT_LOGIN ? (
+                    <button
+                      type="button"
+                      className="secondary-button secondary-button--compact settings-github-connect__action"
+                      onClick={() => setGithubAuthMode("pat")}
+                    >
+                      {t("settings.github.usePat")}
+                    </button>
+                  ) : null}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </section>
+      {isBackupNodeDialogOpen ? (
+        <div
+          className="skill-card-detail-modal__backdrop"
+          role="presentation"
+          onClick={() => setIsBackupNodeDialogOpen(false)}
+        >
+          <section
+            className="skill-card-detail-modal settings-backup-node-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="settings-backup-node-dialog-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <header className="skill-card-detail-modal__header">
+              <div className="skill-card-detail-modal__identity">
+                <div className="skill-card-detail-modal__copy">
+                  <div className="skill-card-detail-modal__title">
+                    <h3 id="settings-backup-node-dialog-title">
+                      {t("settings.backup.nodesTitle")}
+                    </h3>
+                  </div>
+                  <p>{t("settings.backup.nodesDescription")}</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                className="skill-card-detail-modal__close"
+                aria-label={t("settings.backup.nodesClose")}
+                onClick={() => setIsBackupNodeDialogOpen(false)}
+              >
+                ×
+              </button>
+            </header>
+            <div className="skill-card-detail-modal__body settings-backup-node-dialog__body">
+              {isLoadingBackupNodes ? (
+                <p className="settings-backup-node-dialog__empty">
+                  {t("settings.backup.nodesLoading")}
+                </p>
+              ) : cloudBackupNodes.length === 0 ? (
+                <p className="settings-backup-node-dialog__empty">
+                  {t("settings.backup.nodesEmpty")}
+                </p>
+              ) : (
+                <div className="settings-backup-node-dialog__list">
+                  {cloudBackupNodes.map((node) => (
+                    <article className="settings-backup-node-dialog__item" key={node.commitId}>
+                      <div className="settings-backup-node-dialog__node-copy">
+                        <strong>{formatBackupTimestamp(node.createdAt, language)}</strong>
+                        <span>
+                          {t("settings.backup.nodeCounts", {
+                            skills: node.skillCount,
+                            mcp: node.mcpCount,
+                            plugins: node.pluginCount,
+                          })}
+                        </span>
+                        <span>
+                          {t("settings.backup.nodeDevice", { device: node.deviceLabel })}
+                        </span>
+                      </div>
+                      <div className="settings-backup-node-dialog__node-actions">
+                        <span>{t("settings.backup.cloudOnly")}</span>
+                        <div className="settings-backup-node-dialog__node-buttons">
+                          <button
+                            type="button"
+                            className="secondary-button secondary-button--compact"
+                            disabled={Boolean(activeBackupAction)}
+                            onClick={() => void handleRestoreBackupNode(node)}
+                          >
+                            {t("settings.backup.restoreNode")}
+                          </button>
+                          <button
+                            type="button"
+                            className="settings-backup-node-dialog__delete"
+                            aria-label={t("settings.backup.deleteNode")}
+                            title={t("settings.backup.deleteNode")}
+                            disabled={Boolean(activeBackupAction)}
+                            onClick={() => setPendingDeleteBackupNode(node)}
+                          >
+                            <BackupNodeTrashIcon />
+                          </button>
+                        </div>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              )}
+            </div>
+          </section>
+        </div>
+      ) : null}
+      {pendingRestoreBackupNode ? (
+        <div
+          className="skill-card-detail-modal__backdrop settings-backup-confirm-dialog__backdrop"
+          role="presentation"
+          onClick={() => {
+            if (!activeBackupAction) {
+              setPendingRestoreBackupNode(null);
+            }
+          }}
+        >
+          <section
+            className="skill-card-detail-modal settings-backup-confirm-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="settings-backup-restore-confirm-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <header className="skill-card-detail-modal__header">
+              <div className="skill-card-detail-modal__identity">
+                <div className="skill-card-detail-modal__copy">
+                  <div className="skill-card-detail-modal__title">
+                    <h3 id="settings-backup-restore-confirm-title">
+                      {t("settings.backup.restoreConfirmTitle")}
+                    </h3>
+                  </div>
+                </div>
+              </div>
+            </header>
+            <div className="skill-card-detail-modal__body settings-backup-confirm-dialog__body">
+              <p>
+                {t("settings.backup.restoreConfirm", {
+                  added: pendingRestoreBackupNode.preview.added,
+                  overwritten: pendingRestoreBackupNode.preview.overwritten,
+                  deleted: pendingRestoreBackupNode.preview.deleted,
+                })}
+              </p>
+              <div className="settings-backup-confirm-dialog__actions">
+                <button
+                  type="button"
+                  className="secondary-button secondary-button--compact"
+                  disabled={Boolean(activeBackupAction)}
+                  onClick={() => setPendingRestoreBackupNode(null)}
+                >
+                  {t("settings.backup.confirmCancel")}
+                </button>
+                <button
+                  type="button"
+                  className="primary-button primary-button--compact"
+                  disabled={Boolean(activeBackupAction)}
+                  onClick={() => void handleConfirmRestoreBackupNode()}
+                >
+                  {t("settings.backup.confirmRestore")}
+                </button>
+              </div>
+            </div>
+          </section>
+        </div>
+      ) : null}
+      {pendingDeleteBackupNode ? (
+        <div
+          className="skill-card-detail-modal__backdrop settings-backup-confirm-dialog__backdrop"
+          role="presentation"
+          onClick={() => {
+            if (!activeBackupAction) {
+              setPendingDeleteBackupNode(null);
+            }
+          }}
+        >
+          <section
+            className="skill-card-detail-modal settings-backup-confirm-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="settings-backup-delete-confirm-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <header className="skill-card-detail-modal__header">
+              <div className="skill-card-detail-modal__identity">
+                <div className="skill-card-detail-modal__copy">
+                  <div className="skill-card-detail-modal__title">
+                    <h3 id="settings-backup-delete-confirm-title">
+                      {t("settings.backup.deleteTitle")}
+                    </h3>
+                  </div>
+                </div>
+              </div>
+            </header>
+            <div className="skill-card-detail-modal__body settings-backup-confirm-dialog__body">
+              <p>{t("settings.backup.deleteDescription")}</p>
+              <div className="settings-backup-confirm-dialog__actions">
+                <button
+                  type="button"
+                  className="secondary-button secondary-button--compact"
+                  disabled={Boolean(activeBackupAction)}
+                  onClick={() => setPendingDeleteBackupNode(null)}
+                >
+                  {t("settings.backup.confirmCancel")}
+                </button>
+                <button
+                  type="button"
+                  className="secondary-button secondary-button--compact danger-button"
+                  disabled={Boolean(activeBackupAction)}
+                  onClick={() => void handleConfirmDeleteBackupNode()}
+                >
+                  {t(activeBackupAction ? "settings.backup.deletingNode" : "settings.backup.confirmDelete")}
+                </button>
+              </div>
+            </div>
+          </section>
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -1,14 +1,28 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, isTauri } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { vi } from "vitest";
 import { App } from "@/app/App";
+import { requestOpenGithubSettings } from "@/app/github-settings-navigation";
 import { alignExpandedRowIntoView } from "@/app/utils/align-expanded-row";
 import * as appUpdateClient from "@/features/app-update/app-update-client";
+import {
+  appSettingsFixture,
+  gitAccountFixture,
+  githubConnectionFixture,
+  installedSkillFixtures,
+  localSkillFixtures,
+  toolConfigFixtures,
+} from "@/features/skills/state/skill-fixtures";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
   isTauri: vi.fn(() => false),
+}));
+
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: vi.fn(() => Promise.resolve(() => undefined)),
 }));
 
 vi.mock("@/app/utils/align-expanded-row", () => ({
@@ -16,10 +30,362 @@ vi.mock("@/app/utils/align-expanded-row", () => ({
 }));
 
 afterEach(() => {
+  vi.mocked(isTauri).mockReturnValue(false);
   vi.clearAllMocks();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   delete (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
+  Object.assign(githubConnectionFixture, {
+    connected: false,
+    authMethod: "",
+    userId: null,
+    username: "",
+    avatarUrl: "",
+    credentialPersisted: false,
+    warning: "",
+  });
+});
+
+test("opens GitHub account settings after a rate-limited Agent CLI refresh", async () => {
+  vi.mocked(isTauri).mockReturnValue(true);
+  vi.mocked(invoke).mockImplementation(async (command) => {
+    switch (command) {
+      case "list_startup_installed_skills":
+        return installedSkillFixtures;
+      case "refresh_git_states":
+        return {
+          skills: installedSkillFixtures,
+          githubRateLimited: true,
+        };
+      case "list_local_skill_candidates":
+        return localSkillFixtures;
+      case "list_tool_configs":
+        return toolConfigFixtures;
+      case "list_tool_skill_entries":
+        return [];
+      case "get_git_account_summary":
+        return gitAccountFixture;
+      case "get_app_settings":
+        return appSettingsFixture;
+      case "get_github_connection":
+        return githubConnectionFixture;
+      default:
+        throw new Error(`Unexpected command: ${command}`);
+    }
+  });
+  Object.defineProperty(Element.prototype, "scrollIntoView", {
+    configurable: true,
+    value: vi.fn(),
+  });
+
+  render(<App />);
+
+  expect(
+    await screen.findByText("GitHub API 配额已用尽，登录 GitHub 可提高访问额度。"),
+  ).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "去配置" }));
+
+  expect(await screen.findByRole("heading", { name: "账号与备份" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "登录 GitHub" })).toHaveClass(
+    "primary-button",
+    "settings-github-connect__action",
+    "settings-github-connect__login",
+  );
+  expect(screen.queryByRole("button", { name: "使用 Personal Access Token" })).not.toBeInTheDocument();
+});
+
+test("opens GitHub account settings when the marketplace requests login", async () => {
+  Object.defineProperty(Element.prototype, "scrollIntoView", {
+    configurable: true,
+    value: vi.fn(),
+  });
+
+  render(<App />);
+  act(() => requestOpenGithubSettings());
+
+  expect(await screen.findByRole("heading", { name: "账号与备份" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "登录 GitHub" })).toBeInTheDocument();
+});
+
+test("automatically copies the GitHub device code and keeps manual copy available", async () => {
+  const user = userEvent.setup();
+  const openSpy = vi.spyOn(window, "open").mockImplementation(() => null);
+  const clipboardSpy = vi.spyOn(navigator.clipboard, "writeText");
+  vi.mocked(invoke).mockResolvedValueOnce({
+    deviceCode: "device-code",
+    userCode: "045F-820D",
+    verificationUri: "https://github.com/login/device",
+    expiresIn: 900,
+    interval: 5,
+  });
+  window.localStorage.clear();
+
+  render(<App />);
+
+  await user.click(screen.getByRole("button", { name: /设置/ }));
+  await user.click(screen.getByRole("button", { name: "登录 GitHub" }));
+
+  const codeButton = await screen.findByRole("button", { name: /045F-820D.*已复制/ });
+  expect(clipboardSpy).toHaveBeenCalledTimes(1);
+  expect(clipboardSpy).toHaveBeenLastCalledWith("045F-820D");
+  expect(screen.getByText("验证码已复制，请直接粘贴")).toBeInTheDocument();
+  expect(screen.getByText("等待 GitHub 授权")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "登录 GitHub" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "使用 Personal Access Token" })).not.toBeInTheDocument();
+
+  await user.click(codeButton);
+  expect(clipboardSpy).toHaveBeenCalledTimes(2);
+  expect(clipboardSpy).toHaveBeenLastCalledWith("045F-820D");
+  expect(await screen.findByText("已复制")).toBeInTheDocument();
+
+  await user.click(screen.getByRole("button", { name: "打开 GitHub" }));
+  expect(openSpy).toHaveBeenCalledTimes(2);
+});
+
+test("opens GitHub and preserves manual copy when automatic clipboard access fails", async () => {
+  const user = userEvent.setup();
+  const openSpy = vi.spyOn(window, "open").mockImplementation(() => null);
+  const clipboardSpy = vi.spyOn(navigator.clipboard, "writeText")
+    .mockRejectedValueOnce(new Error("clipboard unavailable"));
+  vi.mocked(invoke).mockResolvedValueOnce({
+    deviceCode: "device-code",
+    userCode: "045F-820D",
+    verificationUri: "https://github.com/login/device",
+    expiresIn: 900,
+    interval: 5,
+  });
+  window.localStorage.clear();
+
+  render(<App />);
+
+  await user.click(screen.getByRole("button", { name: /设置/ }));
+  await user.click(screen.getByRole("button", { name: "登录 GitHub" }));
+
+  const codeButton = await screen.findByRole("button", { name: /045F-820D.*复制/ });
+  expect(clipboardSpy).toHaveBeenCalledTimes(1);
+  expect(screen.getByText("在 GitHub 输入验证码")).toBeInTheDocument();
+  expect(openSpy).toHaveBeenCalledTimes(1);
+  expect(screen.queryByText("复制 GitHub 验证码失败")).not.toBeInTheDocument();
+  expect(screen.queryByText("连接 GitHub 失败")).not.toBeInTheDocument();
+
+  await user.click(codeButton);
+  expect(clipboardSpy).toHaveBeenCalledTimes(2);
+  expect(await screen.findByText("验证码已复制，请直接粘贴")).toBeInTheDocument();
+});
+
+test("runs manual GitHub sync and backup from settings", async () => {
+  vi.mocked(isTauri).mockReturnValue(true);
+  Object.assign(githubConnectionFixture, {
+    connected: true,
+    authMethod: "oauth",
+    userId: 1,
+    username: "octocat",
+    credentialPersisted: true,
+  });
+  const backupStatus = {
+    enabled: true,
+    repositoryOwner: "octocat",
+    repositoryName: "skilldock-backup",
+    repositoryUrl: "https://github.com/octocat/skilldock-backup.git",
+    lastSyncAt: "",
+    lastOperation: "",
+    lastError: "",
+    phase: "enabled",
+    syncing: false,
+    pendingConflicts: 0,
+    progressStage: "",
+    progressPercent: 0,
+  };
+  let backupStatusListener: ((event: { payload: typeof backupStatus }) => void) | undefined;
+  let cloudBackupNodeRequestCount = 0;
+  vi.mocked(listen).mockImplementation(async (event, handler) => {
+    if (event === "backup-status-changed") {
+      backupStatusListener = handler as typeof backupStatusListener;
+    }
+    return () => undefined;
+  });
+  vi.mocked(invoke).mockImplementation(async (command) => {
+    switch (command) {
+      case "list_startup_installed_skills":
+        return installedSkillFixtures;
+      case "refresh_git_states":
+        return { skills: installedSkillFixtures, githubRateLimited: false };
+      case "list_local_skill_candidates":
+        return localSkillFixtures;
+      case "list_tool_configs":
+        return toolConfigFixtures;
+      case "list_tool_skill_entries":
+        return [];
+      case "get_git_account_summary":
+        return gitAccountFixture;
+      case "get_app_settings":
+        return appSettingsFixture;
+      case "get_github_connection":
+        return githubConnectionFixture;
+      case "get_backup_status":
+        return backupStatus;
+      case "list_backup_conflicts":
+        return [];
+      case "list_cloud_backup_nodes":
+        cloudBackupNodeRequestCount += 1;
+        return cloudBackupNodeRequestCount === 1
+          ? [
+              {
+                commitId: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                createdAt: "2026-07-31T02:44:00Z",
+                deviceLabel: "MacBook Pro",
+                skillCount: 0,
+                mcpCount: 0,
+                pluginCount: 0,
+              },
+              {
+                commitId: "0123456789abcdef0123456789abcdef01234567",
+                createdAt: "2026-07-30T07:57:00Z",
+                deviceLabel: "MacBook Pro",
+                skillCount: 21,
+                mcpCount: 3,
+                pluginCount: 2,
+              },
+            ]
+          : [
+              {
+                commitId: "0123456789abcdef0123456789abcdef01234567",
+                createdAt: "2026-07-30T07:57:00Z",
+                deviceLabel: "MacBook Pro",
+                skillCount: 21,
+                mcpCount: 3,
+                pluginCount: 2,
+              },
+              {
+                commitId: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                createdAt: "2026-07-29T07:57:00Z",
+                deviceLabel: "MacBook Pro",
+                skillCount: 19,
+                mcpCount: 2,
+                pluginCount: 1,
+              },
+            ];
+      case "preview_cloud_backup_node":
+        return { added: 4, overwritten: 18, deleted: 1 };
+      case "delete_cloud_backup_node":
+        return undefined;
+      case "restore_cloud_backup_node":
+        return {
+          ...backupStatus,
+          phase: "restoring",
+          syncing: true,
+          progressStage: "preparing",
+          progressPercent: 3,
+        };
+      case "sync_backup_to_local":
+      case "run_backup_sync":
+        return backupStatus;
+      default:
+        throw new Error(`Unexpected command: ${command}`);
+    }
+  });
+
+  render(<App />);
+  await userEvent.click(screen.getByRole("button", { name: /设置/ }));
+
+  expect(await screen.findByRole("heading", { name: "账号与备份" })).toBeInTheDocument();
+  expect(screen.getByRole("switch", { name: "云端备份" })).toBeChecked();
+
+  expect(screen.getByRole("button", { name: "octocat/skilldock-backup" })).toBeInTheDocument();
+  expect(screen.getByText("尚未备份")).toBeInTheDocument();
+
+  await waitFor(() => expect(backupStatusListener).toBeDefined());
+  act(() => {
+    backupStatusListener?.({
+      payload: {
+        ...backupStatus,
+        lastSyncAt: "2026-07-31T02:44:00Z",
+        lastOperation: "backup",
+      },
+    });
+  });
+  expect(await screen.findByText(/备份到云端 · 已完成 ·/)).toBeInTheDocument();
+
+  act(() => {
+    backupStatusListener?.({
+      payload: {
+        ...backupStatus,
+        phase: "backingUp",
+        syncing: true,
+        progressStage: "uploading",
+        progressPercent: 68,
+      },
+    });
+  });
+  expect(await screen.findByText("正在上传 Git 对象 · 68%"))
+    .toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "备份中 68%" })).toBeDisabled();
+
+  act(() => {
+    backupStatusListener?.({
+      payload: {
+        ...backupStatus,
+        phase: "restoring",
+        syncing: true,
+        progressStage: "restoring",
+        progressPercent: 72,
+      },
+    });
+  });
+  expect(await screen.findByText("正在恢复本地文件 · 72%"))
+    .toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "同步中 72%" })).toBeDisabled();
+
+  act(() => {
+    backupStatusListener?.({ payload: backupStatus });
+  });
+
+  const syncButton = await screen.findByRole("button", { name: "同步到本地" });
+  const backupButton = screen.getByRole("button", { name: "备份到云端" });
+  const historyButton = screen.getByRole("button", { name: "历史节点" });
+  expect(syncButton.parentElement).toBe(backupButton.parentElement);
+  expect(syncButton.parentElement).toBe(historyButton.parentElement);
+
+  await userEvent.click(syncButton);
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("sync_backup_to_local", {}));
+  expect(screen.queryByRole("dialog", { name: "本机数据将被替换" })).not.toBeInTheDocument();
+  expect(invoke).not.toHaveBeenCalledWith("preview_cloud_backup_node", expect.anything());
+
+  await userEvent.click(backupButton);
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("run_backup_sync", {}));
+
+  await userEvent.click(historyButton);
+  expect(await screen.findByRole("dialog", { name: "云端历史备份节点" })).toBeInTheDocument();
+  expect(await screen.findByText("21 Skills · 3 MCP · 2 插件")).toBeInTheDocument();
+  expect(await screen.findAllByText("设备：MacBook Pro")).toHaveLength(2);
+
+  await userEvent.click(screen.getAllByRole("button", { name: "从此节点恢复" })[1]);
+  const restoreDialog = await screen.findByRole("dialog", { name: "确认恢复云端节点" });
+  expect(within(restoreDialog).getByText(
+    "将新增 4 项、覆盖 18 项、删除 1 项 SkillDock 托管数据，是否继续？",
+  )).toBeInTheDocument();
+  await userEvent.click(within(restoreDialog).getByRole("button", { name: "取消" }));
+  expect(invoke).not.toHaveBeenCalledWith("restore_cloud_backup_node", expect.anything());
+
+  await userEvent.click(screen.getAllByRole("button", { name: "删除节点" })[0]);
+  const deleteDialog = await screen.findByRole("dialog", { name: "删除云端备份节点" });
+  expect(within(deleteDialog).getByText(/Git 历史中的底层数据仍会保留/)).toBeInTheDocument();
+  await userEvent.click(within(deleteDialog).getByRole("button", { name: "删除节点" }));
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("delete_cloud_backup_node", {
+    commitId: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  }));
+  expect(screen.queryByText("0 Skills · 0 MCP · 0 插件")).not.toBeInTheDocument();
+  expect(await screen.findByText("19 Skills · 2 MCP · 1 插件")).toBeInTheDocument();
+  expect(cloudBackupNodeRequestCount).toBe(2);
+
+  await userEvent.click(screen.getAllByRole("button", { name: "从此节点恢复" })[0]);
+  const confirmedRestoreDialog = await screen.findByRole("dialog", { name: "确认恢复云端节点" });
+  await userEvent.click(within(confirmedRestoreDialog).getByRole("button", { name: "确认恢复" }));
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("restore_cloud_backup_node", {
+    commitId: "0123456789abcdef0123456789abcdef01234567",
+  }));
+  expect(screen.queryByRole("dialog", { name: "云端历史备份节点" })).not.toBeInTheDocument();
+  expect(await screen.findByText("正在准备 · 3%")).toBeInTheDocument();
 });
 
 test("allows selecting default open tool in settings", async () => {
@@ -77,6 +443,19 @@ test("allows selecting default open tool in settings", async () => {
 
   await userEvent.click(screen.getByRole("button", { name: "工具状态" }));
   expect(screen.queryByText("CodeBuddy")).not.toBeInTheDocument();
+});
+
+test("keeps the Personal Access Token entry hidden while disconnected", async () => {
+  const user = userEvent.setup();
+  window.localStorage.clear();
+  render(<App />);
+
+  await user.click(screen.getByRole("button", { name: /设置/ }));
+  expect(screen.getByRole("heading", { name: "账号与备份" })).toBeInTheDocument();
+  expect(screen.getByText("未连接")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "登录 GitHub" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "使用 Personal Access Token" })).not.toBeInTheDocument();
+  expect(screen.queryByLabelText("GitHub Token")).not.toBeInTheDocument();
 });
 
 test("applies the shared card preference without locking individual page layouts", async () => {

@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
+import { isGithubRateLimitError } from "@/app/errors";
+import { requestOpenGithubSettings } from "@/app/github-settings-navigation";
 import { useTranslate } from "@/app/i18n";
 import {
   fetchMarketplaceSkillFileBrowser,
@@ -15,6 +17,7 @@ import type {
   SkillFileBrowserSnapshot,
   SkillFileDocument,
 } from "@/features/skills/state/skill-store";
+import { useSkillWorkspace } from "@/features/skills/state/skill-workspace";
 
 type MarketplaceSkillDetailPreviewProps = {
   skill: MarketplaceSkill;
@@ -41,7 +44,14 @@ function setBoundedCache<Value>(
 }
 
 function marketplaceFileTreeCacheKey(skill: MarketplaceSkill) {
-  return `${skill.sourceUrl}#${skill.skillPath ?? ""}`;
+  return [
+    skill.sourceSite,
+    skill.sourceUrl,
+    skill.skillPath ?? "",
+    skill.owner ?? "",
+    skill.slug ?? "",
+    skill.version ?? "",
+  ].join("#");
 }
 
 function marketplaceFileContentCacheKey(skill: MarketplaceSkill, relativePath: string) {
@@ -60,10 +70,14 @@ function previewErrorMessage(error: unknown, fallback: string) {
 
 export function MarketplaceSkillDetailPreview({ skill }: MarketplaceSkillDetailPreviewProps) {
   const { t } = useTranslate();
+  const { githubConnection, reportGithubRateLimit } = useSkillWorkspace();
+  const isGithubConnected = githubConnection.connected;
   const [entries, setEntries] = useState<SkillFileBrowserSnapshot["entries"]>([]);
   const [selectedPath, setSelectedPath] = useState("");
   const [content, setContent] = useState("");
   const [isTreeLoading, setIsTreeLoading] = useState(true);
+  const [isTreeRateLimited, setIsTreeRateLimited] = useState(false);
+  const [retryVersion, setRetryVersion] = useState(0);
   const [isContentLoading, setIsContentLoading] = useState(false);
   const [treeErrorMessage, setTreeErrorMessage] = useState("");
   const [contentErrorMessage, setContentErrorMessage] = useState("");
@@ -108,6 +122,7 @@ export function MarketplaceSkillDetailPreview({ skill }: MarketplaceSkillDetailP
     setContent("");
     setTreeErrorMessage("");
     setContentErrorMessage("");
+    setIsTreeRateLimited(false);
     setIsTreeLoading(true);
 
     if (cachedSnapshot) {
@@ -129,6 +144,14 @@ export function MarketplaceSkillDetailPreview({ skill }: MarketplaceSkillDetailP
       sourceUrl: skill.sourceUrl,
       skillPath: skill.skillPath ?? "",
       skillName: skill.name,
+      sourceSite: skill.sourceSite,
+      owner: skill.owner,
+      slug: skill.slug,
+      version: skill.version,
+      ...(skill.sourceSite === "skillhub" ? {
+        skillId: skill.id,
+        version: skill.currentVersion,
+      } : {}),
     })
       .then((snapshot) => {
         if (!active) {
@@ -146,6 +169,11 @@ export function MarketplaceSkillDetailPreview({ skill }: MarketplaceSkillDetailP
         if (!active) {
           return;
         }
+        const isRateLimited = isGithubRateLimitError(error);
+        setIsTreeRateLimited(isRateLimited);
+        if (isRateLimited) {
+          reportGithubRateLimit();
+        }
         setTreeErrorMessage(
           previewErrorMessage(error, t("install.market.detail.filesUnavailable")),
         );
@@ -159,7 +187,7 @@ export function MarketplaceSkillDetailPreview({ skill }: MarketplaceSkillDetailP
     return () => {
       active = false;
     };
-  }, [skill, t]);
+  }, [reportGithubRateLimit, retryVersion, skill, t]);
 
   useEffect(() => {
     if (!selectedPath) {
@@ -183,7 +211,16 @@ export function MarketplaceSkillDetailPreview({ skill }: MarketplaceSkillDetailP
     void fetchMarketplaceSkillFileContent({
       sourceUrl: skill.sourceUrl,
       skillPath: skill.skillPath ?? "",
+      sourceSite: skill.sourceSite,
+      owner: skill.owner,
+      slug: skill.slug,
+      version: skill.version,
       relativePath: selectedPath,
+      ...(skill.sourceSite === "skillhub" ? {
+        sourceSite: skill.sourceSite,
+        skillId: skill.id,
+        version: skill.currentVersion,
+      } : {}),
     })
       .then((document) => {
         if (!active) {
@@ -201,6 +238,9 @@ export function MarketplaceSkillDetailPreview({ skill }: MarketplaceSkillDetailP
         if (!active) {
           return;
         }
+        if (isGithubRateLimitError(error)) {
+          reportGithubRateLimit();
+        }
         setContentErrorMessage(previewErrorMessage(error, t("skill.files.error.load")));
       })
       .finally(() => {
@@ -212,7 +252,7 @@ export function MarketplaceSkillDetailPreview({ skill }: MarketplaceSkillDetailP
     return () => {
       active = false;
     };
-  }, [selectedPath, skill, t]);
+  }, [reportGithubRateLimit, selectedPath, skill, t]);
 
   function handleSelectFile(path: string) {
     setSelectedPath(path);
@@ -230,6 +270,14 @@ export function MarketplaceSkillDetailPreview({ skill }: MarketplaceSkillDetailP
       ...current,
       [path]: !current[path],
     }));
+  }
+
+  function handleRateLimitAction() {
+    if (isGithubConnected) {
+      setRetryVersion((current) => current + 1);
+      return;
+    }
+    requestOpenGithubSettings();
   }
 
   return (
@@ -250,7 +298,28 @@ export function MarketplaceSkillDetailPreview({ skill }: MarketplaceSkillDetailP
         ) : treeErrorMessage ? (
           <article className="marketplace-skill-file-dialog__state">
             <h4>{t("install.market.detail.intro")}</h4>
-            <p className="dialog-warning">{treeErrorMessage}</p>
+            <p className={isTreeRateLimited ? "dialog-warning" : undefined}>
+              {isTreeRateLimited
+                ? t(
+                    isGithubConnected
+                      ? "install.market.detail.rateLimitedLoggedIn"
+                      : "install.market.detail.rateLimitedLoggedOut",
+                  )
+                : treeErrorMessage}
+            </p>
+            {isTreeRateLimited ? (
+              <button
+                className="marketplace-skill-file-dialog__state-action"
+                type="button"
+                onClick={handleRateLimitAction}
+              >
+                {t(
+                  isGithubConnected
+                    ? "install.market.detail.retry"
+                    : "install.market.detail.loginGithub",
+                )}
+              </button>
+            ) : null}
           </article>
         ) : (
           <>

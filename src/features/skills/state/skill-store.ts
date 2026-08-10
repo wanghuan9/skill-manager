@@ -8,10 +8,10 @@ export type SkillStatusFilter = "all" | SkillCollabStatus | "disabled";
 export type SkillManagementOwner = "skilldock" | "agent-skills-cli" | "external";
 export type ManagedSkillOwnerFilter = "all" | Exclude<SkillManagementOwner, "external">;
 
-export type SourceType = "github" | "gitlab" | "gitee" | "well-known" | "local";
-export type MarketplaceSourceSite = "skills.sh" | "skillsmp";
+export type SourceType = "github" | "gitlab" | "gitee" | "well-known" | "local" | "marketplace";
+export type MarketplaceSourceSite = "skills.sh" | "skillsmp" | "skillhub" | "clawhub";
 export type McpMarketplaceSourceSite = "MCP.Directory";
-export type PluginHostTool = "claude-code" | "cursor" | "codex";
+export type PluginHostTool = "claude-code" | "cursor" | "codex" | "opencode";
 export type PluginKind = "plugin-repo" | "marketplace-root" | "standalone-assets" | "unknown";
 export type PluginProbeKind = PluginKind;
 export type PluginProbeConfidence = "high" | "medium" | "low";
@@ -19,6 +19,7 @@ export type PluginInstallStrategy =
   | "codex-marketplace"
   | "claude-plugin-dir"
   | "cursor-registration"
+  | "opencode-plugin-link"
   | "unsupported";
 export type PluginSourceType = "git" | "local" | "marketplace";
 export type PluginUpdateMode = "auto" | "unsupported";
@@ -171,12 +172,18 @@ export type SkillSummary = {
   lifecycleSource?: PluginLifecycleSource;
   ownerPluginId?: string;
   ownerPluginName?: string;
+  backupId?: string;
   entryPath?: string;
   canonicalPath?: string;
   managementOwner?: SkillManagementOwner;
-  updateDriver?: "git" | "agent-skills-cli" | "none";
+  updateDriver?: "git" | "agent-skills-cli" | "clawhub" | "none";
   skillEntries?: string[];
   pathError?: string;
+  contentHash?: string;
+  marketplaceOwner?: string;
+  marketplaceSlug?: string;
+  marketplaceVersion?: string;
+  marketplaceContentHash?: string;
   tools: SkillToolSyncStatus[];
 };
 
@@ -228,6 +235,7 @@ export type SkillFileBrowserSnapshot = {
   rootName: string;
   entries: SkillFileEntry[];
   initialFilePath: string | null;
+  previewMode: "full";
 };
 
 export type SkillFileDocument = {
@@ -248,7 +256,21 @@ export type MarketplaceSkill = {
   skillPath?: string;
   marketplaceUrl?: string | null;
   popularityLabel: string;
+  topicLabel?: string;
   avatarUrl?: string | null;
+  installed?: boolean;
+  updateAvailable?: boolean;
+  currentVersion?: string;
+  categoryLabel?: string;
+  owner?: string;
+  slug?: string;
+  version?: string;
+  installDriver?: "git" | "clawhub";
+};
+
+export type MarketplaceSkillsPage = {
+  skills: MarketplaceSkill[];
+  hasMore: boolean;
 };
 
 export type McpMarketplaceServer = {
@@ -272,6 +294,8 @@ export type LocalSkillCandidate = {
   localPath: string;
   detectedFrom: string;
   sourceHint: string;
+  toolId?: string;
+  resolvedPath?: string;
 };
 
 export type ToolSkillEntryKind = "symlink" | "directory";
@@ -343,6 +367,7 @@ export type AppSettings = {
   skillLibraryPath: string;
   skillLibraryProvider: SkillLibraryProvider;
   agentSkillsCompatibilityEnabled: boolean;
+  agentSkillsCompatibilityConfigured: boolean;
   defaultOpenToolId: string;
   skillInstallActivation: InstallActivationMode;
   mcpInstallActivation: InstallActivationMode;
@@ -350,6 +375,95 @@ export type AppSettings = {
   language: AppLanguage;
   languageSource: AppLanguageSource;
   theme: AppTheme;
+};
+
+export type GithubConnection = {
+  connected: boolean;
+  authMethod: string;
+  userId: number | null;
+  username: string;
+  avatarUrl: string;
+  credentialPersisted: boolean;
+  warning: string;
+};
+
+export type GithubDeviceFlowStart = {
+  deviceCode: string;
+  userCode: string;
+  verificationUri: string;
+  expiresIn: number;
+  interval: number;
+};
+
+export type GithubDevicePollResult = {
+  status: "pending" | "slowDown" | "authorized";
+  connection: GithubConnection | null;
+};
+
+export type BackupStatus = {
+  enabled: boolean;
+  repositoryOwner: string;
+  repositoryName: string;
+  repositoryUrl: string;
+  lastSyncAt: string;
+  lastOperation: "" | "backup" | "restore";
+  lastError: string;
+  phase: "disabled" | "enabling" | "backingUp" | "restoring" | "enabled" | "error";
+  syncing: boolean;
+  pendingConflicts: number;
+  progressStage: string;
+  progressPercent: number;
+};
+
+export type BackupSyncResult = {
+  status: BackupStatus;
+  includedSkills: number;
+  includedMcpServers: number;
+  includedPlugins: number;
+  preferencesIncluded: boolean;
+  excludedSkills: string[];
+  warnings: string[];
+  changed: boolean;
+};
+
+export type CloudBackupNode = {
+  commitId: string;
+  createdAt: string;
+  deviceLabel: string;
+  skillCount: number;
+  mcpCount: number;
+  pluginCount: number;
+};
+
+export type WorkspaceRestorePreview = {
+  added: number;
+  overwritten: number;
+  deleted: number;
+};
+
+export type BackupSkillMetadata = {
+  schemaVersion: number;
+  backupId: string;
+  name: string;
+  directoryName: string;
+  sourceType: string;
+  sourceUrl: string;
+  branch: string;
+  updateDriver: string;
+  description: string;
+  tools: Record<string, boolean>;
+  contentHash: string;
+};
+
+export type BackupConflict = {
+  conflictId: string;
+  backupId: string;
+  skillName: string;
+  createdAt: string;
+  localCommit: string;
+  remoteCommit: string;
+  local: BackupSkillMetadata | null;
+  remote: BackupSkillMetadata | null;
 };
 
 export type AgentSkillsCliStatus = {

@@ -10,7 +10,12 @@ import {
   mcpMarketplaceServerFixtures,
   toolConfigFixtures,
 } from "@/features/skills/state/skill-fixtures";
-import type { MarketplaceSkill, McpMarketplaceServer, PluginSummary } from "@/features/skills/state/skill-store";
+import type {
+  MarketplaceSkill,
+  MarketplaceSkillsPage,
+  McpMarketplaceServer,
+  PluginSummary,
+} from "@/features/skills/state/skill-store";
 import { getCachedMcpWorkspace } from "@/features/skills/utils/mcp-workspace-cache";
 import { getCachedPlugins } from "@/features/skills/utils/plugin-cache";
 import { clickNavInstall } from "@/tests/helpers/nav";
@@ -38,6 +43,33 @@ function scrollMarketInstallToBottom() {
   fireEvent.scroll(scrollContainer);
 }
 
+function mockSkillhubMarketplaceSkills() {
+  const originalFetchMarketplaceSkillsByPage = skillClient.fetchMarketplaceSkillsByPage;
+  const skillhubSkills = marketplaceSkillFixtures
+    .filter((skill) => skill.sourceSite === "clawhub")
+    .map((skill) => ({
+      ...skill,
+      id: `skillhub-${skill.id}`,
+      sourceSite: "skillhub" as const,
+    }));
+
+  return vi.spyOn(skillClient, "fetchMarketplaceSkillsByPage").mockImplementation((input) => {
+    if (input.sourceSite !== "skillhub") {
+      return originalFetchMarketplaceSkillsByPage(input);
+    }
+
+    const normalizedQuery = input.query?.trim().toLowerCase() ?? "";
+    const skills = normalizedQuery
+      ? skillhubSkills.filter((skill) =>
+          [skill.name, skill.description, skill.maintainer].some((value) =>
+            value.toLowerCase().includes(normalizedQuery),
+          ),
+        )
+      : skillhubSkills;
+    return Promise.resolve({ skills, hasMore: false });
+  });
+}
+
 test("renders install-source and repository install panels", async () => {
   render(<App />);
   await clickNavInstall();
@@ -49,6 +81,8 @@ test("renders install-source and repository install panels", async () => {
   expect(screen.getByRole("tab", { name: "市场安装" })).toBeInTheDocument();
   expect(screen.getByRole("tab", { name: "skills.sh" })).toBeInTheDocument();
   expect(screen.getByRole("tab", { name: "skillsmp" })).toBeInTheDocument();
+  expect(screen.getByRole("tab", { name: "skillhub" })).toBeInTheDocument();
+  expect(screen.queryByRole("tab", { name: "clawhub" })).not.toBeInTheDocument();
   expect(screen.queryByText("安装后默认应用到所有已安装工具")).not.toBeInTheDocument();
   await userEvent.click(screen.getByRole("tab", { name: "Git 安装" }));
   expect(screen.getByRole("textbox", { name: "Git 仓库地址" })).toBeInTheDocument();
@@ -198,6 +232,64 @@ test("probes plugin sources with Codex-style inputs and host selection", async (
 
   probeSpy.mockRestore();
   branchSpy.mockRestore();
+});
+
+test("installs OpenCode plugins with OpenCode selected as the host", async () => {
+  const sourceUrl = "https://github.com/example/demo-opencode";
+  const branchSpy = vi.spyOn(skillClient, "fetchGitRepoBranches").mockResolvedValue([
+    { name: "main", isDefault: true, isSelected: true },
+  ]);
+  const probeSpy = vi.spyOn(skillClient, "probePluginSourceCandidates").mockResolvedValue([{
+    tool: "opencode",
+    compatibleHostTools: ["opencode"],
+    kind: "plugin-repo",
+    manifestName: "demo-opencode",
+    name: "demo-opencode",
+    description: "Demo OpenCode plugin",
+    pluginRoot: "/tmp/demo-opencode",
+    repoRoot: "/tmp/demo-opencode",
+    pluginRelativePath: "",
+    manifestPath: "/tmp/demo-opencode/.opencode/plugins/demo.ts",
+    marketplaceManifestPath: "",
+    components: [],
+    sourceType: "git",
+    sourceUrl,
+    sourceRef: "main",
+    isGitRepo: true,
+    gitRoot: "/tmp/demo-opencode",
+    confidence: "high",
+    installStrategy: "opencode-plugin-link",
+    warnings: [],
+  }]);
+  vi.spyOn(skillClient, "fetchInstalledPlugins").mockResolvedValue([]);
+  const installSpy = vi.spyOn(skillClient, "installSelectedPluginProbes").mockResolvedValue([]);
+
+  render(<App />);
+  await clickNavInstall();
+  await userEvent.click(screen.getByRole("tab", { name: "Plugin" }));
+  await userEvent.type(screen.getByRole("textbox", { name: "Git 仓库地址" }), sourceUrl);
+  await waitFor(() => {
+    expect(screen.getByRole("combobox", { name: "Git 分支" })).toHaveAttribute("data-value", "main");
+  });
+  await userEvent.click(screen.getByRole("button", { name: "识别插件" }));
+
+  expect(await screen.findByText("Demo OpenCode plugin")).toBeInTheDocument();
+  expect(screen.getByRole("button", {
+    name: "取消选择 OpenCode 作为 demo-opencode 安装宿主",
+  })).toHaveAttribute("aria-pressed", "true");
+
+  await userEvent.click(screen.getByRole("button", { name: "安装到选中宿主" }));
+
+  await waitFor(() => {
+    expect(installSpy).toHaveBeenCalledWith({
+      probes: [expect.objectContaining({ tool: "opencode" })],
+      hostTools: ["opencode"],
+    });
+  });
+
+  branchSpy.mockRestore();
+  probeSpy.mockRestore();
+  installSpy.mockRestore();
 });
 
 test("marks already installed plugin hosts and still allows installing remaining hosts", async () => {
@@ -1621,7 +1713,7 @@ test("keeps the current MCP list visible until pending search results return", a
 test("keeps the current skill list visible until pending search results return", async () => {
   window.localStorage.clear();
   const originalFetchMarketplaceSkillsByPage = skillClient.fetchMarketplaceSkillsByPage;
-  let resolvePendingSearch: ((value: MarketplaceSkill[]) => void) | null = null;
+  let resolvePendingSearch: ((value: { skills: MarketplaceSkill[]; hasMore: boolean }) => void) | null = null;
   const fetchMarketplaceSkillsByPageSpy = vi
     .spyOn(skillClient, "fetchMarketplaceSkillsByPage")
     .mockImplementation((input) => {
@@ -1648,11 +1740,17 @@ test("keeps the current skill list visible until pending search results return",
   expect(screen.getByText("workflow-critic")).toBeInTheDocument();
   expect(screen.queryByText("正在搜索可安装技能")).not.toBeInTheDocument();
 
-  const finishPendingSearch = resolvePendingSearch as ((value: MarketplaceSkill[]) => void) | null;
+  const finishPendingSearch = resolvePendingSearch as ((value: {
+    skills: MarketplaceSkill[];
+    hasMore: boolean;
+  }) => void) | null;
   if (!finishPendingSearch) {
     throw new Error("pending skill marketplace search was not triggered");
   }
-  finishPendingSearch(marketplaceSkillFixtures.filter((skill) => skill.name === "workflow-critic"));
+  finishPendingSearch({
+    skills: marketplaceSkillFixtures.filter((skill) => skill.name === "workflow-critic"),
+    hasMore: false,
+  });
 
   await waitFor(() => {
     expect(screen.getByText("workflow-critic")).toBeInTheDocument();
@@ -1984,34 +2082,77 @@ test("marks already installed repo skills as unavailable", async () => {
   expect(screen.getByRole("button", { name: /service-observer/i })).not.toBeDisabled();
 });
 
-test("searches marketplace skills across all supported sources", async () => {
+test("searches marketplace skills across visible sources only", async () => {
+  const fetchMarketplaceSkillsByPageSpy = vi.spyOn(skillClient, "fetchMarketplaceSkillsByPage");
+
   render(<App />);
   await clickNavInstall();
 
+  expect(screen.getByRole("button", { name: "全部" })).toHaveAttribute("aria-pressed", "true");
   const searchInput = screen.getByRole("searchbox", { name: "搜索 skill" });
-  await userEvent.type(searchInput, "guardian");
+  await userEvent.type(searchInput, "i");
 
-  expect(await screen.findByText("release-guardian")).toBeInTheDocument();
-  expect(screen.getByText("repo-guardian")).toBeInTheDocument();
+  expect(await screen.findByText("workflow-critic")).toBeInTheDocument();
+  expect(screen.getByText("design-system-reviewer")).toBeInTheDocument();
+  expect(screen.queryByText("release-guardian")).not.toBeInTheDocument();
+  expect(screen.queryByText("repo-guardian")).not.toBeInTheDocument();
+  await waitFor(() => {
+    expect(
+      fetchMarketplaceSkillsByPageSpy.mock.calls
+        .map(([input]) => input)
+        .filter((input) => input.query === "i")
+        .map((input) => input.sourceSite),
+    ).toEqual(["skills.sh", "skillsmp", "skillhub"]);
+  });
+
+  fetchMarketplaceSkillsByPageSpy.mockRestore();
+});
+
+test("searches marketplace skills only in the active source when current scope is selected", async () => {
+  const fetchMarketplaceSkillsByPageSpy = mockSkillhubMarketplaceSkills();
+
+  render(<App />);
+  await clickNavInstall();
+
+  await userEvent.click(screen.getByRole("button", { name: "当前" }));
+  await userEvent.type(screen.getByRole("searchbox", { name: "搜索 skill" }), "i");
+
+  await waitFor(() => {
+    expect(screen.getAllByRole("heading", { level: 3 }).map((item) => item.textContent)).toEqual([
+      "workflow-critic",
+      "design-system-reviewer",
+    ]);
+  });
+
+  await userEvent.click(screen.getByRole("tab", { name: "skillhub" }));
+
+  await waitFor(() => {
+    expect(screen.getAllByRole("heading", { level: 3 }).map((item) => item.textContent)).toEqual([
+      "release-guardian",
+      "repo-guardian",
+    ]);
+  });
+
+  fetchMarketplaceSkillsByPageSpy.mockRestore();
 });
 
 test("sorts marketplace search results by popularity across sources", async () => {
   render(<App />);
   await clickNavInstall();
 
-  await userEvent.type(screen.getByRole("searchbox", { name: "搜索 skill" }), "skills");
+  await userEvent.type(screen.getByRole("searchbox", { name: "搜索 skill" }), "i");
 
   await waitFor(() => {
     expect(screen.getAllByRole("heading", { level: 3 }).map((item) => item.textContent)).toEqual([
       "workflow-critic",
-      "release-guardian",
       "design-system-reviewer",
-      "repo-guardian",
     ]);
   });
 });
 
 test("keeps source results isolated and preserves the skills.sh display order", async () => {
+  const fetchMarketplaceSkillsByPageSpy = mockSkillhubMarketplaceSkills();
+
   render(<App />);
   await clickNavInstall();
 
@@ -2020,10 +2161,10 @@ test("keeps source results isolated and preserves the skills.sh display order", 
     .map((item) => item.textContent);
   expect(skillsShCards).toEqual(["workflow-critic", "design-system-reviewer"]);
 
-  await userEvent.click(screen.getByRole("tab", { name: "skillsmp" }));
+  await userEvent.click(screen.getByRole("tab", { name: "skillhub" }));
 
-  const skillsMpCards = await screen.findAllByRole("heading", { level: 3 });
-  expect(skillsMpCards.map((item) => item.textContent)).toEqual(["release-guardian", "repo-guardian"]);
+  const skillhubCards = await screen.findAllByRole("heading", { level: 3 });
+  expect(skillhubCards.map((item) => item.textContent)).toEqual(["release-guardian", "repo-guardian"]);
   expect(screen.queryByText("workflow-critic")).not.toBeInTheDocument();
 
   await userEvent.click(screen.getByRole("tab", { name: "skills.sh" }));
@@ -2031,4 +2172,66 @@ test("keeps source results isolated and preserves the skills.sh display order", 
     "workflow-critic",
     "design-system-reviewer",
   ]);
+
+  fetchMarketplaceSkillsByPageSpy.mockRestore();
+});
+
+test("loads the next marketplace page after a refresh finishes at the scroll bottom", async () => {
+  const firstPage = Array.from({ length: 18 }, (_, index): MarketplaceSkill => ({
+    ...marketplaceSkillFixtures[0],
+    id: `skillhub-first-${index + 1}`,
+    name: `skillhub-first-${index + 1}`,
+    sourceSite: "skillhub",
+  }));
+  const secondPageSkill: MarketplaceSkill = {
+    ...marketplaceSkillFixtures[0],
+    id: "skillhub-second-page",
+    name: "skillhub-second-page",
+    sourceSite: "skillhub",
+  };
+  let resolveRefresh: ((page: MarketplaceSkillsPage) => void) | undefined;
+  const fetchMarketplaceSkillsByPageSpy = vi
+    .spyOn(skillClient, "fetchMarketplaceSkillsByPage")
+    .mockImplementation((input) => {
+      if (input.sourceSite !== "skillhub") {
+        return Promise.resolve({ skills: [], hasMore: false });
+      }
+      if (input.page === 2) {
+        return Promise.resolve({ skills: [secondPageSkill], hasMore: false });
+      }
+      if (input.refresh) {
+        return new Promise((resolve) => {
+          resolveRefresh = resolve;
+        });
+      }
+      return Promise.resolve({ skills: firstPage, hasMore: true });
+    });
+
+  render(<App />);
+  await clickNavInstall();
+  await userEvent.click(screen.getByRole("tab", { name: "skillhub" }));
+
+  expect(await screen.findByRole("heading", { name: "skillhub-first-18", level: 3 })).toBeInTheDocument();
+  await waitFor(() => {
+    expect(resolveRefresh).toBeTypeOf("function");
+  });
+
+  scrollMarketInstallToBottom();
+  expect(fetchMarketplaceSkillsByPageSpy).not.toHaveBeenCalledWith(expect.objectContaining({
+    sourceSite: "skillhub",
+    page: 2,
+  }));
+
+  await act(async () => {
+    resolveRefresh?.({ skills: firstPage, hasMore: true });
+  });
+
+  expect(await screen.findByRole("heading", { name: "skillhub-second-page", level: 3 })).toBeInTheDocument();
+  expect(fetchMarketplaceSkillsByPageSpy).toHaveBeenCalledWith({
+    sourceSite: "skillhub",
+    page: 2,
+    limit: 18,
+  });
+
+  fetchMarketplaceSkillsByPageSpy.mockRestore();
 });

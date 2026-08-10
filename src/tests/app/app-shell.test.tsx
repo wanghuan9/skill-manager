@@ -2,6 +2,10 @@ import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, vi } from "vitest";
 import { App } from "@/app/App";
+import {
+  appSettingsFixture,
+  installedSkillFixtures,
+} from "@/features/skills/state/skill-fixtures";
 
 let isWindowMaximized = false;
 let windowResizeListener: (() => void) | null = null;
@@ -54,6 +58,7 @@ test("renders primary navigation entries and embeds projects in a workspace menu
   expect(screen.getByRole("button", { name: "添加项目" })).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "CLI" })).not.toBeInTheDocument();
   expect(within(screen.getByRole("navigation", { name: "Primary" })).getByRole("button", { name: /安装/ })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /发布/ })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: /设置/ })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: /关于/ })).toBeInTheDocument();
   expect(navLabels).toEqual([
@@ -62,6 +67,7 @@ test("renders primary navigation entries and embeds projects in a workspace menu
     "Plugins",
     "工具",
     "安装",
+    "发布",
     "项目",
     "demo-workspace",
     "＋添加项目",
@@ -70,7 +76,29 @@ test("renders primary navigation entries and embeds projects in a workspace menu
   ]);
 });
 
+test("keeps GitHub account and backup controls inside settings", async () => {
+  render(<App />);
+
+  expect(screen.queryByRole("button", { name: "备份" })).not.toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: /设置/ }));
+
+  expect(await screen.findByRole("heading", { name: "账号与备份" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "登录 GitHub" })).toBeInTheDocument();
+});
+
 test("notifies about startup Skill updates and opens the update filter", async () => {
+  appSettingsFixture.skillLibraryProvider = "agent-skills";
+  appSettingsFixture.agentSkillsCompatibilityEnabled = true;
+  installedSkillFixtures.push({
+    ...installedSkillFixtures[0],
+    name: "local-clean-skill",
+    sourceType: "local",
+    sourceUrl: "",
+    localPath: "/Users/demo/.skilldock/skills/local-clean-skill",
+    collabStatus: "clean",
+    gitLinked: false,
+  });
+
   render(<App />);
 
   expect(await screen.findByText("1 个 Skill 有可用更新")).toBeInTheDocument();
