@@ -21,6 +21,7 @@ import {
   fetchGitAccount,
   fetchGithubConnection,
   fetchGitStates,
+  fetchLocalGitStates,
   fetchLocalSkillCandidates,
   fetchMarketplaceSkillsByPage,
   fetchSkillFileBrowser,
@@ -367,6 +368,32 @@ function mergeUpdatedSkillsPreservingOrder(
   return [...newSkills, ...mergedSkills];
 }
 
+function mergeLocalGitStates(
+  currentSkills: SkillSummary[],
+  refreshedSkills: SkillSummary[],
+) {
+  const refreshedByIdentity = new Map(
+    refreshedSkills.map((skill) => [getSkillIdentity(skill), skill]),
+  );
+  return currentSkills.map((skill) => {
+    const refreshedSkill = refreshedByIdentity.get(getSkillIdentity(skill));
+    if (!refreshedSkill) {
+      return skill;
+    }
+    return {
+      ...skill,
+      branch: refreshedSkill.branch,
+      collabStatus: refreshedSkill.collabStatus,
+      statusText: refreshedSkill.statusText,
+      localUpdatedAt: refreshedSkill.localUpdatedAt,
+      lastCheckedAt: refreshedSkill.lastCheckedAt,
+      commitLabel: refreshedSkill.commitLabel,
+      gitLinked: refreshedSkill.gitLinked,
+      localChangeCount: refreshedSkill.localChangeCount,
+    };
+  });
+}
+
 function restoreDeletedSkill(
   currentSkills: SkillSummary[],
   deletedSkill: SkillSummary,
@@ -626,6 +653,9 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
     createMarketplaceSourceRecord(() => true),
   );
   const gitStateRefreshInFlightRef = useRef<Promise<void> | null>(null);
+  const gitStateRefreshGenerationRef = useRef(0);
+  const localGitStatesRefreshInFlightRef = useRef<Promise<void> | null>(null);
+  const localGitStatesRefreshQueuedRef = useRef(false);
   const startupGitStateRefreshCompletedRef = useRef(usesFixtureData);
   const workspaceMutationVersionRef = useRef(0);
   const lastGitStateRefreshAtRef = useRef(0);
@@ -1009,11 +1039,16 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
 
     lastGitStateRefreshAtRef.current = now;
     const refreshMutationVersion = workspaceMutationVersionRef.current;
+    const refreshGeneration = gitStateRefreshGenerationRef.current;
     let nextRefreshPromise: Promise<void> | null = null;
     nextRefreshPromise = (async () => {
       try {
         const gitStateResult = await fetchGitStates();
-        if (!shouldApply() || refreshMutationVersion !== workspaceMutationVersionRef.current) {
+        if (
+          !shouldApply()
+          || refreshMutationVersion !== workspaceMutationVersionRef.current
+          || refreshGeneration !== gitStateRefreshGenerationRef.current
+        ) {
           return;
         }
         setInstalledSkills(gitStateResult.skills);
@@ -1040,6 +1075,45 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
     if (options.showRefreshing) {
       showRefreshIndicatorUntil(nextRefreshPromise);
     }
+    return nextRefreshPromise;
+  }
+
+  async function refreshLocalGitStatesInBackground(
+    shouldApply: () => boolean = () => true,
+  ) {
+    if (localGitStatesRefreshInFlightRef.current) {
+      localGitStatesRefreshQueuedRef.current = true;
+      return localGitStatesRefreshInFlightRef.current;
+    }
+
+    let nextRefreshPromise: Promise<void> | null = null;
+    nextRefreshPromise = (async () => {
+      try {
+        do {
+          localGitStatesRefreshQueuedRef.current = false;
+          const refreshMutationVersion = workspaceMutationVersionRef.current;
+          try {
+            const refreshedSkills = await fetchLocalGitStates();
+            if (!shouldApply()) {
+              return;
+            }
+            if (refreshMutationVersion !== workspaceMutationVersionRef.current) {
+              continue;
+            }
+            gitStateRefreshGenerationRef.current += 1;
+            setInstalledSkills((current) => mergeLocalGitStates(current, refreshedSkills));
+          } catch (error) {
+            console.error("Failed to refresh local git states:", error);
+          }
+        } while (localGitStatesRefreshQueuedRef.current && shouldApply());
+      } finally {
+        if (localGitStatesRefreshInFlightRef.current === nextRefreshPromise) {
+          localGitStatesRefreshInFlightRef.current = null;
+          localGitStatesRefreshQueuedRef.current = false;
+        }
+      }
+    })();
+    localGitStatesRefreshInFlightRef.current = nextRefreshPromise;
     return nextRefreshPromise;
   }
 
@@ -1129,8 +1203,9 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
     }
 
     let active = true;
-    const refreshGitStatesIfNeeded = () => {
-      void refreshGitStatesInBackground(
+    const refreshFocusedGitStates = async () => {
+      await refreshLocalGitStatesInBackground(() => active);
+      await refreshGitStatesInBackground(
         () => active,
         { minimumIntervalMs: AUTO_GIT_STATE_REFRESH_COOLDOWN_MS },
       );
@@ -1139,19 +1214,20 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       if (document.visibilityState !== "visible") {
         return;
       }
-      refreshGitStatesIfNeeded();
+      void refreshFocusedGitStates();
     };
     const intervalId = window.setInterval(
-      refreshGitStatesIfNeeded,
+      () => void refreshGitStatesInBackground(() => active),
       AUTO_GIT_STATE_REFRESH_INTERVAL_MS,
     );
-    window.addEventListener("focus", refreshGitStatesIfNeeded);
+    const handleFocus = () => void refreshFocusedGitStates();
+    window.addEventListener("focus", handleFocus);
     document.addEventListener("visibilitychange", handleVisibilityChange);
 
     return () => {
       active = false;
       window.clearInterval(intervalId);
-      window.removeEventListener("focus", refreshGitStatesIfNeeded);
+      window.removeEventListener("focus", handleFocus);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
   }, [usesFixtureData]);

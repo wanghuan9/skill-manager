@@ -7083,11 +7083,10 @@ pub struct GitStateRefreshResult {
 pub async fn refresh_local_git_states() -> Vec<SkillSummary> {
     tauri::async_runtime::spawn_blocking(|| {
         let skills = load_installed_skills(&default_installed_skills());
-        skills
-            .iter()
-            .map(normalize_skill_tools)
-            .map(|skill| enrich_skill_with_local_git_state(&skill))
-            .collect()
+        map_in_parallel_preserving_order(&skills, REFRESH_GIT_STATES_CONCURRENCY, |skill| {
+            let normalized_skill = normalize_skill_tools(skill);
+            enrich_skill_with_local_git_state(&normalized_skill)
+        })
     })
     .await
     .unwrap_or_default()

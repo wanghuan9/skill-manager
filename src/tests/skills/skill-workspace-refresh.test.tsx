@@ -69,6 +69,7 @@ function RefreshProbe() {
       <span data-testid="loading-state">{isLoading ? "loading" : "ready"}</span>
       <span data-testid="workspace-refreshing">{isWorkspaceRefreshing ? "refreshing" : "idle"}</span>
       <span data-testid="skill-name">{installedSkills[0]?.name ?? "none"}</span>
+      <span data-testid="skill-status">{installedSkills[0]?.collabStatus ?? "none"}</span>
       <span data-testid="remote-updated-at">{installedSkills[0]?.remoteUpdatedAt ?? "none"}</span>
     </div>
   );
@@ -1166,6 +1167,8 @@ test("auto refreshes git state on interval and throttles rapid focus refreshes",
           return intervalSkills;
         }
         return focusSkills;
+      case "refresh_local_git_states":
+        return gitStateCallCount >= 2 ? intervalSkills : initialSkills;
       case "list_local_skill_candidates":
         return localSkillFixtures;
       case "list_tool_configs":
@@ -1223,7 +1226,7 @@ test("auto refreshes git state on interval and throttles rapid focus refreshes",
   expect(screen.getByTestId("workspace-refreshing").textContent).toBe("idle");
 });
 
-test("does not start another focus refresh while a git refresh is already in flight", async () => {
+test("keeps focused local state when a git refresh is already in flight", async () => {
   vi.useFakeTimers();
   const initialSkills: SkillSummary[] = [installedSkillFixtures[0]];
   const pendingGitRefresh = createDeferred<SkillSummary[]>();
@@ -1236,6 +1239,8 @@ test("does not start another focus refresh while a git refresh is already in fli
       case "refresh_git_states":
         gitStateCallCount += 1;
         return pendingGitRefresh.promise;
+      case "refresh_local_git_states":
+        return initialSkills;
       case "list_local_skill_candidates":
         return localSkillFixtures;
       case "list_tool_configs":
@@ -1279,7 +1284,199 @@ test("does not start another focus refresh while a git refresh is already in fli
     await Promise.resolve();
   });
 
-  expect(screen.getByTestId("skill-name").textContent).toBe("resolved-refresh");
+  expect(screen.getByTestId("skill-name").textContent).toBe(initialSkills[0].name);
+});
+
+test("refreshes local git state on every focus without waiting for the remote cooldown", async () => {
+  const pendingCommitSkill: SkillSummary = {
+    ...installedSkillFixtures[0],
+    collabStatus: "pending-commit",
+  };
+  const pendingPushSkill: SkillSummary = {
+    ...pendingCommitSkill,
+    collabStatus: "pending-push",
+  };
+  const cleanSkill: SkillSummary = {
+    ...pendingCommitSkill,
+    collabStatus: "clean",
+  };
+  let localGitStateCallCount = 0;
+  let remoteGitStateCallCount = 0;
+
+  mockedInvoke.mockImplementation(async (command, args) => {
+    switch (command) {
+      case "list_startup_installed_skills":
+        return [pendingCommitSkill];
+      case "refresh_git_states":
+        remoteGitStateCallCount += 1;
+        return [pendingCommitSkill];
+      case "refresh_local_git_states":
+        localGitStateCallCount += 1;
+        return localGitStateCallCount === 1 ? [pendingPushSkill] : [cleanSkill];
+      case "list_local_skill_candidates":
+        return localSkillFixtures;
+      case "list_tool_configs":
+        return toolConfigFixtures;
+      case "get_git_account_summary":
+        return gitAccountFixture;
+      case "get_app_settings":
+        return appSettingsFixture;
+      case "update_app_settings":
+        return (args as { settings: AppSettings }).settings;
+      default:
+        throw new Error(`Unexpected command: ${command}`);
+    }
+  });
+
+  render(
+    <SkillWorkspaceProvider>
+      <RefreshProbe />
+    </SkillWorkspaceProvider>,
+  );
+
+  await waitFor(() => {
+    expect(screen.getByTestId("skill-status").textContent).toBe("pending-commit");
+    expect(remoteGitStateCallCount).toBe(1);
+  });
+
+  window.dispatchEvent(new Event("focus"));
+  await waitFor(() => {
+    expect(screen.getByTestId("skill-status").textContent).toBe("pending-push");
+  });
+
+  window.dispatchEvent(new Event("focus"));
+  await waitFor(() => {
+    expect(screen.getByTestId("skill-status").textContent).toBe("clean");
+  });
+
+  expect(localGitStateCallCount).toBe(2);
+  expect(remoteGitStateCallCount).toBe(1);
+});
+
+test("queues a trailing local git refresh when the app becomes visible and focused", async () => {
+  const pendingCommitSkill: SkillSummary = {
+    ...installedSkillFixtures[0],
+    collabStatus: "pending-commit",
+  };
+  const pendingPushSkill: SkillSummary = {
+    ...pendingCommitSkill,
+    collabStatus: "pending-push",
+  };
+  const cleanSkill: SkillSummary = {
+    ...pendingCommitSkill,
+    collabStatus: "clean",
+  };
+  const pendingLocalRefresh = createDeferred<SkillSummary[]>();
+  let localGitStateCallCount = 0;
+
+  mockedInvoke.mockImplementation(async (command, args) => {
+    switch (command) {
+      case "list_startup_installed_skills":
+        return [pendingCommitSkill];
+      case "refresh_git_states":
+        return [pendingCommitSkill];
+      case "refresh_local_git_states":
+        localGitStateCallCount += 1;
+        return localGitStateCallCount === 1
+          ? pendingLocalRefresh.promise
+          : [cleanSkill];
+      case "list_local_skill_candidates":
+        return localSkillFixtures;
+      case "list_tool_configs":
+        return toolConfigFixtures;
+      case "get_git_account_summary":
+        return gitAccountFixture;
+      case "get_app_settings":
+        return appSettingsFixture;
+      case "update_app_settings":
+        return (args as { settings: AppSettings }).settings;
+      default:
+        throw new Error(`Unexpected command: ${command}`);
+    }
+  });
+
+  render(
+    <SkillWorkspaceProvider>
+      <RefreshProbe />
+    </SkillWorkspaceProvider>,
+  );
+
+  await waitFor(() => {
+    expect(screen.getByTestId("skill-status").textContent).toBe("pending-commit");
+  });
+
+  await act(async () => {
+    document.dispatchEvent(new Event("visibilitychange"));
+    window.dispatchEvent(new Event("focus"));
+  });
+  expect(localGitStateCallCount).toBe(1);
+
+  await act(async () => {
+    pendingLocalRefresh.resolve([pendingPushSkill]);
+    await pendingLocalRefresh.promise;
+  });
+
+  await waitFor(() => {
+    expect(localGitStateCallCount).toBe(2);
+    expect(screen.getByTestId("skill-status").textContent).toBe("clean");
+  });
+});
+
+test("does not let an older remote refresh overwrite a focused local git refresh", async () => {
+  const pendingCommitSkill: SkillSummary = {
+    ...installedSkillFixtures[0],
+    collabStatus: "pending-commit",
+  };
+  const pendingPushSkill: SkillSummary = {
+    ...pendingCommitSkill,
+    collabStatus: "pending-push",
+  };
+  const pendingRemoteRefresh = createDeferred<SkillSummary[]>();
+
+  mockedInvoke.mockImplementation(async (command, args) => {
+    switch (command) {
+      case "list_startup_installed_skills":
+        return [pendingCommitSkill];
+      case "refresh_git_states":
+        return pendingRemoteRefresh.promise;
+      case "refresh_local_git_states":
+        return [pendingPushSkill];
+      case "list_local_skill_candidates":
+        return localSkillFixtures;
+      case "list_tool_configs":
+        return toolConfigFixtures;
+      case "get_git_account_summary":
+        return gitAccountFixture;
+      case "get_app_settings":
+        return appSettingsFixture;
+      case "update_app_settings":
+        return (args as { settings: AppSettings }).settings;
+      default:
+        throw new Error(`Unexpected command: ${command}`);
+    }
+  });
+
+  render(
+    <SkillWorkspaceProvider>
+      <RefreshProbe />
+    </SkillWorkspaceProvider>,
+  );
+
+  await waitFor(() => {
+    expect(screen.getByTestId("skill-status").textContent).toBe("pending-commit");
+  });
+
+  window.dispatchEvent(new Event("focus"));
+  await waitFor(() => {
+    expect(screen.getByTestId("skill-status").textContent).toBe("pending-push");
+  });
+
+  await act(async () => {
+    pendingRemoteRefresh.resolve([pendingCommitSkill]);
+    await pendingRemoteRefresh.promise;
+  });
+
+  expect(screen.getByTestId("skill-status").textContent).toBe("pending-push");
 });
 
 test("keeps manual refresh active across route switches", async () => {
