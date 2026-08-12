@@ -17,9 +17,9 @@ use toml_edit::{DocumentMut, Item, Table};
 use crate::library::{
     configure_git_network_command, configure_hidden_subprocess, git_command,
     parse_market_source_url, remote_clone_candidates, repo_cache_directory,
-    resolve_command_in_path, resolve_git_clone_url_with_instead_of, run_git_clone_with_progress,
-    sanitize_storage_name, summarize_git_error, tree_relative_path_for_branch,
-    with_temporary_discovery_repo_resolved, CloneProgressCallback,
+    resolve_command_in_path, resolve_command_path, resolve_git_clone_url_with_instead_of,
+    run_git_clone_with_progress, sanitize_storage_name, summarize_git_error,
+    tree_relative_path_for_branch, with_temporary_discovery_repo_resolved, CloneProgressCallback,
 };
 use crate::models::{
     CliToolSummary, PluginComponentPreview, PluginComponentSummary, PluginProbeResult,
@@ -5287,14 +5287,10 @@ fn plugin_host_software_exists(spec: &PluginHostDetectionSpec) -> bool {
 }
 
 fn find_plugin_host_executable_path(executable_name: &str) -> Option<PathBuf> {
-    if executable_name.contains('/') {
-        let executable_path = PathBuf::from(executable_name);
-        return executable_path.exists().then_some(executable_path);
-    }
-
     let mut search_dirs = env::var_os("PATH")
         .map(|paths| env::split_paths(&paths).collect::<Vec<_>>())
         .unwrap_or_default();
+    #[cfg(unix)]
     search_dirs.extend([
         PathBuf::from("/opt/homebrew/bin"),
         PathBuf::from("/usr/local/bin"),
@@ -5304,10 +5300,7 @@ fn find_plugin_host_executable_path(executable_name: &str) -> Option<PathBuf> {
         PathBuf::from("/sbin"),
     ]);
 
-    search_dirs.into_iter().find_map(|dir| {
-        let executable_path = dir.join(executable_name);
-        executable_path.exists().then_some(executable_path)
-    })
+    resolve_command_path(executable_name, &search_dirs)
 }
 
 fn find_plugin_host_app_bundle(app_name_candidates: &[&str]) -> Option<PathBuf> {
@@ -10872,6 +10865,33 @@ mod tests {
     fn codex_plugin_host_accepts_chatgpt_app_name() {
         let spec = super::plugin_host_detection_spec("codex").expect("resolve Codex host");
         assert_eq!(spec.app_names, &["Codex", "ChatGPT"]);
+    }
+
+    #[test]
+    fn plugin_host_detection_resolves_platform_command_files_from_path() {
+        let _guard = TEST_ENV_LOCK.lock().expect("lock test env");
+        let temp_dir = temp_test_dir("plugin-host-command");
+        let bin_dir = temp_dir.join("bin");
+        fs::create_dir_all(&bin_dir).expect("create test bin");
+        let executable_path = bin_dir.join(if cfg!(windows) {
+            "claude.cmd"
+        } else {
+            "claude"
+        });
+        fs::write(&executable_path, "probe").expect("write host command");
+
+        let previous_path = env::var_os("PATH");
+        env::set_var("PATH", &bin_dir);
+
+        let detected_path = super::find_plugin_host_executable_path("claude");
+
+        match previous_path {
+            Some(value) => env::set_var("PATH", value),
+            None => env::remove_var("PATH"),
+        }
+
+        assert_eq!(detected_path, Some(executable_path));
+        fs::remove_dir_all(temp_dir).expect("remove test directory");
     }
 
     fn run_git_test(current_dir: &Path, args: &[&str]) {
