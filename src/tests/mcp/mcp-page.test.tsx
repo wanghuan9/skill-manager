@@ -809,6 +809,44 @@ test("auto refreshes newly installed MCP servers that still show undiscovered to
   }
 });
 
+test("does not probe a marketplace MCP while its app sync is pending", async () => {
+  window.localStorage.clear();
+  const workspace = await skillClient.fetchMcpWorkspace();
+  const pendingWorkspace = {
+    ...workspace,
+    servers: workspace.servers.map((server) => (
+      server.id === "linear"
+        ? {
+            ...server,
+            tools: [],
+            toolsDiscoveredAt: "",
+            toolsDiscoveryError: "",
+            hasPendingSync: true,
+          }
+        : server
+    )),
+  };
+  const fetchSpy = vi.spyOn(skillClient, "fetchMcpWorkspace").mockResolvedValue(pendingWorkspace);
+  const refreshSpy = vi.spyOn(skillClient, "refreshMcpServerTools").mockResolvedValue(pendingWorkspace);
+  const fixtureSpy = vi.spyOn(skillClient, "shouldUseFixtureData").mockReturnValue(false);
+
+  try {
+    render(<App />);
+
+    await userEvent.click(screen.getByRole("button", { name: "MCP" }));
+    await screen.findByText("linear");
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalled();
+    });
+    expect(refreshSpy).not.toHaveBeenCalledWith("linear");
+  } finally {
+    fixtureSpy.mockRestore();
+    refreshSpy.mockRestore();
+    fetchSpy.mockRestore();
+  }
+});
+
 test("does not auto refresh MCP servers that already have tools after page load", async () => {
   window.localStorage.clear();
   const workspace = await skillClient.fetchMcpWorkspace();

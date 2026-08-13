@@ -1,3 +1,5 @@
+#[cfg(test)]
+use std::cell::Cell;
 use std::collections::{hash_map::DefaultHasher, BTreeMap, BTreeSet, HashMap};
 use std::fs;
 use std::hash::{Hash, Hasher};
@@ -1006,9 +1008,33 @@ fn run_explicit_cli(args: &[&str]) -> Result<(), String> {
 }
 
 fn find_local_cli_program() -> Option<CliProgram> {
+    #[cfg(test)]
+    if TEST_LOCAL_CLI_UNAVAILABLE.with(Cell::get) {
+        return None;
+    }
     let program = CliProgram::direct();
     let output = run_with_program(&program, &["--version"]).ok()?;
     output.status.success().then_some(program)
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_LOCAL_CLI_UNAVAILABLE: Cell<bool> = const { Cell::new(false) };
+}
+
+#[cfg(test)]
+pub(crate) fn with_test_local_cli_unavailable<T>(operation: impl FnOnce() -> T) -> T {
+    struct RestoreLocalCliAvailability(bool);
+
+    impl Drop for RestoreLocalCliAvailability {
+        fn drop(&mut self) {
+            TEST_LOCAL_CLI_UNAVAILABLE.with(|flag| flag.set(self.0));
+        }
+    }
+
+    let previous = TEST_LOCAL_CLI_UNAVAILABLE.with(|flag| flag.replace(true));
+    let _restore = RestoreLocalCliAvailability(previous);
+    operation()
 }
 
 fn find_cli_program_for_operation() -> Option<CliProgram> {

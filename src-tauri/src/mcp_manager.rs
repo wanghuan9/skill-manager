@@ -17,6 +17,7 @@ use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter};
 
+use crate::commands::installed_mcp_tool_ids;
 use crate::library::{command_for_executable, resolve_command_path};
 use crate::state::{load_app_settings, normalize_mcp_install_activation};
 use crate::tool_adapters;
@@ -145,6 +146,8 @@ pub struct McpServerRecord {
     pub imported_from_app_ids: Vec<String>,
     #[serde(default)]
     pub managed_app_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pending_sync_app_ids: Vec<String>,
     #[serde(default)]
     pub tools: Vec<McpServerToolStatus>,
     #[serde(default)]
@@ -201,6 +204,8 @@ pub struct McpServerSummary {
     pub owner_plugin_id: String,
     #[serde(default)]
     pub owner_plugin_name: String,
+    #[serde(default)]
+    pub has_pending_sync: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -210,6 +215,20 @@ pub struct McpWorkspaceSnapshot {
     pub storage_initialized: bool,
     pub apps: Vec<McpTargetApp>,
     pub servers: Vec<McpServerSummary>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpAppSyncFailure {
+    pub app_id: String,
+    pub app_name: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpMarketplaceInstallResult {
+    pub workspace: McpWorkspaceSnapshot,
+    pub sync_failures: Vec<McpAppSyncFailure>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -441,19 +460,29 @@ pub async fn list_mcp_marketplace_servers(
 #[tauri::command]
 pub async fn install_mcp_server_from_marketplace(
     server: McpMarketplaceServer,
-) -> Result<McpWorkspaceSnapshot, String> {
+) -> Result<McpMarketplaceInstallResult, String> {
+    let server_id = normalize_mcp_marketplace_server_id(&server.name);
+    let mut records = load_mcp_records()?;
+    if let Some(existing_record) = records
+        .iter()
+        .find(|record| record.id == server_id)
+        .cloned()
+    {
+        if !existing_record.pending_sync_app_ids.is_empty() {
+            return resume_marketplace_app_sync(records, existing_record);
+        }
+        return Ok(McpMarketplaceInstallResult {
+            workspace: build_mcp_workspace_snapshot()?,
+            sync_failures: Vec::new(),
+        });
+    }
+
     let server_config = match server.server.clone() {
         Some(config) => config,
         None => fetch_mcp_marketplace_install_config(&server)
             .await?
             .ok_or_else(|| format!("{} 暂未提供可自动安装的 MCP 配置", server.name))?,
     };
-
-    let server_id = normalize_mcp_marketplace_server_id(&server.name);
-    let mut records = load_mcp_records()?;
-    if records.iter().any(|record| record.id == server_id) {
-        return build_mcp_workspace_snapshot();
-    }
 
     let source_url = marketplace_install_source_url(&server, &server_config);
     let metadata_client = mcp_metadata_client();
@@ -467,6 +496,7 @@ pub async fn install_mcp_server_from_marketplace(
         enabled_app_ids: Vec::new(),
         imported_from_app_ids: Vec::new(),
         managed_app_ids: Vec::new(),
+        pending_sync_app_ids: Vec::new(),
         tools: Vec::new(),
         tools_discovered_at: String::new(),
         tools_discovery_error: String::new(),
@@ -481,25 +511,297 @@ pub async fn install_mcp_server_from_marketplace(
         record.source_url = mcp_marketplace_detail_url(&server)
             .unwrap_or_else(|| server.source_url.trim().to_string());
     }
-    if normalize_mcp_install_activation(&load_app_settings().mcp_install_activation)
-        == "apply-all-tools"
-    {
-        let app_specs = target_app_specs()?;
-        let supported_app_ids = app_specs
-            .into_iter()
-            .filter(|app| app.is_mcp_supported && validate_app_is_ready(app).is_ok())
-            .map(|app| app.id.to_string())
-            .collect::<Vec<_>>();
-        for app_id in &supported_app_ids {
-            sync_record_to_app(app_id, &record)?;
-        }
-        record.managed_app_ids = supported_app_ids.clone();
-        record.enabled_app_ids = supported_app_ids;
-    }
-    records.push(record);
+
+    let should_sync_installed_apps =
+        normalize_mcp_install_activation(&load_app_settings().mcp_install_activation)
+            == "apply-all-tools";
+    let installed_app_specs = if should_sync_installed_apps {
+        installed_marketplace_app_specs()?
+    } else {
+        Vec::new()
+    };
+    let (syncable_app_specs, preflight_failures) =
+        prepare_marketplace_app_sync(&mut record, installed_app_specs);
+
+    records.push(record.clone());
     sort_records(&mut records);
     save_mcp_records(&records)?;
-    build_mcp_workspace_snapshot()
+
+    sync_marketplace_record_to_apps(records, record, syncable_app_specs, preflight_failures)
+}
+
+fn prepare_marketplace_app_sync(
+    record: &mut McpServerRecord,
+    installed_app_specs: Vec<McpTargetAppSpec>,
+) -> (Vec<McpTargetAppSpec>, Vec<McpAppSyncFailure>) {
+    let mut syncable_app_specs = Vec::new();
+    let mut sync_failures = Vec::new();
+    for app in installed_app_specs {
+        match read_all_servers_from_app(&app) {
+            Ok(servers) if servers.iter().any(|(server_id, _)| server_id == &record.id) => {
+                record.enabled_app_ids.push(app.id.to_string());
+                record.imported_from_app_ids.push(app.id.to_string());
+            }
+            Ok(_) => {
+                record.pending_sync_app_ids.push(app.id.to_string());
+                syncable_app_specs.push(app);
+            }
+            Err(error) => {
+                log::warn!(
+                    "安装 MCP {} 前读取 {} 配置失败：{}",
+                    record.id,
+                    app.name,
+                    error
+                );
+                sync_failures.push(McpAppSyncFailure {
+                    app_id: app.id.to_string(),
+                    app_name: app.name.to_string(),
+                });
+            }
+        }
+    }
+    record.enabled_app_ids.sort();
+    record.enabled_app_ids.dedup();
+    record.imported_from_app_ids.sort();
+    record.imported_from_app_ids.dedup();
+    record.pending_sync_app_ids.sort();
+    record.pending_sync_app_ids.dedup();
+    (syncable_app_specs, sync_failures)
+}
+
+fn resume_marketplace_app_sync(
+    records: Vec<McpServerRecord>,
+    mut record: McpServerRecord,
+) -> Result<McpMarketplaceInstallResult, String> {
+    let pending_app_ids = record
+        .pending_sync_app_ids
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let pending_app_specs = target_app_specs()?
+        .into_iter()
+        .filter(|app| pending_app_ids.contains(app.id))
+        .collect::<Vec<_>>();
+    let known_pending_app_ids = pending_app_specs
+        .iter()
+        .map(|app| app.id.to_string())
+        .collect::<BTreeSet<_>>();
+    record
+        .pending_sync_app_ids
+        .retain(|app_id| known_pending_app_ids.contains(app_id));
+    let (syncable_app_specs, sync_failures) = revalidate_pending_marketplace_app_sync(
+        &mut record,
+        pending_app_specs,
+        &installed_mcp_tool_ids(),
+    );
+    sync_marketplace_record_to_apps(records, record, syncable_app_specs, sync_failures)
+}
+
+fn revalidate_pending_marketplace_app_sync(
+    record: &mut McpServerRecord,
+    pending_app_specs: Vec<McpTargetAppSpec>,
+    installed_tool_ids: &BTreeSet<String>,
+) -> (Vec<McpTargetAppSpec>, Vec<McpAppSyncFailure>) {
+    let mut syncable_app_specs = Vec::new();
+    let mut sync_failures = Vec::new();
+    for app in pending_app_specs {
+        let expected_server = expected_server_after_app_round_trip(&app, record);
+        match read_all_servers_from_app(&app) {
+            Ok(servers) => {
+                let existing_server = servers
+                    .into_iter()
+                    .find_map(|(server_id, server)| (server_id == record.id).then_some(server));
+                match existing_server {
+                    Some(server)
+                        if expected_server.as_ref().is_ok_and(|value| value == &server) =>
+                    {
+                        mark_marketplace_app_sync_success(record, app.id);
+                    }
+                    Some(_) => {
+                        mark_marketplace_app_as_imported(record, app.id);
+                    }
+                    None if app.is_mcp_supported && installed_tool_ids.contains(app.id) => {
+                        syncable_app_specs.push(app);
+                    }
+                    None => {
+                        record
+                            .pending_sync_app_ids
+                            .retain(|app_id| app_id != app.id);
+                    }
+                }
+            }
+            Err(error) => {
+                if app.is_mcp_supported && installed_tool_ids.contains(app.id) {
+                    log::warn!(
+                        "恢复 MCP {} 同步前读取 {} 配置失败：{}",
+                        record.id,
+                        app.name,
+                        error
+                    );
+                    sync_failures.push(McpAppSyncFailure {
+                        app_id: app.id.to_string(),
+                        app_name: app.name.to_string(),
+                    });
+                } else {
+                    record
+                        .pending_sync_app_ids
+                        .retain(|app_id| app_id != app.id);
+                }
+            }
+        }
+    }
+    (syncable_app_specs, sync_failures)
+}
+
+fn expected_server_after_app_round_trip(
+    app: &McpTargetAppSpec,
+    record: &McpServerRecord,
+) -> Result<Value, String> {
+    let expected_server = build_synced_server_config(&record.server, &record.tools)?;
+    match app.id {
+        APP_GEMINI | "antigravity" | APP_QWEN_CODE => {
+            let mut native_server = unified_to_gemini_server(&expected_server)?;
+            normalize_imported_mcp_server(&mut native_server);
+            Ok(gemini_server_to_unified(native_server))
+        }
+        APP_CODEX => Ok(codex_table_to_json(&json_server_to_toml_table(
+            &expected_server,
+        )?)),
+        APP_OPENCODE | APP_OPENCLAW => {
+            agent_json_to_unified(&unified_to_agent_json(&expected_server)?)
+        }
+        APP_CONTINUE => continue_mcp_server_to_unified(&unified_to_continue_mcp_server(
+            &record.id,
+            &expected_server,
+        )?),
+        APP_GOOSE => {
+            goose_extension_to_unified(&unified_to_goose_extension(&record.id, &expected_server)?)
+        }
+        APP_HERMES => {
+            hermes_mcp_server_to_unified(&unified_to_hermes_mcp_server(&expected_server)?)
+        }
+        _ => expected_registered_server_after_round_trip(app.id, expected_server),
+    }
+}
+
+fn expected_registered_server_after_round_trip(
+    app_id: &str,
+    mut expected_server: Value,
+) -> Result<Value, String> {
+    let Some(definition) = tool_adapters::definition(app_id) else {
+        normalize_imported_mcp_server(&mut expected_server);
+        return Ok(expected_server);
+    };
+    match definition.mcp_format {
+        tool_adapters::McpAdapterFormat::None => Err(format!("{app_id} 暂不支持 MCP 配置同步")),
+        tool_adapters::McpAdapterFormat::JsonObject { .. } => {
+            if let Some(enabled_field) = definition.mcp_enabled_field {
+                expected_server
+                    .as_object_mut()
+                    .ok_or_else(|| "MCP 服务器定义必须为 JSON 对象".to_string())?
+                    .remove(enabled_field);
+            }
+            normalize_imported_mcp_server(&mut expected_server);
+            Ok(expected_server)
+        }
+        tool_adapters::McpAdapterFormat::JsonObjectCommandArray { .. } => {
+            let mut native_server = unified_to_agent_json(&expected_server)?;
+            normalize_imported_mcp_server(&mut native_server);
+            Ok(native_server)
+        }
+        tool_adapters::McpAdapterFormat::TomlTable { .. } => Ok(codex_table_to_json(
+            &json_server_to_toml_table(&expected_server)?,
+        )),
+    }
+}
+
+fn mark_marketplace_app_sync_success(record: &mut McpServerRecord, app_id: &str) {
+    record.pending_sync_app_ids.retain(|item| item != app_id);
+    if !record.enabled_app_ids.iter().any(|item| item == app_id) {
+        record.enabled_app_ids.push(app_id.to_string());
+    }
+    if !record
+        .imported_from_app_ids
+        .iter()
+        .any(|item| item == app_id)
+        && !record.managed_app_ids.iter().any(|item| item == app_id)
+    {
+        record.managed_app_ids.push(app_id.to_string());
+    }
+}
+
+fn mark_marketplace_app_as_imported(record: &mut McpServerRecord, app_id: &str) {
+    record.pending_sync_app_ids.retain(|item| item != app_id);
+    if !record.enabled_app_ids.iter().any(|item| item == app_id) {
+        record.enabled_app_ids.push(app_id.to_string());
+    }
+    if !record
+        .imported_from_app_ids
+        .iter()
+        .any(|item| item == app_id)
+    {
+        record.imported_from_app_ids.push(app_id.to_string());
+    }
+    record.managed_app_ids.retain(|item| item != app_id);
+}
+
+fn sync_marketplace_record_to_apps(
+    mut records: Vec<McpServerRecord>,
+    mut record: McpServerRecord,
+    installed_app_specs: Vec<McpTargetAppSpec>,
+    mut sync_failures: Vec<McpAppSyncFailure>,
+) -> Result<McpMarketplaceInstallResult, String> {
+    let mut synced_app_ids = Vec::new();
+    for app in installed_app_specs {
+        match sync_record_to_app(app.id, &record) {
+            Ok(()) => synced_app_ids.push(app.id.to_string()),
+            Err(error) => {
+                log::warn!(
+                    "安装 MCP {} 后同步到 {} 失败：{}",
+                    record.id,
+                    app.name,
+                    error
+                );
+                sync_failures.push(McpAppSyncFailure {
+                    app_id: app.id.to_string(),
+                    app_name: app.name.to_string(),
+                });
+            }
+        }
+    }
+
+    let has_sync_state_changes = records
+        .iter()
+        .find(|saved_record| saved_record.id == record.id)
+        .is_some_and(|saved_record| saved_record != &record);
+    if has_sync_state_changes || !synced_app_ids.is_empty() {
+        for app_id in synced_app_ids {
+            mark_marketplace_app_sync_success(&mut record, &app_id);
+        }
+        record.enabled_app_ids.sort();
+        record.enabled_app_ids.dedup();
+        record.imported_from_app_ids.sort();
+        record.imported_from_app_ids.dedup();
+        record.managed_app_ids.retain(|app_id| {
+            !record
+                .imported_from_app_ids
+                .iter()
+                .any(|imported_app_id| imported_app_id == app_id)
+        });
+        record.managed_app_ids.sort();
+        record.managed_app_ids.dedup();
+        record.updated_at = now_label();
+        if let Some(saved_record) = records.iter_mut().find(|item| item.id == record.id) {
+            *saved_record = record;
+        }
+        sort_records(&mut records);
+        save_mcp_records(&records)?;
+    }
+
+    Ok(McpMarketplaceInstallResult {
+        workspace: build_mcp_workspace_snapshot()?,
+        sync_failures,
+    })
 }
 
 #[tauri::command]
@@ -597,6 +899,9 @@ pub async fn upsert_mcp_server(server: McpServerRecord) -> Result<McpWorkspaceSn
         if normalized.managed_app_ids.is_empty() {
             normalized.managed_app_ids = previous.managed_app_ids.clone();
         }
+        if normalized.pending_sync_app_ids.is_empty() {
+            normalized.pending_sync_app_ids = previous.pending_sync_app_ids.clone();
+        }
         normalized.managed_app_ids.retain(|app_id| {
             !normalized
                 .imported_from_app_ids
@@ -631,9 +936,7 @@ pub async fn upsert_mcp_server(server: McpServerRecord) -> Result<McpWorkspaceSn
     }
     enrich_mcp_record_metadata(&mut normalized, mcp_metadata_client().as_ref()).await;
 
-    for app_id in &normalized.enabled_app_ids {
-        sync_record_to_app(app_id, &normalized)?;
-    }
+    sync_record_to_owned_apps(&normalized)?;
 
     let enabled_ids = normalized
         .enabled_app_ids
@@ -680,6 +983,9 @@ pub async fn delete_mcp_server(id: &str) -> Result<McpWorkspaceSnapshot, String>
     let Some(record) = records.iter().find(|item| item.id == id).cloned() else {
         return Err(format!("未找到 MCP 服务器：{id}"));
     };
+    if !record.pending_sync_app_ids.is_empty() {
+        return Err("该 MCP 安装同步尚未完成，请先在市场重试安装后再删除".to_string());
+    }
 
     for app_id in &record.enabled_app_ids {
         let can_remove = if app_id == APP_OPENCODE {
@@ -809,9 +1115,7 @@ pub async fn toggle_mcp_server_tool(
     }
     normalize_mcp_tool_statuses(&mut tools);
     record.tools = tools;
-    for app_id in &record.enabled_app_ids {
-        sync_record_to_app(app_id, record)?;
-    }
+    sync_record_to_owned_apps(record)?;
     record.updated_at = now_label();
 
     save_mcp_records(&records)?;
@@ -837,9 +1141,7 @@ fn refresh_mcp_server_tools_blocking(server_id: &str) -> Result<McpWorkspaceSnap
         Ok(discovered_tools) if !discovered_tools.is_empty() => {
             record.tools = merge_discovered_mcp_tools(&record.tools, discovered_tools);
             record.tools_discovery_error.clear();
-            for app_id in &record.enabled_app_ids {
-                sync_record_to_app(app_id, record)?;
-            }
+            sync_record_to_owned_apps(record)?;
         }
         Ok(_) => {
             record.tools.clear();
@@ -975,14 +1277,16 @@ fn to_server_summary(
         lifecycle_source: record.lifecycle_source.trim().to_string(),
         owner_plugin_id: record.owner_plugin_id.trim().to_string(),
         owner_plugin_name: record.owner_plugin_name.trim().to_string(),
+        has_pending_sync: !record.pending_sync_app_ids.is_empty(),
     })
 }
 
 fn target_apps() -> Result<Vec<McpTargetApp>, String> {
+    let installed_tool_ids = installed_mcp_tool_ids();
     Ok(target_app_specs()?
         .into_iter()
         .map(|spec| {
-            let is_installed = spec.config_path.exists() || spec.config_dir.exists();
+            let is_installed = spec.is_mcp_supported && installed_tool_ids.contains(spec.id);
             McpTargetApp {
                 id: spec.id.to_string(),
                 name: spec.name.to_string(),
@@ -1000,6 +1304,24 @@ fn target_apps() -> Result<Vec<McpTargetApp>, String> {
             }
         })
         .collect())
+}
+
+fn installed_marketplace_app_specs() -> Result<Vec<McpTargetAppSpec>, String> {
+    let installed_tool_ids = installed_mcp_tool_ids();
+    Ok(filter_installed_mcp_app_specs(
+        target_app_specs()?,
+        &installed_tool_ids,
+    ))
+}
+
+fn filter_installed_mcp_app_specs(
+    app_specs: Vec<McpTargetAppSpec>,
+    installed_tool_ids: &BTreeSet<String>,
+) -> Vec<McpTargetAppSpec> {
+    app_specs
+        .into_iter()
+        .filter(|app| app.is_mcp_supported && installed_tool_ids.contains(app.id))
+        .collect()
 }
 
 fn target_app_specs() -> Result<Vec<McpTargetAppSpec>, String> {
@@ -1319,6 +1641,36 @@ fn read_servers_from_app(app: &McpTargetAppSpec) -> Result<Vec<(String, Value)>,
     }
 }
 
+fn read_all_servers_from_app(app: &McpTargetAppSpec) -> Result<Vec<(String, Value)>, String> {
+    if app.id == APP_OPENCODE {
+        return read_all_opencode_mcp_servers(&app.config_dir);
+    }
+    if app.id == APP_CODEX {
+        return read_all_codex_mcp_servers(&app.config_path);
+    }
+    if tool_adapters::definition(app.id).is_some() {
+        return read_all_registered_mcp_servers(app.id, &app.config_path);
+    }
+    read_servers_from_app(app)
+}
+
+fn read_all_registered_mcp_servers(
+    app_id: &str,
+    config_path: &Path,
+) -> Result<Vec<(String, Value)>, String> {
+    let definition =
+        tool_adapters::definition(app_id).ok_or_else(|| format!("不支持的 MCP 应用：{app_id}"))?;
+    match definition.mcp_format {
+        tool_adapters::McpAdapterFormat::JsonObject { field } => {
+            read_json_mcp_servers(config_path, field, false)
+        }
+        tool_adapters::McpAdapterFormat::TomlTable { field } => {
+            read_all_toml_mcp_servers(config_path, field)
+        }
+        _ => read_registered_mcp_servers(app_id, config_path),
+    }
+}
+
 fn sync_server_to_app(app_id: &str, server_id: &str, server: &Value) -> Result<(), String> {
     let spec = find_app_spec(app_id)?;
     validate_app_is_ready(&spec)?;
@@ -1370,6 +1722,20 @@ fn sync_server_to_app(app_id: &str, server_id: &str, server: &Value) -> Result<(
 fn sync_record_to_app(app_id: &str, record: &McpServerRecord) -> Result<(), String> {
     let synced_server = build_synced_server_config(&record.server, &record.tools)?;
     sync_server_to_app(app_id, &record.id, &synced_server)
+}
+
+fn sync_record_to_owned_apps(record: &McpServerRecord) -> Result<(), String> {
+    for app_id in &record.enabled_app_ids {
+        if record
+            .imported_from_app_ids
+            .iter()
+            .any(|imported_app_id| imported_app_id == app_id)
+        {
+            continue;
+        }
+        sync_record_to_app(app_id, record)?;
+    }
+    Ok(())
 }
 
 fn remove_server_from_app(app_id: &str, server_id: &str) -> Result<(), String> {
@@ -1713,31 +2079,35 @@ fn remove_trae_cn_mcp_server(server_id: &str) -> Result<(), String> {
 }
 
 fn read_gemini_mcp_servers(path: &Path) -> Result<Vec<(String, Value)>, String> {
-    let mut servers = read_json_mcp_servers(path, "mcpServers", false)?;
-    for (_, spec) in &mut servers {
-        if let Some(obj) = spec.as_object_mut() {
-            if let Some(http_url) = obj.remove("httpUrl") {
-                obj.insert("url".to_string(), http_url);
-                obj.insert("type".to_string(), Value::String("http".to_string()));
-            }
-            if obj.get("type").is_none() {
-                let inferred_type = if obj.contains_key("command") {
-                    Some("stdio")
-                } else if obj.contains_key("url") {
-                    Some("sse")
-                } else {
-                    None
-                };
-                if let Some(server_type) = inferred_type {
-                    obj.insert("type".to_string(), Value::String(server_type.to_string()));
-                }
+    Ok(read_json_mcp_servers(path, "mcpServers", false)?
+        .into_iter()
+        .map(|(server_id, server)| (server_id, gemini_server_to_unified(server)))
+        .collect())
+}
+
+fn gemini_server_to_unified(mut server: Value) -> Value {
+    if let Some(obj) = server.as_object_mut() {
+        if let Some(http_url) = obj.remove("httpUrl") {
+            obj.insert("url".to_string(), http_url);
+            obj.insert("type".to_string(), Value::String("http".to_string()));
+        }
+        if obj.get("type").is_none() {
+            let inferred_type = if obj.contains_key("command") {
+                Some("stdio")
+            } else if obj.contains_key("url") {
+                Some("sse")
+            } else {
+                None
+            };
+            if let Some(server_type) = inferred_type {
+                obj.insert("type".to_string(), Value::String(server_type.to_string()));
             }
         }
     }
-    Ok(servers)
+    server
 }
 
-fn upsert_gemini_mcp_server(path: &Path, server_id: &str, server: &Value) -> Result<(), String> {
+fn unified_to_gemini_server(server: &Value) -> Result<Value, String> {
     let mut gemini_server = server
         .as_object()
         .cloned()
@@ -1748,10 +2118,28 @@ fn upsert_gemini_mcp_server(path: &Path, server_id: &str, server: &Value) -> Res
         }
     }
     gemini_server.remove("type");
-    upsert_json_mcp_server(path, "mcpServers", server_id, &Value::Object(gemini_server))
+    Ok(Value::Object(gemini_server))
+}
+
+fn upsert_gemini_mcp_server(path: &Path, server_id: &str, server: &Value) -> Result<(), String> {
+    upsert_json_mcp_server(
+        path,
+        "mcpServers",
+        server_id,
+        &unified_to_gemini_server(server)?,
+    )
 }
 
 fn read_codex_mcp_servers(path: &Path) -> Result<Vec<(String, Value)>, String> {
+    read_all_codex_mcp_servers(path).map(|servers| {
+        servers
+            .into_iter()
+            .filter(|(_, server)| server.get("enabled").and_then(Value::as_bool) != Some(false))
+            .collect()
+    })
+}
+
+fn read_all_codex_mcp_servers(path: &Path) -> Result<Vec<(String, Value)>, String> {
     if !path.exists() {
         return Ok(Vec::new());
     }
@@ -1765,13 +2153,6 @@ fn read_codex_mcp_servers(path: &Path) -> Result<Vec<(String, Value)>, String> {
     if let Some(table) = doc.get("mcp_servers").and_then(|item| item.as_table()) {
         for (id, item) in table.iter() {
             if let Some(server_table) = item.as_table() {
-                if server_table
-                    .get("enabled")
-                    .and_then(|value| value.as_bool())
-                    == Some(false)
-                {
-                    continue;
-                }
                 servers.push((id.to_string(), codex_table_to_json(server_table)));
             }
         }
@@ -1784,13 +2165,6 @@ fn read_codex_mcp_servers(path: &Path) -> Result<Vec<(String, Value)>, String> {
     {
         for (id, item) in table.iter() {
             if let Some(server_table) = item.as_table() {
-                if server_table
-                    .get("enabled")
-                    .and_then(|value| value.as_bool())
-                    == Some(false)
-                {
-                    continue;
-                }
                 servers.push((id.to_string(), codex_table_to_json(server_table)));
             }
         }
@@ -1799,6 +2173,18 @@ fn read_codex_mcp_servers(path: &Path) -> Result<Vec<(String, Value)>, String> {
 }
 
 fn read_toml_mcp_servers(path: &Path, field_name: &str) -> Result<Vec<(String, Value)>, String> {
+    read_all_toml_mcp_servers(path, field_name).map(|servers| {
+        servers
+            .into_iter()
+            .filter(|(_, server)| server.get("enabled").and_then(Value::as_bool) != Some(false))
+            .collect()
+    })
+}
+
+fn read_all_toml_mcp_servers(
+    path: &Path,
+    field_name: &str,
+) -> Result<Vec<(String, Value)>, String> {
     if !path.exists() {
         return Ok(Vec::new());
     }
@@ -1811,13 +2197,6 @@ fn read_toml_mcp_servers(path: &Path, field_name: &str) -> Result<Vec<(String, V
         let Some(server_table) = item.as_table() else {
             continue;
         };
-        if server_table
-            .get("enabled")
-            .and_then(|value| value.as_bool())
-            == Some(false)
-        {
-            continue;
-        }
         servers.push((id.to_string(), codex_table_to_json(server_table)));
     }
     Ok(servers)
@@ -2053,6 +2432,21 @@ fn merge_json_value(target: &mut Value, overlay: Value) {
 }
 
 fn read_opencode_mcp_servers(config_dir: &Path) -> Result<Vec<(String, Value)>, String> {
+    merged_opencode_mcp_server_specs(config_dir)?
+        .into_iter()
+        .filter(|(_, spec)| spec.get("enabled").and_then(Value::as_bool) != Some(false))
+        .map(|(server_id, spec)| agent_json_to_unified(&spec).map(|server| (server_id, server)))
+        .collect()
+}
+
+fn read_all_opencode_mcp_servers(config_dir: &Path) -> Result<Vec<(String, Value)>, String> {
+    merged_opencode_mcp_server_specs(config_dir)?
+        .into_iter()
+        .map(|(server_id, spec)| agent_json_to_unified(&spec).map(|server| (server_id, server)))
+        .collect()
+}
+
+fn merged_opencode_mcp_server_specs(config_dir: &Path) -> Result<BTreeMap<String, Value>, String> {
     let mut merged = BTreeMap::new();
     for path in workspace::opencode_config_paths_in_dir(config_dir) {
         for (server_id, spec) in read_agent_json_mcp_server_specs(&path)? {
@@ -2063,11 +2457,7 @@ fn read_opencode_mcp_servers(config_dir: &Path) -> Result<Vec<(String, Value)>, 
             }
         }
     }
-    merged
-        .into_iter()
-        .filter(|(_, spec)| spec.get("enabled").and_then(Value::as_bool) != Some(false))
-        .map(|(server_id, spec)| agent_json_to_unified(&spec).map(|server| (server_id, server)))
-        .collect()
+    Ok(merged)
 }
 
 fn opencode_config_path_for_server(config_dir: &Path, server_id: &str) -> Result<PathBuf, String> {
@@ -2150,7 +2540,8 @@ fn edit_agent_json_mcp_server(
     } else {
         "{}\n".to_string()
     };
-    let root = CstRootNode::parse(&content, &ParseOptions::default())
+    let content = content.strip_prefix('\u{feff}').unwrap_or(&content);
+    let root = CstRootNode::parse(content, &ParseOptions::default())
         .map_err(|error| format!("解析 JSONC 配置失败（{}）：{error}", path.display()))?;
     let root_object = root
         .object_value_or_create()
@@ -2196,7 +2587,8 @@ fn remove_agent_json_mcp_server(path: &Path, server_id: &str) -> Result<(), Stri
     }
     let content = fs::read_to_string(path)
         .map_err(|error| format!("读取 JSONC 配置失败（{}）：{error}", path.display()))?;
-    let root = CstRootNode::parse(&content, &ParseOptions::default())
+    let content = content.strip_prefix('\u{feff}').unwrap_or(&content);
+    let root = CstRootNode::parse(content, &ParseOptions::default())
         .map_err(|error| format!("解析 JSONC 配置失败（{}）：{error}", path.display()))?;
     if let Some(server) = root
         .object_value()
@@ -2729,7 +3121,11 @@ fn upsert_imported_record_basic(
     let was_created = existing_index.is_none();
     let previous_record = existing_index.and_then(|index| records.get(index).cloned());
     let mut next_record = if let Some(previous) = previous_record.clone() {
-        let is_managed = previous.managed_app_ids.iter().any(|item| item == app.id);
+        let is_managed = previous.managed_app_ids.iter().any(|item| item == app.id)
+            || previous
+                .pending_sync_app_ids
+                .iter()
+                .any(|item| item == app.id);
         let mut enabled_app_ids = previous.enabled_app_ids;
         if !enabled_app_ids.iter().any(|item| item == app.id) {
             enabled_app_ids.push(app.id.to_string());
@@ -2747,6 +3143,7 @@ fn upsert_imported_record_basic(
             enabled_app_ids,
             imported_from_app_ids,
             managed_app_ids: previous.managed_app_ids,
+            pending_sync_app_ids: previous.pending_sync_app_ids,
             tools: previous.tools,
             tools_discovered_at: previous.tools_discovered_at,
             tools_discovery_error: previous.tools_discovery_error,
@@ -2766,6 +3163,7 @@ fn upsert_imported_record_basic(
             enabled_app_ids: vec![app.id.to_string()],
             imported_from_app_ids: vec![app.id.to_string()],
             managed_app_ids: Vec::new(),
+            pending_sync_app_ids: Vec::new(),
             tools: Vec::new(),
             tools_discovered_at: String::new(),
             tools_discovery_error: String::new(),
@@ -2939,6 +3337,15 @@ fn normalize_record(mut record: McpServerRecord) -> Result<McpServerRecord, Stri
     });
     record.managed_app_ids.sort();
     record.managed_app_ids.dedup();
+    record.pending_sync_app_ids.retain(|app_id| {
+        supported_app_ids.contains(app_id)
+            && !record
+                .imported_from_app_ids
+                .iter()
+                .any(|imported_app_id| imported_app_id == app_id)
+    });
+    record.pending_sync_app_ids.sort();
+    record.pending_sync_app_ids.dedup();
     normalize_mcp_tool_statuses(&mut record.tools);
     if !record.tools.is_empty() {
         record.tools_discovery_error.clear();
@@ -4729,6 +5136,7 @@ fn is_python_package_candidate(value: &str) -> bool {
 fn read_json_value(path: &Path, allow_json5: bool) -> Result<Value, String> {
     let content = fs::read_to_string(path)
         .map_err(|error| format!("读取 JSON 配置失败（{}）：{error}", path.display()))?;
+    let content = content.strip_prefix('\u{feff}').unwrap_or(&content);
     if content.trim().is_empty() {
         return Ok(json!({}));
     }
@@ -4786,7 +5194,69 @@ fn write_text_value(path: &Path, value: &str) -> Result<(), String> {
 
     let temp_path = path.with_extension(format!("tmp-{}", unix_millis()));
     fs::write(&temp_path, value).map_err(|error| format!("写入临时配置失败: {error}"))?;
-    fs::rename(&temp_path, path).map_err(|error| format!("替换配置文件失败: {error}"))
+    if let Err(error) = preserve_replaced_file_permissions(path, &temp_path) {
+        let _ = fs::remove_file(&temp_path);
+        return Err(format!("保留配置文件权限失败: {error}"));
+    }
+    replace_file(&temp_path, path).map_err(|error| {
+        let _ = fs::remove_file(&temp_path);
+        format!("替换配置文件失败: {error}")
+    })
+}
+
+fn preserve_replaced_file_permissions(source: &Path, destination: &Path) -> std::io::Result<()> {
+    let Ok(metadata) = fs::metadata(source) else {
+        return Ok(());
+    };
+    fs::set_permissions(destination, metadata.permissions())
+}
+
+#[cfg(not(windows))]
+fn replace_file(source: &Path, destination: &Path) -> std::io::Result<()> {
+    fs::rename(source, destination)
+}
+
+#[cfg(windows)]
+fn replace_file(source: &Path, destination: &Path) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+        MoveFileExW, ReplaceFileW, MOVEFILE_REPLACE_EXISTING,
+    };
+
+    let destination_exists = destination.exists();
+    let source = source
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let destination = destination
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let replaced = unsafe {
+        if destination_exists {
+            ReplaceFileW(
+                destination.as_ptr(),
+                source.as_ptr(),
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                std::ptr::null(),
+            )
+        } else {
+            MoveFileExW(
+                source.as_ptr(),
+                destination.as_ptr(),
+                MOVEFILE_REPLACE_EXISTING,
+            )
+        }
+    };
+    if replaced == 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
 }
 
 fn sanitized_portable_url(value: &str) -> String {
@@ -4935,6 +5405,7 @@ pub fn export_portable_mcp_state() -> Result<PortableMcpState, String> {
             record.source_url = sanitized_portable_url(&record.source_url);
             record.tools_discovery_error.clear();
             record.managed_app_ids.clear();
+            record.pending_sync_app_ids.clear();
             requirement.env_keys.sort();
             requirement.env_keys.dedup();
             requirement.header_keys.sort();
@@ -5074,6 +5545,7 @@ pub fn apply_portable_mcp_state(input: &PortableMcpState, overwrite: bool) -> Re
                 .imported_from_app_ids
                 .retain(|app_id| app_id != APP_OPENCODE);
             record.managed_app_ids.clear();
+            record.pending_sync_app_ids.clear();
             if let Some(current_record) = current_records
                 .iter()
                 .find(|current_record| current_record.id == record.id)
@@ -5166,17 +5638,14 @@ fn is_mcp_state_storage_initialized() -> bool {
 
 fn save_mcp_records(records: &[McpServerRecord]) -> Result<(), String> {
     let state_file = mcp_state_file()?;
-    let parent = state_file
-        .parent()
-        .ok_or_else(|| "MCP 状态目录无效".to_string())?;
-    fs::create_dir_all(parent).map_err(|error| format!("创建 MCP 状态目录失败: {error}"))?;
     let persistence = McpPersistence {
         schema_version: MCP_PERSISTENCE_SCHEMA_VERSION,
         servers: records.to_vec(),
     };
     let payload = serde_json::to_string_pretty(&persistence)
         .map_err(|error| format!("序列化 MCP 状态失败: {error}"))?;
-    fs::write(state_file, payload).map_err(|error| format!("写入 MCP 状态失败: {error}"))?;
+    write_text_value(&state_file, &payload)
+        .map_err(|error| format!("写入 MCP 状态失败: {error}"))?;
     remove_legacy_workspace_file(MCP_STATE_FILE_NAME);
     Ok(())
 }
@@ -6163,6 +6632,54 @@ fn base64_url_decode(value: &str) -> Option<Vec<u8>> {
 mod tests {
     use super::*;
 
+    struct TestHomeEnvironment {
+        temp_home: PathBuf,
+        original_home: Option<OsString>,
+        original_userprofile: Option<OsString>,
+        original_xdg_config_home: Option<OsString>,
+        original_appdata: Option<OsString>,
+    }
+
+    impl TestHomeEnvironment {
+        fn new(label: &str) -> Self {
+            let temp_home = unique_continue_test_dir(label);
+            fs::create_dir_all(&temp_home).expect("create isolated test home");
+            let environment = Self {
+                temp_home,
+                original_home: env::var_os("HOME"),
+                original_userprofile: env::var_os("USERPROFILE"),
+                original_xdg_config_home: env::var_os("XDG_CONFIG_HOME"),
+                original_appdata: env::var_os("APPDATA"),
+            };
+            unsafe {
+                env::set_var("HOME", &environment.temp_home);
+                env::set_var("USERPROFILE", &environment.temp_home);
+                env::set_var("XDG_CONFIG_HOME", environment.temp_home.join(".config"));
+                env::set_var("APPDATA", environment.temp_home.join("AppData/Roaming"));
+            }
+            environment
+        }
+    }
+
+    impl Drop for TestHomeEnvironment {
+        fn drop(&mut self) {
+            restore_environment_variable("HOME", self.original_home.take());
+            restore_environment_variable("USERPROFILE", self.original_userprofile.take());
+            restore_environment_variable("XDG_CONFIG_HOME", self.original_xdg_config_home.take());
+            restore_environment_variable("APPDATA", self.original_appdata.take());
+            let _ = fs::remove_dir_all(&self.temp_home);
+        }
+    }
+
+    fn restore_environment_variable(key: &str, value: Option<OsString>) {
+        unsafe {
+            match value {
+                Some(value) => env::set_var(key, value),
+                None => env::remove_var(key),
+            }
+        }
+    }
+
     fn opencode_test_record(
         id: &str,
         enabled_app_ids: Vec<String>,
@@ -6181,6 +6698,7 @@ mod tests {
             enabled_app_ids,
             imported_from_app_ids,
             managed_app_ids: Vec::new(),
+            pending_sync_app_ids: Vec::new(),
             tools: Vec::new(),
             tools_discovered_at: String::new(),
             tools_discovery_error: String::new(),
@@ -6973,6 +7491,7 @@ A comprehensive GitLab MCP server for AI clients. Manage projects, merge request
             enabled_app_ids: vec![APP_CODEX.to_string()],
             imported_from_app_ids: vec![APP_CODEX.to_string()],
             managed_app_ids: Vec::new(),
+            pending_sync_app_ids: Vec::new(),
             tools: Vec::new(),
             tools_discovered_at: String::new(),
             tools_discovery_error: String::new(),
@@ -7055,6 +7574,7 @@ A comprehensive GitLab MCP server for AI clients. Manage projects, merge request
             enabled_app_ids: vec![APP_CODEX.to_string()],
             imported_from_app_ids: vec![APP_CODEX.to_string()],
             managed_app_ids: Vec::new(),
+            pending_sync_app_ids: Vec::new(),
             tools: Vec::new(),
             tools_discovered_at: String::new(),
             tools_discovery_error: String::new(),
@@ -7216,6 +7736,7 @@ enabled = false
             enabled_app_ids: vec![APP_CODEX.to_string()],
             imported_from_app_ids: vec![APP_CODEX.to_string()],
             managed_app_ids: Vec::new(),
+            pending_sync_app_ids: Vec::new(),
             tools: Vec::new(),
             tools_discovered_at: String::new(),
             tools_discovery_error: String::new(),
@@ -7311,6 +7832,7 @@ enabled = false
             enabled_app_ids: vec![APP_GEMINI.to_string()],
             imported_from_app_ids: Vec::new(),
             managed_app_ids: Vec::new(),
+            pending_sync_app_ids: Vec::new(),
             tools: Vec::new(),
             tools_discovered_at: String::new(),
             tools_discovery_error: String::new(),
@@ -7394,6 +7916,7 @@ enabled = false
             enabled_app_ids: vec![APP_CODEX.to_string()],
             imported_from_app_ids: vec![APP_CODEX.to_string()],
             managed_app_ids: Vec::new(),
+            pending_sync_app_ids: Vec::new(),
             tools: Vec::new(),
             tools_discovered_at: String::new(),
             tools_discovery_error: String::new(),
@@ -7472,6 +7995,7 @@ enabled = false
             enabled_app_ids: Vec::new(),
             imported_from_app_ids: vec![APP_GEMINI.to_string()],
             managed_app_ids: Vec::new(),
+            pending_sync_app_ids: Vec::new(),
             tools: Vec::new(),
             tools_discovered_at: String::new(),
             tools_discovery_error: String::new(),
@@ -7666,6 +8190,1087 @@ mcpServers:
             "skilldock-continue-test-{label}-{}-{nanos}",
             std::process::id()
         ))
+    }
+
+    #[test]
+    fn issue_20_upsert_accepts_utf8_bom_and_preserves_existing_json() {
+        let temp_dir = unique_continue_test_dir("issue-20-bom");
+        fs::create_dir_all(&temp_dir).expect("create BOM test directory");
+        let config_path = temp_dir.join("mcp.json");
+        fs::write(
+            &config_path,
+            b"\xEF\xBB\xBF{\"theme\":\"dark\",\"mcpServers\":{\"existing\":{\"url\":\"https://existing.example/mcp\"}}}",
+        )
+        .expect("write BOM-prefixed JSON");
+
+        upsert_json_mcp_server(
+            &config_path,
+            "mcpServers",
+            "issue-20",
+            &json!({
+                "type": "http",
+                "url": "https://example.invalid/mcp"
+            }),
+        )
+        .expect("upsert BOM-prefixed JSON");
+
+        let root = read_json_value(&config_path, false).expect("read updated JSON");
+        assert_eq!(root.pointer("/theme"), Some(&json!("dark")));
+        assert_eq!(
+            root.pointer("/mcpServers/existing/url"),
+            Some(&json!("https://existing.example/mcp"))
+        );
+        assert_eq!(
+            root.pointer("/mcpServers/issue-20/url"),
+            Some(&json!("https://example.invalid/mcp"))
+        );
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn issue_20_bom_only_json_is_treated_as_empty() {
+        let temp_dir = unique_continue_test_dir("issue-20-bom-only");
+        fs::create_dir_all(&temp_dir).expect("create BOM-only test directory");
+        let config_path = temp_dir.join("mcp.json");
+        fs::write(&config_path, b"\xEF\xBB\xBF").expect("write BOM-only JSON");
+
+        assert_eq!(
+            read_json_value(&config_path, false).expect("read BOM-only JSON"),
+            json!({})
+        );
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn issue_20_invalid_json_is_not_overwritten() {
+        let temp_dir = unique_continue_test_dir("issue-20-invalid-json");
+        fs::create_dir_all(&temp_dir).expect("create invalid JSON test directory");
+        let config_path = temp_dir.join("mcp.json");
+        let original = b"{\"mcpServers\":".to_vec();
+        fs::write(&config_path, &original).expect("write invalid JSON");
+
+        let error = upsert_json_mcp_server(
+            &config_path,
+            "mcpServers",
+            "issue-20",
+            &json!({ "type": "http", "url": "https://example.invalid/mcp" }),
+        )
+        .expect_err("invalid JSON must not be overwritten");
+
+        assert!(error.contains("解析 JSON 配置失败"));
+        assert_eq!(
+            fs::read(&config_path).expect("read invalid JSON after failed upsert"),
+            original
+        );
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn issue_20_opencode_jsonc_upsert_accepts_utf8_bom() {
+        let temp_dir = unique_continue_test_dir("issue-20-opencode-bom");
+        fs::create_dir_all(&temp_dir).expect("create OpenCode BOM test directory");
+        let config_path = temp_dir.join("opencode.jsonc");
+        fs::write(
+            &config_path,
+            "\u{feff}{\n  // preserve comment\n  \"theme\": \"dark\",\n  \"mcp\": {}\n}\n",
+        )
+        .expect("write BOM-prefixed OpenCode JSONC");
+
+        upsert_agent_json_mcp_server(
+            &config_path,
+            "issue-20",
+            &json!({
+                "type": "http",
+                "url": "https://example.invalid/mcp"
+            }),
+        )
+        .expect("upsert BOM-prefixed OpenCode JSONC");
+
+        let updated = fs::read_to_string(&config_path).expect("read updated OpenCode JSONC");
+        assert!(updated.contains("// preserve comment"));
+        assert_eq!(
+            read_json_value(&config_path, true)
+                .expect("parse updated OpenCode JSONC")
+                .pointer("/mcp/issue-20/url"),
+            Some(&json!("https://example.invalid/mcp"))
+        );
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn issue_20_ownership_scan_includes_disabled_opencode_servers() {
+        let temp_dir = unique_continue_test_dir("issue-20-opencode-disabled");
+        fs::create_dir_all(&temp_dir).expect("create OpenCode disabled-server test directory");
+        let config_path = temp_dir.join("opencode.json");
+        fs::write(
+            &config_path,
+            r#"{"mcp":{"issue-20-disabled":{"type":"remote","url":"https://user.example/mcp","enabled":false}}}"#,
+        )
+        .expect("write disabled OpenCode server");
+
+        assert!(read_opencode_mcp_servers(&temp_dir)
+            .expect("read enabled OpenCode servers")
+            .is_empty());
+        assert_eq!(
+            read_all_opencode_mcp_servers(&temp_dir)
+                .expect("read all OpenCode servers")
+                .first()
+                .map(|(server_id, _)| server_id.as_str()),
+            Some("issue-20-disabled")
+        );
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn issue_20_marketplace_preflight_preserves_disabled_codex_and_grok_servers() {
+        let temp_dir = unique_continue_test_dir("issue-20-disabled-toml-ownership");
+        fs::create_dir_all(&temp_dir).expect("create disabled TOML ownership test directory");
+        let codex_path = temp_dir.join("codex.toml");
+        let grok_path = temp_dir.join("grok.toml");
+        let disabled_server = concat!(
+            "[mcp_servers.issue-20-disabled]\n",
+            "type = \"http\"\n",
+            "url = \"https://user.example/mcp\"\n",
+            "enabled = false\n",
+        );
+        fs::write(&codex_path, disabled_server).expect("write disabled Codex server");
+        fs::write(&grok_path, disabled_server).expect("write disabled Grok server");
+        let original_codex = fs::read(&codex_path).expect("read disabled Codex server");
+        let original_grok = fs::read(&grok_path).expect("read disabled Grok server");
+        let mut record = McpServerRecord {
+            id: "issue-20-disabled".to_string(),
+            name: "issue 20 disabled".to_string(),
+            server: json!({
+                "type": "http",
+                "url": "https://marketplace.example/mcp"
+            }),
+            description: String::new(),
+            source_url: String::new(),
+            enabled_app_ids: Vec::new(),
+            imported_from_app_ids: Vec::new(),
+            managed_app_ids: Vec::new(),
+            pending_sync_app_ids: Vec::new(),
+            tools: Vec::new(),
+            tools_discovered_at: String::new(),
+            tools_discovery_error: String::new(),
+            installed_at: now_label(),
+            updated_at: now_label(),
+            lifecycle_source: String::new(),
+            owner_plugin_id: String::new(),
+            owner_plugin_name: String::new(),
+        };
+        let codex_spec = McpTargetAppSpec {
+            id: APP_CODEX,
+            name: "Codex",
+            config_path: codex_path.clone(),
+            config_dir: temp_dir.join("codex"),
+            is_mcp_supported: true,
+        };
+        let grok_spec = McpTargetAppSpec {
+            id: APP_GROK,
+            name: "Grok Build",
+            config_path: grok_path.clone(),
+            config_dir: temp_dir.join("grok"),
+            is_mcp_supported: true,
+        };
+
+        assert!(read_codex_mcp_servers(&codex_path)
+            .expect("read enabled Codex servers")
+            .is_empty());
+        assert!(read_registered_mcp_servers(APP_GROK, &grok_path)
+            .expect("read enabled Grok servers")
+            .is_empty());
+        let (syncable_apps, failures) =
+            prepare_marketplace_app_sync(&mut record, vec![codex_spec, grok_spec]);
+
+        assert!(syncable_apps.is_empty());
+        assert!(failures.is_empty());
+        assert_eq!(
+            record.imported_from_app_ids,
+            vec![APP_CODEX.to_string(), APP_GROK.to_string()]
+        );
+        assert!(record.pending_sync_app_ids.is_empty());
+        assert_eq!(
+            fs::read(&codex_path).expect("read preserved Codex server"),
+            original_codex
+        );
+        assert_eq!(
+            fs::read(&grok_path).expect("read preserved Grok server"),
+            original_grok
+        );
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn issue_20_marketplace_targets_require_installed_and_mcp_supported_apps() {
+        let temp_dir = unique_continue_test_dir("issue-20-app-readiness");
+        fs::create_dir_all(&temp_dir).expect("create readiness test directory");
+        let app_spec = |id, is_mcp_supported| McpTargetAppSpec {
+            id,
+            name: id,
+            config_path: temp_dir.join(id).join("mcp.json"),
+            config_dir: temp_dir.join(id),
+            is_mcp_supported,
+        };
+
+        let targets = filter_installed_mcp_app_specs(
+            vec![
+                app_spec("installed-supported", true),
+                app_spec("installed-unsupported", false),
+                app_spec("uninstalled-supported", true),
+            ],
+            &BTreeSet::from([
+                "installed-supported".to_string(),
+                "installed-unsupported".to_string(),
+            ]),
+        );
+
+        assert_eq!(
+            targets.into_iter().map(|app| app.id).collect::<Vec<_>>(),
+            vec!["installed-supported"]
+        );
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn issue_20_mcp_app_status_uses_the_shared_skill_installation_result() {
+        use crate::workspace::TEST_ENV_LOCK;
+
+        let _guard = TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let _environment = TestHomeEnvironment::new("issue-20-target-app-status");
+        let apps = crate::commands::with_test_installed_mcp_tool_ids(&[APP_QODER], target_apps)
+            .expect("build MCP target app statuses");
+
+        assert!(apps
+            .iter()
+            .any(|app| app.id == APP_QODER && app.status_label == "已安装"));
+        assert!(apps
+            .iter()
+            .any(|app| app.id == APP_KIRO && app.status_label == "未安装"));
+    }
+
+    #[test]
+    fn issue_20_marketplace_install_keeps_record_and_continues_after_app_failure() {
+        use crate::workspace::TEST_ENV_LOCK;
+
+        let _guard = TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let environment = TestHomeEnvironment::new("issue-20-marketplace-partial-sync");
+        let kiro_path = environment.temp_home.join(".kiro/settings/mcp.json");
+        fs::create_dir_all(kiro_path.parent().expect("Kiro config parent"))
+            .expect("create Kiro config directory");
+        let invalid_kiro_json = b"{\"mcpServers\":".to_vec();
+        fs::write(&kiro_path, &invalid_kiro_json).expect("write invalid Kiro config");
+        let qoder_dir = environment
+            .temp_home
+            .join(".config/Qoder/SharedClientCache");
+        fs::create_dir_all(&qoder_dir).expect("create Qoder config directory");
+
+        let result =
+            crate::commands::with_test_installed_mcp_tool_ids(&[APP_KIRO, APP_QODER], || {
+                tauri::async_runtime::block_on(install_mcp_server_from_marketplace(
+                    McpMarketplaceServer {
+                        id: "mcp-directory-issue-20".to_string(),
+                        name: "Issue 20".to_string(),
+                        source_site: "MCP.Directory".to_string(),
+                        description: "Issue 20 regression server".to_string(),
+                        publisher: "SkillDock".to_string(),
+                        category: "Testing".to_string(),
+                        transport_label: "http".to_string(),
+                        source_url: "https://github.com/example/issue-20".to_string(),
+                        marketplace_url: Some("https://mcp.directory/servers/issue-20".to_string()),
+                        popularity_label: "0".to_string(),
+                        avatar_url: None,
+                        server: Some(json!({
+                            "type": "http",
+                            "url": "https://example.invalid/mcp",
+                            "description": "Issue 20 regression server",
+                            "sourceUrl": "https://github.com/example/issue-20"
+                        })),
+                    },
+                ))
+            })
+            .expect("marketplace install should survive one app sync failure");
+
+        assert_eq!(result.sync_failures.len(), 1);
+        assert_eq!(result.sync_failures[0].app_id, APP_KIRO);
+        assert_eq!(result.sync_failures[0].app_name, "Kiro");
+        let records = load_mcp_records().expect("load marketplace record");
+        let record = records
+            .iter()
+            .find(|record| record.id == "issue-20")
+            .expect("marketplace record should be persisted");
+        assert!(record
+            .enabled_app_ids
+            .iter()
+            .any(|app_id| app_id == APP_QODER));
+        assert!(record
+            .managed_app_ids
+            .iter()
+            .any(|app_id| app_id == APP_QODER));
+        assert!(!record
+            .enabled_app_ids
+            .iter()
+            .any(|app_id| app_id == APP_KIRO));
+        assert!(record.pending_sync_app_ids.is_empty());
+        assert_eq!(
+            fs::read(&kiro_path).expect("read Kiro config after failed sync"),
+            invalid_kiro_json
+        );
+        assert_eq!(
+            read_json_value(&qoder_dir.join("mcp.json"), false)
+                .expect("read synced Qoder config")
+                .pointer("/mcpServers/issue-20/url"),
+            Some(&json!("https://example.invalid/mcp"))
+        );
+        assert!(!environment.temp_home.join(".cursor/mcp.json").exists());
+
+        let server = result
+            .workspace
+            .servers
+            .iter()
+            .find(|server| server.id == "issue-20")
+            .expect("installed server should be present in workspace");
+        assert!(server.enabled_app_count >= 1);
+        assert!(server
+            .apps
+            .iter()
+            .any(|app| app.app_id == APP_QODER && app.is_enabled));
+        assert!(server
+            .apps
+            .iter()
+            .any(|app| app.app_id == APP_KIRO && !app.is_enabled));
+        assert!(!server.has_pending_sync);
+    }
+
+    #[test]
+    fn issue_20_marketplace_install_resumes_a_pending_sync() {
+        use crate::workspace::TEST_ENV_LOCK;
+
+        let _guard = TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let environment = TestHomeEnvironment::new("issue-20-marketplace-resume");
+        let qoder_dir = environment
+            .temp_home
+            .join(".config/Qoder/SharedClientCache");
+        fs::create_dir_all(&qoder_dir).expect("create Qoder config directory");
+        let marketplace_server = McpMarketplaceServer {
+            id: "mcp-directory-issue-20-resume".to_string(),
+            name: "Issue 20 Resume".to_string(),
+            source_site: "MCP.Directory".to_string(),
+            description: "Issue 20 resumable install".to_string(),
+            publisher: "SkillDock".to_string(),
+            category: "Testing".to_string(),
+            transport_label: "http".to_string(),
+            source_url: "https://github.com/example/issue-20-resume".to_string(),
+            marketplace_url: Some("https://mcp.directory/servers/issue-20-resume".to_string()),
+            popularity_label: "0".to_string(),
+            avatar_url: None,
+            server: Some(json!({
+                "type": "http",
+                "url": "https://example.invalid/resume-mcp",
+                "description": "Issue 20 resumable install",
+                "sourceUrl": "https://github.com/example/issue-20-resume"
+            })),
+        };
+        let pending_record = McpServerRecord {
+            id: "issue-20-resume".to_string(),
+            name: "issue 20 resume".to_string(),
+            server: marketplace_server
+                .server
+                .clone()
+                .expect("marketplace config"),
+            description: marketplace_server.description.clone(),
+            source_url: marketplace_server.source_url.clone(),
+            enabled_app_ids: Vec::new(),
+            imported_from_app_ids: Vec::new(),
+            managed_app_ids: Vec::new(),
+            pending_sync_app_ids: vec![APP_QODER.to_string()],
+            tools: Vec::new(),
+            tools_discovered_at: String::new(),
+            tools_discovery_error: String::new(),
+            installed_at: now_label(),
+            updated_at: now_label(),
+            lifecycle_source: String::new(),
+            owner_plugin_id: String::new(),
+            owner_plugin_name: String::new(),
+        };
+        save_mcp_records(&[pending_record]).expect("save pending marketplace record");
+
+        let result = crate::commands::with_test_installed_mcp_tool_ids(&[APP_QODER], || {
+            tauri::async_runtime::block_on(install_mcp_server_from_marketplace(marketplace_server))
+        })
+        .expect("retry should resume pending marketplace sync");
+
+        assert!(result.sync_failures.is_empty());
+        let records = load_mcp_records().expect("load resumed marketplace record");
+        let record = records
+            .iter()
+            .find(|record| record.id == "issue-20-resume")
+            .expect("resumed marketplace record");
+        assert!(record.pending_sync_app_ids.is_empty());
+        assert_eq!(record.enabled_app_ids, vec![APP_QODER.to_string()]);
+        assert_eq!(record.managed_app_ids, vec![APP_QODER.to_string()]);
+        assert_eq!(
+            read_json_value(&qoder_dir.join("mcp.json"), false)
+                .expect("read resumed Qoder config")
+                .pointer("/mcpServers/issue-20-resume/url"),
+            Some(&json!("https://example.invalid/resume-mcp"))
+        );
+    }
+
+    #[test]
+    fn issue_20_marketplace_resume_recognizes_an_already_written_managed_config() {
+        use crate::workspace::TEST_ENV_LOCK;
+
+        let _guard = TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let environment = TestHomeEnvironment::new("issue-20-resume-written-config");
+        let qoder_dir = environment
+            .temp_home
+            .join(".config/Qoder/SharedClientCache");
+        fs::create_dir_all(&qoder_dir).expect("create Qoder config directory");
+        let server = json!({
+            "type": "http",
+            "url": "https://example.invalid/already-written-mcp"
+        });
+        upsert_json_mcp_server(
+            &qoder_dir.join("mcp.json"),
+            "mcpServers",
+            "issue-20-already-written",
+            &server,
+        )
+        .expect("seed already-written Qoder config");
+        save_mcp_records(&[McpServerRecord {
+            id: "issue-20-already-written".to_string(),
+            name: "issue 20 already written".to_string(),
+            server,
+            description: String::new(),
+            source_url: String::new(),
+            enabled_app_ids: Vec::new(),
+            imported_from_app_ids: Vec::new(),
+            managed_app_ids: Vec::new(),
+            pending_sync_app_ids: vec![APP_QODER.to_string()],
+            tools: Vec::new(),
+            tools_discovered_at: String::new(),
+            tools_discovery_error: String::new(),
+            installed_at: now_label(),
+            updated_at: now_label(),
+            lifecycle_source: String::new(),
+            owner_plugin_id: String::new(),
+            owner_plugin_name: String::new(),
+        }])
+        .expect("save pending marketplace record");
+
+        let result = tauri::async_runtime::block_on(install_mcp_server_from_marketplace(
+            McpMarketplaceServer {
+                id: "mcp-directory-issue-20-already-written".to_string(),
+                name: "Issue 20 Already Written".to_string(),
+                source_site: "MCP.Directory".to_string(),
+                description: String::new(),
+                publisher: String::new(),
+                category: String::new(),
+                transport_label: String::new(),
+                source_url: "https://example.invalid/unreachable-marketplace".to_string(),
+                marketplace_url: None,
+                popularity_label: String::new(),
+                avatar_url: None,
+                server: None,
+            },
+        ))
+        .expect("resume should recognize the previously written config");
+
+        assert!(result.sync_failures.is_empty());
+        let records = load_mcp_records().expect("load resumed marketplace record");
+        let record = records
+            .iter()
+            .find(|record| record.id == "issue-20-already-written")
+            .expect("resumed marketplace record");
+        assert!(record.pending_sync_app_ids.is_empty());
+        assert_eq!(record.enabled_app_ids, vec![APP_QODER.to_string()]);
+        assert_eq!(record.managed_app_ids, vec![APP_QODER.to_string()]);
+        assert!(record.imported_from_app_ids.is_empty());
+    }
+
+    #[test]
+    fn issue_20_marketplace_resume_normalizes_a_stdio_config_without_type() {
+        let temp_dir = unique_continue_test_dir("issue-20-stdio-without-type");
+        fs::create_dir_all(&temp_dir).expect("create stdio round-trip directory");
+        let qoder_path = temp_dir.join("mcp.json");
+        let mut record = McpServerRecord {
+            id: "issue-20-stdio-without-type".to_string(),
+            name: "issue 20 stdio without type".to_string(),
+            server: json!({
+                "command": "npx",
+                "args": ["-y", "@example/mcp"]
+            }),
+            description: String::new(),
+            source_url: String::new(),
+            enabled_app_ids: Vec::new(),
+            imported_from_app_ids: Vec::new(),
+            managed_app_ids: Vec::new(),
+            pending_sync_app_ids: vec![APP_QODER.to_string()],
+            tools: Vec::new(),
+            tools_discovered_at: String::new(),
+            tools_discovery_error: String::new(),
+            installed_at: now_label(),
+            updated_at: now_label(),
+            lifecycle_source: String::new(),
+            owner_plugin_id: String::new(),
+            owner_plugin_name: String::new(),
+        };
+        upsert_json_mcp_server(&qoder_path, "mcpServers", &record.id, &record.server)
+            .expect("write stdio server without explicit type");
+
+        let (syncable_apps, failures) = revalidate_pending_marketplace_app_sync(
+            &mut record,
+            vec![McpTargetAppSpec {
+                id: APP_QODER,
+                name: "Qoder",
+                config_path: qoder_path,
+                config_dir: temp_dir.clone(),
+                is_mcp_supported: true,
+            }],
+            &BTreeSet::new(),
+        );
+
+        assert!(syncable_apps.is_empty());
+        assert!(failures.is_empty());
+        assert!(record.pending_sync_app_ids.is_empty());
+        assert_eq!(record.managed_app_ids, vec![APP_QODER.to_string()]);
+        assert!(record.imported_from_app_ids.is_empty());
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn issue_20_marketplace_resume_recognizes_opencode_native_round_trip() {
+        use crate::workspace::TEST_ENV_LOCK;
+
+        let _guard = TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let environment = TestHomeEnvironment::new("issue-20-opencode-round-trip");
+        let opencode_dir = environment.temp_home.join(".config/opencode");
+        fs::create_dir_all(&opencode_dir).expect("create OpenCode config directory");
+        let opencode_path = opencode_dir.join("opencode.json");
+        let server = json!({
+            "type": "http",
+            "url": "https://example.invalid/opencode-round-trip",
+            "headers": { "Authorization": "Bearer test" },
+            "description": "metadata not stored by OpenCode",
+            "sourceUrl": "https://github.com/example/issue-20"
+        });
+        upsert_agent_json_mcp_server(&opencode_path, "issue-20-opencode-round-trip", &server)
+            .expect("seed previously written OpenCode config");
+        save_mcp_records(&[McpServerRecord {
+            id: "issue-20-opencode-round-trip".to_string(),
+            name: "issue 20 opencode round trip".to_string(),
+            server,
+            description: String::new(),
+            source_url: String::new(),
+            enabled_app_ids: Vec::new(),
+            imported_from_app_ids: Vec::new(),
+            managed_app_ids: Vec::new(),
+            pending_sync_app_ids: vec![APP_OPENCODE.to_string()],
+            tools: Vec::new(),
+            tools_discovered_at: String::new(),
+            tools_discovery_error: String::new(),
+            installed_at: now_label(),
+            updated_at: now_label(),
+            lifecycle_source: String::new(),
+            owner_plugin_id: String::new(),
+            owner_plugin_name: String::new(),
+        }])
+        .expect("save pending OpenCode marketplace record");
+
+        let result = tauri::async_runtime::block_on(install_mcp_server_from_marketplace(
+            McpMarketplaceServer {
+                id: "mcp-directory-issue-20-opencode-round-trip".to_string(),
+                name: "Issue 20 OpenCode Round Trip".to_string(),
+                source_site: "MCP.Directory".to_string(),
+                description: String::new(),
+                publisher: String::new(),
+                category: String::new(),
+                transport_label: String::new(),
+                source_url: "https://example.invalid/unreachable-marketplace".to_string(),
+                marketplace_url: None,
+                popularity_label: String::new(),
+                avatar_url: None,
+                server: None,
+            },
+        ))
+        .expect("resume should recognize the native OpenCode round trip");
+
+        assert!(result.sync_failures.is_empty());
+        let records = load_mcp_records().expect("load resumed OpenCode marketplace record");
+        let record = records
+            .iter()
+            .find(|record| record.id == "issue-20-opencode-round-trip")
+            .expect("resumed OpenCode marketplace record");
+        assert!(record.pending_sync_app_ids.is_empty());
+        assert_eq!(record.enabled_app_ids, vec![APP_OPENCODE.to_string()]);
+        assert_eq!(record.managed_app_ids, vec![APP_OPENCODE.to_string()]);
+        assert!(record.imported_from_app_ids.is_empty());
+    }
+
+    #[test]
+    fn issue_20_marketplace_resume_recognizes_other_native_round_trips() {
+        let temp_dir = unique_continue_test_dir("issue-20-native-round-trips");
+        fs::create_dir_all(&temp_dir).expect("create native round-trip directory");
+        let mut record = McpServerRecord {
+            id: "issue-20-native-round-trips".to_string(),
+            name: "issue 20 native round trips".to_string(),
+            server: json!({
+                "type": "http",
+                "url": "https://example.invalid/native-round-trip",
+                "headers": { "Authorization": "Bearer test" },
+                "description": "metadata omitted by some native adapters",
+                "sourceUrl": "https://github.com/example/issue-20"
+            }),
+            description: String::new(),
+            source_url: String::new(),
+            enabled_app_ids: Vec::new(),
+            imported_from_app_ids: Vec::new(),
+            managed_app_ids: Vec::new(),
+            pending_sync_app_ids: vec![
+                APP_OPENCLAW.to_string(),
+                APP_GOOSE.to_string(),
+                APP_MIMO_CODE.to_string(),
+            ],
+            tools: Vec::new(),
+            tools_discovered_at: String::new(),
+            tools_discovery_error: String::new(),
+            installed_at: now_label(),
+            updated_at: now_label(),
+            lifecycle_source: String::new(),
+            owner_plugin_id: String::new(),
+            owner_plugin_name: String::new(),
+        };
+        let synced_server =
+            build_synced_server_config(&record.server, &record.tools).expect("synced server");
+        let openclaw_path = temp_dir.join("openclaw.json");
+        let goose_path = temp_dir.join("goose.yaml");
+        let mimo_path = temp_dir.join("mimo.json");
+        upsert_openclaw_mcp_server(&openclaw_path, &record.id, &synced_server)
+            .expect("write OpenClaw native server");
+        upsert_goose_mcp_server(&goose_path, &record.id, &synced_server)
+            .expect("write Goose native server");
+        upsert_registered_mcp_server(APP_MIMO_CODE, &mimo_path, &record.id, &synced_server)
+            .expect("write MiMo native server");
+        let actual_mimo = read_all_registered_mcp_servers(APP_MIMO_CODE, &mimo_path)
+            .expect("read MiMo native server")
+            .into_iter()
+            .find_map(|(server_id, server)| (server_id == record.id).then_some(server))
+            .expect("MiMo native server");
+        let expected_mimo = expected_server_after_app_round_trip(
+            &McpTargetAppSpec {
+                id: APP_MIMO_CODE,
+                name: "MiMo Code",
+                config_path: mimo_path.clone(),
+                config_dir: temp_dir.clone(),
+                is_mcp_supported: true,
+            },
+            &record,
+        )
+        .expect("expected MiMo native server");
+        assert_eq!(actual_mimo, expected_mimo);
+
+        let app_spec = |id, name, config_path: PathBuf| McpTargetAppSpec {
+            id,
+            name,
+            config_dir: config_path
+                .parent()
+                .expect("native config parent")
+                .to_path_buf(),
+            config_path,
+            is_mcp_supported: true,
+        };
+        let (syncable_apps, failures) = revalidate_pending_marketplace_app_sync(
+            &mut record,
+            vec![
+                app_spec(APP_OPENCLAW, "OpenClaw", openclaw_path),
+                app_spec(APP_GOOSE, "Goose", goose_path),
+                app_spec(APP_MIMO_CODE, "MiMo Code", mimo_path),
+            ],
+            &BTreeSet::new(),
+        );
+
+        assert!(syncable_apps.is_empty());
+        assert!(failures.is_empty());
+        assert!(record.pending_sync_app_ids.is_empty());
+        assert!(
+            record.imported_from_app_ids.is_empty(),
+            "native round trips were misclassified as imported: {:?}",
+            record.imported_from_app_ids
+        );
+        assert_eq!(
+            record.managed_app_ids.into_iter().collect::<BTreeSet<_>>(),
+            BTreeSet::from([
+                APP_OPENCLAW.to_string(),
+                APP_GOOSE.to_string(),
+                APP_MIMO_CODE.to_string(),
+            ])
+        );
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn issue_20_marketplace_resume_recognizes_gemini_sse_round_trip() {
+        let temp_dir = unique_continue_test_dir("issue-20-gemini-sse-round-trip");
+        fs::create_dir_all(&temp_dir).expect("create Gemini round-trip directory");
+        let gemini_path = temp_dir.join("settings.json");
+        let mut record = McpServerRecord {
+            id: "issue-20-gemini-sse".to_string(),
+            name: "issue 20 gemini sse".to_string(),
+            server: json!({
+                "type": "sse",
+                "url": "https://example.invalid/gemini-sse"
+            }),
+            description: String::new(),
+            source_url: String::new(),
+            enabled_app_ids: Vec::new(),
+            imported_from_app_ids: Vec::new(),
+            managed_app_ids: Vec::new(),
+            pending_sync_app_ids: vec![APP_GEMINI.to_string()],
+            tools: Vec::new(),
+            tools_discovered_at: String::new(),
+            tools_discovery_error: String::new(),
+            installed_at: now_label(),
+            updated_at: now_label(),
+            lifecycle_source: String::new(),
+            owner_plugin_id: String::new(),
+            owner_plugin_name: String::new(),
+        };
+        upsert_gemini_mcp_server(&gemini_path, &record.id, &record.server)
+            .expect("write Gemini SSE server");
+
+        let (syncable_apps, failures) = revalidate_pending_marketplace_app_sync(
+            &mut record,
+            vec![McpTargetAppSpec {
+                id: APP_GEMINI,
+                name: "Gemini CLI",
+                config_path: gemini_path,
+                config_dir: temp_dir.clone(),
+                is_mcp_supported: true,
+            }],
+            &BTreeSet::new(),
+        );
+
+        assert!(syncable_apps.is_empty());
+        assert!(failures.is_empty());
+        assert!(record.pending_sync_app_ids.is_empty());
+        assert_eq!(record.managed_app_ids, vec![APP_GEMINI.to_string()]);
+        assert!(record.imported_from_app_ids.is_empty());
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn issue_20_marketplace_resume_preserves_a_conflicting_user_config() {
+        use crate::workspace::TEST_ENV_LOCK;
+
+        let _guard = TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let environment = TestHomeEnvironment::new("issue-20-resume-user-config");
+        let qoder_dir = environment
+            .temp_home
+            .join(".config/Qoder/SharedClientCache");
+        fs::create_dir_all(&qoder_dir).expect("create Qoder config directory");
+        let qoder_path = qoder_dir.join("mcp.json");
+        upsert_json_mcp_server(
+            &qoder_path,
+            "mcpServers",
+            "issue-20-user-config",
+            &json!({
+                "type": "http",
+                "url": "https://user.example/mcp"
+            }),
+        )
+        .expect("seed conflicting user config");
+        let original_bytes = fs::read(&qoder_path).expect("read conflicting user config");
+        save_mcp_records(&[McpServerRecord {
+            id: "issue-20-user-config".to_string(),
+            name: "issue 20 user config".to_string(),
+            server: json!({
+                "type": "http",
+                "url": "https://marketplace.example/mcp"
+            }),
+            description: String::new(),
+            source_url: String::new(),
+            enabled_app_ids: Vec::new(),
+            imported_from_app_ids: Vec::new(),
+            managed_app_ids: Vec::new(),
+            pending_sync_app_ids: vec![APP_QODER.to_string()],
+            tools: Vec::new(),
+            tools_discovered_at: String::new(),
+            tools_discovery_error: String::new(),
+            installed_at: now_label(),
+            updated_at: now_label(),
+            lifecycle_source: String::new(),
+            owner_plugin_id: String::new(),
+            owner_plugin_name: String::new(),
+        }])
+        .expect("save pending marketplace record");
+
+        let result = tauri::async_runtime::block_on(install_mcp_server_from_marketplace(
+            McpMarketplaceServer {
+                id: "mcp-directory-issue-20-user-config".to_string(),
+                name: "Issue 20 User Config".to_string(),
+                source_site: "MCP.Directory".to_string(),
+                description: String::new(),
+                publisher: String::new(),
+                category: String::new(),
+                transport_label: String::new(),
+                source_url: "https://example.invalid/unreachable-marketplace".to_string(),
+                marketplace_url: None,
+                popularity_label: String::new(),
+                avatar_url: None,
+                server: None,
+            },
+        ))
+        .expect("resume should preserve the conflicting user config");
+
+        assert!(result.sync_failures.is_empty());
+        assert_eq!(
+            fs::read(&qoder_path).expect("read preserved user config"),
+            original_bytes
+        );
+        let records = load_mcp_records().expect("load resumed marketplace record");
+        let record = records
+            .iter()
+            .find(|record| record.id == "issue-20-user-config")
+            .expect("resumed marketplace record");
+        assert!(record.pending_sync_app_ids.is_empty());
+        assert_eq!(record.enabled_app_ids, vec![APP_QODER.to_string()]);
+        assert_eq!(record.imported_from_app_ids, vec![APP_QODER.to_string()]);
+        assert!(record.managed_app_ids.is_empty());
+    }
+
+    #[test]
+    fn issue_20_marketplace_resume_merges_existing_app_state_without_refetching() {
+        use crate::workspace::TEST_ENV_LOCK;
+
+        let _guard = TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let environment = TestHomeEnvironment::new("issue-20-marketplace-resume-merge");
+        let qoder_dir = environment
+            .temp_home
+            .join(".config/Qoder/SharedClientCache");
+        fs::create_dir_all(&qoder_dir).expect("create Qoder config directory");
+        let pending_record = McpServerRecord {
+            id: "issue-20-resume-merge".to_string(),
+            name: "issue 20 resume merge".to_string(),
+            server: json!({
+                "type": "http",
+                "url": "https://example.invalid/resume-merge-mcp"
+            }),
+            description: "Issue 20 resume merge".to_string(),
+            source_url: "https://github.com/example/issue-20-resume-merge".to_string(),
+            enabled_app_ids: vec![APP_CODEX.to_string(), APP_KIRO.to_string()],
+            imported_from_app_ids: vec![APP_KIRO.to_string()],
+            managed_app_ids: vec![APP_CODEX.to_string()],
+            pending_sync_app_ids: vec![APP_QODER.to_string()],
+            tools: Vec::new(),
+            tools_discovered_at: String::new(),
+            tools_discovery_error: String::new(),
+            installed_at: now_label(),
+            updated_at: now_label(),
+            lifecycle_source: String::new(),
+            owner_plugin_id: String::new(),
+            owner_plugin_name: String::new(),
+        };
+        save_mcp_records(&[pending_record]).expect("save pending marketplace record");
+        let marketplace_server = McpMarketplaceServer {
+            id: "mcp-directory-issue-20-resume-merge".to_string(),
+            name: "Issue 20 Resume Merge".to_string(),
+            source_site: "MCP.Directory".to_string(),
+            description: String::new(),
+            publisher: String::new(),
+            category: String::new(),
+            transport_label: String::new(),
+            source_url: "https://example.invalid/unreachable-marketplace".to_string(),
+            marketplace_url: None,
+            popularity_label: String::new(),
+            avatar_url: None,
+            server: None,
+        };
+
+        let result = crate::commands::with_test_installed_mcp_tool_ids(&[APP_QODER], || {
+            tauri::async_runtime::block_on(install_mcp_server_from_marketplace(marketplace_server))
+        })
+        .expect("pending resume should use the persisted config");
+
+        assert!(result.sync_failures.is_empty());
+        let records = load_mcp_records().expect("load merged marketplace record");
+        let record = records
+            .iter()
+            .find(|record| record.id == "issue-20-resume-merge")
+            .expect("merged marketplace record");
+        assert!(record.pending_sync_app_ids.is_empty());
+        assert_eq!(
+            record.enabled_app_ids,
+            vec![
+                APP_CODEX.to_string(),
+                APP_KIRO.to_string(),
+                APP_QODER.to_string()
+            ]
+        );
+        assert_eq!(record.imported_from_app_ids, vec![APP_KIRO.to_string()]);
+        assert_eq!(
+            record.managed_app_ids,
+            vec![APP_CODEX.to_string(), APP_QODER.to_string()]
+        );
+    }
+
+    #[test]
+    fn issue_20_marketplace_resume_clears_an_uninstalled_pending_app() {
+        use crate::workspace::TEST_ENV_LOCK;
+
+        let _guard = TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let environment = TestHomeEnvironment::new("issue-20-resume-uninstalled");
+        let qoder_path = environment
+            .temp_home
+            .join(".config/Qoder/SharedClientCache/mcp.json");
+        fs::create_dir_all(qoder_path.parent().expect("Qoder config parent"))
+            .expect("create stale Qoder config directory");
+        fs::write(&qoder_path, "{invalid json").expect("write unreadable stale Qoder config");
+        save_mcp_records(&[McpServerRecord {
+            id: "issue-20-uninstalled".to_string(),
+            name: "issue 20 uninstalled".to_string(),
+            server: json!({
+                "type": "http",
+                "url": "https://example.invalid/uninstalled-mcp"
+            }),
+            description: String::new(),
+            source_url: String::new(),
+            enabled_app_ids: Vec::new(),
+            imported_from_app_ids: Vec::new(),
+            managed_app_ids: Vec::new(),
+            pending_sync_app_ids: vec![APP_QODER.to_string()],
+            tools: Vec::new(),
+            tools_discovered_at: String::new(),
+            tools_discovery_error: String::new(),
+            installed_at: now_label(),
+            updated_at: now_label(),
+            lifecycle_source: String::new(),
+            owner_plugin_id: String::new(),
+            owner_plugin_name: String::new(),
+        }])
+        .expect("save pending marketplace record");
+
+        let result = tauri::async_runtime::block_on(install_mcp_server_from_marketplace(
+            McpMarketplaceServer {
+                id: "mcp-directory-issue-20-uninstalled".to_string(),
+                name: "Issue 20 Uninstalled".to_string(),
+                source_site: "MCP.Directory".to_string(),
+                description: String::new(),
+                publisher: String::new(),
+                category: String::new(),
+                transport_label: String::new(),
+                source_url: "https://example.invalid/unreachable-marketplace".to_string(),
+                marketplace_url: None,
+                popularity_label: String::new(),
+                avatar_url: None,
+                server: None,
+            },
+        ))
+        .expect("resume should clear a pending app that is no longer installed");
+
+        assert!(result.sync_failures.is_empty());
+        let records = load_mcp_records().expect("load resumed marketplace record");
+        let record = records
+            .iter()
+            .find(|record| record.id == "issue-20-uninstalled")
+            .expect("resumed marketplace record");
+        assert!(record.pending_sync_app_ids.is_empty());
+        assert!(record.enabled_app_ids.is_empty());
+        assert!(
+            !result
+                .workspace
+                .servers
+                .iter()
+                .find(|server| server.id == "issue-20-uninstalled")
+                .expect("workspace server")
+                .has_pending_sync
+        );
+    }
+
+    #[test]
+    fn issue_20_pending_marketplace_record_cannot_be_deleted() {
+        use crate::workspace::TEST_ENV_LOCK;
+
+        let _guard = TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let environment = TestHomeEnvironment::new("issue-20-pending-delete");
+        let qoder_dir = environment
+            .temp_home
+            .join(".config/Qoder/SharedClientCache");
+        fs::create_dir_all(&qoder_dir).expect("create Qoder config directory");
+        let qoder_path = qoder_dir.join("mcp.json");
+        let qoder_config = json!({
+            "type": "http",
+            "url": "https://example.invalid/pending-delete-mcp"
+        });
+        upsert_json_mcp_server(
+            &qoder_path,
+            "mcpServers",
+            "issue-20-pending-delete",
+            &qoder_config,
+        )
+        .expect("seed already-written pending Qoder config");
+        let original_qoder_bytes = fs::read(&qoder_path).expect("read seeded Qoder config");
+        let pending_record = McpServerRecord {
+            id: "issue-20-pending-delete".to_string(),
+            name: "issue 20 pending delete".to_string(),
+            server: qoder_config,
+            description: String::new(),
+            source_url: String::new(),
+            enabled_app_ids: Vec::new(),
+            imported_from_app_ids: Vec::new(),
+            managed_app_ids: Vec::new(),
+            pending_sync_app_ids: vec![APP_QODER.to_string()],
+            tools: Vec::new(),
+            tools_discovered_at: String::new(),
+            tools_discovery_error: String::new(),
+            installed_at: now_label(),
+            updated_at: now_label(),
+            lifecycle_source: String::new(),
+            owner_plugin_id: String::new(),
+            owner_plugin_name: String::new(),
+        };
+        save_mcp_records(&[pending_record]).expect("save pending marketplace record");
+
+        let error = tauri::async_runtime::block_on(delete_mcp_server("issue-20-pending-delete"))
+            .expect_err("pending marketplace record must not be deleted");
+
+        assert!(error.contains("安装同步尚未完成"));
+        assert!(load_mcp_records()
+            .expect("load records after rejected delete")
+            .iter()
+            .any(|record| record.id == "issue-20-pending-delete"));
+        assert_eq!(
+            fs::read(&qoder_path).expect("read Qoder config after rejected delete"),
+            original_qoder_bytes
+        );
     }
 
     #[test]
@@ -8161,6 +9766,7 @@ mcpServers:
             enabled_app_ids: Vec::new(),
             imported_from_app_ids: Vec::new(),
             managed_app_ids: Vec::new(),
+            pending_sync_app_ids: Vec::new(),
             tools: Vec::new(),
             tools_discovered_at: "2026/5/15 14:16:46".to_string(),
             tools_discovery_error: String::new(),

@@ -270,7 +270,9 @@ async function ensureInstalledServerIdsLoaded() {
 
   const cachedWorkspace = getCachedMcpWorkspace();
   if (cachedWorkspace) {
-    const cachedInstalledServerIds = new Set(cachedWorkspace.servers.map((server) => server.id));
+    const cachedInstalledServerIds = new Set(
+      cachedWorkspace.servers.filter((server) => !server.hasPendingSync).map((server) => server.id),
+    );
     cacheInstalledServerIds(cachedInstalledServerIds);
     return cachedInstalledServerIds;
   }
@@ -279,7 +281,9 @@ async function ensureInstalledServerIdsLoaded() {
     cache.workspacePromise = fetchMcpWorkspace()
       .then((workspace) => {
         cacheMcpWorkspace(workspace);
-        const installedServerIds = new Set(workspace.servers.map((server) => server.id));
+        const installedServerIds = new Set(
+          workspace.servers.filter((server) => !server.hasPendingSync).map((server) => server.id),
+        );
         cacheInstalledServerIds(installedServerIds);
         return installedServerIds;
       })
@@ -605,18 +609,34 @@ export function McpMarketplacePanel(props: McpMarketplacePanelProps) {
   async function handleInstall(server: McpMarketplaceServer) {
     setInstallingServerIds((current) => new Set(current).add(server.id));
     try {
-      const installedWorkspace = await installMcpServerFromMarketplace({ server });
+      const installResult = await installMcpServerFromMarketplace({ server });
+      const installedWorkspace = installResult.workspace;
       cacheMcpWorkspace(installedWorkspace);
       const installedServerId = normalizeMcpServerId(server.name);
       const installedServer = installedWorkspace.servers.find((item) => item.id === installedServerId);
       const shouldRefreshTools = Boolean(
         installedServer
+        && !installedServer.hasPendingSync
         && installedServer.tools.length === 0
         && !installedServer.toolsDiscoveredAt,
       );
-      const nextInstalledServerIds = new Set(installedWorkspace.servers.map((item) => item.id));
+      const nextInstalledServerIds = new Set(
+        installedWorkspace.servers.filter((item) => !item.hasPendingSync).map((item) => item.id),
+      );
       setInstalledServerIds(nextInstalledServerIds);
-      notify({ message: t("install.mcp.success.installed", { name: server.name }), tone: "success" });
+      if (installResult.syncFailures.length > 0) {
+        const failedAppNames = [...new Set(installResult.syncFailures.map((failure) => failure.appName))]
+          .join(", ");
+        notify({
+          message: t("install.mcp.info.installedWithSyncFailures", {
+            name: server.name,
+            apps: failedAppNames,
+          }),
+          tone: "info",
+        });
+      } else {
+        notify({ message: t("install.mcp.success.installed", { name: server.name }), tone: "success" });
+      }
 
       if (shouldRefreshTools) {
         void refreshMcpServerTools(installedServerId)

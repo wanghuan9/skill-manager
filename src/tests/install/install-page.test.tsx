@@ -8,6 +8,7 @@ import * as skillClient from "@/features/skills/api/skill-client";
 import {
   marketplaceSkillFixtures,
   mcpMarketplaceServerFixtures,
+  mcpWorkspaceFixture,
   toolConfigFixtures,
 } from "@/features/skills/state/skill-fixtures";
 import type {
@@ -16,7 +17,11 @@ import type {
   McpMarketplaceServer,
   PluginSummary,
 } from "@/features/skills/state/skill-store";
-import { getCachedMcpWorkspace } from "@/features/skills/utils/mcp-workspace-cache";
+import { getCachedInstalledServerIds } from "@/features/skills/utils/mcp-installed-server-cache";
+import {
+  cacheMcpWorkspace,
+  getCachedMcpWorkspace,
+} from "@/features/skills/utils/mcp-workspace-cache";
 import { getCachedPlugins } from "@/features/skills/utils/plugin-cache";
 import { clickNavInstall } from "@/tests/helpers/nav";
 
@@ -1448,20 +1453,115 @@ test("installs MCP marketplace servers into the managed MCP list with apps enabl
     expect(installSpy).toHaveBeenCalledTimes(1);
   });
   await expect(installSpy.mock.results[0]?.value).resolves.toMatchObject({
-    servers: expect.arrayContaining([
-      expect.objectContaining({
-        id: "playwright",
-        name: "playwright",
-        enabledAppCount: expect.any(Number),
-        apps: expect.arrayContaining([
-          expect.objectContaining({
-            isEnabled: true,
-          }),
-        ]),
-      }),
-    ]),
+    workspace: {
+      servers: expect.arrayContaining([
+        expect.objectContaining({
+          id: "playwright",
+          name: "playwright",
+          enabledAppCount: expect.any(Number),
+          apps: expect.arrayContaining([
+            expect.objectContaining({
+              isEnabled: true,
+            }),
+            expect.objectContaining({
+              appId: "codebuddy",
+              isEnabled: false,
+            }),
+            expect.objectContaining({
+              appId: "vscode",
+              isEnabled: false,
+            }),
+          ]),
+        }),
+      ]),
+    },
+    syncFailures: [],
   });
   installSpy.mockRestore();
+});
+
+test("MCP marketplace fallback enables only installed tools that support MCP", async () => {
+  const vscodeTool = toolConfigFixtures.find((tool) => tool.id === "vscode");
+  const vscodeApp = mcpWorkspaceFixture.apps.find((app) => app.id === "vscode");
+  if (!vscodeTool || !vscodeApp) {
+    throw new Error("missing VS Code fixture");
+  }
+  vscodeTool.mcpConfigPath = "/Users/demo/.vscode/mcp.json";
+  vscodeApp.configPath = vscodeTool.mcpConfigPath;
+  const playwrightServer = mcpMarketplaceServerFixtures.find((server) => server.name === "playwright");
+  if (!playwrightServer) {
+    throw new Error("missing Playwright marketplace fixture");
+  }
+
+  const result = await skillClient.installMcpServerFromMarketplace({
+    server: playwrightServer,
+  });
+  const installedServer = result.workspace.servers.find((server) => server.id === "playwright");
+
+  expect(installedServer?.apps.find((app) => app.appId === "vscode")?.isEnabled).toBe(false);
+  expect(installedServer?.apps.find((app) => app.appId === "continue")?.isEnabled).toBe(true);
+});
+
+test("reports apps that failed to sync after an MCP is saved", async () => {
+  window.localStorage.clear();
+  resetMcpMarketplaceRuntimeCache();
+  const playwrightServer = mcpMarketplaceServerFixtures.find((server) => server.name === "playwright");
+  if (!playwrightServer) {
+    throw new Error("missing playwright marketplace fixture");
+  }
+  const installResult = await skillClient.installMcpServerFromMarketplace({ server: playwrightServer });
+  resetMcpMarketplaceRuntimeCache();
+  const fetchWorkspaceSpy = vi.spyOn(skillClient, "fetchMcpWorkspace");
+  fetchWorkspaceSpy.mockResolvedValue({
+    ...installResult.workspace,
+    servers: installResult.workspace.servers.filter((server) => server.id !== "playwright"),
+  });
+  const installSpy = vi.spyOn(skillClient, "installMcpServerFromMarketplace").mockResolvedValue({
+    workspace: installResult.workspace,
+    syncFailures: [{ appId: "kiro", appName: "Kiro" }],
+  });
+
+  render(<App />);
+  await clickNavInstall();
+  await userEvent.click(screen.getByRole("tab", { name: "MCP" }));
+
+  const playwrightCard = (await screen.findByRole("heading", { name: "playwright", level: 3 }))
+    .closest("article");
+  if (!playwrightCard) {
+    throw new Error("playwright marketplace card was not rendered");
+  }
+  await userEvent.click(within(playwrightCard).getByRole("button", { name: "安装" }));
+
+  expect(await within(playwrightCard).findByRole("button", { name: "已安装" })).toBeDisabled();
+  const partialSuccessMessage = await screen.findByText(
+    'MCP "playwright" 已保存，但未同步到：Kiro。可到 MCP 页处理。',
+  );
+  expect(partialSuccessMessage.closest(".app-notification")).toHaveClass("app-notification--info");
+  expect(screen.queryByText('MCP "playwright" 已安装，可到 MCP 页查看')).not.toBeInTheDocument();
+
+  installSpy.mockRestore();
+  fetchWorkspaceSpy.mockRestore();
+});
+
+test("keeps a pending marketplace MCP out of the installed cache", async () => {
+  resetMcpMarketplaceRuntimeCache();
+  const playwrightServer = mcpMarketplaceServerFixtures.find((server) => server.name === "playwright");
+  if (!playwrightServer) {
+    throw new Error("missing playwright marketplace fixture");
+  }
+  const installResult = await skillClient.installMcpServerFromMarketplace({ server: playwrightServer });
+  const pendingWorkspace = {
+    ...installResult.workspace,
+    servers: installResult.workspace.servers.map((server) => (server.id === "playwright"
+      ? { ...server, hasPendingSync: true }
+      : server)),
+  };
+
+  cacheMcpWorkspace(pendingWorkspace);
+
+  expect(getCachedInstalledServerIds()).not.toContain("playwright");
+  expect(getCachedMcpWorkspace()?.servers.find((server) => server.id === "playwright"))
+    .toMatchObject({ hasPendingSync: true });
 });
 
 test("refreshes marketplace MCP tools right after install when they are still undiscovered", async () => {

@@ -789,7 +789,11 @@ export function McpRoute(props: McpRouteProps = {}) {
     }
     let nextSnapshot = snapshot;
     for (const server of snapshot.servers) {
-      if (!predicate(server) || probingToolServerIdsRef.current.has(server.id)) {
+      if (
+        server.hasPendingSync
+        || !predicate(server)
+        || probingToolServerIdsRef.current.has(server.id)
+      ) {
         continue;
       }
       const autoProbeSignature = options.dedupeAutoRefresh

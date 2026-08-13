@@ -34,7 +34,9 @@ export function cacheMcpWorkspace(snapshot: McpWorkspaceSnapshot | null) {
 
   window.__SKILLM_MCP_WORKSPACE__ = snapshot;
   if (snapshot) {
-    cacheInstalledServerIds(snapshot.servers.map((server) => server.id));
+    cacheInstalledServerIds(
+      snapshot.servers.filter((server) => !server.hasPendingSync).map((server) => server.id),
+    );
   } else {
     invalidateCachedInstalledServerIds();
   }
