@@ -1123,6 +1123,15 @@ export async function refreshLocalGitState(skillName: string, skillPath?: string
   return normalizeSkillSummary(updatedSkill);
 }
 
+export async function fetchLocalGitStates(): Promise<SkillSummary[]> {
+  const skills = await invokeOrFallback<LegacySkillSummary[]>(
+    "refresh_local_git_states",
+    {},
+    installedSkillFixtures,
+  );
+  return normalizeSkillSummaryList(skills);
+}
+
 export async function subscribeSkillLibraryChanges(
   handler: (payload: SkillLibraryChangeEvent) => void,
 ): Promise<UnlistenFn> {
