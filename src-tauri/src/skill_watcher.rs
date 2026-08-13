@@ -17,6 +17,7 @@ const SKILL_LIBRARY_CHANGE_EVENT: &str = "skill-library-changed";
 struct WatchedSkill {
     name: String,
     local_path: PathBuf,
+    repository_root: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -104,6 +105,7 @@ fn current_watched_skills() -> Vec<WatchedSkill> {
             let local_path = PathBuf::from(skill.local_path.trim());
             local_path.exists().then_some(WatchedSkill {
                 name: skill.name,
+                repository_root: find_git_repository_root(&local_path),
                 local_path,
             })
         })
@@ -139,6 +141,16 @@ fn classify_skill_change_paths_internal(
     let mut matched_skill_names = std::collections::BTreeSet::new();
 
     for path in paths {
+        if let Some(repository_root) = git_state_metadata_repository_root(path) {
+            for skill in watched_skills
+                .iter()
+                .filter(|skill| skill.repository_root.as_deref() == Some(repository_root))
+            {
+                matched_skill_names.insert(skill.name.clone());
+            }
+            continue;
+        }
+
         if is_git_metadata_path(path) {
             continue;
         }
@@ -153,6 +165,24 @@ fn classify_skill_change_paths_internal(
     }
 
     matched_skill_names.into_iter().collect()
+}
+
+fn find_git_repository_root(path: &Path) -> Option<PathBuf> {
+    path.ancestors()
+        .find(|ancestor| ancestor.join(".git").exists())
+        .map(Path::to_path_buf)
+}
+
+fn git_state_metadata_repository_root(path: &Path) -> Option<&Path> {
+    let git_dir = path
+        .ancestors()
+        .find(|ancestor| ancestor.file_name().is_some_and(|name| name == ".git"))?;
+    let relative_path = path.strip_prefix(git_dir).ok()?;
+    let affects_git_state = relative_path == Path::new("HEAD")
+        || relative_path == Path::new("index")
+        || relative_path == Path::new("packed-refs")
+        || relative_path.starts_with("refs");
+    affects_git_state.then(|| git_dir.parent()).flatten()
 }
 
 fn skill_name_under_root(path: &Path, skills_root: &Path) -> Option<String> {
@@ -191,6 +221,9 @@ mod tests {
         let watched_skills = vec![WatchedSkill {
             name: "drawio-diagram".into(),
             local_path: PathBuf::from("/Users/demo/.skilldock/skills/drawio-diagram"),
+            repository_root: Some(PathBuf::from(
+                "/Users/demo/.skilldock/skills/drawio-diagram",
+            )),
         }];
 
         let matched = classify_skill_change_paths(
@@ -210,12 +243,14 @@ mod tests {
             WatchedSkill {
                 name: "repo-root".into(),
                 local_path: PathBuf::from("/Users/demo/.skilldock/skills/repo-root"),
+                repository_root: Some(PathBuf::from("/Users/demo/.skilldock/skills/repo-root")),
             },
             WatchedSkill {
                 name: "technical-design-test".into(),
                 local_path: PathBuf::from(
                     "/Users/demo/.skilldock/skills/repo-root/skills/technical-design-test",
                 ),
+                repository_root: Some(PathBuf::from("/Users/demo/.skilldock/skills/repo-root")),
             },
         ];
 
@@ -223,6 +258,29 @@ mod tests {
             &[PathBuf::from(
                 "/Users/demo/.skilldock/skills/repo-root/skills/technical-design-test/SKILL.md",
             )],
+            &watched_skills,
+        );
+
+        assert_eq!(matched, vec!["technical-design-test"]);
+    }
+
+    #[test]
+    fn classify_skill_change_paths_matches_git_refs_to_skills_in_repository() {
+        let watched_skills = vec![WatchedSkill {
+            name: "technical-design-test".into(),
+            local_path: PathBuf::from(
+                "/Users/demo/.skilldock/skills/repo-root/skills/technical-design-test",
+            ),
+            repository_root: Some(PathBuf::from("/Users/demo/.skilldock/skills/repo-root")),
+        }];
+
+        let matched = classify_skill_change_paths(
+            &[
+                PathBuf::from("/Users/demo/.skilldock/skills/repo-root/.git/refs/heads/main"),
+                PathBuf::from(
+                    "/Users/demo/.skilldock/skills/repo-root/.git/refs/remotes/origin/main",
+                ),
+            ],
             &watched_skills,
         );
 

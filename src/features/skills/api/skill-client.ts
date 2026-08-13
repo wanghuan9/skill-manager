@@ -47,6 +47,7 @@ import type {
   MarketplaceSkillsPage,
   MarketplaceSourceSite,
   McpMarketplaceServer,
+  McpMarketplaceInstallResult,
   McpMarketplaceSourceSite,
   McpImportProgress,
   McpServerRecord,
@@ -85,6 +86,7 @@ import { mergeSkillToolsWithInstalledTools } from "@/features/skills/utils/skill
 import {
   getToolStatusLabel,
   isToolEnabledStatus,
+  isToolInstalledStatus,
   localizeToolStatusLabel,
 } from "@/features/skills/utils/tool-status";
 import { formatSkillDescription } from "@/features/skills/utils/skill-description";
@@ -1123,6 +1125,15 @@ export async function refreshLocalGitState(skillName: string, skillPath?: string
   return normalizeSkillSummary(updatedSkill);
 }
 
+export async function fetchLocalGitStates(): Promise<SkillSummary[]> {
+  const skills = await invokeOrFallback<LegacySkillSummary[]>(
+    "refresh_local_git_states",
+    {},
+    installedSkillFixtures,
+  );
+  return normalizeSkillSummaryList(skills);
+}
+
 export async function subscribeSkillLibraryChanges(
   handler: (payload: SkillLibraryChangeEvent) => void,
 ): Promise<UnlistenFn> {
@@ -2076,12 +2087,24 @@ export async function fetchMcpMarketplaceServerConfig(
 
 export async function installMcpServerFromMarketplace(
   input: InstallMcpMarketplaceServerInput,
-): Promise<McpWorkspaceSnapshot> {
+): Promise<McpMarketplaceInstallResult> {
   const installedServerConfig = input.server.server
     ?? mcpMarketplaceServerFixtures.find((server) => server.id === input.server.id)?.server
     ?? {};
   const normalizedName = input.server.name.trim().toLowerCase();
   const shouldEnableAllApps = appSettingsFixture.mcpInstallActivation === "apply-all-tools";
+  const installedMcpToolIds = new Set(
+    toolConfigFixtures
+      .filter((tool) => isToolInstalledStatus(tool.statusLabel) && tool.supportsMcp)
+      .map((tool) => tool.id),
+  );
+  const enabledAppIds = new Set(
+    shouldEnableAllApps
+      ? mcpWorkspaceFixture.apps
+        .filter((app) => installedMcpToolIds.has(app.id))
+        .map((app) => app.id)
+      : [],
+  );
   const installedServer = {
     id: normalizeMcpServerId(input.server.name),
     name: normalizedName,
@@ -2090,26 +2113,34 @@ export async function installMcpServerFromMarketplace(
     description: input.server.description,
     sourceUrl: input.server.sourceUrl,
     serverJson: JSON.stringify(installedServerConfig, null, 2),
-    enabledAppCount: shouldEnableAllApps ? mcpWorkspaceFixture.apps.length : 0,
+    enabledAppCount: enabledAppIds.size,
     apps: mcpWorkspaceFixture.apps.map((app) => ({
       appId: app.id,
       appName: app.name,
       configPath: app.configPath,
       statusLabel: app.statusLabel,
-      isEnabled: shouldEnableAllApps,
+      isEnabled: enabledAppIds.has(app.id),
     })),
     tools: [],
     toolsDiscoveredAt: "",
     toolsDiscoveryError: "",
     installedAt: getCurrentTimestampLabel(),
+    hasPendingSync: false,
   };
-  const fallback = {
-    ...mcpWorkspaceFixture,
-    servers: [installedServer, ...mcpWorkspaceFixture.servers.filter((item) => item.id !== installedServer.id)],
+  const fallback: McpMarketplaceInstallResult = {
+    workspace: {
+      ...mcpWorkspaceFixture,
+      servers: [installedServer, ...mcpWorkspaceFixture.servers.filter((item) => item.id !== installedServer.id)],
+    },
+    syncFailures: [],
   };
 
-  const workspace = await invokeOrFallback("install_mcp_server_from_marketplace", input, fallback);
-  return normalizeMcpWorkspaceSnapshot(workspace);
+  const result = await invokeOrFallback("install_mcp_server_from_marketplace", input, fallback);
+  return {
+    ...result,
+    workspace: normalizeMcpWorkspaceSnapshot(result.workspace),
+    syncFailures: result.syncFailures ?? [],
+  };
 }
 
 export async function importMcpServersFromApps(): Promise<number> {

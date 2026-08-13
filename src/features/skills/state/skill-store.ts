@@ -524,6 +524,7 @@ export type McpServerSummary = {
   lifecycleSource?: PluginLifecycleSource;
   ownerPluginId?: string;
   ownerPluginName?: string;
+  hasPendingSync?: boolean;
 };
 
 export type McpServerRecord = {
@@ -533,6 +534,7 @@ export type McpServerRecord = {
   description: string;
   sourceUrl: string;
   enabledAppIds: string[];
+  pendingSyncAppIds?: string[];
   tools: McpServerToolStatus[];
   toolsDiscoveredAt: string;
   toolsDiscoveryError: string;
@@ -548,6 +550,16 @@ export type McpWorkspaceSnapshot = {
   storageInitialized: boolean;
   apps: McpTargetApp[];
   servers: McpServerSummary[];
+};
+
+export type McpAppSyncFailure = {
+  appId: string;
+  appName: string;
+};
+
+export type McpMarketplaceInstallResult = {
+  workspace: McpWorkspaceSnapshot;
+  syncFailures: McpAppSyncFailure[];
 };
 
 export type McpImportProgress = {
