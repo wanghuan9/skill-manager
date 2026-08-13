@@ -7,6 +7,7 @@ use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
+use crate::git_metadata::{git_state_metadata_repository_root, is_git_metadata_path};
 use crate::state::load_installed_skills;
 use crate::workspace::skill_root_paths;
 
@@ -173,18 +174,6 @@ fn find_git_repository_root(path: &Path) -> Option<PathBuf> {
         .map(Path::to_path_buf)
 }
 
-fn git_state_metadata_repository_root(path: &Path) -> Option<&Path> {
-    let git_dir = path
-        .ancestors()
-        .find(|ancestor| ancestor.file_name().is_some_and(|name| name == ".git"))?;
-    let relative_path = path.strip_prefix(git_dir).ok()?;
-    let affects_git_state = relative_path == Path::new("HEAD")
-        || relative_path == Path::new("index")
-        || relative_path == Path::new("packed-refs")
-        || relative_path.starts_with("refs");
-    affects_git_state.then(|| git_dir.parent()).flatten()
-}
-
 fn skill_name_under_root(path: &Path, skills_root: &Path) -> Option<String> {
     path.strip_prefix(skills_root)
         .ok()?
@@ -204,11 +193,6 @@ fn match_skill_name_for_path<'a>(
         .filter(|skill| path.starts_with(&skill.local_path))
         .max_by_key(|skill| skill.local_path.as_os_str().len())
         .map(|skill| skill.name.as_str())
-}
-
-fn is_git_metadata_path(path: &Path) -> bool {
-    path.components()
-        .any(|component| component.as_os_str() == ".git")
 }
 
 #[cfg(test)]

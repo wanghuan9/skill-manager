@@ -717,6 +717,7 @@ function normalizePluginSummary(plugin: LegacyPluginSummary): PluginSummary {
     currentCommit: plugin.currentCommit ?? "",
     collabStatus:
       plugin.collabStatus === "update-available"
+      || plugin.collabStatus === "pending-commit"
       || plugin.collabStatus === "pending-push"
       || plugin.collabStatus === "diverged"
         ? plugin.collabStatus
@@ -882,6 +883,15 @@ export async function fetchStartupInstalledPlugins(): Promise<PluginSummary[]> {
 export async function refreshPluginStates(): Promise<PluginSummary[]> {
   const plugins = await invokeOrFallback<LegacyPluginSummary[]>(
     "refresh_plugin_states",
+    {},
+    pluginFixtures,
+  );
+  return normalizePluginSummaryList(plugins);
+}
+
+export async function fetchLocalPluginStates(): Promise<PluginSummary[]> {
+  const plugins = await invokeOrFallback<LegacyPluginSummary[]>(
+    "refresh_local_plugin_states",
     {},
     pluginFixtures,
   );

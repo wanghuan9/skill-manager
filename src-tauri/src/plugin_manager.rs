@@ -14,6 +14,7 @@ use serde_json::Value as JsonValue;
 use sha2::{Digest, Sha256};
 use toml_edit::{DocumentMut, Item, Table};
 
+use crate::git_divergence::{local_branch_divergence_counts, resolve_remote_branch};
 use crate::library::{
     configure_git_network_command, configure_hidden_subprocess, git_command,
     parse_market_source_url, remote_clone_candidates, repo_cache_directory,
@@ -363,6 +364,7 @@ struct PluginHashCacheEntry {
 
 const PLUGIN_STATUS_CLEAN: &str = "clean";
 const PLUGIN_STATUS_UPDATE_AVAILABLE: &str = "update-available";
+const PLUGIN_STATUS_PENDING_COMMIT: &str = "pending-commit";
 const PLUGIN_STATUS_PENDING_PUSH: &str = "pending-push";
 const PLUGIN_STATUS_DIVERGED: &str = "diverged";
 const CODEX_APP_NAMES: &[&str] = &["Codex", "ChatGPT"];
@@ -492,6 +494,17 @@ pub async fn refresh_plugin_states() -> Result<Vec<PluginSummary>, String> {
     })
     .await
     .map_err(|error| format!("插件列表扫描任务失败: {error}"))?
+}
+
+#[tauri::command]
+pub async fn refresh_local_plugin_states() -> Result<Vec<PluginSummary>, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let plugins = list_installed_plugins_blocking_with_mode(PluginScanMode::Local)?;
+        save_plugin_list_cache(&plugins);
+        Ok(plugins)
+    })
+    .await
+    .map_err(|error| format!("插件本地状态刷新任务失败: {error}"))?
 }
 
 #[tauri::command]
@@ -709,10 +722,13 @@ fn refresh_and_persist_local_plugin_state(
     root_path: &str,
 ) -> Result<PluginSummary, String> {
     let plugins = list_installed_plugins_blocking_with_mode(PluginScanMode::Local)?;
-    plugins
-        .into_iter()
+    let refreshed_plugin = plugins
+        .iter()
         .find(|plugin| plugin_cache_matches_host_and_root(host_tool, root_path, plugin))
-        .ok_or_else(|| "未找到要刷新的插件".to_string())
+        .cloned()
+        .ok_or_else(|| "未找到要刷新的插件".to_string())?;
+    save_plugin_list_cache(&plugins);
+    Ok(refreshed_plugin)
 }
 
 #[tauri::command]
@@ -8329,6 +8345,14 @@ fn plugin_pending_push_cache_entry_is_current(
     })
 }
 
+fn cached_plugin_local_collab_status(entry: &PluginPendingPushCacheEntry) -> &'static str {
+    if entry.working_tree_signature.trim().is_empty() {
+        PLUGIN_STATUS_PENDING_PUSH
+    } else {
+        PLUGIN_STATUS_PENDING_COMMIT
+    }
+}
+
 fn save_hash_cache_entry(
     plugin: &PluginSummary,
     baseline_hash: &str,
@@ -8375,19 +8399,13 @@ fn plugin_git_state(repo_root: &Path, plugin_relative_path: &Path) -> PluginGitS
         .map(|output| !output.trim().is_empty())
         .unwrap_or(false);
 
-    let remote_counts = if !branch.is_empty() && branch != "HEAD" {
-        resolve_plugin_remote_branch(repo_root, &branch).and_then(|remote_branch| {
-            plugin_branch_divergence_counts(repo_root, &remote_branch, &scoped_path)
-        })
-    } else {
-        None
-    };
+    let remote_counts = local_branch_divergence_counts(repo_root, &branch, &scoped_path);
     let (collab_status, status_text, update_available) =
         derive_plugin_collab_status(working_tree_dirty, remote_counts);
     let latest_local_commit_metadata =
         latest_plugin_commit_metadata_for_ref(repo_root, None, &scoped_path).unwrap_or_default();
     let latest_remote_commit_metadata = if !branch.is_empty() && branch != "HEAD" {
-        resolve_plugin_remote_branch(repo_root, &branch).and_then(|remote_branch| {
+        resolve_remote_branch(repo_root, &branch).and_then(|remote_branch| {
             latest_plugin_commit_metadata_for_ref(
                 repo_root,
                 Some(remote_branch.as_str()),
@@ -8480,12 +8498,18 @@ fn enrich_git_plugin_summary(
     .unwrap_or_else(|| plugin.local_updated_at.clone());
 
     if scan_mode == PluginScanMode::Startup {
-        if cached_pending_push_entry(&plugin, &branch, &head, &working_tree_signature).is_some() {
+        if let Some(entry) =
+            cached_pending_push_entry(&plugin, &branch, &head, &working_tree_signature)
+        {
             let mut enriched = plugin.clone();
             enriched.current_branch = branch;
             enriched.current_commit = commit;
-            enriched.collab_status = PLUGIN_STATUS_PENDING_PUSH.to_string();
-            enriched.status_text = "本地存在待推送内容，已使用上次检测结果。".to_string();
+            enriched.collab_status = cached_plugin_local_collab_status(&entry).to_string();
+            enriched.status_text = if enriched.collab_status == PLUGIN_STATUS_PENDING_COMMIT {
+                "本地存在未提交修改，已使用上次检测结果。".to_string()
+            } else {
+                "本地存在待推送提交，已使用上次检测结果。".to_string()
+            };
             enriched.local_updated_at = local_updated_at;
             enriched.last_scanned_at = "已缓存".to_string();
             return enriched;
@@ -8532,13 +8556,7 @@ fn enrich_git_plugin_summary(
     }
 
     let git_state = plugin_git_state(repo_root, plugin_relative_path);
-    let remote_counts = if !git_state.branch.is_empty() && git_state.branch != "HEAD" {
-        resolve_plugin_remote_branch(repo_root, &git_state.branch).and_then(|remote_branch| {
-            plugin_branch_divergence_counts(repo_root, &remote_branch, &scoped_path)
-        })
-    } else {
-        None
-    };
+    let remote_counts = local_branch_divergence_counts(repo_root, &git_state.branch, &scoped_path);
 
     if let Some((behind, ahead)) = remote_counts {
         save_git_update_cache_entry(
@@ -8765,63 +8783,23 @@ fn plugin_modified_timestamp(
         .unwrap_or_default()
 }
 
-fn resolve_plugin_remote_branch(repo_root: &Path, branch: &str) -> Option<String> {
-    let remote_branch = format!("{REMOTE_BRANCH_PREFIX}{branch}");
-    let exists = run_git_at(
-        repo_root,
-        &[
-            "show-ref",
-            "--verify",
-            "--quiet",
-            &format!("refs/remotes/{remote_branch}"),
-        ],
-    )
-    .is_ok();
-    if exists {
-        Some(remote_branch)
-    } else {
-        None
-    }
-}
-
-fn plugin_branch_divergence_counts(
-    repo_root: &Path,
-    remote_branch: &str,
-    scoped_path: &str,
-) -> Option<(usize, usize)> {
-    let mut args = vec![
-        "rev-list".to_string(),
-        "--left-right".to_string(),
-        "--count".to_string(),
-        format!("{remote_branch}...HEAD"),
-    ];
-    if !scoped_path.is_empty() {
-        args.push("--".to_string());
-        args.push(scoped_path.to_string());
-    }
-    let output = run_git_dynamic_at(repo_root, &args).ok()?;
-    let mut parts = output.split_whitespace();
-    let behind = parts.next()?.parse::<usize>().ok()?;
-    let ahead = parts.next()?.parse::<usize>().ok()?;
-    Some((behind, ahead))
-}
-
 fn derive_plugin_collab_status(
     working_tree_dirty: bool,
     remote_counts: Option<(usize, usize)>,
 ) -> (&'static str, String, bool) {
+    if working_tree_dirty {
+        return (
+            PLUGIN_STATUS_PENDING_COMMIT,
+            "本地存在未提交修改，请先提交后再推送。".to_string(),
+            false,
+        );
+    }
+
     let Some((behind, ahead)) = remote_counts else {
-        if working_tree_dirty {
-            return (
-                PLUGIN_STATUS_PENDING_PUSH,
-                "插件目录存在本地未提交改动。".to_string(),
-                false,
-            );
-        }
         return (PLUGIN_STATUS_CLEAN, "插件目录已是最新。".to_string(), false);
     };
 
-    if behind > 0 && (ahead > 0 || working_tree_dirty) {
+    if behind > 0 && ahead > 0 {
         return (
             PLUGIN_STATUS_DIVERGED,
             "本地与远端均有变化，建议先处理本地改动，再同步插件目录。".to_string(),
@@ -8835,14 +8813,10 @@ fn derive_plugin_collab_status(
             true,
         );
     }
-    if ahead > 0 || working_tree_dirty {
+    if ahead > 0 {
         return (
             PLUGIN_STATUS_PENDING_PUSH,
-            if ahead > 0 {
-                "本地存在待推送提交。".to_string()
-            } else {
-                "插件目录存在本地未提交改动。".to_string()
-            },
+            "本地存在待推送提交。".to_string(),
             false,
         );
     }
@@ -11169,6 +11143,92 @@ mod tests {
         assert!(!super::prune_stale_plugin_update_cache(&mut cache));
 
         let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn dirty_plugin_worktree_is_pending_commit() {
+        let (status, status_text, update_available) =
+            super::derive_plugin_collab_status(true, Some((0, 2)));
+
+        assert_eq!(status, super::PLUGIN_STATUS_PENDING_COMMIT);
+        assert!(status_text.contains("未提交"));
+        assert!(!update_available);
+    }
+
+    #[test]
+    fn clean_plugin_worktree_with_ahead_commits_is_pending_push() {
+        let (status, status_text, update_available) =
+            super::derive_plugin_collab_status(false, Some((0, 2)));
+
+        assert_eq!(status, super::PLUGIN_STATUS_PENDING_PUSH);
+        assert!(status_text.contains("待推送"));
+        assert!(!update_available);
+    }
+
+    #[test]
+    fn unpublished_plugin_branch_is_pending_push_after_commit() {
+        let temp_dir = temp_test_dir("plugin-unpublished-branch");
+        let remote_repo = temp_dir.join("remote.git");
+        let repo_root = temp_dir.join("repo");
+        let plugin_root = repo_root.join("example-plugin");
+
+        super::run_git_at(
+            Path::new("."),
+            &["init", "--bare", remote_repo.to_string_lossy().as_ref()],
+        )
+        .expect("init bare remote");
+        super::run_git_at(&remote_repo, &["symbolic-ref", "HEAD", "refs/heads/main"])
+            .expect("point remote HEAD at main");
+        fs::create_dir_all(&plugin_root).expect("create plugin directory");
+        fs::write(plugin_root.join("SKILL.md"), "# initial").expect("write plugin file");
+        commit_test_repo(&repo_root, Some(remote_repo.to_string_lossy().as_ref()));
+        run_git_test(&repo_root, &["push", "-u", "origin", "main"]);
+
+        run_git_test(&repo_root, &["checkout", "-b", "feature/local-change"]);
+        fs::write(plugin_root.join("SKILL.md"), "# changed").expect("update plugin file");
+        run_git_test(&repo_root, &["add", "."]);
+        run_git_test(&repo_root, &["commit", "-m", "Update plugin"]);
+
+        assert_eq!(
+            crate::git_divergence::local_branch_divergence_counts(
+                &repo_root,
+                "feature/local-change",
+                "example-plugin",
+            ),
+            Some((0, 1))
+        );
+
+        run_git_test(
+            &repo_root,
+            &["push", "-u", "origin", "feature/local-change"],
+        );
+        assert_eq!(
+            crate::git_divergence::local_branch_divergence_counts(
+                &repo_root,
+                "feature/local-change",
+                "example-plugin",
+            ),
+            Some((0, 0))
+        );
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn cached_dirty_plugin_state_is_pending_commit() {
+        let entry = super::PluginPendingPushCacheEntry {
+            host_tool: "cursor".to_string(),
+            root_path: "/tmp/plugin".to_string(),
+            branch: "main".to_string(),
+            head: "head".to_string(),
+            working_tree_signature: " M SKILL.md".to_string(),
+            ahead: 0,
+        };
+
+        assert_eq!(
+            super::cached_plugin_local_collab_status(&entry),
+            super::PLUGIN_STATUS_PENDING_COMMIT
+        );
     }
 
     #[test]

@@ -26,4 +26,26 @@ describe("install theme styles", () => {
     expect(getRuleBody(".local-install-dropzone.is-selected")).toContain("var(--success)");
     expect(getRuleBody(".local-install-dropzone.is-selected")).toContain("var(--surface)");
   });
+
+  test("keeps long Git branch names inside the install form", () => {
+    expect(getRuleBody(".repo-form__source-row")).toContain(
+      "grid-template-columns: minmax(0, 1fr) 260px",
+    );
+    expect(getRuleBody(".repo-form__field--branch .app-select__trigger")).toContain(
+      "overflow: hidden",
+    );
+    expect(getRuleBody(".repo-form__field--branch .app-select__trigger")).toContain(
+      "height: 40px",
+    );
+    expect(getRuleBody(".repo-form__field--branch .app-select__value")).toContain(
+      "text-overflow: ellipsis",
+    );
+  });
+
+  test("uses the thin Skill scrollbar style for branch menus", () => {
+    expect(getRuleBody(".app-select__popover::-webkit-scrollbar")).toContain("width: 10px");
+    expect(getRuleBody(".app-select__popover::-webkit-scrollbar-thumb")).toContain(
+      "border: 2px solid transparent",
+    );
+  });
 });

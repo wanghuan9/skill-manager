@@ -36,6 +36,7 @@ beforeEach(() => {
   vi.spyOn(skillClient, "fetchStartupInstalledPlugins").mockResolvedValue(pluginFixtures);
   vi.spyOn(skillClient, "fetchInstalledPlugins").mockResolvedValue(pluginFixtures);
   vi.spyOn(skillClient, "refreshPluginStates").mockResolvedValue(pluginFixtures);
+  vi.spyOn(skillClient, "fetchLocalPluginStates").mockResolvedValue(pluginFixtures);
   vi.spyOn(skillClient, "refreshLocalPluginState").mockImplementation(async (input) => {
     const matchedPlugin = pluginFixtures.find((plugin) => (
       plugin.hostTool === input.hostTool && plugin.rootPath === input.rootPath
@@ -161,6 +162,15 @@ test("switches plugins to cards, opens details in a dialog, and restores the pre
   const firstRender = renderWithI18n(<PluginsRoute />);
 
   await screen.findByText("Repo Scout");
+  const repoScoutListRow = screen.getByRole("button", { name: "展开 Repo Scout" })
+    .closest(".tool-list-row");
+  const listEnabledBadge = repoScoutListRow?.querySelector(
+    ".tool-list-row__title-row > .status-badge",
+  );
+  expect(listEnabledBadge).toHaveTextContent("已启用");
+  expect(listEnabledBadge).toHaveClass("tone-info");
+  expect(repoScoutListRow).not.toHaveTextContent("Git 仓库");
+
   await userEvent.click(screen.getByRole("button", { name: "卡片" }));
 
   expect(document.querySelector(".plugins-page > .card-list")).toHaveClass("tool-card-grid");
@@ -169,10 +179,15 @@ test("switches plugins to cards, opens details in a dialog, and restores the pre
   const eccCard = screen.getByRole("button", { name: "展开 ecc" }).closest(".tool-list-row");
   expect(repoScoutCard?.querySelectorAll(".tool-list-row__grid-badges > .status-badge")).toHaveLength(6);
   expect(eccCard?.querySelectorAll(".tool-list-row__grid-badges > .status-badge")).toHaveLength(1);
-  expect(repoScoutCard?.querySelector(".tool-list-row__grid-meta > span")).toHaveTextContent("SkillDock 安装");
+  const gridEnabledBadge = repoScoutCard?.querySelector(
+    ".tool-list-row__grid-meta > .skill-card__grid-enabled-badge",
+  );
+  expect(gridEnabledBadge).toHaveTextContent("已启用");
+  expect(gridEnabledBadge).toHaveClass("tone-info");
   expect(repoScoutCard?.querySelector(".tool-list-row__grid-meta .plugins-page__host-coverage-icon")).not.toBeNull();
   expect(repoScoutCard?.querySelector(".skill-card__git-source-badge")).toBeNull();
-  expect(repoScoutCard?.querySelector(".tool-list-row__grid-footer")).toHaveTextContent("Git 仓库");
+  expect(repoScoutCard?.querySelector(".tool-list-row__grid-footer")).toHaveTextContent("SkillDock 安装");
+  expect(repoScoutCard).not.toHaveTextContent("Git 仓库");
   expect(repoScoutCard?.querySelector(".tool-list-row__actions > .tool-list-row__chevron")).toBeNull();
 
   await userEvent.click(screen.getByRole("button", { name: "展开 Repo Scout" }));
@@ -242,7 +257,7 @@ test("reconciles plugin config with a startup scan even when the plugin list is 
   fixtureSpy.mockRestore();
 });
 
-test("reconciles plugin config again when returning to the plugin page window", async () => {
+test("refreshes local plugin state again when returning to the plugin page window", async () => {
   const fixtureSpy = vi.spyOn(skillClient, "shouldUseFixtureData").mockReturnValue(false);
   const initialPlugin: PluginSummary = {
     ...pluginFixtures[0],
@@ -270,7 +285,9 @@ test("reconciles plugin config again when returning to the plugin page window", 
   };
   const startupSpy = vi
     .spyOn(skillClient, "fetchStartupInstalledPlugins")
-    .mockResolvedValueOnce([initialPlugin])
+    .mockResolvedValueOnce([initialPlugin]);
+  const localStatesSpy = vi
+    .spyOn(skillClient, "fetchLocalPluginStates")
     .mockResolvedValueOnce([syncedPlugin]);
   const remoteRefreshSpy = vi.spyOn(skillClient, "refreshPluginStates").mockResolvedValue([syncedPlugin]);
   const localRefreshSpy = vi.spyOn(skillClient, "refreshLocalPluginState");
@@ -284,7 +301,10 @@ test("reconciles plugin config again when returning to the plugin page window", 
   });
 
   await waitFor(() => {
-    expect(startupSpy).toHaveBeenCalledTimes(2);
+    expect(startupSpy).toHaveBeenCalledTimes(1);
+  });
+  await waitFor(() => {
+    expect(localStatesSpy).toHaveBeenCalledTimes(1);
   });
   await waitFor(() => {
     expect(remoteRefreshSpy).toHaveBeenCalledTimes(1);
@@ -293,6 +313,58 @@ test("reconciles plugin config again when returning to the plugin page window", 
     expect(screen.getByText("已启用")).toBeInTheDocument();
   });
   expect(localRefreshSpy).not.toHaveBeenCalled();
+  fixtureSpy.mockRestore();
+});
+
+test("refreshes pending commit and pending push state on every focus", async () => {
+  const fixtureSpy = vi.spyOn(skillClient, "shouldUseFixtureData").mockReturnValue(false);
+  const pendingCommitPlugin: PluginSummary = {
+    ...pluginFixtures[0],
+    installSource: "skilldock",
+    updateMode: "auto",
+    updateStrategy: "git",
+    collabStatus: "pending-commit",
+    updateAvailable: false,
+    statusText: "插件目录存在本地未提交改动。",
+  };
+  const pendingPushPlugin: PluginSummary = {
+    ...pendingCommitPlugin,
+    collabStatus: "pending-push",
+    statusText: "插件目录存在待推送提交。",
+  };
+  const cleanPlugin: PluginSummary = {
+    ...pendingCommitPlugin,
+    collabStatus: "clean",
+    statusText: "插件目录已是最新。",
+  };
+  vi.spyOn(skillClient, "fetchStartupInstalledPlugins").mockResolvedValueOnce([
+    pendingCommitPlugin,
+  ]);
+  const remoteRefreshSpy = vi
+    .spyOn(skillClient, "refreshPluginStates")
+    .mockResolvedValue([pendingCommitPlugin]);
+  const localStatesSpy = vi
+    .spyOn(skillClient, "fetchLocalPluginStates")
+    .mockResolvedValueOnce([pendingPushPlugin])
+    .mockResolvedValueOnce([cleanPlugin]);
+
+  renderWithI18n(<PluginsRoute />);
+
+  await screen.findByText("待提交");
+  await waitFor(() => {
+    expect(remoteRefreshSpy).toHaveBeenCalledTimes(1);
+  });
+
+  window.dispatchEvent(new Event("focus"));
+  await screen.findByText("待推送");
+
+  window.dispatchEvent(new Event("focus"));
+  await waitFor(() => {
+    expect(screen.queryByText("待推送")).not.toBeInTheDocument();
+  });
+
+  expect(localStatesSpy).toHaveBeenCalledTimes(2);
+  expect(remoteRefreshSpy).toHaveBeenCalledTimes(1);
   fixtureSpy.mockRestore();
 });
 
@@ -1593,24 +1665,45 @@ test("prompts before updating a hash-based plugin with local modifications", asy
   updateSpy.mockRestore();
 });
 
-test("shows pending push status without an update action", async () => {
+test("places pending commit and update statuses at the top of plugin cards", async () => {
   const plugins: PluginSummary[] = [
     {
       ...pluginFixtures[0],
-      collabStatus: "pending-push",
+      name: "Pending Plugin",
+      manifestName: "pending-plugin",
+      id: "pending-plugin",
+      rootPath: "/Users/demo/workspace/pending-plugin",
+      collabStatus: "pending-commit",
       updateAvailable: false,
       statusText: "插件目录存在本地未提交改动。",
     },
+    {
+      ...pluginFixtures[0],
+      name: "Update Plugin",
+      manifestName: "update-plugin",
+      id: "update-plugin",
+      rootPath: "/Users/demo/workspace/update-plugin",
+      collabStatus: "update-available",
+      updateAvailable: true,
+      statusText: "远端存在插件目录更新。",
+    },
   ];
   vi.spyOn(skillClient, "fetchStartupInstalledPlugins").mockResolvedValueOnce(plugins);
+  window.localStorage.setItem("plugins:view-mode", "grid");
 
   renderWithI18n(<PluginsRoute />);
 
-  await screen.findByRole("tab", { name: /Codex/ });
-  await userEvent.click(screen.getByRole("tab", { name: /Codex/ }));
+  const pendingCard = (await screen.findByRole("button", { name: "展开 pending-plugin" }))
+    .closest(".tool-list-row");
+  const updateCard = screen.getByRole("button", { name: "展开 update-plugin" })
+    .closest(".tool-list-row");
 
-  expect(screen.getByText("待推送")).toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: "更新 Repo Scout 插件" })).not.toBeInTheDocument();
+  const pendingStatus = pendingCard?.querySelector(".plugins-page__action-status .status-badge");
+  expect(pendingStatus).toHaveTextContent("待提交");
+  expect(pendingStatus).toHaveClass("tone-pending-commit");
+  expect(updateCard?.querySelector(".plugins-page__action-status")).toHaveTextContent("可更新");
+  expect(within(updateCard as HTMLElement).getByRole("button", { name: "更新 update-plugin 插件" }))
+    .toBeInTheDocument();
 });
 
 test("refreshes plugin states after plugin library changes", async () => {
@@ -1645,6 +1738,12 @@ test("refreshes plugin states after plugin library changes", async () => {
   });
   await waitFor(() => {
     expect(screen.getByText("待推送")).toBeInTheDocument();
+  });
+  await waitFor(() => {
+    const cachedPlugins = JSON.parse(
+      window.localStorage.getItem("skilldock.pluginsCache") ?? "[]",
+    ) as PluginSummary[];
+    expect(cachedPlugins[0]?.collabStatus).toBe("pending-push");
   });
 });
 

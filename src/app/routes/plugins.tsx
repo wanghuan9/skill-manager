@@ -18,6 +18,7 @@ import { waitForNextPaint } from "@/app/utils/wait-for-next-paint";
 import {
   deletePlugin,
   fetchInstalledPlugins,
+  fetchLocalPluginStates,
   fetchStartupInstalledPlugins,
   fetchPluginComponentPreview,
   openExternalLink,
@@ -59,6 +60,7 @@ import { useSkillWorkspace } from "@/features/skills/state/skill-workspace";
 import {
   cachePlugins,
   getCachedPlugins,
+  mergeStartupPluginStatusCache,
   subscribePluginsChange,
 } from "@/features/skills/utils/plugin-cache";
 import {
@@ -134,9 +136,7 @@ const maxVisibleHostCoverageEntries = 5;
 const PLUGIN_LIBRARY_CHANGE_DEBOUNCE_MS = 500;
 const AUTO_PLUGIN_STATE_REFRESH_INTERVAL_MS = 10 * 60 * 1000;
 const AUTO_PLUGIN_STATE_REFRESH_COOLDOWN_MS = 60 * 1000;
-const STARTUP_PLUGIN_SYNC_COOLDOWN_MS = 1_500;
 const PLUGIN_LOCAL_ALIGN_COOLDOWN_MS = 2_000;
-const PLUGIN_HEAVY_REFRESH_AFTER_STARTUP_SYNC_DELAY_MS = 800;
 const pluginEnabledOrder: Record<PluginSummary["enabledState"], number> = {
   enabled: 0,
   disabled: 1,
@@ -600,13 +600,17 @@ function buildAllTabPlugins(plugins: PluginSummary[]): PluginSummary[] {
     const installSource = sortedGroup.some((plugin) => plugin.installSource === "skilldock")
       ? "skilldock"
       : primaryPlugin.installSource;
-    const collabStatus: PluginSummary["collabStatus"] = sortedGroup.some((plugin) => plugin.collabStatus === "pending-push")
-      ? "pending-push"
-      : sortedGroup.some((plugin) => plugin.collabStatus === "update-available")
-        ? "update-available"
-        : sortedGroup.some((plugin) => plugin.collabStatus === "diverged")
-          ? "diverged"
-          : "clean";
+    const collabStatus: PluginSummary["collabStatus"] = sortedGroup.some(
+      (plugin) => plugin.collabStatus === "pending-commit",
+    )
+      ? "pending-commit"
+      : sortedGroup.some((plugin) => plugin.collabStatus === "pending-push")
+        ? "pending-push"
+        : sortedGroup.some((plugin) => plugin.collabStatus === "update-available")
+          ? "update-available"
+          : sortedGroup.some((plugin) => plugin.collabStatus === "diverged")
+            ? "diverged"
+            : "clean";
     const statusText = updateAvailable
       ? "Shared plugin package has updates available."
       : hasBrokenInstallation
@@ -1014,6 +1018,9 @@ function getPluginCollabBadge(
 ) {
   if (plugin.collabStatus === "update-available") {
     return { label: t("plugins.collab.updateAvailable"), tone: "positive" as const };
+  }
+  if (plugin.collabStatus === "pending-commit") {
+    return { label: t("plugins.collab.pendingCommit"), tone: "pending-commit" as const };
   }
   if (plugin.collabStatus === "pending-push") {
     return { label: t("plugins.collab.pendingPush"), tone: "info" as const };
@@ -1595,9 +1602,11 @@ export function PluginsRoute(props: PluginsRouteProps = {}) {
   const pluginRefreshDebounceTimerRef = useRef<number | null>(null);
   const pluginLocalRefreshInFlightRef = useRef(new Map<string, Promise<void>>());
   const pluginStateRefreshInFlightRef = useRef<Promise<void> | null>(null);
-  const deferredHeavyRefreshTimerRef = useRef<number | null>(null);
+  const pluginStateRefreshGenerationRef = useRef(0);
+  const localPluginStatesRefreshInFlightRef = useRef<Promise<void> | null>(null);
+  const localPluginStatesRefreshQueuedRef = useRef(false);
   const lastPluginAutoRefreshAtRef = useRef(0);
-  const startupPluginSyncInFlightRef = useRef<Promise<void> | null>(null);
+  const startupPluginSyncInFlightRef = useRef<Promise<PluginSummary[] | void> | null>(null);
   const lastStartupPluginSyncAtRef = useRef(0);
   const lastPluginLocalAlignAtRef = useRef(0);
   const wasPluginRefreshingRef = useRef(isRefreshing || isReloading);
@@ -1688,9 +1697,16 @@ export function PluginsRoute(props: PluginsRouteProps = {}) {
         if (!isActive()) {
           return;
         }
-        setPlugins((current) => current.map((candidate) => (
-          getPluginInstanceKey(candidate) === refreshKey ? refreshedPlugin : candidate
-        )));
+        pluginStateRefreshGenerationRef.current += 1;
+        setPlugins((current) => {
+          const nextPlugins = current.map((candidate) => (
+            getPluginInstanceKey(candidate) === refreshKey ? refreshedPlugin : candidate
+          ));
+          if (!shouldUseFixtureData()) {
+            cachePlugins(nextPlugins);
+          }
+          return nextPlugins;
+        });
       } catch (error) {
         console.warn("Failed to refresh plugin local state", error);
       } finally {
@@ -1727,10 +1743,14 @@ export function PluginsRoute(props: PluginsRouteProps = {}) {
     }
 
     lastPluginAutoRefreshAtRef.current = now;
+    const refreshGeneration = pluginStateRefreshGenerationRef.current;
     const refreshPromise = (async () => {
       try {
         const refreshedPlugins = await refreshPluginStates();
-        if (!isActive()) {
+        if (
+          !isActive()
+          || refreshGeneration !== pluginStateRefreshGenerationRef.current
+        ) {
           return;
         }
         setPlugins((current) => {
@@ -1750,6 +1770,46 @@ export function PluginsRoute(props: PluginsRouteProps = {}) {
     })();
 
     pluginStateRefreshInFlightRef.current = refreshPromise;
+    return refreshPromise;
+  }
+
+  async function refreshLocalPluginStatesInBackground(isActive: () => boolean) {
+    if (localPluginStatesRefreshInFlightRef.current) {
+      localPluginStatesRefreshQueuedRef.current = true;
+      return localPluginStatesRefreshInFlightRef.current;
+    }
+
+    let refreshPromise: Promise<void> | null = null;
+    refreshPromise = (async () => {
+      try {
+        do {
+          localPluginStatesRefreshQueuedRef.current = false;
+          try {
+            const refreshedPlugins = await fetchLocalPluginStates();
+            if (!isActive()) {
+              return;
+            }
+            pluginStateRefreshGenerationRef.current += 1;
+            setPlugins((current) => {
+              const nextPlugins = mergePluginsByInstance(current, refreshedPlugins);
+              if (!shouldUseFixtureData()) {
+                cachePlugins(nextPlugins);
+              }
+              return nextPlugins;
+            });
+          } catch (error) {
+            console.warn("Failed to refresh local plugin states", error);
+          }
+        } while (localPluginStatesRefreshQueuedRef.current && isActive());
+      } finally {
+        if (localPluginStatesRefreshInFlightRef.current === refreshPromise) {
+          localPluginStatesRefreshInFlightRef.current = null;
+          localPluginStatesRefreshQueuedRef.current = false;
+        }
+      }
+    })();
+
+    localPluginStatesRefreshInFlightRef.current = refreshPromise;
     return refreshPromise;
   }
 
@@ -1800,8 +1860,10 @@ export function PluginsRoute(props: PluginsRouteProps = {}) {
         if (!isActive()) {
           return;
         }
-        commitPlugins(nextPlugins);
+        const mergedPlugins = mergeStartupPluginStatusCache(nextPlugins, pluginsRef.current);
+        commitPlugins(mergedPlugins);
         setErrorMessage("");
+        return mergedPlugins;
       })
       .catch((error) => {
         console.warn("Failed to align installed plugins from startup scan", error);
@@ -1973,55 +2035,30 @@ export function PluginsRoute(props: PluginsRouteProps = {}) {
     }
 
     let active = true;
-    const refreshPluginStatesIfNeeded = () => {
-      void refreshPluginStatesInBackground(
+    const refreshFocusedPluginStates = async () => {
+      await refreshLocalPluginStatesInBackground(() => active);
+      await refreshPluginStatesInBackground(
         () => active,
         { minimumIntervalMs: AUTO_PLUGIN_STATE_REFRESH_COOLDOWN_MS },
-      );
-    };
-    const syncPluginStartupStateIfNeeded = () => {
-      void syncPluginsStartupState(
-        () => active,
-        { minimumIntervalMs: STARTUP_PLUGIN_SYNC_COOLDOWN_MS },
       );
     };
     const handleVisibilityChange = () => {
       if (document.visibilityState !== "visible") {
         return;
       }
-      syncPluginStartupStateIfNeeded();
-      if (deferredHeavyRefreshTimerRef.current !== null) {
-        window.clearTimeout(deferredHeavyRefreshTimerRef.current);
-      }
-      deferredHeavyRefreshTimerRef.current = window.setTimeout(() => {
-        deferredHeavyRefreshTimerRef.current = null;
-        refreshPluginStatesIfNeeded();
-      }, PLUGIN_HEAVY_REFRESH_AFTER_STARTUP_SYNC_DELAY_MS);
+      void refreshFocusedPluginStates();
     };
     const intervalId = window.setInterval(
-      refreshPluginStatesIfNeeded,
+      () => void refreshPluginStatesInBackground(() => active),
       AUTO_PLUGIN_STATE_REFRESH_INTERVAL_MS,
     );
-    const handleFocus = () => {
-      syncPluginStartupStateIfNeeded();
-      if (deferredHeavyRefreshTimerRef.current !== null) {
-        window.clearTimeout(deferredHeavyRefreshTimerRef.current);
-      }
-      deferredHeavyRefreshTimerRef.current = window.setTimeout(() => {
-        deferredHeavyRefreshTimerRef.current = null;
-        refreshPluginStatesIfNeeded();
-      }, PLUGIN_HEAVY_REFRESH_AFTER_STARTUP_SYNC_DELAY_MS);
-    };
+    const handleFocus = () => void refreshFocusedPluginStates();
     window.addEventListener("focus", handleFocus);
     document.addEventListener("visibilitychange", handleVisibilityChange);
 
     return () => {
       active = false;
       window.clearInterval(intervalId);
-      if (deferredHeavyRefreshTimerRef.current !== null) {
-        window.clearTimeout(deferredHeavyRefreshTimerRef.current);
-        deferredHeavyRefreshTimerRef.current = null;
-      }
       window.removeEventListener("focus", handleFocus);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
@@ -3335,12 +3372,11 @@ export function PluginsRoute(props: PluginsRouteProps = {}) {
                 name={pluginDisplayName}
                 subtitle={getPluginSubtitle(plugin, t)}
                 leading={<PluginListIcon name={pluginDisplayName} />}
-                badges={[
+                badges={viewMode === "grid" ? [] : [
                   {
                     key: "enabled-state",
                     label: renderPluginEnabledBadge(plugin, t),
-                    tone:
-                      plugin.enabledState === "enabled" ? "positive" : "neutral",
+                    tone: plugin.enabledState === "enabled" ? "info" : "neutral",
                   },
                   ...componentSummaryBadges,
                   ...(activeHost === "all" && hostCoverageBadge
@@ -3350,7 +3386,13 @@ export function PluginsRoute(props: PluginsRouteProps = {}) {
                 gridBadges={componentSummaryBadges}
                 gridMeta={(
                   <>
-                    <span>{getPluginInstallSourceLabel(plugin, t)}</span>
+                    <span
+                      className={`status-badge skill-card__grid-enabled-badge ${
+                        plugin.enabledState === "enabled" ? "tone-info" : "tone-neutral"
+                      }`}
+                    >
+                      {renderPluginEnabledBadge(plugin, t)}
+                    </span>
                     <div className="skill-card__summary-tools">
                       {renderPluginHostCoverageList(enabledHostCoverageEntries, t)}
                     </div>
@@ -3358,7 +3400,7 @@ export function PluginsRoute(props: PluginsRouteProps = {}) {
                 )}
                 gridFooter={(
                   <span className="skill-card__grid-source-text">
-                    {getPluginSourceTypeLabel(plugin, t)}
+                    {getPluginInstallSourceLabel(plugin, t)}
                   </span>
                 )}
                 details={renderPluginDetails(plugin)}

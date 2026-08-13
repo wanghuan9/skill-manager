@@ -5,6 +5,8 @@ mod backup_snapshot;
 mod clawhub_market;
 mod commands;
 mod diagnostics;
+mod git_divergence;
+mod git_metadata;
 mod git_state;
 mod github_api;
 mod github_connection;
@@ -149,6 +151,7 @@ pub fn run() {
             plugin_manager::list_startup_installed_plugins,
             plugin_manager::list_installed_plugins,
             plugin_manager::refresh_plugin_states,
+            plugin_manager::refresh_local_plugin_states,
             plugin_manager::refresh_local_plugin_state,
             plugin_manager::list_cli_tools,
             plugin_manager::probe_plugin_repo,

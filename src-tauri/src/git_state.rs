@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{mpsc, Condvar, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, SystemTime};
 
+use crate::git_divergence::{local_branch_divergence_counts, resolve_remote_branch};
 use crate::library::{configure_git_network_command, git_command};
 use crate::models::SkillSummary;
 use crate::workspace::{
@@ -17,7 +18,6 @@ const STATUS_UPDATE_AVAILABLE: &str = "update-available";
 const STATUS_PENDING_COMMIT: &str = "pending-commit";
 const STATUS_PENDING_PUSH: &str = "pending-push";
 const ORIGIN_REMOTE: &str = "origin";
-const REMOTE_BRANCH_PREFIX: &str = "origin/";
 const UPDATE_CACHE_FILE_NAME: &str = "git-update-cache.json";
 
 static UPDATE_CACHE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -525,41 +525,11 @@ fn git_fetch_with_timeout(skill_path: &Path) {
 fn branch_divergence(skill_path: &Path, branch: &str) -> Option<(usize, usize)> {
     git_fetch_with_timeout(skill_path);
 
-    let remote_branch = resolve_remote_branch(skill_path, branch)?;
-    let output = run_git(
-        skill_path,
-        &[
-            "rev-list",
-            "--left-right",
-            "--count",
-            &format!("{remote_branch}...HEAD"),
-            "--",
-            ".",
-        ],
-    )?;
-    let mut parts = output.split_whitespace();
-    let behind = parts.next()?.parse::<usize>().ok()?;
-    let ahead = parts.next()?.parse::<usize>().ok()?;
-    Some((behind, ahead))
+    local_branch_divergence_counts(skill_path, branch, ".")
 }
 
 fn local_branch_divergence(skill_path: &Path, branch: &str) -> Option<(usize, usize)> {
-    let remote_branch = resolve_remote_branch(skill_path, branch)?;
-    let output = run_git(
-        skill_path,
-        &[
-            "rev-list",
-            "--left-right",
-            "--count",
-            &format!("{remote_branch}...HEAD"),
-            "--",
-            ".",
-        ],
-    )?;
-    let mut parts = output.split_whitespace();
-    let behind = parts.next()?.parse::<usize>().ok()?;
-    let ahead = parts.next()?.parse::<usize>().ok()?;
-    Some((behind, ahead))
+    local_branch_divergence_counts(skill_path, branch, ".")
 }
 
 fn cached_update_counts(skill: &SkillSummary, branch: &str, head: &str) -> Option<(usize, usize)> {
@@ -788,38 +758,6 @@ fn acquire_git_fetch_lock(repo_key: String) -> GitFetchLockGuard {
     }
     active_repos.insert(repo_key.clone());
     GitFetchLockGuard { repo_key }
-}
-
-fn resolve_remote_branch(skill_path: &Path, branch: &str) -> Option<String> {
-    let upstream = run_git(
-        skill_path,
-        &[
-            "rev-parse",
-            "--abbrev-ref",
-            "--symbolic-full-name",
-            "@{upstream}",
-        ],
-    );
-    if let Some(upstream) = upstream.filter(|value| !value.trim().is_empty()) {
-        return Some(upstream);
-    }
-
-    let remote_branch = format!("{REMOTE_BRANCH_PREFIX}{branch}");
-    let exists = run_git(
-        skill_path,
-        &[
-            "show-ref",
-            "--verify",
-            "--quiet",
-            &format!("refs/remotes/{remote_branch}"),
-        ],
-    )
-    .is_some();
-    if exists {
-        Some(remote_branch)
-    } else {
-        None
-    }
 }
 
 fn derive_collab_status(
@@ -1099,6 +1037,98 @@ mod tests {
         let (status, _) = derive_collab_status(false, Some((0, 2)));
 
         assert_eq!(status, STATUS_PENDING_PUSH);
+    }
+
+    #[test]
+    fn unpublished_skill_branch_is_pending_push_after_commit() {
+        let temp_dir = unique_temp_dir("unpublished-skill-branch");
+        let remote_dir = temp_dir.join("remote.git");
+        let local_dir = temp_dir.join("local");
+        let skill_dir = local_dir.join("skills/technical-design-test");
+
+        fs::create_dir_all(&temp_dir).expect("create test temp dir");
+        run_git_test(["init", "--bare", remote_dir.to_str().expect("remote path")]);
+        run_git_test([
+            "clone",
+            remote_dir.to_str().expect("remote path"),
+            local_dir.to_str().expect("local path"),
+        ]);
+        run_git_test([
+            "-C",
+            local_dir.to_str().expect("local path"),
+            "checkout",
+            "-b",
+            "main",
+        ]);
+        run_git_test([
+            "-C",
+            local_dir.to_str().expect("local path"),
+            "config",
+            "user.name",
+            "SkillDock Test",
+        ]);
+        run_git_test([
+            "-C",
+            local_dir.to_str().expect("local path"),
+            "config",
+            "user.email",
+            "skilldock@example.com",
+        ]);
+        fs::create_dir_all(&skill_dir).expect("create skill directory");
+        fs::write(skill_dir.join("SKILL.md"), "# initial").expect("write skill file");
+        run_git_test(["-C", local_dir.to_str().expect("local path"), "add", "."]);
+        run_git_test([
+            "-C",
+            local_dir.to_str().expect("local path"),
+            "commit",
+            "-m",
+            "Initial skill",
+        ]);
+        run_git_test([
+            "-C",
+            local_dir.to_str().expect("local path"),
+            "push",
+            "-u",
+            "origin",
+            "main",
+        ]);
+
+        run_git_test([
+            "-C",
+            local_dir.to_str().expect("local path"),
+            "checkout",
+            "-b",
+            "feature/local-change",
+        ]);
+        fs::write(skill_dir.join("SKILL.md"), "# changed").expect("update skill file");
+        run_git_test(["-C", local_dir.to_str().expect("local path"), "add", "."]);
+        run_git_test([
+            "-C",
+            local_dir.to_str().expect("local path"),
+            "commit",
+            "-m",
+            "Update skill",
+        ]);
+
+        let mut skill = skill_summary("technical-design-test", &skill_dir);
+        skill.branch = "feature/local-change".into();
+        let enriched = enrich_skill_with_local_git_state(&skill);
+
+        assert_eq!(enriched.collab_status, STATUS_PENDING_PUSH);
+
+        run_git_test([
+            "-C",
+            local_dir.to_str().expect("local path"),
+            "push",
+            "-u",
+            "origin",
+            "feature/local-change",
+        ]);
+        let pushed = enrich_skill_with_local_git_state(&enriched);
+
+        assert_eq!(pushed.collab_status, STATUS_CLEAN);
+
+        let _ = fs::remove_dir_all(temp_dir);
     }
 
     fn run_git_test<I, S>(args: I)

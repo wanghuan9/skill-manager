@@ -191,6 +191,8 @@ button *,
   padding: 5px;
   overflow-x: hidden;
   overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(148, 163, 184, 0.58) transparent;
   border: 1px solid var(--line);
   border-radius: 12px;
   background: var(--surface);
@@ -1746,7 +1748,8 @@ code {
 .local-install-workspace::-webkit-scrollbar,
 .skill-file-dialog__preview::-webkit-scrollbar,
 .mcp-edit-dialog__body::-webkit-scrollbar,
-.mcp-market-config-preview::-webkit-scrollbar {
+.mcp-market-config-preview::-webkit-scrollbar,
+.app-select__popover::-webkit-scrollbar {
   width: 10px;
   height: 10px;
 }
@@ -1757,7 +1760,8 @@ code {
 .local-install-workspace::-webkit-scrollbar-track,
 .skill-file-dialog__preview::-webkit-scrollbar-track,
 .mcp-edit-dialog__body::-webkit-scrollbar-track,
-.mcp-market-config-preview::-webkit-scrollbar-track {
+.mcp-market-config-preview::-webkit-scrollbar-track,
+.app-select__popover::-webkit-scrollbar-track {
   background: transparent;
 }
 
@@ -1767,7 +1771,8 @@ code {
 .local-install-workspace::-webkit-scrollbar-thumb,
 .skill-file-dialog__preview::-webkit-scrollbar-thumb,
 .mcp-edit-dialog__body::-webkit-scrollbar-thumb,
-.mcp-market-config-preview::-webkit-scrollbar-thumb {
+.mcp-market-config-preview::-webkit-scrollbar-thumb,
+.app-select__popover::-webkit-scrollbar-thumb {
   border: 2px solid transparent;
   border-radius: 999px;
   background: rgba(148, 163, 184, 0.58);
@@ -1780,7 +1785,8 @@ code {
 .local-install-workspace::-webkit-scrollbar-thumb:hover,
 .skill-file-dialog__preview::-webkit-scrollbar-thumb:hover,
 .mcp-edit-dialog__body::-webkit-scrollbar-thumb:hover,
-.mcp-market-config-preview::-webkit-scrollbar-thumb:hover {
+.mcp-market-config-preview::-webkit-scrollbar-thumb:hover,
+.app-select__popover::-webkit-scrollbar-thumb:hover {
   background: rgba(100, 116, 139, 0.66);
   background-clip: padding-box;
 }
@@ -5586,7 +5592,7 @@ code {
 
 .repo-form__source-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 220px;
+  grid-template-columns: minmax(0, 1fr) 260px;
   gap: 10px;
   align-items: start;
 }
@@ -5601,10 +5607,28 @@ code {
   min-width: 200px;
 }
 
+.repo-form__field--branch .app-select__trigger {
+  height: 40px;
+  min-height: 40px;
+  max-width: 100%;
+  overflow: hidden;
+  box-sizing: border-box;
+}
+
+.repo-form__field--branch .app-select__value {
+  flex: 1 1 0;
+  width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .repo-form__source-row input,
 .repo-form__source-row select {
   height: 40px;
   min-height: 40px;
+  box-sizing: border-box;
 }
 
 .repo-form__label {
@@ -13865,9 +13889,11 @@ button.settings-form-item:disabled {
 }
 
 .tool-list-row--grid .tool-list-row__actions > .plugins-page__action-status {
-  min-width: 0;
+  position: absolute;
+  top: 12px;
+  right: 14px;
+  z-index: 1;
   margin-right: 0;
-  overflow: hidden;
 }
 
 .tool-list-row--grid .tool-list-row__actions > .plugins-page__action-status .status-badge {
@@ -15553,7 +15579,8 @@ button.settings-form-item:disabled {
 :root[data-theme="dark"] .skill-file-dialog__preview::-webkit-scrollbar-thumb,
 :root[data-theme="dark"] .mcp-edit-dialog__body::-webkit-scrollbar-thumb,
 :root[data-theme="dark"] .mcp-market-config-preview::-webkit-scrollbar-thumb,
-:root[data-theme="dark"] .market-install-scroll::-webkit-scrollbar-thumb {
+:root[data-theme="dark"] .market-install-scroll::-webkit-scrollbar-thumb,
+:root[data-theme="dark"] .app-select__popover::-webkit-scrollbar-thumb {
   background: rgba(255, 255, 255, 0.17);
   background-clip: padding-box;
 }
@@ -15565,7 +15592,8 @@ button.settings-form-item:disabled {
 :root[data-theme="dark"] .skill-file-dialog__preview::-webkit-scrollbar-thumb:hover,
 :root[data-theme="dark"] .mcp-edit-dialog__body::-webkit-scrollbar-thumb:hover,
 :root[data-theme="dark"] .mcp-market-config-preview::-webkit-scrollbar-thumb:hover,
-:root[data-theme="dark"] .market-install-scroll::-webkit-scrollbar-thumb:hover {
+:root[data-theme="dark"] .market-install-scroll::-webkit-scrollbar-thumb:hover,
+:root[data-theme="dark"] .app-select__popover::-webkit-scrollbar-thumb:hover {
   background: rgba(255, 255, 255, 0.28);
   background-clip: padding-box;
 }
