@@ -2,7 +2,7 @@ use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 use std::sync::{mpsc, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -763,7 +763,21 @@ fn install_selected_plugin_probes_blocking(
             let progress = on_progress.cloned();
             let mut install_threads = Vec::new();
 
-            if cursor_selected {
+            if cursor_selected && !shared_host_tools.is_empty() {
+                let home_dir = home_dir.clone();
+                let probe = probe.clone();
+                let progress = progress.clone();
+                let mut combined_host_tools = shared_host_tools.clone();
+                combined_host_tools.push("cursor".to_string());
+                install_threads.push(std::thread::spawn(move || {
+                    install_shared_plugin_probe_for_hosts(
+                        &home_dir,
+                        &probe,
+                        combined_host_tools,
+                        progress.as_ref(),
+                    )
+                }));
+            } else if cursor_selected {
                 let home_dir = home_dir.clone();
                 let probe = probe.clone();
                 let progress = progress.clone();
@@ -773,7 +787,7 @@ fn install_selected_plugin_probes_blocking(
                 }));
             }
 
-            if !shared_host_tools.is_empty() {
+            if !cursor_selected && !shared_host_tools.is_empty() {
                 let home_dir = home_dir.clone();
                 let probe = probe.clone();
                 let progress = progress.clone();
@@ -927,6 +941,21 @@ fn update_plugin_blocking(host_tool: &str, root_path: &str) -> Result<PluginSumm
 
 #[tauri::command]
 pub fn delete_plugin(host_tool: String, root_path: String) -> Result<(), String> {
+    let requested_root = Path::new(&root_path);
+    if canonicalize_existing_dir(requested_root).is_err() {
+        if host_tool != "codex" {
+            if let Some(result) = delete_broken_managed_plugin(requested_root) {
+                return result;
+            }
+        }
+        if host_tool != "codex"
+            && fs::symlink_metadata(requested_root).is_err()
+            && is_host_plugin_storage_path(&host_tool, requested_root)
+        {
+            return Ok(());
+        }
+    }
+
     match host_tool.as_str() {
         "codex" => delete_codex_plugin(&root_path),
         "claude-code" => delete_claude_plugin(&root_path),
@@ -934,6 +963,206 @@ pub fn delete_plugin(host_tool: String, root_path: String) -> Result<(), String>
         "opencode" => delete_opencode_plugin(&root_path),
         _ => Err(format!("不支持的插件宿主: {host_tool}")),
     }
+}
+
+fn is_host_plugin_storage_path(host_tool: &str, path: &Path) -> bool {
+    let Some(home_dir) = workspace::home_dir_option() else {
+        return false;
+    };
+    let host_roots = match host_tool {
+        "claude-code" => vec![home_dir.join(".claude/plugins")],
+        "cursor" => vec![
+            home_dir.join(".cursor/plugins/local"),
+            cursor_disabled_plugins_root(&home_dir),
+        ],
+        "opencode" => vec![
+            opencode_user_plugins_root(&home_dir),
+            opencode_disabled_plugins_root(&home_dir),
+        ],
+        _ => Vec::new(),
+    };
+    let normalized_path = normalize_lexical_path(path);
+    host_roots
+        .into_iter()
+        .any(|root| normalized_path.starts_with(normalize_lexical_path(&root)))
+}
+
+fn delete_broken_managed_plugin(requested_root: &Path) -> Option<Result<(), String>> {
+    let package_root = managed_plugin_package_root_for_broken_request(requested_root)?;
+    Some(clean_up_broken_managed_plugin(&package_root))
+}
+
+fn managed_plugin_package_root_for_broken_request(path: &Path) -> Option<PathBuf> {
+    managed_plugin_package_root_for_requested_path(path).or_else(|| {
+        let link_target = fs::read_link(path).ok()?;
+        let resolved_target = if link_target.is_absolute() {
+            link_target
+        } else {
+            path.parent()?.join(link_target)
+        };
+        managed_plugin_package_root_for_requested_path(&normalize_lexical_path(&resolved_target))
+    })
+}
+
+fn clean_up_broken_managed_plugin(package_root: &Path) -> Result<(), String> {
+    let home_dir = workspace::home_dir_option().ok_or_else(|| "无法定位用户主目录".to_string())?;
+    remove_broken_claude_plugin_entries(&home_dir, package_root)?;
+
+    let mut links_to_remove = BTreeMap::<String, PathBuf>::new();
+    for host_root in [
+        home_dir.join(".claude/plugins"),
+        home_dir.join(".cursor/plugins/local"),
+        cursor_disabled_plugins_root(&home_dir),
+        home_dir.join(".cursor/agents"),
+        home_dir.join(".cursor/commands"),
+        home_dir.join(".cursor/rules"),
+        home_dir.join(".cursor/skills"),
+        opencode_user_plugins_root(&home_dir),
+    ] {
+        collect_broken_managed_plugin_links(&host_root, package_root, 0, &mut links_to_remove);
+    }
+    remove_plugin_roots(links_to_remove.into_values(), "损坏的 SkillDock")?;
+
+    if let Ok(disabled_marker) = opencode_disabled_marker(&home_dir, package_root) {
+        remove_plugin_roots([disabled_marker], "OpenCode")?;
+    }
+    remove_plugin_roots([package_root.to_path_buf()], "SkillDock")
+}
+
+fn remove_broken_claude_plugin_entries(home_dir: &Path, package_root: &Path) -> Result<(), String> {
+    let installed_state_path = home_dir.join(".claude/plugins/installed_plugins.json");
+    if !installed_state_path.is_file() {
+        return Ok(());
+    }
+
+    let mut installed_state = read_json_object_or_empty(&installed_state_path)?;
+    let plugins = installed_state
+        .as_object_mut()
+        .and_then(|object| object.get_mut("plugins"))
+        .and_then(serde_json::Value::as_object_mut)
+        .ok_or_else(|| "Claude installed_plugins.json plugins 不是对象".to_string())?;
+    let mut removed_plugin_keys = Vec::new();
+    let mut state_changed = false;
+    for (plugin_key, entries_value) in plugins.iter_mut() {
+        let Some(entries) = entries_value.as_array_mut() else {
+            continue;
+        };
+        let previous_len = entries.len();
+        entries.retain(|entry| {
+            entry
+                .get("installPath")
+                .and_then(serde_json::Value::as_str)
+                .map(|install_path| {
+                    !path_resolves_into_broken_package(Path::new(install_path), package_root)
+                })
+                .unwrap_or(true)
+        });
+        let entries_changed = entries.len() != previous_len;
+        state_changed |= entries_changed;
+        if entries_changed && entries.is_empty() {
+            removed_plugin_keys.push(plugin_key.clone());
+        }
+    }
+    for plugin_key in &removed_plugin_keys {
+        plugins.remove(plugin_key);
+    }
+    if state_changed {
+        write_json_config(
+            &installed_state_path,
+            &installed_state,
+            "Claude installed_plugins.json",
+        )?;
+    }
+
+    let settings_path = home_dir.join(".claude/settings.json");
+    for plugin_key in removed_plugin_keys {
+        remove_claude_enabled_plugin_entry(&settings_path, &plugin_key)?;
+    }
+    Ok(())
+}
+
+fn collect_broken_managed_plugin_links(
+    root: &Path,
+    package_root: &Path,
+    depth: usize,
+    links: &mut BTreeMap<String, PathBuf>,
+) {
+    if depth > 8 {
+        return;
+    }
+    let Ok(entries) = fs::read_dir(root) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Ok(metadata) = fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if metadata.file_type().is_symlink() {
+            if path_resolves_into_broken_package(&path, package_root) {
+                links.insert(path_to_string(&path), path);
+            }
+        } else if metadata.is_dir() {
+            collect_broken_managed_plugin_links(&path, package_root, depth + 1, links);
+        }
+    }
+}
+
+fn path_resolves_into_broken_package(path: &Path, package_root: &Path) -> bool {
+    path_resolves_into_broken_package_at_depth(path, package_root, 0)
+}
+
+fn path_resolves_into_broken_package_at_depth(
+    path: &Path,
+    package_root: &Path,
+    depth: usize,
+) -> bool {
+    if depth > 16 {
+        return false;
+    }
+    let normalized_path = normalize_lexical_path(path);
+    if normalized_path.starts_with(package_root) {
+        return true;
+    }
+
+    let mut candidate = Some(normalized_path.as_path());
+    while let Some(prefix) = candidate {
+        if let Ok(link_target) = fs::read_link(prefix) {
+            let remaining_path = normalized_path
+                .strip_prefix(prefix)
+                .unwrap_or(Path::new(""));
+            let target_parent = prefix.parent().unwrap_or(Path::new(""));
+            let mut resolved_path = if link_target.is_absolute() {
+                link_target
+            } else {
+                target_parent.join(link_target)
+            };
+            resolved_path.push(remaining_path);
+            return path_resolves_into_broken_package_at_depth(
+                &resolved_path,
+                package_root,
+                depth + 1,
+            );
+        }
+        candidate = prefix.parent();
+    }
+    false
+}
+
+fn normalize_lexical_path(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Prefix(prefix) => normalized.push(prefix.as_os_str()),
+            Component::RootDir => normalized.push(component.as_os_str()),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            Component::Normal(value) => normalized.push(value),
+        }
+    }
+    normalized
 }
 
 #[tauri::command]
@@ -1908,7 +2137,6 @@ fn scan_cursor_installed_plugins(scan_mode: PluginScanMode) -> Vec<PluginSummary
         }
 
         let manifest_path = canonical_root.join(CURSOR_PLUGIN_MANIFEST);
-        let source_metadata = read_skilldock_plugin_source_metadata(&canonical_root);
         let cursor_git_root = find_git_root(&canonical_root)
             .filter(|root| is_under_cursor_plugin_storage(&home_dir, root))
             .filter(|root| !is_synthetic_cursor_git_repo(root));
@@ -1932,6 +2160,12 @@ fn scan_cursor_installed_plugins(scan_mode: PluginScanMode) -> Vec<PluginSummary
                         .map(Path::to_path_buf)
                 })
         });
+        let source_metadata =
+            read_skilldock_plugin_source_metadata(&canonical_root).or_else(|| {
+                managed_plugin_root
+                    .as_ref()
+                    .and_then(|root| read_skilldock_plugin_source_metadata(root))
+            });
         let source_type = resolve_plugin_source_type(
             &canonical_root,
             source_metadata.as_ref(),
@@ -2504,6 +2738,12 @@ fn managed_plugin_package_root_for_requested_path(path: &Path) -> Option<PathBuf
     let managed_plugins_root = workspace::managed_workspace_root()
         .ok()?
         .join(PLUGIN_PACKAGE_DIR);
+    let normalized_path = normalize_lexical_path(path);
+    let normalized_managed_root = normalize_lexical_path(&managed_plugins_root);
+    if let Ok(relative_path) = normalized_path.strip_prefix(&normalized_managed_root) {
+        let package_name = relative_path.components().next()?.as_os_str();
+        return Some(normalized_managed_root.join(package_name));
+    }
     let canonical_managed_root = canonicalize_existing_dir(&managed_plugins_root).ok()?;
     let relative_path = path.strip_prefix(&canonical_managed_root).ok()?;
     let package_name = relative_path.components().next()?.as_os_str();
@@ -2991,17 +3231,33 @@ fn delete_cursor_plugin(root_path: &str) -> Result<(), String> {
 fn cursor_local_install_root_for_path(home_dir: &Path, path: &Path) -> Option<PathBuf> {
     let cursor_root = home_dir.join(".cursor/plugins/local");
     cursor_install_root_for_path(&cursor_root, path)
+        .or_else(|| cursor_install_root_for_target(&cursor_root, path))
 }
 
 fn cursor_disabled_install_root_for_path(home_dir: &Path, path: &Path) -> Option<PathBuf> {
     let cursor_root = cursor_disabled_plugins_root(home_dir);
     cursor_install_root_for_path(&cursor_root, path)
+        .or_else(|| cursor_install_root_for_target(&cursor_root, path))
 }
 
 fn cursor_install_root_for_path(cursor_root: &Path, path: &Path) -> Option<PathBuf> {
     let relative_path = path.strip_prefix(&cursor_root).ok()?;
     let install_name = relative_path.components().next()?.as_os_str();
     Some(cursor_root.join(install_name))
+}
+
+fn cursor_install_root_for_target(cursor_root: &Path, target_root: &Path) -> Option<PathBuf> {
+    let entries = fs::read_dir(cursor_root).ok()?;
+    for entry in entries.flatten() {
+        let install_root = entry.path();
+        let Ok(canonical_install_root) = canonicalize_existing_dir(&install_root) else {
+            continue;
+        };
+        if target_root.strip_prefix(&canonical_install_root).is_ok() {
+            return Some(install_root);
+        }
+    }
+    None
 }
 
 fn collect_cursor_plugin_roots_for_target(
@@ -4506,10 +4762,13 @@ fn ensure_shared_plugin_repo(
             branch_arg = r.to_string();
             fetch_args.push(&branch_arg);
         }
-        if run_git_at(repo_root, &fetch_args).is_ok() {
-            let _ = run_git_at(repo_root, &["reset", "--hard", "FETCH_HEAD"]);
-        }
-        // fetch 失败也继续（使用现有内容），不阻断安装
+        let reset_target = if run_git_at(repo_root, &fetch_args).is_ok() {
+            "FETCH_HEAD"
+        } else {
+            "HEAD"
+        };
+        run_git_at(repo_root, &["reset", "--hard", reset_target])?;
+        // fetch 失败也继续（恢复并使用本地 HEAD），不阻断安装
         ensure_managed_plugin_repo_git_excludes(repo_root)?;
         configure_plugin_sparse_checkout(repo_root, plugin_relative_path)?;
         return Ok(());
@@ -4562,12 +4821,14 @@ fn ensure_shared_plugin_repo_from_existing(
 ) -> Result<(), String> {
     if paths_refer_to_same_dir(source_repo_root, target_repo_root) {
         write_plugin_package_identity(target_repo_root, source, plugin_relative_path)?;
+        run_git_at(target_repo_root, &["reset", "--hard", "HEAD"])?;
         ensure_managed_plugin_repo_git_excludes(target_repo_root)?;
         configure_plugin_sparse_checkout(target_repo_root, plugin_relative_path)?;
         return Ok(());
     }
     if target_repo_root.join(".git").is_dir() {
         write_plugin_package_identity(target_repo_root, source, plugin_relative_path)?;
+        run_git_at(target_repo_root, &["reset", "--hard", "HEAD"])?;
         ensure_managed_plugin_repo_git_excludes(target_repo_root)?;
         configure_plugin_sparse_checkout(target_repo_root, plugin_relative_path)?;
         return Ok(());
@@ -5138,8 +5399,15 @@ fn remove_opencode_installation(home_dir: &Path, plugin_root: &Path) -> Result<(
 }
 
 fn link_or_copy_plugin_dir(source_root: &Path, target_root: &Path) -> Result<(), String> {
-    if paths_refer_to_same_dir(source_root, target_root) {
+    if try_link_plugin_dir(source_root, target_root)? {
         return Ok(());
+    }
+    copy_dir_all(source_root, target_root, false)
+}
+
+fn try_link_plugin_dir(source_root: &Path, target_root: &Path) -> Result<bool, String> {
+    if paths_refer_to_same_dir(source_root, target_root) {
+        return Ok(true);
     }
     if target_root.exists() || fs::symlink_metadata(target_root).is_ok() {
         remove_path(target_root)?;
@@ -5150,12 +5418,60 @@ fn link_or_copy_plugin_dir(source_root: &Path, target_root: &Path) -> Result<(),
     }
     #[cfg(unix)]
     {
-        match std::os::unix::fs::symlink(source_root, target_root) {
-            Ok(()) => return Ok(()),
-            Err(_) => {}
+        if std::os::unix::fs::symlink(source_root, target_root).is_ok() {
+            return Ok(true);
         }
     }
-    copy_dir_all(source_root, target_root, false)
+    Ok(false)
+}
+
+fn link_cursor_plugin_dir_contents(source_root: &Path, target_root: &Path) -> Result<bool, String> {
+    #[cfg(unix)]
+    {
+        if paths_refer_to_same_dir(source_root, target_root) {
+            return Ok(true);
+        }
+        if target_root.exists() || fs::symlink_metadata(target_root).is_ok() {
+            remove_path(target_root)?;
+        }
+        fs::create_dir_all(target_root).map_err(|error| {
+            format!(
+                "创建 Cursor 插件安装目录失败（{}）: {error}",
+                target_root.display()
+            )
+        })?;
+        let entries = fs::read_dir(source_root).map_err(|error| {
+            format!(
+                "读取 Cursor 插件源目录失败（{}）: {error}",
+                source_root.display()
+            )
+        })?;
+        for entry in entries {
+            let entry = entry.map_err(|error| {
+                format!(
+                    "读取 Cursor 插件源目录条目失败（{}）: {error}",
+                    source_root.display()
+                )
+            })?;
+            let file_name = entry.file_name();
+            if file_name == ".git" || file_name == ".idea" {
+                continue;
+            }
+            let source_path = entry.path();
+            let target_path = target_root.join(&file_name);
+            if let Err(error) = std::os::unix::fs::symlink(&source_path, &target_path) {
+                let _ = fs::remove_dir_all(target_root);
+                return Err(format!(
+                    "创建 Cursor 插件内容软连接失败（{} -> {}）: {error}",
+                    target_path.display(),
+                    source_path.display()
+                ));
+            }
+        }
+        return Ok(true);
+    }
+    #[allow(unreachable_code)]
+    Ok(false)
 }
 
 fn remove_path(path: &Path) -> Result<(), String> {
@@ -6032,6 +6348,11 @@ fn install_cursor_plugin_probe(
     let target_repo_root = home_dir.join(".cursor/plugins/local").join(&plugin_name);
     let plugin_relative_path = cursor_plugin_relative_path(package_root, source_root, probe);
 
+    if link_cursor_plugin_dir_contents(source_root, &target_repo_root)? {
+        write_cursor_plugin_metadata(source_root, package_root, probe, &plugin_relative_path)?;
+        return Ok(target_repo_root);
+    }
+
     if cursor_plugin_should_use_git_clone(package_root, source_root, probe) {
         let target_root = ensure_cursor_local_git_clone(
             source_root,
@@ -6044,8 +6365,6 @@ fn install_cursor_plugin_probe(
         return Ok(target_root);
     }
 
-    // Cursor rejects local plugins whose install roots are symlinks pointing outside
-    // ~/.cursor/plugins/local, so non-Git installs are still materialized as real directories.
     copy_cursor_plugin_dir(source_root, &target_repo_root)?;
     write_cursor_plugin_metadata(
         &target_repo_root,
@@ -6078,14 +6397,16 @@ fn install_cursor_plugin_probe_independent(
     }
 
     if let Ok((clone_url, source_ref, plugin_relative_path)) = cursor_remote_clone_spec(probe) {
-        return install_cursor_plugin_probe_from_remote(
+        if let Ok(installed_root) = install_cursor_plugin_probe_from_remote(
             home_dir,
             probe,
             &clone_url,
             source_ref.as_deref(),
             &plugin_relative_path,
             on_progress,
-        );
+        ) {
+            return Ok(installed_root);
+        }
     }
 
     let host_tools = vec!["cursor".to_string()];
@@ -6137,77 +6458,20 @@ fn install_cursor_plugin_probe_from_remote(
     plugin_relative_path: &Path,
     on_progress: Option<&CloneProgressCallback>,
 ) -> Result<PathBuf, String> {
-    let cursor_local_root = home_dir.join(".cursor/plugins/local");
-    fs::create_dir_all(&cursor_local_root).map_err(|error| {
-        format!(
-            "创建 Cursor 插件目录失败（{}）: {error}",
-            cursor_local_root.display()
-        )
-    })?;
-    let temp_repo_root = cursor_local_root.join(format!(
-        ".skilldock-install-{}",
-        short_stable_hash(&format!(
-            "{}#{}#{}",
-            clone_url,
-            source_ref.unwrap_or_default(),
-            normalize_relative_path(plugin_relative_path)
-        ))
-    ));
-    if temp_repo_root.exists() || fs::symlink_metadata(&temp_repo_root).is_ok() {
-        remove_path(&temp_repo_root)?;
-    }
+    let mut shared_probe = probe.clone();
+    shared_probe.plugin_root.clear();
+    shared_probe.repo_root.clear();
+    shared_probe.git_root.clear();
+    shared_probe.source_url = clone_url.to_string();
+    shared_probe.source_ref = source_ref.unwrap_or_default().to_string();
+    shared_probe.plugin_relative_path = normalize_relative_path(plugin_relative_path);
 
-    clone_cursor_plugin_remote_repo(
-        &clone_url,
-        source_ref,
-        &temp_repo_root,
-        plugin_relative_path,
-        on_progress,
-    )
-    .map_err(|error| {
-        let _ = remove_path(&temp_repo_root);
-        error
-    })?;
-
-    let plugin_root = cursor_plugin_root_from_repo(&temp_repo_root, plugin_relative_path)?;
-    ensure_host_manifests_for_hosts(&plugin_root, probe, &["cursor".to_string()]).map_err(
-        |error| {
-            let _ = remove_path(&temp_repo_root);
-            error
-        },
-    )?;
-    let manifest =
-        read_plugin_manifest(&plugin_root.join(CURSOR_PLUGIN_MANIFEST)).map_err(|error| {
-            let _ = remove_path(&temp_repo_root);
-            error
-        })?;
-    let plugin_name = plugin_install_name(&manifest, &plugin_root);
-    ensure_cursor_plugin_not_disabled(home_dir, &plugin_name).map_err(|error| {
-        let _ = remove_path(&temp_repo_root);
-        error
-    })?;
-    let target_repo_root = cursor_local_root.join(&plugin_name);
-
-    if paths_refer_to_same_dir(&temp_repo_root, &target_repo_root) {
-        ensure_cursor_plugin_root_overlay(&target_repo_root, plugin_relative_path)?;
-        write_cursor_plugin_remote_metadata(&target_repo_root, probe, plugin_relative_path)?;
-        return canonicalize_existing_dir(&target_repo_root);
-    }
-    if target_repo_root.exists() || fs::symlink_metadata(&target_repo_root).is_ok() {
-        remove_path(&target_repo_root)?;
-    }
-    fs::rename(&temp_repo_root, &target_repo_root).map_err(|error| {
-        let _ = remove_path(&temp_repo_root);
-        format!(
-            "替换 Cursor 插件目录失败（{} -> {}）: {error}",
-            temp_repo_root.display(),
-            target_repo_root.display()
-        )
-    })?;
-
-    ensure_cursor_plugin_root_overlay(&target_repo_root, plugin_relative_path)?;
-    write_cursor_plugin_remote_metadata(&target_repo_root, probe, plugin_relative_path)?;
-    canonicalize_existing_dir(&target_repo_root)
+    let host_tools = vec!["cursor".to_string()];
+    let package = ensure_shared_plugin_package(&shared_probe, &host_tools, on_progress)?;
+    let source_root = canonicalize_existing_dir(&package.plugin_root)?;
+    let package_root =
+        managed_plugin_package_root_for_path(&source_root).unwrap_or_else(|| source_root.clone());
+    install_cursor_plugin_probe(home_dir, &source_root, &package_root, &shared_probe)
 }
 
 fn legacy_skilldock_plugin_source_metadata_path(plugin_root: &Path) -> PathBuf {
@@ -6474,35 +6738,6 @@ fn local_git_clone_url_from_source(source: &str) -> Option<String> {
     None
 }
 
-fn clone_cursor_plugin_remote_repo(
-    clone_url: &str,
-    source_ref: Option<&str>,
-    target_repo_root: &Path,
-    plugin_relative_path: &Path,
-    on_progress: Option<&CloneProgressCallback>,
-) -> Result<(), String> {
-    let mut command = git_command();
-    configure_git_network_command(&mut command);
-    command.arg("clone").arg("--no-tags");
-    if !plugin_relative_path.as_os_str().is_empty() {
-        command.arg("--sparse").arg("--no-checkout");
-    }
-    if on_progress.is_some() {
-        command.arg("--progress");
-    }
-    if let Some(branch) = source_ref.and_then(non_empty_trimmed_string) {
-        command.arg("--branch").arg(branch);
-    }
-    command
-        .arg(clone_url.trim())
-        .arg(target_repo_root.to_string_lossy().as_ref());
-    run_git_clone_with_progress(&mut command, on_progress, "git clone (cursor plugin)")?;
-    if plugin_relative_path.as_os_str().is_empty() {
-        return Ok(());
-    }
-    configure_plugin_sparse_checkout(target_repo_root, plugin_relative_path)
-}
-
 fn ensure_cursor_local_git_clone(
     source_root: &Path,
     package_root: &Path,
@@ -6711,18 +6946,6 @@ fn cursor_clone_origin_url(probe: &PluginProbeResult, package_root: &Path) -> Op
         })
 }
 
-fn write_cursor_plugin_remote_metadata(
-    plugin_root: &Path,
-    probe: &PluginProbeResult,
-    plugin_relative_path: &Path,
-) -> Result<(), String> {
-    write_skilldock_plugin_source_metadata(plugin_root, probe)?;
-    if let Some(source) = cursor_remote_clone_url(probe) {
-        write_plugin_package_identity(plugin_root, &source, plugin_relative_path)?;
-    }
-    Ok(())
-}
-
 fn remote_clone_url_from_source(source: &str) -> Option<String> {
     let trimmed = source.trim();
     if trimmed.is_empty() {
@@ -6920,43 +7143,10 @@ fn plugin_remote_repo_segments<'a>(host: &str, segments: &'a [&'a str]) -> Optio
 }
 
 fn sync_cursor_local_git_copy(source_root: &Path, target_root: &Path) -> Result<(), String> {
-    copy_cursor_plugin_dir(source_root, target_root)?;
-    if let Some(identity) = read_plugin_package_identity(source_root).or_else(|| {
-        managed_plugin_package_root_for_path(source_root)
-            .and_then(|root| read_plugin_package_identity(&root))
-    }) {
-        write_plugin_package_identity(
-            target_root,
-            &identity.source,
-            Path::new(&identity.plugin_relative_path),
-        )?;
+    if link_cursor_plugin_dir_contents(source_root, target_root)? {
+        return Ok(());
     }
-    if let Some(metadata) = read_skilldock_plugin_source_metadata(source_root) {
-        let probe = PluginProbeResult {
-            tool: "cursor".to_string(),
-            compatible_host_tools: vec!["cursor".to_string()],
-            kind: "plugin-repo".to_string(),
-            manifest_name: String::new(),
-            name: String::new(),
-            description: String::new(),
-            plugin_root: source_root.to_string_lossy().into_owned(),
-            repo_root: String::new(),
-            plugin_relative_path: String::new(),
-            manifest_path: String::new(),
-            marketplace_manifest_path: String::new(),
-            components: Vec::new(),
-            source_type: metadata.source_type,
-            source_url: metadata.source_url,
-            source_ref: metadata.source_ref,
-            is_git_repo: false,
-            git_root: String::new(),
-            confidence: "high".to_string(),
-            install_strategy: "cursor-plugin-dir".to_string(),
-            warnings: Vec::new(),
-        };
-        write_skilldock_plugin_source_metadata(target_root, &probe)?;
-    }
-    Ok(())
+    copy_cursor_plugin_dir(source_root, target_root)
 }
 
 fn paths_refer_to_same_dir(left: &Path, right: &Path) -> bool {
@@ -10826,7 +11016,8 @@ mod tests {
     use super::{
         build_plugin_scope_summary, cleanup_duplicate_plugin_package_roots,
         configure_plugin_sparse_checkout, copy_plugin_dir, current_timestamp_rfc3339,
-        dedupe_and_sort_plugins, delete_plugin, ensure_skilldock_claude_marketplace,
+        dedupe_and_sort_plugins, delete_plugin, ensure_shared_plugin_repo,
+        ensure_shared_plugin_repo_from_existing, ensure_skilldock_claude_marketplace,
         ensure_skilldock_codex_cache_link, ensure_skilldock_codex_marketplace,
         get_plugin_component_preview, install_selected_plugin_probes_blocking,
         legacy_plugin_package_identity_path, legacy_skilldock_plugin_source_metadata_path,
@@ -11429,6 +11620,109 @@ exit 0
         assert!(git_exclude.contains(".idea/"));
         assert!(git_exclude.contains(".vscode/"));
         assert!(git_exclude.contains(".DS_Store"));
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn shared_plugin_repo_restores_local_head_when_fetch_fails() {
+        let _guard = TEST_ENV_LOCK.lock().expect("lock test env");
+        let temp_dir = temp_test_dir("plugin-cache-fetch-fallback");
+        let repo_root = temp_dir.join("repo");
+        let plugin_root = repo_root.join("example-plugin");
+        fs::create_dir_all(plugin_root.join(".opencode/plugins"))
+            .expect("create OpenCode plugin dir");
+        fs::write(
+            plugin_root.join(".opencode/plugins/example-plugin.js"),
+            "export const AgenticEngineering = async () => ({})",
+        )
+        .expect("write OpenCode plugin entry");
+        commit_test_repo(&repo_root, None);
+        run_git_test(
+            &repo_root,
+            &[
+                "remote",
+                "add",
+                "origin",
+                temp_dir.join("missing-remote.git").to_str().unwrap(),
+            ],
+        );
+        configure_plugin_sparse_checkout(&repo_root, Path::new("example-plugin"))
+            .expect("configure sparse checkout");
+        fs::remove_dir_all(&plugin_root).expect("simulate missing managed worktree");
+
+        ensure_shared_plugin_repo(
+            "unused-while-cache-exists",
+            None,
+            &repo_root,
+            Path::new("example-plugin"),
+            false,
+            None,
+        )
+        .expect("restore existing managed repo from local HEAD");
+
+        assert!(plugin_root
+            .join(".opencode/plugins/example-plugin.js")
+            .is_file());
+        assert_eq!(
+            run_git_test_output(&repo_root, &["status", "--porcelain"]),
+            ""
+        );
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn shared_plugin_repo_from_existing_restores_reused_managed_worktree() {
+        let _guard = TEST_ENV_LOCK.lock().expect("lock test env");
+        let temp_dir = temp_test_dir("plugin-existing-cache-restore");
+        let source_repo_root = temp_dir.join("source-repo");
+        let target_repo_root = temp_dir.join("managed-repo");
+        let plugin_relative_path = Path::new("example-plugin");
+        let target_plugin_root = target_repo_root.join(plugin_relative_path);
+
+        fs::create_dir_all(
+            source_repo_root
+                .join(plugin_relative_path)
+                .join(".cursor-plugin"),
+        )
+        .expect("create source plugin dir");
+        fs::write(
+            source_repo_root
+                .join(plugin_relative_path)
+                .join(".cursor-plugin/plugin.json"),
+            r#"{"name":"example-plugin"}"#,
+        )
+        .expect("write source plugin manifest");
+        commit_test_repo(&source_repo_root, None);
+
+        fs::create_dir_all(target_plugin_root.join(".opencode/plugins"))
+            .expect("create managed OpenCode plugin dir");
+        fs::write(
+            target_plugin_root.join(".opencode/plugins/example-plugin.js"),
+            "export const AgenticEngineering = async () => ({})",
+        )
+        .expect("write managed OpenCode plugin entry");
+        commit_test_repo(&target_repo_root, None);
+        configure_plugin_sparse_checkout(&target_repo_root, plugin_relative_path)
+            .expect("configure managed sparse checkout");
+        fs::remove_dir_all(&target_plugin_root).expect("simulate missing managed worktree");
+
+        ensure_shared_plugin_repo_from_existing(
+            &source_repo_root,
+            &target_repo_root,
+            "https://example.com/example-plugin.git",
+            plugin_relative_path,
+        )
+        .expect("restore reused managed repo from local HEAD");
+
+        assert!(target_plugin_root
+            .join(".opencode/plugins/example-plugin.js")
+            .is_file());
+        assert_eq!(
+            run_git_test_output(&target_repo_root, &["status", "--porcelain"]),
+            ""
+        );
 
         let _ = fs::remove_dir_all(temp_dir);
     }
@@ -12933,15 +13227,15 @@ source = "__SOURCE__"
         let installed_repo_root = home_dir.join(".cursor/plugins/local/coding-tutor");
         assert_eq!(installed.len(), 1);
         assert!(repo_root.exists());
-        assert!(installed_repo_root.join(".git").is_dir());
+        assert!(installed_repo_root.is_dir());
+        assert!(fs::canonicalize(installed_repo_root.join(".cursor-plugin"))
+            .expect("canonicalize managed Cursor manifest directory")
+            .to_string_lossy()
+            .contains("/.skilldock/plugins/"));
         assert!(installed_repo_root
             .join(".cursor-plugin/plugin.json")
             .is_file());
         assert!(installed_repo_root.join("commands/teach.md").is_file());
-        assert_eq!(
-            run_git_test_output(&installed_repo_root, &["remote", "get-url", "origin"]),
-            source_url
-        );
 
         let _ = fs::remove_dir_all(temp_dir);
     }
@@ -13732,7 +14026,6 @@ source = "__SOURCE__"
         }
 
         let installed_repo_root = home_dir.join(".cursor/plugins/local/example-plugin");
-        let installed_plugin_root = installed_repo_root.join("plugins/example-plugin");
         assert_eq!(installed.len(), 1);
         assert_eq!(installed[0].host_tool, "cursor");
         assert_eq!(installed[0].name, "Example Plugin");
@@ -13741,54 +14034,17 @@ source = "__SOURCE__"
             Path::new(&installed[0].root_path),
             &installed_repo_root
         ));
-        assert!(!fs::symlink_metadata(&installed_repo_root)
-            .expect("read installed root metadata")
-            .file_type()
-            .is_symlink());
+        assert!(installed_repo_root.is_dir());
+        assert!(fs::canonicalize(installed_repo_root.join(".cursor-plugin"))
+            .expect("canonicalize managed Cursor manifest directory")
+            .to_string_lossy()
+            .contains("/.skilldock/plugins/"));
         assert!(installed_repo_root
             .join(".cursor-plugin/plugin.json")
             .is_file());
         assert!(installed_repo_root
             .join("rules/review-checklist.mdc")
             .is_file());
-        assert!(installed_plugin_root
-            .join(".cursor-plugin/plugin.json")
-            .is_file());
-        assert!(installed_plugin_root
-            .join("rules/review-checklist.mdc")
-            .is_file());
-        assert!(installed_repo_root.join(".git").is_dir());
-        assert!(!installed_plugin_root.join(".git").exists());
-        assert!(!super::is_synthetic_cursor_git_repo(&installed_repo_root));
-        assert!(
-            fs::symlink_metadata(installed_repo_root.join(".cursor-plugin"))
-                .expect("read cursor manifest overlay metadata")
-                .file_type()
-                .is_symlink()
-        );
-        assert!(fs::symlink_metadata(installed_repo_root.join("rules"))
-            .expect("read rules overlay metadata")
-            .file_type()
-            .is_symlink());
-        assert_eq!(
-            run_git_test_output(&installed_repo_root, &["rev-parse", "--abbrev-ref", "HEAD"]),
-            "main"
-        );
-        assert_eq!(
-            run_git_test_output(&installed_repo_root, &["remote", "get-url", "origin"]),
-            source_url
-        );
-        assert_eq!(
-            run_git_test_output(
-                &installed_repo_root,
-                &["status", "--porcelain", "--", "plugins/example-plugin"]
-            ),
-            ""
-        );
-        assert!(
-            !run_git_test_output(&installed_repo_root, &["log", "--format=%s"])
-                .contains("SkillDock plugin snapshot")
-        );
         assert_eq!(plugins.len(), 1);
         assert_eq!(plugins[0].host_tool, "cursor");
         assert_eq!(plugins[0].name, "Example Plugin");
@@ -13814,7 +14070,7 @@ source = "__SOURCE__"
     }
 
     #[test]
-    fn installs_cursor_plugin_directly_without_shared_package() {
+    fn installs_cursor_plugin_from_shared_package_symlink() {
         let _guard = TEST_ENV_LOCK.lock().expect("lock test env");
         let temp_dir = temp_test_dir("cloudflare-skills-name-alignment");
         let home_dir = temp_dir.join("home");
@@ -13872,10 +14128,14 @@ source = "__SOURCE__"
         let managed_root = home_dir.join(".skilldock/plugins/cloudflare");
         let cursor_root = home_dir.join(".cursor/plugins/local/cloudflare");
         assert_eq!(installed.len(), 1);
-        assert!(!managed_root.exists());
+        assert!(managed_root.is_dir());
+        assert!(cursor_root.is_dir());
+        assert!(paths_refer_to_same_dir(
+            &managed_root.join(".cursor-plugin"),
+            &cursor_root.join(".cursor-plugin")
+        ));
         assert!(cursor_root.join(".cursor-plugin/plugin.json").is_file());
         assert!(cursor_root.join("skills/browser/SKILL.md").is_file());
-        assert!(cursor_root.join(".git").is_dir());
 
         let _ = fs::remove_dir_all(temp_dir);
     }
@@ -14124,12 +14384,8 @@ source = "__SOURCE__"
             .is_file());
         assert!(home_dir.join(".codex/config.toml").is_file());
         let cursor_root = home_dir.join(".cursor/plugins/local/coding-tutor");
-        assert!(cursor_root.join(".git").is_dir());
+        assert!(cursor_root.is_dir());
         assert!(cursor_root.join(".cursor-plugin/plugin.json").is_file());
-        assert_eq!(
-            run_git_test_output(&cursor_root, &["remote", "get-url", "origin"]),
-            source_url
-        );
         let claude_root = installed
             .iter()
             .find(|plugin| plugin.host_tool == "claude-code")
@@ -14142,8 +14398,14 @@ source = "__SOURCE__"
             .expect("find codex install root");
         assert!(claude_root.join(".claude-plugin/plugin.json").is_file());
         assert!(codex_root.join(".codex-plugin/plugin.json").is_file());
-        assert!(!paths_refer_to_same_dir(&claude_root, &cursor_root));
-        assert!(!paths_refer_to_same_dir(&codex_root, &cursor_root));
+        assert!(paths_refer_to_same_dir(
+            &claude_root.join(".claude-plugin"),
+            &cursor_root.join(".claude-plugin")
+        ));
+        assert!(paths_refer_to_same_dir(
+            &codex_root.join(".codex-plugin"),
+            &cursor_root.join(".codex-plugin")
+        ));
 
         let _ = fs::remove_dir_all(temp_dir);
     }
@@ -14205,6 +14467,7 @@ source = "__SOURCE__"
         let cursor_root = home_dir.join(".cursor/plugins/local/compound-engineering");
         assert_eq!(installed.len(), 1);
         assert_eq!(installed[0].host_tool, "cursor");
+        assert!(cursor_root.is_dir());
         assert!(cursor_root.join(".cursor-plugin/plugin.json").is_file());
         assert!(cursor_root.join("skills/compound/SKILL.md").is_file());
 
@@ -14213,7 +14476,7 @@ source = "__SOURCE__"
 
     #[cfg(unix)]
     #[test]
-    fn cursor_plugin_install_materializes_directory_in_local_root() {
+    fn cursor_plugin_install_links_managed_contents_into_local_root() {
         let _guard = TEST_ENV_LOCK.lock().expect("lock test env");
         let temp_dir = temp_test_dir("cursor-install-materializes-local-dir");
         let home_dir = temp_dir.join("home");
@@ -14270,28 +14533,39 @@ source = "__SOURCE__"
         }
 
         let installed_root = home_dir.join(".cursor/plugins/local/shopify-plugin");
-        let installed_plugin_root = installed_root.join("plugins/shopify-plugin");
         assert_eq!(installed.len(), 1);
         assert!(installed_root.join(".cursor-plugin/plugin.json").is_file());
-        assert!(installed_plugin_root
-            .join(".cursor-plugin/plugin.json")
-            .is_file());
-        assert!(installed_root.join(".git").is_dir());
-        assert!(!super::is_synthetic_cursor_git_repo(&installed_root));
+        assert!(installed_root.is_dir());
         assert!(!fs::symlink_metadata(&installed_root)
-            .expect("read installed root metadata")
+            .expect("read Cursor plugin root metadata")
             .file_type()
             .is_symlink());
         assert!(fs::symlink_metadata(installed_root.join(".cursor-plugin"))
-            .expect("read cursor manifest overlay metadata")
+            .expect("read Cursor manifest link metadata")
             .file_type()
             .is_symlink());
+        assert!(fs::symlink_metadata(installed_root.join("skills"))
+            .expect("read Cursor skills link metadata")
+            .file_type()
+            .is_symlink());
+        let managed_plugin_root = fs::canonicalize(installed_root.join(".cursor-plugin"))
+            .expect("canonicalize managed Cursor manifest directory")
+            .parent()
+            .expect("managed plugin root")
+            .to_path_buf();
+        assert!(managed_plugin_root
+            .to_string_lossy()
+            .contains("/.skilldock/plugins/"));
+        assert!(paths_refer_to_same_dir(
+            Path::new(&installed[0].root_path),
+            &installed_root
+        ));
 
         let _ = fs::remove_dir_all(temp_dir);
     }
 
     #[test]
-    fn cursor_subdir_install_creates_independent_git_clone_without_snapshot() {
+    fn cursor_subdir_install_links_shared_plugin_without_snapshot() {
         let _guard = TEST_ENV_LOCK.lock().expect("lock test env");
         let temp_dir = temp_test_dir("cursor-subdir-install-git");
         let home_dir = temp_dir.join("home");
@@ -14350,68 +14624,39 @@ source = "__SOURCE__"
         }
 
         let installed_repo_root = home_dir.join(".cursor/plugins/local/coding-tutor");
-        let installed_repo_root_canonical =
-            fs::canonicalize(&installed_repo_root).expect("canonicalize installed repo root");
-        let installed_plugin_root = installed_repo_root.join("plugins/coding-tutor");
         assert_eq!(installed.len(), 1);
-        assert_eq!(
-            installed[0].root_path,
-            installed_repo_root_canonical.to_string_lossy().into_owned()
-        );
+        assert!(paths_refer_to_same_dir(
+            Path::new(&installed[0].root_path),
+            &installed_repo_root
+        ));
         assert!(installed_repo_root
             .join(".cursor-plugin/plugin.json")
             .is_file());
-        assert!(installed_plugin_root
-            .join(".cursor-plugin/plugin.json")
-            .is_file());
-        assert!(installed_repo_root.join(".git").is_dir());
-        assert!(!installed_plugin_root.join(".git").exists());
-        assert!(!super::is_synthetic_cursor_git_repo(&installed_repo_root));
-        assert!(
-            fs::symlink_metadata(installed_repo_root.join(".cursor-plugin"))
-                .expect("read cursor manifest overlay metadata")
-                .file_type()
-                .is_symlink()
-        );
-        assert!(fs::symlink_metadata(installed_repo_root.join("commands"))
-            .expect("read commands overlay metadata")
-            .file_type()
-            .is_symlink());
-        assert_eq!(
-            run_git_test_output(&installed_repo_root, &["remote", "get-url", "origin"]),
-            source_url
-        );
-        assert_eq!(
-            run_git_test_output(
-                &installed_repo_root,
-                &["status", "--porcelain", "--", "plugins/coding-tutor"]
-            ),
-            ""
-        );
-        assert_eq!(
-            run_git_test_output(&installed_repo_root, &["status", "--porcelain"]),
-            ""
-        );
-        assert!(
-            !run_git_test_output(&installed_repo_root, &["log", "--format=%s"])
-                .contains("SkillDock plugin snapshot")
-        );
+        assert!(installed_repo_root.is_dir());
+        let managed_plugin_root = fs::canonicalize(installed_repo_root.join(".cursor-plugin"))
+            .expect("canonicalize managed Cursor manifest directory")
+            .parent()
+            .expect("managed plugin root")
+            .to_path_buf();
+        assert!(managed_plugin_root
+            .to_string_lossy()
+            .contains("/.skilldock/plugins/"));
         assert_eq!(plugins.len(), 1);
-        assert_eq!(
-            plugins[0].root_path,
-            installed_repo_root_canonical.to_string_lossy().into_owned()
-        );
-        assert_eq!(
-            plugins[0].repo_root_path,
-            installed_repo_root_canonical.to_string_lossy().into_owned()
-        );
+        assert!(paths_refer_to_same_dir(
+            Path::new(&plugins[0].root_path),
+            &installed_repo_root
+        ));
         assert_eq!(plugins[0].plugin_relative_path, "plugins/coding-tutor");
+        assert!(paths_refer_to_same_dir(
+            &PathBuf::from(&plugins[0].repo_root_path).join(&plugins[0].plugin_relative_path),
+            &managed_plugin_root
+        ));
 
         let _ = fs::remove_dir_all(temp_dir);
     }
 
     #[test]
-    fn updates_cursor_git_plugin_in_local_repo_without_managed_copy() {
+    fn updates_cursor_git_plugin_in_managed_directory() {
         let _guard = TEST_ENV_LOCK.lock().expect("lock test env");
         let temp_dir = temp_test_dir("cursor-git-update-local-repo");
         let home_dir = temp_dir.join("home");
@@ -14462,6 +14707,11 @@ source = "__SOURCE__"
         )
         .expect("install cursor plugin");
         let installed_root = PathBuf::from(&installed[0].root_path);
+        let managed_package_root = home_dir.join(".skilldock/plugins/coding-tutor");
+        run_git_test(
+            &managed_package_root,
+            &["remote", "add", "origin", &source_url],
+        );
 
         fs::write(source_root.join("commands/teach-me.md"), "# v2").expect("update command");
         run_git_test(&repo_root, &["add", "."]);
@@ -14485,10 +14735,10 @@ source = "__SOURCE__"
                 .contains("v2")
         );
         assert_eq!(
-            run_git_test_output(&installed_root, &["remote", "get-url", "origin"]),
+            run_git_test_output(&managed_package_root, &["remote", "get-url", "origin"]),
             source_url
         );
-        assert!(!home_dir.join(".skilldock/plugins/coding-tutor").exists());
+        assert!(home_dir.join(".skilldock/plugins/coding-tutor").is_dir());
 
         let _ = fs::remove_dir_all(temp_dir);
     }
@@ -14658,7 +14908,7 @@ source = "__SOURCE__"
 
     #[cfg(unix)]
     #[test]
-    fn deletes_cursor_local_copy_and_managed_plugin_package() {
+    fn deletes_cursor_local_link_and_managed_plugin_package() {
         let _guard = TEST_ENV_LOCK.lock().expect("lock test env");
         let temp_dir = temp_test_dir("cursor-delete-managed-plugin");
         let home_dir = temp_dir.join("home");
@@ -14685,7 +14935,10 @@ source = "__SOURCE__"
             .expect("create legacy placeholder");
         fs::write(legacy_placeholder_root.join(".idea/workspace.xml"), "")
             .expect("write legacy placeholder metadata");
-        copy_plugin_dir(&managed_plugin_root, &install_root).expect("copy cursor plugin");
+        fs::create_dir_all(install_root.parent().expect("Cursor install parent"))
+            .expect("create Cursor install parent");
+        std::os::unix::fs::symlink(&managed_plugin_root, &install_root)
+            .expect("link managed Cursor plugin");
         write_skilldock_plugin_source_metadata(
             &install_root,
             &PluginProbeResult {
@@ -14924,6 +15177,120 @@ source = "__SOURCE__"
         assert!(fs::symlink_metadata(&install_root).is_err());
         assert!(!managed_package_root.exists());
         assert!(plugins.is_empty());
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn deletes_broken_managed_plugin_links_and_residual_package() {
+        let _guard = TEST_ENV_LOCK.lock().expect("lock test env");
+        let temp_dir = temp_test_dir("delete-broken-managed-plugin");
+        let home_dir = temp_dir.join("home");
+        let package_root = home_dir.join(".skilldock/plugins/example-plugin");
+        let missing_plugin_root = package_root.join("example-plugin");
+        let claude_link =
+            home_dir.join(".claude/plugins/marketplaces/skilldock/plugins/example-plugin");
+        let cursor_link = home_dir.join(".cursor/plugins/local/example-plugin");
+        let cursor_agent_link = home_dir.join(".cursor/agents/agentic-review.md");
+        let opencode_link = home_dir.join(".config/opencode/plugins/example-plugin.js");
+        let opencode_marker =
+            home_dir.join(".skilldock/disabled-plugins/opencode/example-plugin");
+        let codex_link = home_dir.join(".codex/plugins/cache/skilldock/example-plugin");
+
+        fs::create_dir_all(package_root.join(".git/info")).expect("create residual package");
+        for parent in [
+            claude_link.parent(),
+            cursor_link.parent(),
+            cursor_agent_link.parent(),
+            opencode_link.parent(),
+            codex_link.parent(),
+        ] {
+            fs::create_dir_all(parent.expect("link parent")).expect("create link parent");
+        }
+        fs::create_dir_all(&opencode_marker).expect("create opencode marker");
+        std::os::unix::fs::symlink(&missing_plugin_root, &claude_link)
+            .expect("create broken claude link");
+        std::os::unix::fs::symlink(&missing_plugin_root, &cursor_link)
+            .expect("create broken cursor link");
+        std::os::unix::fs::symlink(
+            cursor_link.join("agents/agentic-review.md"),
+            &cursor_agent_link,
+        )
+        .expect("create broken cursor agent link");
+        std::os::unix::fs::symlink(
+            missing_plugin_root.join(".opencode/plugins/example-plugin.js"),
+            &opencode_link,
+        )
+        .expect("create broken opencode link");
+        std::os::unix::fs::symlink(&missing_plugin_root, &codex_link).expect("create codex link");
+
+        fs::write(
+            home_dir.join(".claude/plugins/installed_plugins.json"),
+            r#"{
+  "version": 2,
+  "plugins": {
+    "example-plugin@skilldock": [
+      { "installPath": "__INSTALL_PATH__" }
+    ]
+  }
+}"#
+            .replace("__INSTALL_PATH__", &claude_link.to_string_lossy()),
+        )
+        .expect("write claude installed state");
+        fs::write(
+            home_dir.join(".claude/settings.json"),
+            r#"{
+  "enabledPlugins": {
+    "example-plugin@skilldock": true
+  }
+}"#,
+        )
+        .expect("write claude settings");
+
+        let previous_home = env::var_os("HOME");
+        env::set_var("HOME", &home_dir);
+
+        assert!(super::path_resolves_into_broken_package(
+            &claude_link,
+            &package_root,
+        ));
+        assert!(super::path_resolves_into_broken_package(
+            &cursor_agent_link,
+            &package_root,
+        ));
+
+        delete_plugin(
+            "claude-code".to_string(),
+            claude_link.to_string_lossy().into_owned(),
+        )
+        .expect("delete broken managed plugin");
+        delete_plugin(
+            "cursor".to_string(),
+            cursor_link.to_string_lossy().into_owned(),
+        )
+        .expect("repeat aggregate delete after cleanup");
+
+        let installed_content =
+            fs::read_to_string(home_dir.join(".claude/plugins/installed_plugins.json"))
+                .expect("read claude installed state");
+        let settings_content =
+            fs::read_to_string(home_dir.join(".claude/settings.json")).expect("read settings");
+
+        match previous_home {
+            Some(value) => env::set_var("HOME", value),
+            None => env::remove_var("HOME"),
+        }
+
+        assert!(fs::symlink_metadata(&claude_link).is_err());
+        assert!(fs::symlink_metadata(&cursor_link).is_err());
+        assert!(fs::symlink_metadata(&cursor_agent_link).is_err());
+        assert!(fs::symlink_metadata(&opencode_link).is_err());
+        assert!(fs::symlink_metadata(&opencode_marker).is_err());
+        assert!(fs::symlink_metadata(&package_root).is_err());
+        assert!(fs::symlink_metadata(&codex_link).is_ok());
+        assert!(!installed_content.contains("example-plugin@skilldock"));
+        assert!(!settings_content.contains("example-plugin@skilldock"));
 
         let _ = fs::remove_dir_all(temp_dir);
     }
@@ -15169,6 +15536,69 @@ source = "__SOURCE__"
         assert!(!disabled_root.exists());
         assert_eq!(plugins.len(), 1);
         assert_eq!(plugins[0].enabled_state, "enabled");
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn toggles_cursor_plugin_by_moving_managed_symlink() {
+        let _guard = TEST_ENV_LOCK.lock().expect("lock test env");
+        let temp_dir = temp_test_dir("cursor-toggle-managed-symlink");
+        let home_dir = temp_dir.join("home");
+        let managed_root = home_dir.join(".skilldock/plugins/example-plugin");
+        let install_root = home_dir.join(".cursor/plugins/local/example-plugin");
+        let disabled_root = home_dir.join(".skilldock/disabled-plugins/cursor/example-plugin");
+
+        fs::create_dir_all(managed_root.join(".cursor-plugin"))
+            .expect("create managed Cursor plugin manifest dir");
+        fs::create_dir_all(managed_root.join("skills/reviewer"))
+            .expect("create managed Cursor skill dir");
+        fs::write(
+            managed_root.join(".cursor-plugin/plugin.json"),
+            r#"{"name":"example-plugin","displayName":"Example Plugin","version":"1.0.0"}"#,
+        )
+        .expect("write managed Cursor plugin manifest");
+        fs::write(managed_root.join("skills/reviewer/SKILL.md"), "# Reviewer")
+            .expect("write managed Cursor skill");
+        fs::create_dir_all(install_root.parent().expect("Cursor install parent"))
+            .expect("create Cursor install parent");
+        std::os::unix::fs::symlink(&managed_root, &install_root)
+            .expect("link managed Cursor plugin");
+
+        let previous_home = env::var_os("HOME");
+        env::set_var("HOME", &home_dir);
+
+        let disabled_plugin = set_plugin_enabled(
+            "cursor".to_string(),
+            managed_root.to_string_lossy().into_owned(),
+            false,
+        )
+        .expect("disable linked Cursor plugin");
+        assert_eq!(disabled_plugin.enabled_state, "disabled");
+        assert!(fs::symlink_metadata(&install_root).is_err());
+        assert!(fs::symlink_metadata(&disabled_root)
+            .expect("read disabled Cursor plugin link")
+            .file_type()
+            .is_symlink());
+        assert!(managed_root.join("skills/reviewer/SKILL.md").is_file());
+
+        let enabled_plugin =
+            set_plugin_enabled("cursor".to_string(), disabled_plugin.root_path, true)
+                .expect("enable linked Cursor plugin");
+
+        match previous_home {
+            Some(value) => env::set_var("HOME", value),
+            None => env::remove_var("HOME"),
+        }
+
+        assert_eq!(enabled_plugin.enabled_state, "enabled");
+        assert!(fs::symlink_metadata(&install_root)
+            .expect("read enabled Cursor plugin link")
+            .file_type()
+            .is_symlink());
+        assert!(fs::symlink_metadata(&disabled_root).is_err());
+        assert!(managed_root.join("skills/reviewer/SKILL.md").is_file());
 
         let _ = fs::remove_dir_all(temp_dir);
     }
