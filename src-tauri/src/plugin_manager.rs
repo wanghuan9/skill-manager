@@ -2318,7 +2318,7 @@ fn delete_opencode_plugin(root_path: &str) -> Result<(), String> {
     let package_root = managed_plugin_package_root_for_path(&plugin_root)
         .ok_or_else(|| "OpenCode 插件源必须位于 SkillDock 托管目录".to_string())?;
     remove_opencode_installation(&home_dir, &plugin_root)?;
-    if !managed_package_has_other_shared_host_installations(&package_root, "opencode") {
+    if !managed_package_has_other_host_installations(&package_root, "opencode") {
         remove_path(&package_root)?;
     }
     Ok(())
@@ -2479,7 +2479,7 @@ fn delete_codex_plugin(root_path: &str) -> Result<(), String> {
         .or_else(|| managed_plugin_package_root_from_identity(&target_root))
         .or_else(|| managed_plugin_package_root_from_source_metadata(&target_root));
     let should_remove_managed_package = managed_package_root.as_ref().is_some_and(|package_root| {
-        !managed_package_has_other_shared_host_installations(package_root, "codex")
+        !managed_package_has_other_host_installations(package_root, "codex")
     });
     let config_content = if config_path.is_file() {
         Some(fs::read_to_string(&config_path).map_err(|error| {
@@ -2492,7 +2492,12 @@ fn delete_codex_plugin(root_path: &str) -> Result<(), String> {
         None
     };
     let mut roots_to_remove = BTreeMap::<String, PathBuf>::new();
-    if should_delete_codex_physical_root(&home_dir, &target_root) {
+    let requested_root_is_managed_package_path = managed_package_root
+        .as_ref()
+        .is_some_and(|package_root| requested_root.strip_prefix(package_root).is_ok());
+    if should_delete_codex_physical_root(&home_dir, &target_root)
+        && (!requested_root_is_managed_package_path || should_remove_managed_package)
+    {
         roots_to_remove.insert(path_to_string(&requested_root), requested_root.clone());
     }
     if should_remove_managed_package {
@@ -2883,27 +2888,6 @@ fn plugin_package_contains_cursor_plugin(
     })
 }
 
-fn managed_package_has_other_shared_host_installations(
-    managed_package_root: &Path,
-    deleting_host_tool: &str,
-) -> bool {
-    match deleting_host_tool {
-        "codex" => {
-            claude_has_plugin_from_package(managed_package_root)
-                || opencode_has_plugin_from_package(managed_package_root)
-        }
-        "claude-code" => {
-            codex_has_plugin_from_package(managed_package_root)
-                || opencode_has_plugin_from_package(managed_package_root)
-        }
-        "opencode" => {
-            codex_has_plugin_from_package(managed_package_root)
-                || claude_has_plugin_from_package(managed_package_root)
-        }
-        _ => false,
-    }
-}
-
 fn opencode_has_plugin_from_package(managed_package_root: &Path) -> bool {
     scan_opencode_installed_plugins(PluginScanMode::Local)
         .into_iter()
@@ -2912,78 +2896,6 @@ fn opencode_has_plugin_from_package(managed_package_root: &Path) -> bool {
                 |package_root| paths_refer_to_same_dir(&package_root, managed_package_root),
             )
         })
-}
-
-fn codex_has_plugin_from_package(managed_package_root: &Path) -> bool {
-    let Some(home_dir) = workspace::home_dir_option() else {
-        return false;
-    };
-
-    let config_path = home_dir.join(".codex/config.toml");
-    if let Ok(config_content) = fs::read_to_string(&config_path) {
-        if let Ok(config) = parse_codex_config(&config_content) {
-            let cache_root = home_dir.join(".codex/plugins/cache");
-            for (plugin_key, _) in &config.plugins {
-                let Some((plugin_name, marketplace_name)) = split_enabled_plugin_key(plugin_key)
-                else {
-                    continue;
-                };
-                let Some(marketplace_config) = config.marketplaces.get(marketplace_name) else {
-                    continue;
-                };
-                if let Some(plugin_root) = resolve_configured_codex_plugin_root(
-                    &cache_root,
-                    marketplace_name,
-                    marketplace_config,
-                    plugin_name,
-                ) {
-                    if path_belongs_to_managed_package(&plugin_root, managed_package_root) {
-                        return true;
-                    }
-                }
-            }
-        }
-    }
-
-    [".codex/plugins/cache", ".codex/marketplaces"]
-        .iter()
-        .any(|relative_root| {
-            path_contains_plugin_from_package(&home_dir.join(relative_root), managed_package_root)
-        })
-}
-
-fn claude_has_plugin_from_package(managed_package_root: &Path) -> bool {
-    let Some(home_dir) = workspace::home_dir_option() else {
-        return false;
-    };
-
-    let installed_state_path = home_dir.join(".claude/plugins/installed_plugins.json");
-    if let Ok(installed_state) = read_claude_installed_plugins(&installed_state_path) {
-        for install_entries in installed_state.plugins.values() {
-            for install_entry in install_entries {
-                let install_path = install_entry.install_path.trim();
-                if install_path.is_empty() {
-                    continue;
-                }
-                if path_belongs_to_managed_package(Path::new(install_path), managed_package_root) {
-                    return true;
-                }
-            }
-        }
-    }
-
-    [".claude/plugins/marketplaces", ".claude/plugins"]
-        .iter()
-        .any(|relative_root| {
-            path_contains_plugin_from_package(&home_dir.join(relative_root), managed_package_root)
-        })
-}
-
-fn path_belongs_to_managed_package(path: &Path, managed_package_root: &Path) -> bool {
-    managed_plugin_package_root_for_path(path)
-        .or_else(|| managed_plugin_package_root_from_identity(path))
-        .or_else(|| managed_plugin_package_root_from_source_metadata(path))
-        .is_some_and(|package_root| paths_refer_to_same_dir(&package_root, managed_package_root))
 }
 
 fn managed_package_has_other_host_installations(
@@ -2997,8 +2909,10 @@ fn managed_package_has_other_host_installations(
     let home_dir = canonicalize_existing_dir(&home_dir).unwrap_or(home_dir);
     let host_roots = [
         ("cursor", home_dir.join(".cursor/plugins/local")),
+        ("cursor", cursor_disabled_plugins_root(&home_dir)),
         ("claude-code", home_dir.join(".claude/plugins")),
         ("codex", home_dir.join(".codex/plugins/cache")),
+        ("codex", home_dir.join(".codex/marketplaces")),
     ];
 
     host_roots.iter().any(|(host_tool, host_root)| {
@@ -3147,7 +3061,7 @@ fn delete_claude_plugin(root_path: &str) -> Result<(), String> {
         .or_else(|| managed_plugin_package_root_from_identity(&target_root))
         .or_else(|| managed_plugin_package_root_from_source_metadata(&target_root));
     let should_remove_managed_package = managed_package_root.as_ref().is_some_and(|package_root| {
-        !managed_package_has_other_shared_host_installations(package_root, "claude-code")
+        !managed_package_has_other_host_installations(package_root, "claude-code")
     });
     let mut roots_to_remove = BTreeMap::<String, PathBuf>::new();
     let requested_root_is_managed_package_path =
@@ -3956,13 +3870,11 @@ fn ensure_shared_plugin_package(
             } else {
                 repo_root.join(&plugin_relative_path)
             };
-            if plugin_root.is_dir() {
-                ensure_host_manifests_for_hosts(&plugin_root, probe, host_tools)?;
-                return Ok(SharedPluginPackage { plugin_root });
-            }
             ensure_shared_plugin_repo(
                 &source_spec.clone_url,
-                source_spec.branch.as_deref(),
+                non_empty_trimmed_string(&probe.source_ref)
+                    .as_deref()
+                    .or(source_spec.branch.as_deref()),
                 &repo_root,
                 &plugin_relative_path,
                 false,
@@ -3998,12 +3910,28 @@ fn ensure_shared_plugin_package(
             preferred_package_name.as_deref(),
         )?;
         let repo_root = shared_plugin_package_repo_root(&package_id)?;
-        ensure_shared_plugin_repo_from_existing(
-            git_root,
-            &repo_root,
-            identity_source,
-            &plugin_relative_path,
-        )?;
+        if is_managed_plugin_discovery_repo(git_root) {
+            let source_spec = source_spec
+                .as_ref()
+                .ok_or_else(|| format!("无法解析插件缓存的远端来源: {identity_source}"))?;
+            let source_ref =
+                non_empty_trimmed_string(&probe.source_ref).or_else(|| source_spec.branch.clone());
+            ensure_shared_plugin_repo(
+                &source_spec.clone_url,
+                source_ref.as_deref(),
+                &repo_root,
+                &plugin_relative_path,
+                false,
+                on_progress,
+            )?;
+        } else {
+            ensure_shared_plugin_repo_from_existing(
+                git_root,
+                &repo_root,
+                identity_source,
+                &plugin_relative_path,
+            )?;
+        }
         cleanup_duplicate_plugin_package_roots(&repo_root, identity_source, &plugin_relative_path)?;
         let plugin_root = if plugin_relative_path.as_os_str().is_empty() {
             repo_root
@@ -4424,6 +4352,13 @@ fn canonical_plugin_package_source(probe: &PluginProbeResult, git_root: &Path) -
     path_to_string(git_root)
 }
 
+fn is_managed_plugin_discovery_repo(path: &Path) -> bool {
+    workspace::managed_workspace_root_option()
+        .map(|root| root.join(workspace::REPOSITORIES_DIR_NAME))
+        .and_then(|root| canonicalize_existing_dir(&root).ok())
+        .is_some_and(|root| path.starts_with(root))
+}
+
 fn resolve_shared_plugin_package_id(
     source: &str,
     plugin_relative_path: &Path,
@@ -4752,7 +4687,7 @@ fn ensure_shared_plugin_repo(
     on_progress: Option<&CloneProgressCallback>,
 ) -> Result<(), String> {
     if repo_root.join(".git").is_dir() {
-        // 已有缓存：用 fetch 拉最新内容，避免重新 clone
+        // 已有缓存必须先同步远端；同步失败时停止安装，不能把旧缓存当作最新版。
         if let Some(cb) = on_progress {
             cb("正在更新插件缓存...");
         }
@@ -4762,13 +4697,13 @@ fn ensure_shared_plugin_repo(
             branch_arg = r.to_string();
             fetch_args.push(&branch_arg);
         }
-        let reset_target = if run_git_at(repo_root, &fetch_args).is_ok() {
-            "FETCH_HEAD"
-        } else {
-            "HEAD"
-        };
-        run_git_at(repo_root, &["reset", "--hard", reset_target])?;
-        // fetch 失败也继续（恢复并使用本地 HEAD），不阻断安装
+        run_git_at(repo_root, &fetch_args).map_err(|error| {
+            format!(
+                "更新插件缓存失败，已停止安装以避免使用旧版本（{}）: {error}",
+                repo_root.display()
+            )
+        })?;
+        run_git_at(repo_root, &["reset", "--hard", "FETCH_HEAD"])?;
         ensure_managed_plugin_repo_git_excludes(repo_root)?;
         configure_plugin_sparse_checkout(repo_root, plugin_relative_path)?;
         return Ok(());
@@ -11625,7 +11560,7 @@ exit 0
     }
 
     #[test]
-    fn shared_plugin_repo_restores_local_head_when_fetch_fails() {
+    fn shared_plugin_repo_rejects_stale_cache_when_fetch_fails() {
         let _guard = TEST_ENV_LOCK.lock().expect("lock test env");
         let temp_dir = temp_test_dir("plugin-cache-fetch-fallback");
         let repo_root = temp_dir.join("repo");
@@ -11651,7 +11586,7 @@ exit 0
             .expect("configure sparse checkout");
         fs::remove_dir_all(&plugin_root).expect("simulate missing managed worktree");
 
-        ensure_shared_plugin_repo(
+        let error = ensure_shared_plugin_repo(
             "unused-while-cache-exists",
             None,
             &repo_root,
@@ -11659,15 +11594,10 @@ exit 0
             false,
             None,
         )
-        .expect("restore existing managed repo from local HEAD");
+        .expect_err("stale cache must not be reused when fetch fails");
 
-        assert!(plugin_root
-            .join(".opencode/plugins/example-plugin.js")
-            .is_file());
-        assert_eq!(
-            run_git_test_output(&repo_root, &["status", "--porcelain"]),
-            ""
-        );
+        assert!(error.contains("已停止安装以避免使用旧版本"));
+        assert!(!plugin_root.exists());
 
         let _ = fs::remove_dir_all(temp_dir);
     }
@@ -12250,6 +12180,117 @@ exit 0
         assert_eq!(results[0].source_ref, "master");
         assert_eq!(results[0].plugin_relative_path, "example-plugin");
         assert!(Path::new(&results[0].repo_root).ends_with(&repo_key));
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn installs_latest_plugin_when_discovery_cache_is_stale() {
+        let _guard = TEST_ENV_LOCK.lock().expect("lock test env");
+        let temp_dir = temp_test_dir("stale-plugin-discovery-cache");
+        let home_dir = temp_dir.join("home");
+        let remote_repo = temp_dir.join("remote-example-plugin.git");
+        let seed_repo = temp_dir.join("seed-repo");
+        let cached_repo = home_dir.join(".skilldock/repositories/plugin-cache");
+        let cached_plugin_root = cached_repo.join("example-plugin");
+
+        super::run_git_at(
+            Path::new("."),
+            &["init", "--bare", remote_repo.to_string_lossy().as_ref()],
+        )
+        .expect("init bare remote");
+        super::run_git_at(&remote_repo, &["symbolic-ref", "HEAD", "refs/heads/main"])
+            .expect("point remote HEAD at main");
+
+        fs::create_dir_all(seed_repo.join("example-plugin/.cursor-plugin"))
+            .expect("create seed manifest dir");
+        fs::create_dir_all(seed_repo.join("example-plugin/rules"))
+            .expect("create seed rules dir");
+        fs::write(
+            seed_repo.join("example-plugin/.cursor-plugin/plugin.json"),
+            r#"{"name":"example-plugin","displayName":"Example Plugin","version":"1.0.0"}"#,
+        )
+        .expect("write seed manifest");
+        fs::write(
+            seed_repo.join("example-plugin/rules/version.mdc"),
+            "# old",
+        )
+        .expect("write old plugin content");
+        commit_test_repo(&seed_repo, Some(remote_repo.to_string_lossy().as_ref()));
+        run_git_test(&seed_repo, &["push", "-u", "origin", "main"]);
+
+        fs::create_dir_all(cached_repo.parent().expect("cache parent"))
+            .expect("create repositories dir");
+        run_git_test(
+            &temp_dir,
+            &[
+                "clone",
+                remote_repo.to_string_lossy().as_ref(),
+                cached_repo.to_string_lossy().as_ref(),
+            ],
+        );
+        let stale_revision = run_git_test_output(&cached_repo, &["rev-parse", "HEAD"]);
+
+        fs::write(
+            seed_repo.join("example-plugin/rules/version.mdc"),
+            "# latest",
+        )
+        .expect("write latest plugin content");
+        run_git_test(&seed_repo, &["add", "."]);
+        run_git_test(&seed_repo, &["commit", "-m", "Update plugin"]);
+        run_git_test(&seed_repo, &["push", "origin", "main"]);
+        let latest_revision = run_git_test_output(&seed_repo, &["rev-parse", "HEAD"]);
+        assert_ne!(stale_revision, latest_revision);
+
+        let previous_home = env::var_os("HOME");
+        env::set_var("HOME", &home_dir);
+        let source_url = format!("file://{}", remote_repo.to_string_lossy());
+        let installed = install_selected_plugin_probes_blocking(
+            vec![PluginProbeResult {
+                tool: "cursor".to_string(),
+                compatible_host_tools: vec!["cursor".to_string()],
+                kind: "plugin-repo".to_string(),
+                manifest_name: "example-plugin".to_string(),
+                name: "Example Plugin".to_string(),
+                description: "Agent workflows".to_string(),
+                plugin_root: cached_plugin_root.to_string_lossy().into_owned(),
+                repo_root: cached_repo.to_string_lossy().into_owned(),
+                plugin_relative_path: "example-plugin".to_string(),
+                manifest_path: cached_plugin_root
+                    .join(".cursor-plugin/plugin.json")
+                    .to_string_lossy()
+                    .into_owned(),
+                marketplace_manifest_path: String::new(),
+                components: Vec::new(),
+                source_type: "git".to_string(),
+                source_url,
+                source_ref: "main".to_string(),
+                is_git_repo: true,
+                git_root: cached_repo.to_string_lossy().into_owned(),
+                confidence: "high".to_string(),
+                install_strategy: "cursor-plugin-dir".to_string(),
+                warnings: Vec::new(),
+            }],
+            vec!["cursor".to_string()],
+            None,
+        )
+        .expect("install plugin from stale discovery cache");
+        match previous_home {
+            Some(value) => env::set_var("HOME", value),
+            None => env::remove_var("HOME"),
+        }
+
+        let managed_repo = home_dir.join(".skilldock/plugins/example-plugin");
+        assert_eq!(installed.len(), 1);
+        assert_eq!(
+            run_git_test_output(&managed_repo, &["rev-parse", "HEAD"]),
+            latest_revision
+        );
+        assert_eq!(
+            fs::read_to_string(managed_repo.join("example-plugin/rules/version.mdc"))
+                .expect("read installed plugin content"),
+            "# latest"
+        );
 
         let _ = fs::remove_dir_all(temp_dir);
     }
@@ -13169,7 +13210,7 @@ source = "__SOURCE__"
     }
 
     #[test]
-    fn installs_cursor_plugin_from_repo_cache_before_remote_clone() {
+    fn rejects_cursor_plugin_when_repo_cache_cannot_be_refreshed() {
         let _guard = TEST_ENV_LOCK.lock().expect("lock test env");
         let temp_dir = temp_test_dir("cursor-install-from-repo-cache");
         let home_dir = temp_dir.join("home");
@@ -13188,7 +13229,7 @@ source = "__SOURCE__"
 
         let previous_home = env::var_os("HOME");
         env::set_var("HOME", &home_dir);
-        let installed = install_selected_plugin_probes_blocking(
+        let result = install_selected_plugin_probes_blocking(
             vec![PluginProbeResult {
                 tool: "cursor".to_string(),
                 compatible_host_tools: vec!["cursor".to_string()],
@@ -13216,8 +13257,7 @@ source = "__SOURCE__"
             }],
             vec!["cursor".to_string()],
             None,
-        )
-        .expect("install cursor plugin from repo cache");
+        );
 
         match previous_home {
             Some(value) => env::set_var("HOME", value),
@@ -13225,17 +13265,10 @@ source = "__SOURCE__"
         }
 
         let installed_repo_root = home_dir.join(".cursor/plugins/local/coding-tutor");
-        assert_eq!(installed.len(), 1);
+        assert!(result.is_err());
         assert!(repo_root.exists());
-        assert!(installed_repo_root.is_dir());
-        assert!(fs::canonicalize(installed_repo_root.join(".cursor-plugin"))
-            .expect("canonicalize managed Cursor manifest directory")
-            .to_string_lossy()
-            .contains("/.skilldock/plugins/"));
-        assert!(installed_repo_root
-            .join(".cursor-plugin/plugin.json")
-            .is_file());
-        assert!(installed_repo_root.join("commands/teach.md").is_file());
+        assert!(!installed_repo_root.exists());
+        assert!(!home_dir.join(".skilldock/plugins/coding-tutor").exists());
 
         let _ = fs::remove_dir_all(temp_dir);
     }
@@ -16172,6 +16205,107 @@ source = "__SOURCE__"
             None => env::remove_var("HOME"),
         }
 
+        assert!(!shared_package_root.exists());
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn deleting_shared_codex_then_cursor_plugin_removes_managed_package() {
+        let _guard = TEST_ENV_LOCK.lock().expect("lock test env");
+        let temp_dir = temp_test_dir("delete-shared-codex-then-cursor");
+        let home_dir = temp_dir.join("home");
+        let shared_package_root = home_dir.join(".skilldock/plugins/example-plugin");
+        let shared_plugin_root = shared_package_root.join("example-plugin");
+        let codex_marketplace_root = home_dir.join(".codex/marketplaces/skilldock");
+        let codex_install_root = codex_marketplace_root.join("plugins/example-plugin");
+        let cursor_install_root = home_dir.join(".cursor/plugins/local/example-plugin");
+
+        fs::create_dir_all(shared_plugin_root.join(".codex-plugin"))
+            .expect("create shared Codex manifest dir");
+        fs::create_dir_all(shared_plugin_root.join(".cursor-plugin"))
+            .expect("create shared Cursor manifest dir");
+        fs::create_dir_all(shared_plugin_root.join("skills")).expect("create shared skill dir");
+        fs::write(
+            shared_plugin_root.join(".codex-plugin/plugin.json"),
+            r#"{"name":"example-plugin","version":"1.0.0","interface":{"displayName":"Example Plugin"}}"#,
+        )
+        .expect("write shared Codex manifest");
+        fs::write(
+            shared_plugin_root.join(".cursor-plugin/plugin.json"),
+            r#"{"name":"example-plugin","displayName":"Example Plugin","version":"1.0.0"}"#,
+        )
+        .expect("write shared Cursor manifest");
+        fs::write(
+            shared_plugin_root.join("skills/SKILL.md"),
+            "# Example Plugin",
+        )
+        .expect("write shared skill");
+        write_plugin_package_identity(
+            &shared_package_root,
+            "https://code.example.com/example-repo.git",
+            Path::new("example-plugin"),
+        )
+        .expect("write shared package identity");
+
+        fs::create_dir_all(codex_install_root.parent().expect("Codex install parent"))
+            .expect("create Codex install parent");
+        std::os::unix::fs::symlink(&shared_plugin_root, &codex_install_root)
+            .expect("link shared Codex plugin");
+        fs::create_dir_all(codex_marketplace_root.join(".agents/plugins"))
+            .expect("create Codex marketplace dir");
+        fs::write(
+            codex_marketplace_root.join(".agents/plugins/marketplace.json"),
+            r#"{
+  "plugins": [
+    {
+      "name": "example-plugin",
+      "source": { "path": "./plugins/example-plugin" }
+    }
+  ]
+}"#,
+        )
+        .expect("write Codex marketplace manifest");
+        fs::create_dir_all(home_dir.join(".codex")).expect("create Codex home dir");
+        fs::write(
+            home_dir.join(".codex/config.toml"),
+            r#"[plugins."example-plugin@skilldock"]
+enabled = true
+
+[marketplaces.skilldock]
+source = "__SOURCE__"
+"#
+            .replace("__SOURCE__", &codex_marketplace_root.to_string_lossy()),
+        )
+        .expect("write Codex config");
+        super::link_cursor_plugin_dir_contents(&shared_plugin_root, &cursor_install_root)
+            .expect("link shared Cursor plugin contents");
+
+        let previous_home = env::var_os("HOME");
+        env::set_var("HOME", &home_dir);
+
+        delete_plugin(
+            "codex".to_string(),
+            shared_plugin_root.to_string_lossy().into_owned(),
+        )
+        .expect("delete shared Codex plugin");
+        assert!(shared_plugin_root.exists());
+        assert!(cursor_install_root.join("skills/SKILL.md").is_file());
+
+        delete_plugin(
+            "cursor".to_string(),
+            cursor_install_root.to_string_lossy().into_owned(),
+        )
+        .expect("delete shared Cursor plugin");
+
+        match previous_home {
+            Some(value) => env::set_var("HOME", value),
+            None => env::remove_var("HOME"),
+        }
+
+        assert!(!codex_install_root.exists());
+        assert!(!cursor_install_root.exists());
         assert!(!shared_package_root.exists());
 
         let _ = fs::remove_dir_all(temp_dir);
