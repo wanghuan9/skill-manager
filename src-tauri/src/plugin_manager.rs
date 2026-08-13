@@ -10881,7 +10881,14 @@ mod tests {
         fs::write(&executable_path, "probe").expect("write host command");
 
         let previous_path = env::var_os("PATH");
-        env::set_var("PATH", &bin_dir);
+        let mut search_paths = vec![bin_dir];
+        if let Some(path) = &previous_path {
+            search_paths.extend(env::split_paths(path));
+        }
+        env::set_var(
+            "PATH",
+            env::join_paths(search_paths).expect("build plugin host test PATH"),
+        );
 
         let detected_path = super::find_plugin_host_executable_path("claude");
 

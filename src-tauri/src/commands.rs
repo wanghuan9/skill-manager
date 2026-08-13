@@ -1,3 +1,5 @@
+#[cfg(test)]
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::env;
 use std::fs;
@@ -2398,6 +2400,11 @@ fn windows_well_known_executable_candidates(executable_name: &str) -> Vec<PathBu
                 paths.push(local.join("Programs/Codex/Codex.exe"));
             }
         }
+        "kiro" => {
+            if let Some(local) = &local_app_data {
+                paths.push(local.join("Programs/Kiro/Kiro.exe"));
+            }
+        }
         "windsurf" | "devin" => {
             if let Some(local) = &local_app_data {
                 paths.push(local.join("Programs/Windsurf/Windsurf.exe"));
@@ -2589,6 +2596,7 @@ fn supports_mcp_for_tool(tool_id: &str) -> bool {
             | "kiro"
             | "opencode"
             | "openclaw"
+            | "continue"
             | "qoder"
             | "qwen-code"
             | "roo-code"
@@ -2873,7 +2881,7 @@ fn build_tool_configs() -> Vec<ToolConfig> {
             vec!["editor", "cli"],
             true,
             vec![home_path.join(".kiro")],
-            software_spec(&["Kiro", "Kiro CLI"], &["kiro"]),
+            software_spec(&["Kiro", "Kiro CLI"], &["kiro", "kiro-cli"]),
         ),
         (
             "qoder",
@@ -2996,6 +3004,54 @@ fn build_tool_configs() -> Vec<ToolConfig> {
         .collect::<Vec<_>>();
     configs.extend(build_registered_tool_configs(&home_path));
     configs
+}
+
+fn installed_mcp_tool_ids_from_configs(tool_configs: &[ToolConfig]) -> BTreeSet<String> {
+    tool_configs
+        .iter()
+        .filter(|tool| tool.is_installed && tool.supports_mcp)
+        .map(|tool| tool.id.clone())
+        .collect()
+}
+
+pub(crate) fn installed_mcp_tool_ids() -> BTreeSet<String> {
+    #[cfg(test)]
+    if let Some(tool_ids) = TEST_INSTALLED_MCP_TOOL_IDS.with(|slot| slot.borrow().clone()) {
+        return tool_ids;
+    }
+    installed_mcp_tool_ids_from_configs(&build_tool_configs())
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_INSTALLED_MCP_TOOL_IDS: RefCell<Option<BTreeSet<String>>> = const {
+        RefCell::new(None)
+    };
+}
+
+#[cfg(test)]
+pub(crate) fn with_test_installed_mcp_tool_ids<T>(
+    tool_ids: &[&str],
+    operation: impl FnOnce() -> T,
+) -> T {
+    struct RestoreInstalledMcpToolIds(Option<BTreeSet<String>>);
+
+    impl Drop for RestoreInstalledMcpToolIds {
+        fn drop(&mut self) {
+            TEST_INSTALLED_MCP_TOOL_IDS.with(|slot| {
+                *slot.borrow_mut() = self.0.take();
+            });
+        }
+    }
+
+    let next_tool_ids = tool_ids
+        .iter()
+        .map(|tool_id| (*tool_id).to_string())
+        .collect();
+    let previous_tool_ids =
+        TEST_INSTALLED_MCP_TOOL_IDS.with(|slot| slot.borrow_mut().replace(next_tool_ids));
+    let _restore = RestoreInstalledMcpToolIds(previous_tool_ids);
+    operation()
 }
 
 fn build_registered_tool_configs(home_path: &Path) -> Vec<ToolConfig> {
@@ -12340,7 +12396,6 @@ mod tests {
             .lock()
             .unwrap_or_else(|error| error.into_inner());
         let original_home = env::var_os("HOME");
-        let original_path = env::var_os("PATH");
         let temp_home = temp_test_dir("agent-cli-copy-toggle-without-cli-home");
         let agent_skill_path = temp_home.join(".agents/skills/tdd");
         let copied_skill_path = temp_home.join(".claude/skills/tdd");
@@ -12348,7 +12403,6 @@ mod tests {
         fs::create_dir_all(&copied_skill_path).expect("create Agent CLI tool copy");
         fs::create_dir_all(temp_home.join(".skilldock"))
             .expect("create SkillDock settings directory");
-        fs::create_dir_all(temp_home.join("empty-bin")).expect("create empty PATH directory");
         fs::write(agent_skill_path.join("SKILL.md"), "# canonical\n")
             .expect("write canonical Agent CLI skill");
         fs::write(copied_skill_path.join("SKILL.md"), "# copied\n")
@@ -12381,16 +12435,17 @@ mod tests {
 
         unsafe {
             env::set_var("HOME", &temp_home);
-            env::set_var("PATH", temp_home.join("empty-bin"));
         }
         save_installed_skills(&[skill]).expect("save Agent CLI skill");
 
-        let updated = super::toggle_skill_tool_status_blocking(
-            "tdd",
-            Some(agent_skill_path.to_string_lossy().as_ref()),
-            "Claude Code",
-            &["Claude Code".into()],
-        )
+        let updated = crate::agent_skills_cli::with_test_local_cli_unavailable(|| {
+            super::toggle_skill_tool_status_blocking(
+                "tdd",
+                Some(agent_skill_path.to_string_lossy().as_ref()),
+                "Claude Code",
+                &["Claude Code".into()],
+            )
+        })
         .expect("disable Agent CLI copy without skills command");
 
         assert!(updated
@@ -12402,7 +12457,6 @@ mod tests {
         assert!(temp_home.join(".agents/.skill-lock.json").is_file());
 
         restore_env_var("HOME", original_home);
-        restore_env_var("PATH", original_path);
         let _ = fs::remove_dir_all(temp_home);
     }
 
@@ -12957,6 +13011,9 @@ mod tests {
 
     #[test]
     fn detect_tool_installation_uses_cursor_directory_with_software() {
+        let _guard = TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         let temp_dir = temp_test_dir("cursor-installation-detection");
         let cursor_dir = temp_dir.join(".cursor");
         fs::create_dir_all(&cursor_dir).expect("create cursor dir");
@@ -12998,6 +13055,9 @@ mod tests {
 
     #[test]
     fn detect_tool_installation_uses_continue_directory_with_host_editor() {
+        let _guard = TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         let temp_dir = temp_test_dir("continue-installation-detection");
         fs::create_dir_all(temp_dir.join(".continue/skills")).expect("create continue dir");
 
@@ -13033,6 +13093,9 @@ mod tests {
 
     #[test]
     fn detect_tool_installation_uses_software_only_for_empty_config_paths() {
+        let _guard = TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         let temp_dir = temp_test_dir("vscode-installation-detection");
         let spec = super::software_spec(&[], &["code-missing-executable-xyz"]);
         assert_eq!(
@@ -13081,6 +13144,69 @@ mod tests {
         assert!(!super::supports_skill_sync_for_tool("vscode"));
         assert!(!super::supports_skill_sync_for_tool("intellij"));
         assert!(super::supports_skill_sync_for_tool("cursor"));
+    }
+
+    #[test]
+    fn mcp_targets_require_both_installed_and_supported_without_changing_skill_targets() {
+        let tool_configs = vec![
+            ToolConfig {
+                id: "codex".into(),
+                name: "Codex".into(),
+                skills_path: "/Users/demo/.codex/skills".into(),
+                mcp_config_path: "/Users/demo/.codex/config.toml".into(),
+                supports_mcp: true,
+                mcp_config_path_recognized: true,
+                status_label: "已安装".into(),
+                is_installed: true,
+                is_enabled: true,
+                primary_type: "cli".into(),
+                surface_types: vec!["cli".into()],
+                supports_direct_open: false,
+            },
+            ToolConfig {
+                id: "pi".into(),
+                name: "Pi".into(),
+                skills_path: "/Users/demo/.pi/agent/skills".into(),
+                mcp_config_path: String::new(),
+                supports_mcp: false,
+                mcp_config_path_recognized: false,
+                status_label: "已安装".into(),
+                is_installed: true,
+                is_enabled: true,
+                primary_type: "cli".into(),
+                surface_types: vec!["cli".into()],
+                supports_direct_open: false,
+            },
+            ToolConfig {
+                id: "omp".into(),
+                name: "OMP".into(),
+                skills_path: "/Users/demo/.omp/agent/skills".into(),
+                mcp_config_path: "/Users/demo/.omp/agent/mcp.json".into(),
+                supports_mcp: true,
+                mcp_config_path_recognized: true,
+                status_label: "未安装".into(),
+                is_installed: false,
+                is_enabled: false,
+                primary_type: "cli".into(),
+                surface_types: vec!["cli".into()],
+                supports_direct_open: false,
+            },
+        ];
+
+        assert_eq!(
+            super::installed_mcp_tool_ids_from_configs(&tool_configs),
+            BTreeSet::from(["codex".to_string()])
+        );
+
+        let skill_targets = super::installed_tool_sync_entries_from_configs(&tool_configs);
+        assert!(skill_targets.iter().any(|tool| tool.name == "Codex"));
+        assert!(skill_targets.iter().any(|tool| tool.name == "Pi"));
+        assert!(!skill_targets.iter().any(|tool| tool.name == "OMP"));
+    }
+
+    #[test]
+    fn continue_is_marked_as_mcp_capable() {
+        assert!(super::supports_mcp_for_tool("continue"));
     }
 
     #[test]
