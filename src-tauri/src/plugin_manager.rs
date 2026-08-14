@@ -3685,8 +3685,15 @@ fn delete_cursor_plugin(root_path: &str) -> Result<(), String> {
         !managed_package_has_other_host_installations(package_root, "cursor")
     });
     let mut roots_to_remove = BTreeMap::<String, PathBuf>::new();
-    roots_to_remove.insert(path_to_string(&requested_root), requested_root.clone());
-    if requested_root != target_root {
+    let requested_root_is_managed_package_path =
+        managed_package_root.as_ref().is_some_and(|package_root| {
+            requested_root.strip_prefix(package_root).is_ok()
+                || target_root.strip_prefix(package_root).is_ok()
+        });
+    if !requested_root_is_managed_package_path || requested_root != target_root {
+        roots_to_remove.insert(path_to_string(&requested_root), requested_root.clone());
+    }
+    if !requested_root_is_managed_package_path && requested_root != target_root {
         roots_to_remove.insert(path_to_string(&target_root), target_root.clone());
     }
     if let Some(home_dir) = workspace::home_dir_option() {
@@ -5195,24 +5202,79 @@ fn cleanup_duplicate_plugin_package_roots(
             continue;
         }
         if read_plugin_package_identity(&candidate_root).as_ref() == Some(&active_identity) {
-            remove_path(&candidate_root).map_err(|error| {
-                format!(
-                    "清理重复插件共享目录失败（{}）: {error}",
-                    candidate_root.display()
-                )
-            })?;
+            remove_duplicate_plugin_package_root_if_safe(active_root, &candidate_root)?;
             continue;
         }
         if legacy_git_package_matches_identity(&candidate_root, &active_identity) {
-            remove_path(&candidate_root).map_err(|error| {
-                format!(
-                    "清理重复插件共享目录失败（{}）: {error}",
-                    candidate_root.display()
-                )
-            })?;
+            remove_duplicate_plugin_package_root_if_safe(active_root, &candidate_root)?;
         }
     }
     Ok(())
+}
+
+fn remove_duplicate_plugin_package_root_if_safe(
+    active_root: &Path,
+    candidate_root: &Path,
+) -> Result<(), String> {
+    if managed_package_has_other_host_installations(candidate_root, "")
+        || !duplicate_plugin_package_matches_active_revision(active_root, candidate_root)
+    {
+        return Ok(());
+    }
+
+    remove_path(candidate_root).map_err(|error| {
+        format!(
+            "清理重复插件共享目录失败（{}）: {error}",
+            candidate_root.display()
+        )
+    })
+}
+
+fn duplicate_plugin_package_matches_active_revision(
+    active_root: &Path,
+    candidate_root: &Path,
+) -> bool {
+    let active_git = active_root.join(".git");
+    let candidate_git = candidate_root.join(".git");
+    if active_git.exists() || candidate_git.exists() {
+        if !active_git.exists() || !candidate_git.exists() {
+            return false;
+        }
+        let Ok(candidate_status) = run_git_at(
+            candidate_root,
+            &[
+                "status",
+                "--porcelain",
+                "--no-renames",
+                "--untracked-files=all",
+            ],
+        ) else {
+            return false;
+        };
+        if !candidate_status.trim().is_empty() {
+            return false;
+        }
+        let Ok(active_revision) = run_git_at(active_root, &["rev-parse", "HEAD"]) else {
+            return false;
+        };
+        let Ok(candidate_revision) = run_git_at(candidate_root, &["rev-parse", "HEAD"]) else {
+            return false;
+        };
+        return active_revision == candidate_revision;
+    }
+
+    let Ok(entries) = fs::read_dir(candidate_root) else {
+        return false;
+    };
+    for entry in entries {
+        let Ok(entry) = entry else {
+            return false;
+        };
+        if entry.file_name().to_string_lossy().as_ref() != PLUGIN_PACKAGE_IDENTITY_FILE {
+            return false;
+        }
+    }
+    true
 }
 
 fn shared_plugin_package_repo_root(package_id: &str) -> Result<PathBuf, String> {
@@ -5265,24 +5327,28 @@ fn ensure_shared_plugin_repo(
     apply_instead_of: bool,
     on_progress: Option<&CloneProgressCallback>,
 ) -> Result<(), String> {
-    if repo_root.join(".git").is_dir() {
+    if repo_root.join(".git").exists() {
+        ensure_plugin_repo_clean_for_install(repo_root)?;
+        let head_before_fetch = run_git_at(repo_root, &["rev-parse", "HEAD"])?;
         // 已有缓存必须先同步远端；同步失败时停止安装，不能把旧缓存当作最新版。
         if let Some(cb) = on_progress {
             cb("正在更新插件缓存...");
         }
-        let mut fetch_args = vec!["fetch", "origin", "--no-tags", "--quiet"];
-        let branch_arg;
-        if let Some(r) = git_ref.and_then(non_empty_trimmed_string) {
-            branch_arg = r.to_string();
-            fetch_args.push(&branch_arg);
-        }
+        let fetch_args = ["fetch", "origin", "--no-tags", "--quiet", "--prune"];
         run_git_at(repo_root, &fetch_args).map_err(|error| {
             format!(
                 "更新插件缓存失败，已停止安装以避免使用旧版本（{}）: {error}",
                 repo_root.display()
             )
         })?;
-        run_git_at(repo_root, &["reset", "--hard", "FETCH_HEAD"])?;
+        let (fetched_revision, checkout_target) =
+            resolve_fetched_plugin_revision(repo_root, git_ref)?;
+        update_clean_plugin_repo_to_fetched_ref(
+            repo_root,
+            head_before_fetch.trim(),
+            fetched_revision.trim(),
+            &checkout_target,
+        )?;
         ensure_managed_plugin_repo_git_excludes(repo_root)?;
         configure_plugin_sparse_checkout(repo_root, plugin_relative_path)?;
         return Ok(());
@@ -5334,15 +5400,15 @@ fn ensure_shared_plugin_repo_from_existing(
     plugin_relative_path: &Path,
 ) -> Result<(), String> {
     if paths_refer_to_same_dir(source_repo_root, target_repo_root) {
+        ensure_plugin_repo_clean_for_install(target_repo_root)?;
         write_plugin_package_identity(target_repo_root, source, plugin_relative_path)?;
-        run_git_at(target_repo_root, &["reset", "--hard", "HEAD"])?;
         ensure_managed_plugin_repo_git_excludes(target_repo_root)?;
         configure_plugin_sparse_checkout(target_repo_root, plugin_relative_path)?;
         return Ok(());
     }
-    if target_repo_root.join(".git").is_dir() {
+    if target_repo_root.join(".git").exists() {
+        ensure_plugin_repo_clean_for_install(target_repo_root)?;
         write_plugin_package_identity(target_repo_root, source, plugin_relative_path)?;
-        run_git_at(target_repo_root, &["reset", "--hard", "HEAD"])?;
         ensure_managed_plugin_repo_git_excludes(target_repo_root)?;
         configure_plugin_sparse_checkout(target_repo_root, plugin_relative_path)?;
         return Ok(());
@@ -5362,8 +5428,241 @@ fn ensure_shared_plugin_repo_from_existing(
     Ok(())
 }
 
+fn ensure_plugin_repo_clean_for_install(repo_root: &Path) -> Result<(), String> {
+    let local_changes = run_git_at(
+        repo_root,
+        &[
+            "status",
+            "--porcelain",
+            "--no-renames",
+            "--untracked-files=all",
+        ],
+    )?;
+    if local_changes.trim().is_empty() {
+        return Ok(());
+    }
+
+    Err(format!(
+        "插件目录存在本地未提交改动，已停止安装以避免覆盖（{}）。请先提交或清理改动后重试。",
+        repo_root.display()
+    ))
+}
+
+enum FetchedPluginCheckoutTarget {
+    CurrentBranch,
+    Branch(String),
+    Detached,
+}
+
+fn resolve_fetched_plugin_revision(
+    repo_root: &Path,
+    git_ref: Option<&str>,
+) -> Result<(String, FetchedPluginCheckoutTarget), String> {
+    let Some(reference) = git_ref.and_then(non_empty_trimmed_string) else {
+        return run_git_at(repo_root, &["rev-parse", "FETCH_HEAD^{commit}"])
+            .map(|revision| (revision, FetchedPluginCheckoutTarget::CurrentBranch));
+    };
+
+    let branch_name = reference
+        .strip_prefix("refs/heads/")
+        .or_else(|| reference.strip_prefix("refs/remotes/origin/"))
+        .or_else(|| reference.strip_prefix("origin/"))
+        .unwrap_or(&reference);
+    if !reference.starts_with("refs/tags/") {
+        let branch_ref = format!("refs/remotes/origin/{branch_name}^{{commit}}");
+        if let Ok(revision) = run_git_at(repo_root, &["rev-parse", "--verify", &branch_ref]) {
+            return Ok((
+                revision,
+                FetchedPluginCheckoutTarget::Branch(branch_name.to_string()),
+            ));
+        }
+
+        // single-branch / 窄 fetchspec 缓存不会自动创建其他分支的 tracking ref。
+        // 显式 refspec 可确认目标确为远端分支，并保持后续 checkout/upstream 语义一致。
+        let remote_branch_ref =
+            format!("+refs/heads/{branch_name}:refs/remotes/origin/{branch_name}");
+        if run_git_at(
+            repo_root,
+            &[
+                "fetch",
+                "origin",
+                "--no-tags",
+                "--quiet",
+                &remote_branch_ref,
+            ],
+        )
+        .is_ok()
+        {
+            let revision = run_git_at(repo_root, &["rev-parse", "--verify", &branch_ref])?;
+            return Ok((
+                revision,
+                FetchedPluginCheckoutTarget::Branch(branch_name.to_string()),
+            ));
+        }
+    }
+
+    run_git_at(
+        repo_root,
+        &["fetch", "origin", "--no-tags", "--quiet", &reference],
+    )
+    .map_err(|error| {
+        format!("远端不存在所选插件分支、标签或提交（{reference}），已停止安装: {error}")
+    })?;
+    if let Ok(revision) = run_git_at(repo_root, &["rev-parse", "FETCH_HEAD^{commit}"]) {
+        return Ok((revision, FetchedPluginCheckoutTarget::Detached));
+    }
+
+    Err(format!(
+        "无法解析所选插件分支、标签或提交（{reference}），已停止安装。"
+    ))
+}
+
+fn update_clean_plugin_repo_to_fetched_ref(
+    repo_root: &Path,
+    expected_head: &str,
+    fetched_revision: &str,
+    checkout_target: &FetchedPluginCheckoutTarget,
+) -> Result<(), String> {
+    // fetch 可能耗时较长；落盘前必须重新校验，避免覆盖 fetch 期间产生的编辑。
+    ensure_plugin_repo_clean_for_install(repo_root)?;
+    let current_head = run_git_at(repo_root, &["rev-parse", "HEAD"])?;
+    if current_head.trim() != expected_head {
+        return Err(format!(
+            "插件目录在更新期间产生了新的本地提交，已停止安装以避免覆盖（{}）。",
+            repo_root.display()
+        ));
+    }
+
+    let is_fast_forward = run_git_at(
+        repo_root,
+        &["merge-base", "--is-ancestor", "HEAD", fetched_revision],
+    )
+    .is_ok();
+    if !is_fast_forward {
+        let published_remote_refs = run_git_at(
+            repo_root,
+            &[
+                "for-each-ref",
+                "--contains",
+                "HEAD",
+                "--format=%(refname)",
+                "refs/remotes/origin",
+            ],
+        )?;
+        if published_remote_refs.trim().is_empty() {
+            return Err(format!(
+                "插件目录存在未推送或已分叉的本地提交，已停止安装以避免覆盖（{}）。请先推送或处理分支后重试。",
+                repo_root.display()
+            ));
+        }
+    }
+
+    match checkout_target {
+        FetchedPluginCheckoutTarget::Branch(branch) => {
+            checkout_fetched_plugin_branch(repo_root, branch, fetched_revision)?;
+        }
+        FetchedPluginCheckoutTarget::Detached => {
+            run_git_at(
+                repo_root,
+                &["checkout", "--quiet", "--detach", fetched_revision],
+            )?;
+        }
+        FetchedPluginCheckoutTarget::CurrentBranch if is_fast_forward => {
+            run_git_at(repo_root, &["merge", "--ff-only", fetched_revision])?;
+        }
+        FetchedPluginCheckoutTarget::CurrentBranch => {
+            return Err(format!(
+                "插件当前分支与远端默认分支已分叉，已停止安装以避免移动本地分支（{}）。请先处理分支后重试。",
+                repo_root.display()
+            ));
+        }
+    }
+    ensure_plugin_repo_clean_for_install(repo_root)?;
+    Ok(())
+}
+
+fn checkout_fetched_plugin_branch(
+    repo_root: &Path,
+    branch: &str,
+    fetched_revision: &str,
+) -> Result<(), String> {
+    let current_branch = run_git_at(repo_root, &["branch", "--show-current"])?;
+    let local_branch_ref = format!("refs/heads/{branch}^{{commit}}");
+    let local_branch_revision =
+        run_git_at(repo_root, &["rev-parse", "--verify", &local_branch_ref]).ok();
+
+    if let Some(local_revision) = local_branch_revision.as_deref() {
+        let local_branch_can_fast_forward = run_git_at(
+            repo_root,
+            &[
+                "merge-base",
+                "--is-ancestor",
+                local_revision.trim(),
+                fetched_revision,
+            ],
+        )
+        .is_ok();
+        if !local_branch_can_fast_forward {
+            return Err(format!(
+                "插件本地分支 {branch} 存在未推送或已分叉的提交，已停止安装以避免覆盖。"
+            ));
+        }
+    }
+
+    if current_branch.trim() != branch {
+        if local_branch_revision.is_some() {
+            run_git_at(repo_root, &["checkout", "--quiet", branch])?;
+        } else {
+            run_git_at(
+                repo_root,
+                &["checkout", "--quiet", "-b", branch, fetched_revision],
+            )?;
+        }
+    }
+    run_git_at(repo_root, &["merge", "--ff-only", fetched_revision])?;
+
+    ensure_origin_branch_fetch_refspec(repo_root, branch)?;
+    let upstream = format!("origin/{branch}");
+    run_git_at(
+        repo_root,
+        &["branch", "--set-upstream-to", &upstream, branch],
+    )?;
+    Ok(())
+}
+
+fn ensure_origin_branch_fetch_refspec(repo_root: &Path, branch: &str) -> Result<(), String> {
+    let wildcard_refspec = "refs/heads/*:refs/remotes/origin/*";
+    let branch_refspec = format!("refs/heads/{branch}:refs/remotes/origin/{branch}");
+    let existing_refspecs =
+        run_git_at(repo_root, &["config", "--get-all", "remote.origin.fetch"]).unwrap_or_default();
+    if existing_refspecs.lines().any(|line| {
+        let normalized = line.trim().trim_start_matches('+');
+        normalized == wildcard_refspec || normalized == branch_refspec
+    }) {
+        return Ok(());
+    }
+
+    let configured_refspec = format!("+{branch_refspec}");
+    run_git_at(
+        repo_root,
+        &[
+            "config",
+            "--add",
+            "remote.origin.fetch",
+            &configured_refspec,
+        ],
+    )?;
+    Ok(())
+}
+
 fn ensure_managed_plugin_repo_git_excludes(repo_root: &Path) -> Result<(), String> {
-    let exclude_path = repo_root.join(".git/info/exclude");
+    let git_exclude_path = run_git_at(repo_root, &["rev-parse", "--git-path", "info/exclude"])?;
+    let raw_exclude_path = PathBuf::from(git_exclude_path.trim());
+    let exclude_path = if raw_exclude_path.is_absolute() {
+        raw_exclude_path
+    } else {
+        repo_root.join(raw_exclude_path)
+    };
     let Some(parent) = exclude_path.parent() else {
         return Ok(());
     };
@@ -11505,9 +11804,11 @@ mod tests {
         paths_refer_to_same_dir, plugin_discovery_repo_key, plugin_git_state,
         plugin_probe_source_url, probe_plugin_repo, probe_plugin_source_candidates_blocking,
         read_plugin_package_identity, read_skilldock_plugin_source_metadata,
-        resolve_shared_plugin_package_id, set_plugin_enabled, shared_plugin_package_id_candidates,
-        shared_plugin_package_repo_root, write_plugin_package_identity,
-        write_skilldock_plugin_source_metadata, PLUGIN_STATUS_PENDING_PUSH,
+        resolve_shared_plugin_package_id, run_git_at, set_plugin_enabled,
+        shared_plugin_package_id_candidates, shared_plugin_package_repo_root,
+        update_clean_plugin_repo_to_fetched_ref, write_plugin_package_identity,
+        write_skilldock_plugin_source_metadata, FetchedPluginCheckoutTarget,
+        PLUGIN_STATUS_PENDING_PUSH,
     };
     use crate::library::parse_market_source_url;
     use crate::models::{PluginComponentSummary, PluginProbeResult, PluginSummary};
@@ -11913,14 +12214,15 @@ mod tests {
         write_plugin_package_identity(&active_root, source, Path::new(""))
             .expect("write active identity");
 
-        fs::create_dir_all(duplicate_root.join(".codex-plugin"))
-            .expect("create duplicate manifest dir");
-        fs::write(
-            duplicate_root.join(".codex-plugin/plugin.json"),
-            r#"{"name":"compound-engineering","version":"1.0.0"}"#,
-        )
-        .expect("write duplicate manifest");
-        commit_test_repo(&duplicate_root, Some(source));
+        run_git_test(
+            &temp_dir,
+            &[
+                "clone",
+                active_root.to_str().unwrap(),
+                duplicate_root.to_str().unwrap(),
+            ],
+        );
+        run_git_test(&duplicate_root, &["remote", "set-url", "origin", source]);
 
         cleanup_duplicate_plugin_package_roots(&active_root, source, Path::new(""))
             .expect("cleanup legacy duplicate");
@@ -11932,6 +12234,123 @@ mod tests {
 
         assert!(active_root.exists());
         assert!(!duplicate_root.exists());
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn cleanup_duplicate_plugin_package_roots_preserves_uncommitted_changes() {
+        let _guard = TEST_ENV_LOCK.lock().expect("lock test env");
+        let temp_dir = temp_test_dir("plugin-package-dirty-duplicate");
+        let home_dir = temp_dir.join("home");
+        let previous_home = env::var_os("HOME");
+        env::set_var("HOME", &home_dir);
+        let source = "https://github.com/everyinc/compound-engineering-plugin.git";
+        let active_root = home_dir.join(".skilldock/plugins/compound-engineering-plugin");
+        let duplicate_root = home_dir
+            .join(".skilldock/plugins/compound-engineering-plugin-compound-engineering-plugin");
+
+        fs::create_dir_all(active_root.join(".codex-plugin")).expect("create active manifest dir");
+        fs::write(
+            active_root.join(".codex-plugin/plugin.json"),
+            r#"{"name":"compound-engineering","version":"1.0.0"}"#,
+        )
+        .expect("write active manifest");
+        commit_test_repo(&active_root, Some(source));
+        write_plugin_package_identity(&active_root, source, Path::new(""))
+            .expect("write active identity");
+        run_git_test(
+            &temp_dir,
+            &[
+                "clone",
+                active_root.to_str().unwrap(),
+                duplicate_root.to_str().unwrap(),
+            ],
+        );
+        run_git_test(&duplicate_root, &["remote", "set-url", "origin", source]);
+        fs::write(
+            duplicate_root.join(".codex-plugin/plugin.json"),
+            r#"{"name":"compound-engineering","version":"2.0.0-dirty"}"#,
+        )
+        .expect("write dirty duplicate manifest");
+
+        cleanup_duplicate_plugin_package_roots(&active_root, source, Path::new(""))
+            .expect("preserve dirty duplicate");
+
+        match previous_home {
+            Some(value) => env::set_var("HOME", value),
+            None => env::remove_var("HOME"),
+        }
+
+        assert!(active_root.exists());
+        assert!(duplicate_root.exists());
+        assert_eq!(
+            fs::read_to_string(duplicate_root.join(".codex-plugin/plugin.json"))
+                .expect("read dirty duplicate manifest"),
+            r#"{"name":"compound-engineering","version":"2.0.0-dirty"}"#
+        );
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn cleanup_duplicate_plugin_package_roots_preserves_distinct_local_commit() {
+        let _guard = TEST_ENV_LOCK.lock().expect("lock test env");
+        let temp_dir = temp_test_dir("plugin-package-local-commit-duplicate");
+        let home_dir = temp_dir.join("home");
+        let previous_home = env::var_os("HOME");
+        env::set_var("HOME", &home_dir);
+        let source = "https://github.com/everyinc/compound-engineering-plugin.git";
+        let active_root = home_dir.join(".skilldock/plugins/compound-engineering-plugin");
+        let duplicate_root = home_dir
+            .join(".skilldock/plugins/compound-engineering-plugin-compound-engineering-plugin");
+
+        fs::create_dir_all(active_root.join(".codex-plugin")).expect("create active manifest dir");
+        fs::write(
+            active_root.join(".codex-plugin/plugin.json"),
+            r#"{"name":"compound-engineering","version":"1.0.0"}"#,
+        )
+        .expect("write active manifest");
+        commit_test_repo(&active_root, Some(source));
+        write_plugin_package_identity(&active_root, source, Path::new(""))
+            .expect("write active identity");
+        run_git_test(
+            &temp_dir,
+            &[
+                "clone",
+                active_root.to_str().unwrap(),
+                duplicate_root.to_str().unwrap(),
+            ],
+        );
+        run_git_test(&duplicate_root, &["remote", "set-url", "origin", source]);
+        run_git_test(&duplicate_root, &["config", "user.name", "SkillDock Test"]);
+        run_git_test(
+            &duplicate_root,
+            &["config", "user.email", "skilldock-test@example.com"],
+        );
+        fs::write(
+            duplicate_root.join(".codex-plugin/plugin.json"),
+            r#"{"name":"compound-engineering","version":"2.0.0-local"}"#,
+        )
+        .expect("write local duplicate manifest");
+        run_git_test(&duplicate_root, &["add", ".codex-plugin/plugin.json"]);
+        run_git_test(&duplicate_root, &["commit", "-m", "Local duplicate edit"]);
+        let duplicate_revision = run_git_test_output(&duplicate_root, &["rev-parse", "HEAD"]);
+
+        cleanup_duplicate_plugin_package_roots(&active_root, source, Path::new(""))
+            .expect("preserve duplicate with distinct local commit");
+
+        match previous_home {
+            Some(value) => env::set_var("HOME", value),
+            None => env::remove_var("HOME"),
+        }
+
+        assert!(active_root.exists());
+        assert!(duplicate_root.exists());
+        assert_eq!(
+            run_git_test_output(&duplicate_root, &["rev-parse", "HEAD"]),
+            duplicate_revision
+        );
 
         let _ = fs::remove_dir_all(temp_dir);
     }
@@ -12260,7 +12679,7 @@ exit 0
     }
 
     #[test]
-    fn shared_plugin_repo_rejects_stale_cache_when_fetch_fails() {
+    fn shared_plugin_repo_rejects_cache_when_fetch_fails() {
         let _guard = TEST_ENV_LOCK.lock().expect("lock test env");
         let temp_dir = temp_test_dir("plugin-cache-fetch-fallback");
         let repo_root = temp_dir.join("repo");
@@ -12284,7 +12703,6 @@ exit 0
         );
         configure_plugin_sparse_checkout(&repo_root, Path::new("example-plugin"))
             .expect("configure sparse checkout");
-        fs::remove_dir_all(&plugin_root).expect("simulate missing managed worktree");
 
         let error = ensure_shared_plugin_repo(
             "unused-while-cache-exists",
@@ -12297,13 +12715,734 @@ exit 0
         .expect_err("stale cache must not be reused when fetch fails");
 
         assert!(error.contains("已停止安装以避免使用旧版本"));
-        assert!(!plugin_root.exists());
+        assert!(plugin_root.exists());
 
         let _ = fs::remove_dir_all(temp_dir);
     }
 
     #[test]
-    fn shared_plugin_repo_from_existing_restores_reused_managed_worktree() {
+    fn shared_plugin_repo_rejects_deleted_plugin_worktree() {
+        let _guard = TEST_ENV_LOCK.lock().expect("lock test env");
+        let temp_dir = temp_test_dir("plugin-cache-deleted-worktree");
+        let repo_root = temp_dir.join("repo");
+        let plugin_root = repo_root.join("example-plugin");
+        fs::create_dir_all(&plugin_root).expect("create plugin dir");
+        fs::write(plugin_root.join("SKILL.md"), "# plugin\n").expect("write plugin file");
+        commit_test_repo(&repo_root, None);
+        run_git_test(
+            &repo_root,
+            &[
+                "remote",
+                "add",
+                "origin",
+                temp_dir.join("missing-remote.git").to_str().unwrap(),
+            ],
+        );
+        fs::remove_dir_all(&plugin_root).expect("delete managed plugin worktree");
+
+        let error = ensure_shared_plugin_repo(
+            "unused-while-cache-exists",
+            None,
+            &repo_root,
+            Path::new("example-plugin"),
+            false,
+            None,
+        )
+        .expect_err("deleted plugin worktree must not be restored during installation");
+
+        assert!(error.contains("本地未提交改动"));
+        assert!(!plugin_root.exists());
+        assert_eq!(
+            run_git_test_output(&repo_root, &["status", "--porcelain"]),
+            "D example-plugin/SKILL.md"
+        );
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn shared_plugin_repo_preserves_staged_and_unstaged_changes_before_refresh() {
+        let _guard = TEST_ENV_LOCK.lock().expect("lock test env");
+        let temp_dir = temp_test_dir("plugin-cache-local-changes");
+        let repo_root = temp_dir.join("repo");
+        let plugin_root = repo_root.join("example-plugin");
+        let plugin_file = plugin_root.join("SKILL.md");
+        fs::create_dir_all(&plugin_root).expect("create plugin dir");
+        fs::write(&plugin_file, "# original\n").expect("write original plugin file");
+        commit_test_repo(&repo_root, None);
+        run_git_test(
+            &repo_root,
+            &[
+                "remote",
+                "add",
+                "origin",
+                temp_dir.join("missing-remote.git").to_str().unwrap(),
+            ],
+        );
+        fs::write(&plugin_file, "# staged\n").expect("write staged plugin file");
+        run_git_test(&repo_root, &["add", "example-plugin/SKILL.md"]);
+        fs::write(&plugin_file, "# unstaged\n").expect("write unstaged plugin file");
+
+        let error = ensure_shared_plugin_repo(
+            "unused-while-cache-exists",
+            None,
+            &repo_root,
+            Path::new("example-plugin"),
+            false,
+            None,
+        )
+        .expect_err("dirty cache must not be refreshed during installation");
+
+        assert!(error.contains("本地未提交改动"));
+        assert_eq!(
+            fs::read_to_string(&plugin_file).expect("read preserved plugin file"),
+            "# unstaged\n"
+        );
+        assert_eq!(
+            run_git_test_output(&repo_root, &["status", "--porcelain"]),
+            "MM example-plugin/SKILL.md"
+        );
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn shared_plugin_repo_rejects_unpushed_local_commits_without_resetting() {
+        let _guard = TEST_ENV_LOCK.lock().expect("lock test env");
+        let temp_dir = temp_test_dir("plugin-cache-local-commit");
+        let seed_repo = temp_dir.join("seed-repo");
+        let remote_repo = temp_dir.join("remote.git");
+        let managed_repo = temp_dir.join("managed-repo");
+        let plugin_relative_path = Path::new("example-plugin");
+        let seed_plugin_file = seed_repo.join(plugin_relative_path).join("SKILL.md");
+        fs::create_dir_all(seed_plugin_file.parent().expect("seed plugin parent"))
+            .expect("create seed plugin dir");
+        fs::write(&seed_plugin_file, "# remote\n").expect("write remote plugin file");
+        commit_test_repo(&seed_repo, None);
+        run_git_test(
+            &temp_dir,
+            &["init", "--bare", remote_repo.to_str().unwrap()],
+        );
+        run_git_test(
+            &seed_repo,
+            &["remote", "add", "origin", remote_repo.to_str().unwrap()],
+        );
+        run_git_test(&seed_repo, &["push", "-u", "origin", "main"]);
+        run_git_test(
+            &temp_dir,
+            &[
+                "clone",
+                "--branch",
+                "main",
+                remote_repo.to_str().unwrap(),
+                managed_repo.to_str().unwrap(),
+            ],
+        );
+        run_git_test(&managed_repo, &["config", "user.name", "SkillDock Test"]);
+        run_git_test(
+            &managed_repo,
+            &["config", "user.email", "skilldock-test@example.com"],
+        );
+        let managed_plugin_file = managed_repo.join(plugin_relative_path).join("SKILL.md");
+        fs::write(&managed_plugin_file, "# local commit\n").expect("write local commit");
+        run_git_test(&managed_repo, &["add", "example-plugin/SKILL.md"]);
+        run_git_test(&managed_repo, &["commit", "-m", "Local plugin edit"]);
+        let local_commit = run_git_test_output(&managed_repo, &["rev-parse", "HEAD"]);
+
+        let error = ensure_shared_plugin_repo(
+            remote_repo.to_str().unwrap(),
+            Some("main"),
+            &managed_repo,
+            plugin_relative_path,
+            false,
+            None,
+        )
+        .expect_err("install refresh must not reset unpushed local commits");
+
+        assert!(error.contains("未推送或已分叉的本地提交"));
+        assert_eq!(
+            run_git_test_output(&managed_repo, &["rev-parse", "HEAD"]),
+            local_commit
+        );
+        assert_eq!(
+            fs::read_to_string(&managed_plugin_file).expect("read local committed content"),
+            "# local commit\n"
+        );
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn shared_plugin_repo_switches_clean_cache_to_selected_remote_branch() {
+        let _guard = TEST_ENV_LOCK.lock().expect("lock test env");
+        let temp_dir = temp_test_dir("plugin-cache-switch-branch");
+        let seed_repo = temp_dir.join("seed-repo");
+        let remote_repo = temp_dir.join("remote.git");
+        let managed_repo = temp_dir.join("managed-repo");
+        let plugin_relative_path = Path::new("example-plugin");
+        let seed_plugin_file = seed_repo.join(plugin_relative_path).join("SKILL.md");
+        fs::create_dir_all(seed_plugin_file.parent().expect("seed plugin parent"))
+            .expect("create seed plugin dir");
+        fs::write(&seed_plugin_file, "# main\n").expect("write main plugin file");
+        commit_test_repo(&seed_repo, None);
+        run_git_test(
+            &temp_dir,
+            &["init", "--bare", remote_repo.to_str().unwrap()],
+        );
+        run_git_test(
+            &seed_repo,
+            &["remote", "add", "origin", remote_repo.to_str().unwrap()],
+        );
+        run_git_test(&seed_repo, &["push", "-u", "origin", "main"]);
+        run_git_test(&seed_repo, &["checkout", "-b", "feature/alternate"]);
+        fs::write(&seed_plugin_file, "# alternate\n").expect("write alternate plugin file");
+        run_git_test(&seed_repo, &["add", "example-plugin/SKILL.md"]);
+        run_git_test(&seed_repo, &["commit", "-m", "Alternate plugin branch"]);
+        run_git_test(&seed_repo, &["push", "-u", "origin", "feature/alternate"]);
+        let alternate_commit = run_git_test_output(&seed_repo, &["rev-parse", "HEAD"]);
+        run_git_test(
+            &temp_dir,
+            &[
+                "clone",
+                "--branch",
+                "main",
+                remote_repo.to_str().unwrap(),
+                managed_repo.to_str().unwrap(),
+            ],
+        );
+
+        ensure_shared_plugin_repo(
+            remote_repo.to_str().unwrap(),
+            Some("feature/alternate"),
+            &managed_repo,
+            plugin_relative_path,
+            false,
+            None,
+        )
+        .expect("clean cache should switch to selected published branch");
+
+        assert_eq!(
+            run_git_test_output(&managed_repo, &["rev-parse", "HEAD"]),
+            alternate_commit
+        );
+        assert_eq!(
+            fs::read_to_string(managed_repo.join(plugin_relative_path).join("SKILL.md"))
+                .expect("read selected branch content"),
+            "# alternate\n"
+        );
+        assert_eq!(
+            run_git_test_output(&managed_repo, &["branch", "--show-current"]),
+            "feature/alternate"
+        );
+        assert_eq!(
+            run_git_test_output(
+                &managed_repo,
+                &[
+                    "rev-parse",
+                    "--abbrev-ref",
+                    "--symbolic-full-name",
+                    "@{upstream}"
+                ]
+            ),
+            "origin/feature/alternate"
+        );
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn shared_plugin_repo_switches_between_diverged_published_branches() {
+        let _guard = TEST_ENV_LOCK.lock().expect("lock test env");
+        let temp_dir = temp_test_dir("plugin-cache-switch-diverged-branch");
+        let seed_repo = temp_dir.join("seed-repo");
+        let remote_repo = temp_dir.join("remote.git");
+        let managed_repo = temp_dir.join("managed-repo");
+        let plugin_relative_path = Path::new("example-plugin");
+        let seed_plugin_file = seed_repo.join(plugin_relative_path).join("SKILL.md");
+        fs::create_dir_all(seed_plugin_file.parent().expect("seed plugin parent"))
+            .expect("create seed plugin dir");
+        fs::write(&seed_plugin_file, "# base\n").expect("write base plugin file");
+        commit_test_repo(&seed_repo, None);
+        run_git_test(
+            &temp_dir,
+            &["init", "--bare", remote_repo.to_str().unwrap()],
+        );
+        run_git_test(&remote_repo, &["symbolic-ref", "HEAD", "refs/heads/main"]);
+        run_git_test(
+            &seed_repo,
+            &["remote", "add", "origin", remote_repo.to_str().unwrap()],
+        );
+        run_git_test(&seed_repo, &["checkout", "-b", "feature/alternate"]);
+        fs::write(&seed_plugin_file, "# alternate\n").expect("write alternate plugin file");
+        run_git_test(&seed_repo, &["add", "example-plugin/SKILL.md"]);
+        run_git_test(&seed_repo, &["commit", "-m", "Alternate plugin branch"]);
+        run_git_test(&seed_repo, &["push", "-u", "origin", "feature/alternate"]);
+        run_git_test(&seed_repo, &["checkout", "main"]);
+        fs::write(&seed_plugin_file, "# main\n").expect("write main plugin file");
+        run_git_test(&seed_repo, &["add", "example-plugin/SKILL.md"]);
+        run_git_test(&seed_repo, &["commit", "-m", "Main plugin branch"]);
+        run_git_test(&seed_repo, &["push", "-u", "origin", "main"]);
+        let main_commit = run_git_test_output(&seed_repo, &["rev-parse", "HEAD"]);
+        run_git_test(
+            &temp_dir,
+            &[
+                "clone",
+                "--branch",
+                "feature/alternate",
+                remote_repo.to_str().unwrap(),
+                managed_repo.to_str().unwrap(),
+            ],
+        );
+
+        ensure_shared_plugin_repo(
+            remote_repo.to_str().unwrap(),
+            Some("main"),
+            &managed_repo,
+            plugin_relative_path,
+            false,
+            None,
+        )
+        .expect("clean cache should switch between published branches");
+
+        assert_eq!(
+            run_git_test_output(&managed_repo, &["rev-parse", "HEAD"]),
+            main_commit
+        );
+        assert_eq!(
+            run_git_test_output(&managed_repo, &["branch", "--show-current"]),
+            "main"
+        );
+        assert_eq!(
+            run_git_test_output(
+                &managed_repo,
+                &[
+                    "rev-parse",
+                    "--abbrev-ref",
+                    "--symbolic-full-name",
+                    "@{upstream}"
+                ]
+            ),
+            "origin/main"
+        );
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn shared_plugin_repo_switches_single_branch_cache_to_explicit_remote_branch() {
+        let _guard = TEST_ENV_LOCK.lock().expect("lock test env");
+        let temp_dir = temp_test_dir("plugin-cache-switch-single-branch");
+        let seed_repo = temp_dir.join("seed-repo");
+        let remote_repo = temp_dir.join("remote.git");
+        let managed_repo = temp_dir.join("managed-repo");
+        let plugin_relative_path = Path::new("example-plugin");
+        let seed_plugin_file = seed_repo.join(plugin_relative_path).join("SKILL.md");
+        fs::create_dir_all(seed_plugin_file.parent().expect("seed plugin parent"))
+            .expect("create seed plugin dir");
+        fs::write(&seed_plugin_file, "# base\n").expect("write base plugin file");
+        commit_test_repo(&seed_repo, None);
+        run_git_test(
+            &temp_dir,
+            &["init", "--bare", remote_repo.to_str().unwrap()],
+        );
+        run_git_test(&remote_repo, &["symbolic-ref", "HEAD", "refs/heads/main"]);
+        run_git_test(
+            &seed_repo,
+            &["remote", "add", "origin", remote_repo.to_str().unwrap()],
+        );
+        run_git_test(&seed_repo, &["push", "-u", "origin", "main"]);
+        run_git_test(&seed_repo, &["checkout", "-b", "feature/alternate"]);
+        fs::write(&seed_plugin_file, "# alternate\n").expect("write alternate plugin file");
+        run_git_test(&seed_repo, &["add", "example-plugin/SKILL.md"]);
+        run_git_test(&seed_repo, &["commit", "-m", "Alternate plugin branch"]);
+        run_git_test(&seed_repo, &["push", "-u", "origin", "feature/alternate"]);
+        let alternate_commit = run_git_test_output(&seed_repo, &["rev-parse", "HEAD"]);
+        run_git_test(
+            &temp_dir,
+            &[
+                "clone",
+                "--single-branch",
+                "--branch",
+                "main",
+                remote_repo.to_str().unwrap(),
+                managed_repo.to_str().unwrap(),
+            ],
+        );
+        assert!(run_git_at(
+            &managed_repo,
+            &[
+                "show-ref",
+                "--verify",
+                "refs/remotes/origin/feature/alternate"
+            ]
+        )
+        .is_err());
+
+        ensure_shared_plugin_repo(
+            remote_repo.to_str().unwrap(),
+            Some("feature/alternate"),
+            &managed_repo,
+            plugin_relative_path,
+            false,
+            None,
+        )
+        .expect("single-branch cache should fetch and checkout explicit branch");
+
+        assert_eq!(
+            run_git_test_output(&managed_repo, &["rev-parse", "HEAD"]),
+            alternate_commit
+        );
+        assert_eq!(
+            run_git_test_output(&managed_repo, &["branch", "--show-current"]),
+            "feature/alternate"
+        );
+        assert_eq!(
+            run_git_test_output(
+                &managed_repo,
+                &[
+                    "rev-parse",
+                    "--abbrev-ref",
+                    "--symbolic-full-name",
+                    "@{upstream}"
+                ]
+            ),
+            "origin/feature/alternate"
+        );
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn shared_plugin_repo_checks_out_tags_and_commits_without_moving_local_branch() {
+        let _guard = TEST_ENV_LOCK.lock().expect("lock test env");
+        let temp_dir = temp_test_dir("plugin-cache-checkout-detached-ref");
+        let seed_repo = temp_dir.join("seed-repo");
+        let remote_repo = temp_dir.join("remote.git");
+        let managed_repo = temp_dir.join("managed-repo");
+        let plugin_relative_path = Path::new("example-plugin");
+        let seed_plugin_file = seed_repo.join(plugin_relative_path).join("SKILL.md");
+        fs::create_dir_all(seed_plugin_file.parent().expect("seed plugin parent"))
+            .expect("create seed plugin dir");
+        fs::write(&seed_plugin_file, "# tagged\n").expect("write tagged plugin file");
+        commit_test_repo(&seed_repo, None);
+        let tag_commit = run_git_test_output(&seed_repo, &["rev-parse", "HEAD"]);
+        run_git_test(&seed_repo, &["tag", "v1.0.0"]);
+        fs::write(&seed_plugin_file, "# main\n").expect("write main plugin file");
+        run_git_test(&seed_repo, &["add", "example-plugin/SKILL.md"]);
+        run_git_test(&seed_repo, &["commit", "-m", "Advance main"]);
+        let main_commit = run_git_test_output(&seed_repo, &["rev-parse", "HEAD"]);
+        run_git_test(
+            &temp_dir,
+            &["init", "--bare", remote_repo.to_str().unwrap()],
+        );
+        run_git_test(&remote_repo, &["symbolic-ref", "HEAD", "refs/heads/main"]);
+        run_git_test(
+            &seed_repo,
+            &["remote", "add", "origin", remote_repo.to_str().unwrap()],
+        );
+        run_git_test(&seed_repo, &["push", "-u", "origin", "main", "--tags"]);
+        run_git_test(
+            &temp_dir,
+            &[
+                "clone",
+                "--branch",
+                "main",
+                remote_repo.to_str().unwrap(),
+                managed_repo.to_str().unwrap(),
+            ],
+        );
+
+        ensure_shared_plugin_repo(
+            remote_repo.to_str().unwrap(),
+            Some("v1.0.0"),
+            &managed_repo,
+            plugin_relative_path,
+            false,
+            None,
+        )
+        .expect("tag should be checked out in detached mode");
+
+        assert_eq!(
+            run_git_test_output(&managed_repo, &["rev-parse", "HEAD"]),
+            tag_commit
+        );
+        assert_eq!(
+            run_git_test_output(&managed_repo, &["branch", "--show-current"]),
+            ""
+        );
+        assert_eq!(
+            run_git_test_output(&managed_repo, &["rev-parse", "refs/heads/main"]),
+            main_commit
+        );
+
+        ensure_shared_plugin_repo(
+            remote_repo.to_str().unwrap(),
+            Some(&main_commit),
+            &managed_repo,
+            plugin_relative_path,
+            false,
+            None,
+        )
+        .expect("commit should be checked out in detached mode");
+
+        assert_eq!(
+            run_git_test_output(&managed_repo, &["rev-parse", "HEAD"]),
+            main_commit
+        );
+        assert_eq!(
+            run_git_test_output(&managed_repo, &["branch", "--show-current"]),
+            ""
+        );
+        assert_eq!(
+            run_git_test_output(&managed_repo, &["rev-parse", "refs/heads/main"]),
+            main_commit
+        );
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn shared_plugin_repo_rechecks_changes_before_applying_fetched_revision() {
+        let _guard = TEST_ENV_LOCK.lock().expect("lock test env");
+        let temp_dir = temp_test_dir("plugin-cache-late-local-change");
+        let repo_root = temp_dir.join("repo");
+        let plugin_file = repo_root.join("example-plugin/SKILL.md");
+        fs::create_dir_all(plugin_file.parent().expect("plugin parent"))
+            .expect("create plugin dir");
+        fs::write(&plugin_file, "# original\n").expect("write original plugin file");
+        commit_test_repo(&repo_root, None);
+        let expected_head = run_git_test_output(&repo_root, &["rev-parse", "HEAD"]);
+        fs::write(&plugin_file, "# fetched\n").expect("write fetched plugin file");
+        run_git_test(&repo_root, &["add", "example-plugin/SKILL.md"]);
+        run_git_test(&repo_root, &["commit", "-m", "Fetched plugin update"]);
+        let fetched_revision = run_git_test_output(&repo_root, &["rev-parse", "HEAD"]);
+        run_git_test(&repo_root, &["checkout", "--detach", &expected_head]);
+        fs::write(&plugin_file, "# edited during fetch\n").expect("write late local edit");
+
+        let error = update_clean_plugin_repo_to_fetched_ref(
+            &repo_root,
+            &expected_head,
+            &fetched_revision,
+            &FetchedPluginCheckoutTarget::CurrentBranch,
+        )
+        .expect_err("late local edit must block fetched revision");
+
+        assert!(error.contains("本地未提交改动"));
+        assert_eq!(
+            fs::read_to_string(&plugin_file).expect("read preserved late edit"),
+            "# edited during fetch\n"
+        );
+        assert_eq!(
+            run_git_test_output(&repo_root, &["rev-parse", "HEAD"]),
+            expected_head
+        );
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn shared_plugin_repo_prunes_stale_remote_refs_before_branch_switch() {
+        let _guard = TEST_ENV_LOCK.lock().expect("lock test env");
+        let temp_dir = temp_test_dir("plugin-cache-stale-remote-ref");
+        let seed_repo = temp_dir.join("seed-repo");
+        let remote_repo = temp_dir.join("remote.git");
+        let managed_repo = temp_dir.join("managed-repo");
+        let plugin_relative_path = Path::new("example-plugin");
+        let seed_plugin_file = seed_repo.join(plugin_relative_path).join("SKILL.md");
+        fs::create_dir_all(seed_plugin_file.parent().expect("seed plugin parent"))
+            .expect("create seed plugin dir");
+        fs::write(&seed_plugin_file, "# base\n").expect("write base plugin file");
+        commit_test_repo(&seed_repo, None);
+        run_git_test(
+            &temp_dir,
+            &["init", "--bare", remote_repo.to_str().unwrap()],
+        );
+        run_git_test(&remote_repo, &["symbolic-ref", "HEAD", "refs/heads/main"]);
+        run_git_test(
+            &seed_repo,
+            &["remote", "add", "origin", remote_repo.to_str().unwrap()],
+        );
+        run_git_test(&seed_repo, &["checkout", "-b", "feature/removed"]);
+        fs::write(&seed_plugin_file, "# removed branch\n").expect("write removed branch file");
+        run_git_test(&seed_repo, &["add", "example-plugin/SKILL.md"]);
+        run_git_test(&seed_repo, &["commit", "-m", "Removed branch"]);
+        run_git_test(&seed_repo, &["push", "-u", "origin", "feature/removed"]);
+        run_git_test(&seed_repo, &["checkout", "main"]);
+        fs::write(&seed_plugin_file, "# main\n").expect("write main branch file");
+        run_git_test(&seed_repo, &["add", "example-plugin/SKILL.md"]);
+        run_git_test(&seed_repo, &["commit", "-m", "Main branch"]);
+        run_git_test(&seed_repo, &["push", "-u", "origin", "main"]);
+        run_git_test(
+            &temp_dir,
+            &[
+                "clone",
+                "--branch",
+                "feature/removed",
+                remote_repo.to_str().unwrap(),
+                managed_repo.to_str().unwrap(),
+            ],
+        );
+        let removed_commit = run_git_test_output(&managed_repo, &["rev-parse", "HEAD"]);
+        run_git_test(
+            &seed_repo,
+            &["push", "origin", "--delete", "feature/removed"],
+        );
+
+        let error = ensure_shared_plugin_repo(
+            remote_repo.to_str().unwrap(),
+            Some("main"),
+            &managed_repo,
+            plugin_relative_path,
+            false,
+            None,
+        )
+        .expect_err("stale remote ref must not authorize discarding the current commit");
+
+        assert!(error.contains("未推送或已分叉的本地提交"));
+        assert_eq!(
+            run_git_test_output(&managed_repo, &["rev-parse", "HEAD"]),
+            removed_commit
+        );
+        assert!(run_git_at(
+            &managed_repo,
+            &[
+                "show-ref",
+                "--verify",
+                "refs/remotes/origin/feature/removed"
+            ]
+        )
+        .is_err());
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn shared_plugin_repo_from_existing_preserves_local_changes() {
+        let _guard = TEST_ENV_LOCK.lock().expect("lock test env");
+        let temp_dir = temp_test_dir("plugin-existing-local-changes");
+        let repo_root = temp_dir.join("managed-repo");
+        let plugin_relative_path = Path::new("example-plugin");
+        let plugin_file = repo_root.join(plugin_relative_path).join("SKILL.md");
+        fs::create_dir_all(plugin_file.parent().expect("plugin file parent"))
+            .expect("create plugin dir");
+        fs::write(&plugin_file, "# original\n").expect("write original plugin file");
+        commit_test_repo(&repo_root, None);
+        fs::write(&plugin_file, "# local edit\n").expect("write local plugin edit");
+
+        let error = ensure_shared_plugin_repo_from_existing(
+            &repo_root,
+            &repo_root,
+            "https://example.com/example-plugin.git",
+            plugin_relative_path,
+        )
+        .expect_err("reused managed repo must preserve local changes");
+
+        assert!(error.contains("本地未提交改动"));
+        assert_eq!(
+            fs::read_to_string(&plugin_file).expect("read preserved plugin file"),
+            "# local edit\n"
+        );
+        assert_eq!(
+            run_git_test_output(&repo_root, &["status", "--porcelain"]),
+            "M example-plugin/SKILL.md"
+        );
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn shared_plugin_repo_from_existing_protects_git_worktree_changes() {
+        let _guard = TEST_ENV_LOCK.lock().expect("lock test env");
+        let temp_dir = temp_test_dir("plugin-existing-git-worktree-changes");
+        let source_repo_root = temp_dir.join("source-repo");
+        let target_repo_root = temp_dir.join("managed-worktree");
+        let plugin_relative_path = Path::new("example-plugin");
+        let source_plugin_file = source_repo_root.join(plugin_relative_path).join("SKILL.md");
+        fs::create_dir_all(source_plugin_file.parent().expect("source plugin parent"))
+            .expect("create source plugin dir");
+        fs::write(&source_plugin_file, "# original\n").expect("write original plugin file");
+        commit_test_repo(&source_repo_root, None);
+        run_git_test(
+            &source_repo_root,
+            &[
+                "worktree",
+                "add",
+                "-b",
+                "managed-worktree",
+                target_repo_root.to_str().unwrap(),
+            ],
+        );
+        assert!(target_repo_root.join(".git").is_file());
+        let target_plugin_file = target_repo_root.join(plugin_relative_path).join("SKILL.md");
+        fs::write(&target_plugin_file, "# worktree edit\n").expect("write linked worktree edit");
+
+        let error = ensure_shared_plugin_repo_from_existing(
+            &source_repo_root,
+            &target_repo_root,
+            "https://example.com/example-plugin.git",
+            plugin_relative_path,
+        )
+        .expect_err("linked worktree local changes must be preserved");
+
+        assert!(error.contains("本地未提交改动"));
+        assert_eq!(
+            fs::read_to_string(&target_plugin_file).expect("read preserved worktree edit"),
+            "# worktree edit\n"
+        );
+        assert!(target_repo_root.join(".git").is_file());
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn shared_plugin_repo_from_existing_supports_clean_git_worktree() {
+        let _guard = TEST_ENV_LOCK.lock().expect("lock test env");
+        let temp_dir = temp_test_dir("plugin-existing-clean-git-worktree");
+        let source_repo_root = temp_dir.join("source-repo");
+        let target_repo_root = temp_dir.join("managed-worktree");
+        let plugin_relative_path = Path::new("example-plugin");
+        let source_plugin_file = source_repo_root.join(plugin_relative_path).join("SKILL.md");
+        fs::create_dir_all(source_plugin_file.parent().expect("source plugin parent"))
+            .expect("create source plugin dir");
+        fs::write(&source_plugin_file, "# original\n").expect("write original plugin file");
+        commit_test_repo(&source_repo_root, None);
+        run_git_test(
+            &source_repo_root,
+            &[
+                "worktree",
+                "add",
+                "-b",
+                "managed-worktree",
+                target_repo_root.to_str().unwrap(),
+            ],
+        );
+        assert!(target_repo_root.join(".git").is_file());
+
+        ensure_shared_plugin_repo_from_existing(
+            &source_repo_root,
+            &target_repo_root,
+            "https://example.com/example-plugin.git",
+            plugin_relative_path,
+        )
+        .expect("clean linked worktree should be reusable");
+
+        assert!(target_repo_root
+            .join(plugin_relative_path)
+            .join("SKILL.md")
+            .is_file());
+        assert!(target_repo_root.join(".git").is_file());
+        let exclude_path = PathBuf::from(run_git_test_output(
+            &target_repo_root,
+            &["rev-parse", "--git-path", "info/exclude"],
+        ));
+        let exclude_content = fs::read_to_string(exclude_path).expect("read linked git exclude");
+        assert!(exclude_content.contains(".idea/"));
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn shared_plugin_repo_from_existing_rejects_staged_plugin_deletion() {
         let _guard = TEST_ENV_LOCK.lock().expect("lock test env");
         let temp_dir = temp_test_dir("plugin-existing-cache-restore");
         let source_repo_root = temp_dir.join("source-repo");
@@ -12336,22 +13475,22 @@ exit 0
         commit_test_repo(&target_repo_root, None);
         configure_plugin_sparse_checkout(&target_repo_root, plugin_relative_path)
             .expect("configure managed sparse checkout");
-        fs::remove_dir_all(&target_plugin_root).expect("simulate missing managed worktree");
+        fs::remove_dir_all(&target_plugin_root).expect("delete managed plugin worktree");
+        run_git_test(&target_repo_root, &["add", "-u"]);
 
-        ensure_shared_plugin_repo_from_existing(
+        let error = ensure_shared_plugin_repo_from_existing(
             &source_repo_root,
             &target_repo_root,
             "https://example.com/example-plugin.git",
             plugin_relative_path,
         )
-        .expect("restore reused managed repo from local HEAD");
+        .expect_err("staged plugin deletion must not be restored during installation");
 
-        assert!(target_plugin_root
-            .join(".opencode/plugins/example-plugin.js")
-            .is_file());
-        assert_eq!(
-            run_git_test_output(&target_repo_root, &["status", "--porcelain"]),
-            ""
+        assert!(error.contains("本地未提交改动"));
+        assert!(!target_plugin_root.exists());
+        assert!(
+            run_git_test_output(&target_repo_root, &["status", "--porcelain"])
+                .contains("D  example-plugin/.opencode/plugins/example-plugin.js")
         );
 
         let _ = fs::remove_dir_all(temp_dir);
@@ -16888,6 +18027,55 @@ source = "__SOURCE__"
         assert!(shared_package_root.exists());
         assert!(!installed_content.contains("coding-tutor@skilldock"));
         assert!(!settings_content.contains("coding-tutor@skilldock"));
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn deleting_shared_cursor_directory_link_keeps_package_for_other_hosts() {
+        let _guard = TEST_ENV_LOCK.lock().expect("lock test env");
+        let temp_dir = temp_test_dir("delete-shared-cursor-canonical-root");
+        let home_dir = temp_dir.join("home");
+        let (shared_package_root, claude_install_root, codex_install_root) =
+            create_shared_claude_codex_plugin_fixture(&home_dir);
+        let shared_plugin_root = shared_package_root.join("plugins/coding-tutor");
+        let cursor_install_root = home_dir.join(".cursor/plugins/local/coding-tutor");
+        fs::create_dir_all(shared_plugin_root.join(".cursor-plugin"))
+            .expect("create shared cursor manifest dir");
+        fs::write(
+            shared_plugin_root.join(".cursor-plugin/plugin.json"),
+            r#"{"name":"coding-tutor","displayName":"Coding Tutor","version":"1.0.0"}"#,
+        )
+        .expect("write shared cursor manifest");
+        fs::create_dir_all(cursor_install_root.parent().expect("cursor install parent"))
+            .expect("create cursor install parent");
+        std::os::unix::fs::symlink(&shared_plugin_root, &cursor_install_root)
+            .expect("link cursor install to shared plugin");
+        let canonical_cursor_root =
+            fs::canonicalize(&cursor_install_root).expect("canonicalize cursor install root");
+
+        let previous_home = env::var_os("HOME");
+        env::set_var("HOME", &home_dir);
+
+        delete_plugin(
+            "cursor".to_string(),
+            canonical_cursor_root.to_string_lossy().into_owned(),
+        )
+        .expect("delete shared cursor plugin by canonical root");
+
+        match previous_home {
+            Some(value) => env::set_var("HOME", value),
+            None => env::remove_var("HOME"),
+        }
+
+        assert!(fs::symlink_metadata(&cursor_install_root).is_err());
+        assert!(shared_package_root.exists());
+        assert!(shared_plugin_root
+            .join(".cursor-plugin/plugin.json")
+            .is_file());
+        assert!(claude_install_root.exists());
+        assert!(codex_install_root.exists());
 
         let _ = fs::remove_dir_all(temp_dir);
     }
