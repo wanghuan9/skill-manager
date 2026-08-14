@@ -1638,7 +1638,8 @@ test("deduplicates shared plugin package updates in the all tab", async () => {
   refreshSpy.mockRestore();
 });
 
-test("shows the backend update error message instead of a generic toast-only message", async () => {
+test("shows plugin update failures only in the global notification stack", async () => {
+  const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
   const updateSpy = vi.spyOn(skillClient, "updatePlugin").mockRejectedValue(
     new Error("插件目录存在本地未提交改动，请先推送或清理后再更新。"),
   );
@@ -1649,13 +1650,13 @@ test("shows the backend update error message instead of a generic toast-only mes
   await userEvent.click(screen.getByRole("tab", { name: /Codex/ }));
   await userEvent.click(screen.getByRole("button", { name: "更新 Repo Scout 插件" }));
 
-  await waitFor(() => {
-    expect(screen.getByRole("status")).toHaveTextContent(
-      "插件目录存在本地未提交改动，请先推送或清理后再更新。",
-    );
-  });
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "插件目录存在本地未提交改动，请先推送或清理后再更新。",
+  );
+  expect(screen.queryByRole("status")).not.toBeInTheDocument();
 
   updateSpy.mockRestore();
+  warnSpy.mockRestore();
 });
 
 test("prompts before updating a hash-based plugin with local modifications", async () => {

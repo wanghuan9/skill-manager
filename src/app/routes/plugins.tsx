@@ -1633,7 +1633,6 @@ export function PluginsRoute(props: PluginsRouteProps = {}) {
   const [isReloading, setIsReloading] = useState(false);
   const [pluginOrderRevision, setPluginOrderRevision] = useState(0);
   const [errorMessage, setErrorMessage] = useState("");
-  const [actionErrorMessage, setActionErrorMessage] = useState("");
   const [previewState, setPreviewState] = useState<PreviewState | null>(null);
   const [gitPreviewState, setGitPreviewState] = useState<PluginGitPreviewState | null>(null);
   const gitPreviewLoaders = useMemo(() => {
@@ -2245,15 +2244,6 @@ export function PluginsRoute(props: PluginsRouteProps = {}) {
   }, [activeHost, props.onActiveHostChange]);
 
   useEffect(() => {
-    if (!actionErrorMessage) {
-      return;
-    }
-
-    const timerId = window.setTimeout(() => setActionErrorMessage(""), 4500);
-    return () => window.clearTimeout(timerId);
-  }, [actionErrorMessage]);
-
-  useEffect(() => {
     if (!previewState) {
       return;
     }
@@ -2655,7 +2645,6 @@ export function PluginsRoute(props: PluginsRouteProps = {}) {
         return nextPlugins;
       });
       setErrorMessage("");
-      setActionErrorMessage("");
     } catch (error) {
       console.warn("Failed to update plugin enabled state", error);
       notify({
@@ -2772,11 +2761,9 @@ export function PluginsRoute(props: PluginsRouteProps = {}) {
         return nextPlugins;
       });
       setErrorMessage("");
-      setActionErrorMessage("");
     } catch (error) {
       console.warn("Failed to update plugin", error);
       const errorMessage = getPluginActionErrorMessage(error, t("plugins.error.update"));
-      setActionErrorMessage(errorMessage);
       notify({
         message: errorMessage,
         tone: "error",
@@ -2854,11 +2841,9 @@ export function PluginsRoute(props: PluginsRouteProps = {}) {
         return nextPlugins;
       });
       setErrorMessage("");
-      setActionErrorMessage("");
     } catch (error) {
       console.warn("Failed to update plugin", error);
       const errorMessage = getPluginActionErrorMessage(error, t("plugins.error.update"));
-      setActionErrorMessage(errorMessage);
       notify({
         message: errorMessage,
         tone: "error",
@@ -2889,7 +2874,6 @@ export function PluginsRoute(props: PluginsRouteProps = {}) {
         rootPath: getPluginOpenRootPath(plugin, activeHost, plugins),
         editorId: resolvedOpenToolId,
       });
-      setActionErrorMessage("");
     } catch (error) {
       console.warn("Failed to open plugin folder with default tool", error);
       notify({
@@ -2902,7 +2886,6 @@ export function PluginsRoute(props: PluginsRouteProps = {}) {
   async function handlePluginOpenInFinder(plugin: PluginSummary) {
     try {
       await openPathInFinder({ path: getPluginDirectoryPath(plugin, activeHost, plugins) });
-      setActionErrorMessage("");
     } catch (error) {
       console.warn("Failed to open plugin folder", error);
       notify({
@@ -2919,7 +2902,6 @@ export function PluginsRoute(props: PluginsRouteProps = {}) {
     }
     if (deleteConfirmingPluginId !== pluginKey) {
       setDeleteConfirmingPluginId(pluginKey);
-      setActionErrorMessage("");
       return;
     }
 
@@ -2959,7 +2941,6 @@ export function PluginsRoute(props: PluginsRouteProps = {}) {
         return next;
       });
       handleExpandedChange(pluginKey, false);
-      setActionErrorMessage("");
     } catch (error) {
       console.warn("Failed to delete plugin", error);
       notify({
@@ -3373,11 +3354,6 @@ export function PluginsRoute(props: PluginsRouteProps = {}) {
     <div className="skills-page plugins-page">
       {toolbarContainer ? createPortal(toolbar, toolbarContainer) : toolbar}
       {sourceHeaderContainer ? createPortal(sourceHeader, sourceHeaderContainer) : sourceHeader}
-      {actionErrorMessage ? (
-        <div className="plugins-page__inline-error" role="status">
-          {actionErrorMessage}
-        </div>
-      ) : null}
       {batchSelection.isSelecting ? (
         <BatchActionBar
           actions={selectedPlugins.length > 0 ? [
