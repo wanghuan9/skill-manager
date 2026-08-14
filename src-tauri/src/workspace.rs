@@ -36,14 +36,16 @@ const WORKSPACE_LAYOUT_DIRECTORIES: [&str; 11] = [
 ];
 const WORKSPACE_MIGRATION_PARENT_DIRECTORIES: [&str; 5] =
     ["config", "data", "data/publishing", "credentials", "cache"];
-const WORKSPACE_FILE_MOVES: [WorkspaceFileMove; 9] = [
+const WORKSPACE_FILE_MOVES: [WorkspaceFileMove; 11] = [
     WorkspaceFileMove::new("settings.json", "config/settings.json"),
     WorkspaceFileMove::new("mcp-servers.json", "config/mcp-servers.json"),
     WorkspaceFileMove::new("state.json", "data/state.json"),
+    WorkspaceFileMove::new("publish-state.json", "data/publishing/legacy-marketplace.json"),
     WorkspaceFileMove::new(
         "skillhub-publish-state.json",
         "data/publishing/skillhub.json",
     ),
+    WorkspaceFileMove::new("cache/legacy-marketplace-session.json", "credentials/legacy-marketplace.json"),
     WorkspaceFileMove::new("skillhub-auth.json", "credentials/skillhub.json"),
     WorkspaceFileMove::new("github-credentials.json", "credentials/github.json"),
     WorkspaceFileMove::new("git-update-cache.json", "cache/git-update.json"),
@@ -765,7 +767,7 @@ fn protect_credentials_directory(workspace_root: &Path) -> Result<(), String> {
 
         fs::set_permissions(&credentials_dir, fs::Permissions::from_mode(0o700))
             .map_err(|error| format!("设置凭证目录权限失败: {error}"))?;
-        for file_name in ["skillhub.json", "github.json"] {
+        for file_name in ["legacy-marketplace.json", "skillhub.json", "github.json"] {
             let path = credentials_dir.join(file_name);
             if path_exists(&path)? {
                 protect_credential_file(&path)?;
@@ -1043,6 +1045,14 @@ mod tests {
                     temp_home.join(".skillm/state.json"),
                 ]
             );
+            assert_eq!(
+                workspace_file_candidates("legacy-marketplace-session.json"),
+                vec![
+                    temp_home.join(".skilldock/credentials/legacy-marketplace.json"),
+                    temp_home.join(".skilldock/cache/legacy-marketplace-session.json"),
+                    temp_home.join(".skillm/cache/legacy-marketplace-session.json"),
+                ]
+            );
         });
     }
 
@@ -1237,7 +1247,9 @@ mod tests {
                 ("settings.json", "{\"theme\":\"dark\"}"),
                 ("mcp-servers.json", "{\"servers\":[]}"),
                 ("state.json", "{\"installedSkills\":[]}"),
+                ("publish-state.json", "{\"skills\":{}}"),
                 ("skillhub-publish-state.json", "{\"skills\":{}}"),
+                ("cache/legacy-marketplace-session.json", "{\"accessToken\":\"secret\"}"),
                 ("skillhub-auth.json", "{\"token\":\"secret\"}"),
                 ("github-credentials.json", "{\"token\":\"secret\"}"),
                 ("git-update-cache.json", "{\"entries\":[]}"),
@@ -1259,7 +1271,9 @@ mod tests {
                 ("config/settings.json", "{\"theme\":\"dark\"}"),
                 ("config/mcp-servers.json", "{\"servers\":[]}"),
                 ("data/state.json", "{\"installedSkills\":[]}"),
+                ("data/publishing/legacy-marketplace.json", "{\"skills\":{}}"),
                 ("data/publishing/skillhub.json", "{\"skills\":{}}"),
+                ("credentials/legacy-marketplace.json", "{\"accessToken\":\"secret\"}"),
                 ("credentials/skillhub.json", "{\"token\":\"secret\"}"),
                 ("credentials/github.json", "{\"token\":\"secret\"}"),
                 ("cache/git-update.json", "{\"entries\":[]}"),
@@ -1380,8 +1394,8 @@ mod tests {
             let workspace_root = temp_home.join(WORKSPACE_DIR_NAME);
             let legacy_cache = workspace_root.join("cache");
             fs::create_dir_all(&legacy_cache).expect("create legacy cache");
-            fs::write(legacy_cache.join("plugin-list-cache.json"), "[]")
-                .expect("write legacy cache");
+            fs::write(legacy_cache.join("legacy-marketplace-session.json"), "secret")
+                .expect("write legacy credential");
             fs::set_permissions(&legacy_cache, fs::Permissions::from_mode(0o000))
                 .expect("remove cache permissions");
 
@@ -1390,7 +1404,7 @@ mod tests {
             fs::set_permissions(&legacy_cache, fs::Permissions::from_mode(0o700))
                 .expect("restore cache permissions");
             assert!(result.is_err());
-            assert!(legacy_cache.join("plugin-list-cache.json").is_file());
+            assert!(legacy_cache.join("legacy-marketplace-session.json").is_file());
             assert!(!workspace_root.join("data/layout.json").exists());
         });
     }

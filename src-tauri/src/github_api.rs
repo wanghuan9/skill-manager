@@ -620,7 +620,7 @@ mod tests {
     #[test]
     fn builds_repository_api_url() {
         let url = repository_api_url(
-            "wh1024k",
+            "example-user",
             "skilldock-backup",
             &["contents", ".skilldock", "snapshot.json"],
         )
