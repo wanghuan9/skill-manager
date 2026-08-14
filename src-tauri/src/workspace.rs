@@ -40,12 +40,18 @@ const WORKSPACE_FILE_MOVES: [WorkspaceFileMove; 11] = [
     WorkspaceFileMove::new("settings.json", "config/settings.json"),
     WorkspaceFileMove::new("mcp-servers.json", "config/mcp-servers.json"),
     WorkspaceFileMove::new("state.json", "data/state.json"),
-    WorkspaceFileMove::new("publish-state.json", "data/publishing/legacy-marketplace.json"),
+    WorkspaceFileMove::new(
+        "publish-state.json",
+        "data/publishing/legacy-marketplace.json",
+    ),
     WorkspaceFileMove::new(
         "skillhub-publish-state.json",
         "data/publishing/skillhub.json",
     ),
-    WorkspaceFileMove::new("cache/legacy-marketplace-session.json", "credentials/legacy-marketplace.json"),
+    WorkspaceFileMove::new(
+        "cache/legacy-marketplace-session.json",
+        "credentials/legacy-marketplace.json",
+    ),
     WorkspaceFileMove::new("skillhub-auth.json", "credentials/skillhub.json"),
     WorkspaceFileMove::new("github-credentials.json", "credentials/github.json"),
     WorkspaceFileMove::new("git-update-cache.json", "cache/git-update.json"),
@@ -1249,7 +1255,10 @@ mod tests {
                 ("state.json", "{\"installedSkills\":[]}"),
                 ("publish-state.json", "{\"skills\":{}}"),
                 ("skillhub-publish-state.json", "{\"skills\":{}}"),
-                ("cache/legacy-marketplace-session.json", "{\"accessToken\":\"secret\"}"),
+                (
+                    "cache/legacy-marketplace-session.json",
+                    "{\"accessToken\":\"secret\"}",
+                ),
                 ("skillhub-auth.json", "{\"token\":\"secret\"}"),
                 ("github-credentials.json", "{\"token\":\"secret\"}"),
                 ("git-update-cache.json", "{\"entries\":[]}"),
@@ -1273,7 +1282,10 @@ mod tests {
                 ("data/state.json", "{\"installedSkills\":[]}"),
                 ("data/publishing/legacy-marketplace.json", "{\"skills\":{}}"),
                 ("data/publishing/skillhub.json", "{\"skills\":{}}"),
-                ("credentials/legacy-marketplace.json", "{\"accessToken\":\"secret\"}"),
+                (
+                    "credentials/legacy-marketplace.json",
+                    "{\"accessToken\":\"secret\"}",
+                ),
                 ("credentials/skillhub.json", "{\"token\":\"secret\"}"),
                 ("credentials/github.json", "{\"token\":\"secret\"}"),
                 ("cache/git-update.json", "{\"entries\":[]}"),
@@ -1394,8 +1406,11 @@ mod tests {
             let workspace_root = temp_home.join(WORKSPACE_DIR_NAME);
             let legacy_cache = workspace_root.join("cache");
             fs::create_dir_all(&legacy_cache).expect("create legacy cache");
-            fs::write(legacy_cache.join("legacy-marketplace-session.json"), "secret")
-                .expect("write legacy credential");
+            fs::write(
+                legacy_cache.join("legacy-marketplace-session.json"),
+                "secret",
+            )
+            .expect("write legacy credential");
             fs::set_permissions(&legacy_cache, fs::Permissions::from_mode(0o000))
                 .expect("remove cache permissions");
 
@@ -1404,7 +1419,9 @@ mod tests {
             fs::set_permissions(&legacy_cache, fs::Permissions::from_mode(0o700))
                 .expect("restore cache permissions");
             assert!(result.is_err());
-            assert!(legacy_cache.join("legacy-marketplace-session.json").is_file());
+            assert!(legacy_cache
+                .join("legacy-marketplace-session.json")
+                .is_file());
             assert!(!workspace_root.join("data/layout.json").exists());
         });
     }
