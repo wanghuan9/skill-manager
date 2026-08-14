@@ -390,12 +390,14 @@ where
 }
 
 fn source_type_for_url(source_url: &str) -> &'static str {
-    if source_url.contains("gitlab.com") || source_url.contains("git.example.com") {
+    if source_url.contains("gitlab.com") || source_url.contains("/-/") {
         "gitlab"
     } else if source_url.contains("gitee.com") {
         "gitee"
-    } else {
+    } else if source_url.contains("github.com") {
         "github"
+    } else {
+        "git"
     }
 }
 
@@ -3396,9 +3398,10 @@ fn build_tree_source_url(
         "gitlab" => format!(
             "{normalized_repository_url}/-/tree/{branch_segment}/{normalized_relative_path}"
         ),
-        _ => {
+        "github" | "gitee" => {
             format!("{normalized_repository_url}/tree/{branch_segment}/{normalized_relative_path}")
         }
+        _ => normalized_repository_url.to_string(),
     }
 }
 
@@ -3469,14 +3472,21 @@ fn normalize_installed_skill_source_url(skill: &SkillSummary) -> SkillSummary {
         .or_else(|| current_branch_name(&skill.local_path).ok());
 
     let mut normalized = skill.clone();
-    let source_type = source_type_for_url(&repository_url);
+    let detected_source_type = source_type_for_url(&repository_url);
+    let source_type = if detected_source_type == "git"
+        && matches!(skill.source_type.as_str(), "github" | "gitlab" | "gitee")
+    {
+        skill.source_type.as_str()
+    } else {
+        detected_source_type
+    };
     normalized.source_url = build_tree_source_url(
         &repository_url,
         source_type,
         branch.as_deref(),
         &relative_path,
     );
-    normalized.source_type = source_type_for_url(&normalized.source_url).into();
+    normalized.source_type = source_type.into();
     normalized.source_label = source_label_for_type(&normalized.source_type).into();
     normalized
 }
@@ -9331,9 +9341,15 @@ mod tests {
     }
 
     #[test]
-    fn identifies_internal_gitlab_skill_sources() {
+    fn identifies_gitlab_skill_sources() {
         assert_eq!(
-            super::source_type_for_url("https://git.example.com/example-org/example-repo"),
+            super::source_type_for_url("https://gitlab.com/example-org/example-repo"),
+            "gitlab"
+        );
+        assert_eq!(
+            super::source_type_for_url(
+                "https://git.example.com/example-org/example-repo/-/tree/main/skills/demo"
+            ),
             "gitlab"
         );
     }
@@ -10573,7 +10589,7 @@ mod tests {
         let _guard = TEST_ENV_LOCK
             .lock()
             .unwrap_or_else(|error| error.into_inner());
-        let temp_dir = temp_test_dir("legacy-marketplace-cache");
+        let temp_dir = temp_test_dir("old-marketplace-cache");
         let home_dir = temp_dir.join("home");
         let cache_dir = home_dir.join(".skilldock/cache");
         fs::create_dir_all(&cache_dir).expect("create marketplace cache dir");
@@ -11614,6 +11630,74 @@ mod tests {
         );
         assert_eq!(normalized.source_type, "github");
         assert_eq!(normalized.source_label, "GitHub");
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn preserves_self_hosted_gitlab_type_when_normalizing_git_remote() {
+        let temp_dir = temp_test_dir("normalize-self-hosted-gitlab-source-url");
+        let repo_path = temp_dir.join("example-repo");
+        let skill_path = repo_path.join("skills/demo");
+        fs::create_dir_all(&skill_path).expect("create skill path");
+        fs::write(skill_path.join("SKILL.md"), "# demo").expect("write skill file");
+
+        run_git_test(
+            &temp_dir,
+            &["init", "--quiet", repo_path.to_str().expect("repo path")],
+        );
+        run_git_test(&repo_path, &["checkout", "-b", "main"]);
+        run_git_test(
+            &repo_path,
+            &[
+                "remote",
+                "add",
+                "origin",
+                "https://git.example.com/example-org/example-repo.git",
+            ],
+        );
+        run_git_test(&repo_path, &["config", "user.name", "SkillDock Test"]);
+        run_git_test(
+            &repo_path,
+            &["config", "user.email", "skilldock@example.com"],
+        );
+        run_git_test(&repo_path, &["add", "."]);
+        run_git_test(&repo_path, &["commit", "-m", "init"]);
+
+        let skill = SkillSummary {
+            name: "demo".into(),
+            source_label: "GitLab".into(),
+            source_type: "gitlab".into(),
+            source_url: String::new(),
+            description: String::new(),
+            local_path: skill_path.to_string_lossy().to_string(),
+            branch: "main".into(),
+            collab_status: "clean".into(),
+            status_text: String::new(),
+            remote_updated_at: String::new(),
+            local_updated_at: String::new(),
+            last_synced_at: String::new(),
+            last_checked_at: String::new(),
+            synced_tool_count: 0,
+            last_editor: String::new(),
+            commit_label: String::new(),
+            git_linked: true,
+            local_change_count: 0,
+            lifecycle_source: "direct".into(),
+            owner_plugin_id: String::new(),
+            owner_plugin_name: String::new(),
+            instance: Default::default(),
+            tools: vec![],
+        };
+
+        let normalized = normalize_installed_skill_source_url(&skill);
+
+        assert_eq!(
+            normalized.source_url,
+            "https://git.example.com/example-org/example-repo/-/tree/main/skills/demo"
+        );
+        assert_eq!(normalized.source_type, "gitlab");
+        assert_eq!(normalized.source_label, "GitLab");
 
         let _ = fs::remove_dir_all(temp_dir);
     }

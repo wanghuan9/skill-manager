@@ -1763,8 +1763,11 @@ mod tests {
             fs::create_dir_all(&codex_skills_root).expect("create codex skills dir");
             fs::write(managed_skill_dir.join("SKILL.md"), "# example-migration")
                 .expect("write managed skill file");
-            fs::write(codex_skills_root.join("example-migration"), "# not a directory")
-                .expect("write non-directory entry");
+            fs::write(
+                codex_skills_root.join("example-migration"),
+                "# not a directory",
+            )
+            .expect("write non-directory entry");
 
             let candidates = scan_local_skill_candidates(&[]);
 
@@ -1871,7 +1874,8 @@ mod tests {
             std::os::unix::fs::symlink(&legacy_skill_dir, &codex_skill_link)
                 .expect("create legacy skill symlink");
 
-            let installed_skills = vec![test_skill_summary("example-migration", &managed_skill_dir)];
+            let installed_skills =
+                vec![test_skill_summary("example-migration", &managed_skill_dir)];
             let candidates = scan_local_skill_candidates(&installed_skills);
 
             assert!(candidates.is_empty());

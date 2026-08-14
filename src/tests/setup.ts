@@ -5,6 +5,12 @@ import { resetSkillFixtureState } from "@/features/skills/state/skill-fixtures";
 
 const storageState = new Map<string, string>();
 
+if (typeof Range.prototype.getClientRects !== "function") {
+  Object.defineProperty(Range.prototype, "getClientRects", {
+    value: () => [],
+  });
+}
+
 if (typeof window !== "undefined") {
   Object.defineProperty(window, "localStorage", {
     configurable: true,

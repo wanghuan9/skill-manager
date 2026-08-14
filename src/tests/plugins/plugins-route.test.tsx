@@ -23,6 +23,7 @@ const mockedUseSkillWorkspace = vi.mocked(useSkillWorkspace);
 const mockedListen = vi.mocked(listen);
 
 beforeEach(() => {
+  vi.restoreAllMocks();
   delete (window as Window & { __SKILLM_PLUGINS__?: unknown }).__SKILLM_PLUGINS__;
   window.localStorage.clear();
   resetPluginScanSessionForTests();

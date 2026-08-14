@@ -1,6 +1,9 @@
 {
   "name": "skilldock",
   "version": "1.0.8",
+  "description": "Desktop manager for AI coding skills, MCP servers, and plugins",
+  "license": "MIT",
+  "repository": "https://github.com/wanghuan9/skilldock.git",
   "private": true,
   "type": "module",
   "scripts": {
@@ -9,12 +12,9 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "tauri": "tauri",
-    "desktop:dev": "cargo tauri dev",
-    "desktop:build": "cargo tauri build",
-    "tauri:check": "cd src-tauri && cargo check",
-    "release:check": "bash scripts/check-release-secrets.sh",
-    "release:notes": "node scripts/generate-release-notes.cjs",
-    "release:publish": "bash scripts/publish-release.sh"
+    "desktop:dev": "tauri dev",
+    "desktop:build": "tauri build",
+    "tauri:check": "cd src-tauri && cargo check"
   },
   "dependencies": {
     "@codemirror/merge": "^6.12.2",

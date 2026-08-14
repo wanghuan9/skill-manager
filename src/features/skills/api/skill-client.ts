@@ -317,7 +317,7 @@ type LegacyCliToolSummary = Partial<CliToolSummary>;
 function pluginSourceCandidateFixtures(input: ProbePluginSourceInput): LegacyPluginProbeResult[] {
   const source = input.source.trim();
   const sparsePath = input.sparsePath?.trim() ?? "";
-  const agenticEngineeringProbe: LegacyPluginProbeResult = {
+  const examplePluginProbe: LegacyPluginProbeResult = {
     tool: "codex",
     compatibleHostTools: ["codex", "claude-code", "cursor", "opencode"],
     kind: "plugin-repo",
@@ -356,8 +356,8 @@ function pluginSourceCandidateFixtures(input: ProbePluginSourceInput): LegacyPlu
     compatibleHostTools: ["claude-code"],
     kind: "plugin-repo",
     description: "面向工作流编排与项目初始化的插件集合",
-    pluginRoot: "/tmp/example-repo/plugins/example-plugin",
-    manifestPath: "/tmp/example-repo/plugins/example-plugin/.claude-plugin/plugin.json",
+    pluginRoot: "/tmp/example-repo/plugins/workflow-plugin",
+    manifestPath: "/tmp/example-repo/plugins/workflow-plugin/.claude-plugin/plugin.json",
     marketplaceManifestPath: "",
     components: [
       {
@@ -382,13 +382,13 @@ function pluginSourceCandidateFixtures(input: ProbePluginSourceInput): LegacyPlu
     return [pluginProbeFixture];
   }
   if (sparsePath === "example-plugin") {
-    return [agenticEngineeringProbe];
+    return [examplePluginProbe];
   }
-  if (sparsePath === "plugins/example-plugin") {
+  if (sparsePath === "plugins/workflow-plugin") {
     return [workflowPluginProbe];
   }
 
-  return [agenticEngineeringProbe, workflowPluginProbe];
+  return [examplePluginProbe, workflowPluginProbe];
 }
 
 export type McpImportSessionSnapshot = {

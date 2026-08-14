@@ -13,9 +13,9 @@
 </p>
 
 <p align="center">
-  <img alt="Version" src="https://img.shields.io/badge/version-1.0.0-blue" />
+  <img alt="Version" src="https://img.shields.io/badge/version-1.0.8-blue" />
   <img alt="Platform" src="https://img.shields.io/badge/platform-macOS%20Apple%20Silicon%20%7C%20Windows%20x64-blue" />
-  <img alt="Preview" src="https://img.shields.io/badge/source-closed%20preview-lightgrey" />
+  <a href="./LICENSE"><img alt="License" src="https://img.shields.io/badge/license-MIT-green" /></a>
 </p>
 
 <p align="center">
@@ -185,15 +185,31 @@ sudo xattr -cr /Applications/SkillDock.app
 4. 为你的 Coding Agent 启用 Plugins、Skills 和 MCP servers。
 5. 使用 Git-aware 状态查看更新、本地修改、Diff 预览和推送预览。
 
+## 从源码构建
+
+请先安装 Node.js 20+、Rust 1.77.2+，以及当前平台所需的 [Tauri 系统依赖](https://v2.tauri.app/zh-cn/start/prerequisites/)。
+
+```bash
+npm ci
+npm test
+npm run build
+npm run tauri:check
+npm run desktop:build
+```
+
+本地开发可运行 `npm run desktop:dev`。
+
 ## 路线图
 
-- [ ] 预览版稳定后开放源码。
+- [x] 以 MIT License 公开源代码。
 - [ ] 更清晰的 skill 状态：可更新、本地已修改、待推送、冲突。
 - [ ] 更完整的插件和 MCP 生命周期：安装、参数配置、tools 探测、跨工具同步。
 - [ ] 更好的 Git 流程：分支选择、团队仓库回推、PR/MR 交接。
 
-## 源码说明
+## 参与贡献
 
-SkillDock 当前以闭源预览版形式发布。
+欢迎提交 Issue 和 Pull Request。提交改动前请运行 `npm test`、`npm run build` 和 `npm run tauri:check`。
 
-源码是否开放会在首个公开版本稳定后再决定。
+## 许可证
+
+SkillDock 基于 [MIT License](./LICENSE) 开源。

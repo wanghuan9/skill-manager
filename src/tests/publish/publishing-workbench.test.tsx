@@ -360,7 +360,7 @@ test("keeps unmanaged candidates while switching the publishing platform", async
   document.body.append(sourceHeader);
   const firstAdapter = createAdapter();
   const secondAdapter = createAdapter();
-  secondAdapter.platform = { id: "secondary-market", label: "legacy-marketplace" };
+  secondAdapter.platform = { id: "secondary-market", label: "secondary-marketplace" };
   const { rerender } = render(<PublishingWorkbench adapter={firstAdapter} />);
 
   await screen.findByRole("tab", { name: /未托管 1/ });

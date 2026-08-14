@@ -13,9 +13,9 @@
 </p>
 
 <p align="center">
-  <img alt="Version" src="https://img.shields.io/badge/version-1.0.0-blue" />
+  <img alt="Version" src="https://img.shields.io/badge/version-1.0.8-blue" />
   <img alt="Platform" src="https://img.shields.io/badge/platform-macOS%20Apple%20Silicon%20%7C%20Windows%20x64-blue" />
-  <img alt="Preview" src="https://img.shields.io/badge/source-closed%20preview-lightgrey" />
+  <a href="./LICENSE"><img alt="License" src="https://img.shields.io/badge/license-MIT-green" /></a>
 </p>
 
 <p align="center">
@@ -184,15 +184,31 @@ You can then launch SkillDock normally.
 4. Enable plugins, skills, and MCP servers for your coding tools.
 5. Use Git-aware status to review updates, local edits, Diff previews, and push previews.
 
+## Build from Source
+
+Prerequisites: Node.js 20+, Rust 1.77.2+, and the [Tauri system dependencies](https://v2.tauri.app/start/prerequisites/) for your platform.
+
+```bash
+npm ci
+npm test
+npm run build
+npm run tauri:check
+npm run desktop:build
+```
+
+For local development, run `npm run desktop:dev`.
+
 ## Roadmap
 
-- [ ] Public source release after the preview stabilizes.
+- [x] Publish the source code under the MIT License.
 - [ ] Clearer skill states: updateable, locally modified, pending push, conflicted.
 - [ ] Fuller plugin and MCP lifecycle: install, configure, discover tools, and sync across tools.
 - [ ] Better Git flows: branch selection, team repository pushback, PR/MR handoff.
 
-## Source Availability
+## Contributing
 
-SkillDock is currently distributed as a closed-source preview.
+Issues and pull requests are welcome. Before submitting a change, run `npm test`, `npm run build`, and `npm run tauri:check`.
 
-Source code may be opened later after the first public release stabilizes.
+## License
+
+SkillDock is released under the [MIT License](./LICENSE).

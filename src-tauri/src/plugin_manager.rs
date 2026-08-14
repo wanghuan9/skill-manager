@@ -13912,8 +13912,7 @@ exit 0
             r#"{"name":"example-plugin","version":"1.0.0"}"#,
         )
         .expect("write claude manifest");
-        fs::write(workflow_root.join("commands/init-project.md"), "# init")
-            .expect("write command");
+        fs::write(workflow_root.join("commands/init-project.md"), "# init").expect("write command");
         fs::create_dir_all(repo_root.join(".agents/plugins")).expect("create marketplace dir");
         fs::write(
             repo_root.join(".agents/plugins/marketplace.json"),
@@ -14043,18 +14042,14 @@ exit 0
 
         fs::create_dir_all(seed_repo.join("example-plugin/.cursor-plugin"))
             .expect("create seed manifest dir");
-        fs::create_dir_all(seed_repo.join("example-plugin/rules"))
-            .expect("create seed rules dir");
+        fs::create_dir_all(seed_repo.join("example-plugin/rules")).expect("create seed rules dir");
         fs::write(
             seed_repo.join("example-plugin/.cursor-plugin/plugin.json"),
             r#"{"name":"example-plugin","displayName":"Example Plugin","version":"1.0.0"}"#,
         )
         .expect("write seed manifest");
-        fs::write(
-            seed_repo.join("example-plugin/rules/version.mdc"),
-            "# old",
-        )
-        .expect("write old plugin content");
+        fs::write(seed_repo.join("example-plugin/rules/version.mdc"), "# old")
+            .expect("write old plugin content");
         commit_test_repo(&seed_repo, Some(remote_repo.to_string_lossy().as_ref()));
         run_git_test(&seed_repo, &["push", "-u", "origin", "main"]);
 
@@ -14147,8 +14142,7 @@ exit 0
             r#"{"name":"example-plugin","version":"1.0.0","description":"Workflow plugin"}"#,
         )
         .expect("write claude manifest");
-        fs::write(source_root.join("commands/init-project.md"), "# init")
-            .expect("write command");
+        fs::write(source_root.join("commands/init-project.md"), "# init").expect("write command");
 
         let previous_home = env::var_os("HOME");
         env::set_var("HOME", &home_dir);
@@ -14226,12 +14220,8 @@ exit 0
         assert!(marketplace_manifest_content.contains(r#""owner""#));
         assert!(marketplace_manifest_content.contains(r#""SkillDock""#));
         assert!(marketplace_manifest_content.contains(r#""name": "example-plugin""#));
-        assert!(
-            marketplace_manifest_content.contains(r#""source": "./plugins/example-plugin""#)
-        );
-        assert!(
-            !marketplace_manifest_content.contains(r#""path": "./plugins/example-plugin""#)
-        );
+        assert!(marketplace_manifest_content.contains(r#""source": "./plugins/example-plugin""#));
+        assert!(!marketplace_manifest_content.contains(r#""path": "./plugins/example-plugin""#));
 
         let _ = fs::remove_dir_all(temp_dir);
     }
@@ -14649,8 +14639,7 @@ exit 0
         let installed_root = plugin_cache_root.join("latest");
 
         fs::create_dir_all(source_root.join(".codex-plugin")).expect("create codex manifest dir");
-        fs::create_dir_all(source_root.join("skills/example-plugin"))
-            .expect("create skill dir");
+        fs::create_dir_all(source_root.join("skills/example-plugin")).expect("create skill dir");
         fs::write(
             source_root.join(".codex-plugin/plugin.json"),
             r#"{"name":"example-plugin","version":"0.1.0","skills":"./skills/"}"#,
@@ -14666,13 +14655,8 @@ exit 0
         std::os::unix::fs::symlink(&source_root, &plugin_cache_root)
             .expect("create legacy direct cache link");
 
-        ensure_skilldock_codex_cache_link(
-            &home_dir,
-            &source_root,
-            "skilldock",
-            "example-plugin",
-        )
-        .expect("ensure codex cache link");
+        ensure_skilldock_codex_cache_link(&home_dir, &source_root, "skilldock", "example-plugin")
+            .expect("ensure codex cache link");
 
         assert!(plugin_cache_root.is_dir());
         assert!(!plugin_cache_root.join(".codex-plugin/plugin.json").exists());
@@ -14698,8 +14682,7 @@ exit 0
         let _guard = TEST_ENV_LOCK.lock().expect("lock test env");
         let temp_dir = temp_test_dir("codex-skilldock-package-identity-fallback");
         let home_dir = temp_dir.join("home");
-        let shared_package_root =
-            home_dir.join(".skilldock/plugins/example-plugin-example-repo");
+        let shared_package_root = home_dir.join(".skilldock/plugins/example-plugin-example-repo");
         let shared_plugin_root = shared_package_root.join("example-plugin");
         let codex_marketplace_root = home_dir.join(".codex/marketplaces/skilldock");
         let marketplace_plugin_root = codex_marketplace_root.join("plugins/example-plugin");
@@ -15801,8 +15784,7 @@ source = "__SOURCE__"
         let _guard = TEST_ENV_LOCK.lock().expect("lock test env");
         let temp_dir = temp_test_dir("cursor-plugin-dedupe");
         let home_dir = temp_dir.join("home");
-        let cache_root =
-            home_dir.join(".cursor/plugins/cache/example-org/example-plugin/0.1.0");
+        let cache_root = home_dir.join(".cursor/plugins/cache/example-org/example-plugin/0.1.0");
         let local_root = home_dir.join(".cursor/plugins/local/example-plugin");
         let manifest = r#"{"name":"example-plugin","displayName":"Example Plugin","version":"0.1.0","repository":"https://git.example.com/example-org/example-repo","description":"Example Plugin"}"#;
 
@@ -15937,10 +15919,7 @@ source = "__SOURCE__"
         assert_eq!(plugins.len(), 1);
         assert_eq!(plugins[0].host_tool, "cursor");
         assert_eq!(plugins[0].name, "Example Plugin");
-        assert_eq!(
-            plugins[0].plugin_relative_path,
-            "plugins/example-plugin"
-        );
+        assert_eq!(plugins[0].plugin_relative_path, "plugins/example-plugin");
         assert_ne!(plugins[0].collab_status, PLUGIN_STATUS_PENDING_PUSH);
 
         let _ = fs::remove_dir_all(temp_dir);
@@ -17083,8 +17062,7 @@ source = "__SOURCE__"
         let cursor_link = home_dir.join(".cursor/plugins/local/example-plugin");
         let cursor_agent_link = home_dir.join(".cursor/agents/agentic-review.md");
         let opencode_link = home_dir.join(".config/opencode/plugins/example-plugin.js");
-        let opencode_marker =
-            home_dir.join(".skilldock/disabled-plugins/opencode/example-plugin");
+        let opencode_marker = home_dir.join(".skilldock/disabled-plugins/opencode/example-plugin");
         let codex_link = home_dir.join(".codex/plugins/cache/skilldock/example-plugin");
 
         fs::create_dir_all(package_root.join(".git/info")).expect("create residual package");

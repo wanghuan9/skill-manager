@@ -785,10 +785,10 @@ test("probes repository roots and lists every plugin candidate", async () => {
       tool: "claude-code",
       compatibleHostTools: ["claude-code"],
       kind: "plugin-repo",
-      name: "example-plugin",
+      name: "workflow-plugin",
       description: "面向工作流编排与项目初始化的插件集合",
-      pluginRoot: "/tmp/example-repo/plugins/example-plugin",
-      manifestPath: "/tmp/example-repo/plugins/example-plugin/.claude-plugin/plugin.json",
+      pluginRoot: "/tmp/example-repo/plugins/workflow-plugin",
+      manifestPath: "/tmp/example-repo/plugins/workflow-plugin/.claude-plugin/plugin.json",
       marketplaceManifestPath: "",
       components: [
         {
@@ -829,26 +829,26 @@ test("probes repository roots and lists every plugin candidate", async () => {
     });
   });
   expect(await screen.findByText("example-plugin")).toBeInTheDocument();
-  expect(screen.getByText("example-plugin")).toBeInTheDocument();
+  expect(screen.getByText("workflow-plugin")).toBeInTheDocument();
   expect(screen.getByText("1 skill")).toBeInTheDocument();
   expect(screen.getByText("1 command")).toBeInTheDocument();
   expect(screen.queryByRole("textbox", { name: "Git 仓库地址" })).not.toBeInTheDocument();
   expect(screen.getByRole("button", { name: "返回" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "安装到选中宿主" })).toBeDisabled();
-  expect(screen.getByText("example-plugin").closest(".plugin-install-preview__item")).not.toHaveClass("is-selected");
+  expect(screen.getByText("workflow-plugin").closest(".plugin-install-preview__item")).not.toHaveClass("is-selected");
   expect(screen.getByRole("button", { name: /选择 Codex 作为 example-plugin 安装宿主/ })).toHaveAttribute("aria-pressed", "false");
   expect(screen.getByRole("button", { name: /选择 Claude Code 作为 example-plugin 安装宿主/ })).toHaveAttribute("aria-pressed", "false");
   expect(screen.getByRole("button", { name: /选择 Cursor 作为 example-plugin 安装宿主/ })).toHaveAttribute("aria-pressed", "false");
-  await userEvent.click(screen.getByRole("button", { name: /选择 Claude Code 作为 example-plugin 安装宿主/ }));
+  await userEvent.click(screen.getByRole("button", { name: /选择 Claude Code 作为 workflow-plugin 安装宿主/ }));
   await waitFor(() => {
-    expect(screen.getByText("example-plugin").closest(".plugin-install-preview__item")).toHaveClass("is-selected");
-    expect(screen.getByRole("button", { name: /取消选择 Claude Code 作为 example-plugin 安装宿主/ })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByText("workflow-plugin").closest(".plugin-install-preview__item")).toHaveClass("is-selected");
+    expect(screen.getByRole("button", { name: /取消选择 Claude Code 作为 workflow-plugin 安装宿主/ })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByRole("button", { name: "安装到选中宿主" })).toBeEnabled();
   });
   await userEvent.click(screen.getByRole("button", { name: "安装到选中宿主" }));
   await waitFor(() => {
     expect(installSpy).toHaveBeenCalledWith({
-      probes: [expect.objectContaining({ pluginRoot: "/tmp/example-repo/plugins/example-plugin" })],
+      probes: [expect.objectContaining({ pluginRoot: "/tmp/example-repo/plugins/workflow-plugin" })],
       hostTools: ["claude-code"],
     });
   });
@@ -873,7 +873,7 @@ test("uses browser fixtures to list example-repo plugin candidates", async () =>
   await userEvent.click(screen.getByRole("button", { name: "识别插件" }));
 
   expect(await screen.findByText("example-plugin")).toBeInTheDocument();
-  expect(await screen.findByText("example-plugin")).toBeInTheDocument();
+  expect(await screen.findByText("workflow-plugin")).toBeInTheDocument();
   expect(screen.getByText("1 command")).toBeInTheDocument();
   expect(screen.queryByRole("textbox", { name: "Git 仓库地址" })).not.toBeInTheDocument();
 });
@@ -893,17 +893,17 @@ test("filters discovered plugin candidates by name and description", async () =>
   await userEvent.click(screen.getByRole("button", { name: "识别插件" }));
 
   expect(await screen.findByText("example-plugin")).toBeInTheDocument();
-  expect(await screen.findByText("example-plugin")).toBeInTheDocument();
+  expect(await screen.findByText("workflow-plugin")).toBeInTheDocument();
   const searchInput = screen.getByRole("searchbox", { name: "搜索仓库插件" });
 
   await userEvent.type(searchInput, "workflow");
   expect(screen.queryByText("example-plugin")).not.toBeInTheDocument();
-  expect(screen.getByText("example-plugin")).toBeInTheDocument();
+  expect(screen.getByText("workflow-plugin")).toBeInTheDocument();
 
   await userEvent.clear(searchInput);
   await userEvent.type(searchInput, "框架");
   expect(screen.getByText("example-plugin")).toBeInTheDocument();
-  expect(screen.queryByText("example-plugin")).not.toBeInTheDocument();
+  expect(screen.queryByText("workflow-plugin")).not.toBeInTheDocument();
 
   await userEvent.clear(searchInput);
   await userEvent.type(searchInput, "missing");
@@ -928,17 +928,17 @@ test("selects and deselects visible plugin candidates from git install search re
   await userEvent.click(screen.getByRole("button", { name: "识别插件" }));
 
   expect(await screen.findByText("example-plugin")).toBeInTheDocument();
-  expect(await screen.findByText("example-plugin")).toBeInTheDocument();
+  expect(await screen.findByText("workflow-plugin")).toBeInTheDocument();
   const searchInput = screen.getByRole("searchbox", { name: "搜索仓库插件" });
   await userEvent.type(searchInput, "workflow");
 
   await userEvent.click(screen.getByRole("button", { name: "全选" }));
   expect(screen.getByRole("button", { name: "取消全选" })).toBeInTheDocument();
-  expect(screen.getByText("example-plugin").closest(".plugin-install-preview__item")).toHaveClass("is-selected");
+  expect(screen.getByText("workflow-plugin").closest(".plugin-install-preview__item")).toHaveClass("is-selected");
 
   await userEvent.clear(searchInput);
   expect(screen.getByRole("button", { name: "全选" })).toBeInTheDocument();
-  expect(screen.getByText("example-plugin").closest(".plugin-install-preview__item")).toHaveClass("is-selected");
+  expect(screen.getByText("workflow-plugin").closest(".plugin-install-preview__item")).toHaveClass("is-selected");
   expect(screen.getByText("example-plugin").closest(".plugin-install-preview__item")).not.toHaveClass("is-selected");
 
   await userEvent.click(screen.getByRole("button", { name: "全选" }));
@@ -947,7 +947,7 @@ test("selects and deselects visible plugin candidates from git install search re
 
   await userEvent.click(screen.getByRole("button", { name: "取消全选" }));
   expect(screen.getByText("example-plugin").closest(".plugin-install-preview__item")).not.toHaveClass("is-selected");
-  expect(screen.getByText("example-plugin").closest(".plugin-install-preview__item")).not.toHaveClass("is-selected");
+  expect(screen.getByText("workflow-plugin").closest(".plugin-install-preview__item")).not.toHaveClass("is-selected");
 
   fetchInstalledPluginsSpy.mockRestore();
 });
