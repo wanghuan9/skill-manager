@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
 import { PublishingWorkbench } from "@/features/publishing/PublishingWorkbench";
+import { NotificationProvider } from "@/app/notifications";
 import type { PublishingPlatformAdapter } from "@/features/publishing/publishing-adapter";
 import type { PublishableSkill } from "@/features/publishing/types";
 import { subscribeSkillLibraryChanges } from "@/features/skills/api/skill-client";
@@ -14,6 +15,15 @@ vi.mock("@/features/skills/api/skill-client", () => ({
   openExternalLink: vi.fn(),
   openPathInFinder: vi.fn(),
   subscribeSkillLibraryChanges: vi.fn().mockResolvedValue(() => undefined),
+}));
+
+vi.mock("@/features/skills/state/skill-workspace", () => ({
+  useSkillWorkspace: () => ({
+    defaultOpenToolId: "finder",
+    language: "zh-CN",
+    markSkillAsActive: vi.fn(),
+    toolConfigs: [],
+  }),
 }));
 
 const SKILL: PublishableSkill = {
@@ -206,6 +216,48 @@ test("shows the changed file count on an update preview button", async () => {
 
   const previewButton = await screen.findByRole("button", { name: "预览变更 shared-workbench" });
   expect(within(previewButton).getByText("2")).toHaveClass("skill-card__change-count");
+});
+
+test("shows the exact EOF deletion in the publishing update preview", async () => {
+  const retainedLine = "- **组件设计原则**：参见 `bp-component-design` Skill（SOLID、设计模式）";
+  const adapter = createAdapter();
+  adapter.fetchSkills = vi.fn().mockResolvedValue({
+    skills: [{
+      ...SKILL,
+      remoteSkillId: "remote-1",
+      remoteVersion: "1.0.0",
+      publishStatus: "update-available",
+      targetVersion: "1.0.1",
+      updateFileCount: 1,
+    }],
+    authorizationRequired: false,
+  });
+  adapter.getUpdatePreview = vi.fn().mockResolvedValue({
+    currentBranch: "main",
+    remoteBranch: "main",
+    commitsToPull: 0,
+    hasLocalChanges: false,
+    changedFiles: [{
+      path: "SKILL.md",
+      status: "M",
+      diff: "@@ -2,2 +2 @@\n retained line\n-11测试2",
+      originalContent: ["## 进阶", retainedLine, "11测试2"].join("\n"),
+      currentContent: ["## 进阶", retainedLine].join("\n"),
+    }],
+  });
+
+  render(
+    <NotificationProvider>
+      <PublishingWorkbench adapter={adapter} />
+    </NotificationProvider>,
+  );
+
+  await userEvent.click(await screen.findByRole("button", { name: "预览变更 shared-workbench" }));
+  await waitFor(() => {
+    expect(document.querySelector(".cm-deletedChunk")).toHaveTextContent("11测试2");
+  });
+  expect(document.querySelector(".cm-deletedChunk")).not.toHaveTextContent(retainedLine);
+  expect(document.querySelector(".cm-insertedLine")).not.toBeInTheDocument();
 });
 
 test("keeps a platform-blocked skill visible without a publish action", async () => {

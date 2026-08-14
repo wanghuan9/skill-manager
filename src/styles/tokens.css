@@ -27,6 +27,8 @@
   --tooltip-delay: 600ms;
   --tooltip-surface: rgba(255, 255, 255, 0.76);
   --tooltip-border: rgba(15, 23, 42, 0.1);
+  --scrollbar-thumb: rgba(148, 163, 184, 0.58);
+  --scrollbar-thumb-hover: rgba(100, 116, 139, 0.66);
   --motion-fast: 120ms;
   --motion-base: 160ms;
   --motion-slow: 180ms;
@@ -64,10 +66,36 @@
   --shadow: 0 12px 30px rgba(0, 0, 0, 0.22);
   --tooltip-surface: rgba(45, 45, 45, 0.96);
   --tooltip-border: rgba(255, 255, 255, 0.12);
+  --scrollbar-thumb: rgba(255, 255, 255, 0.17);
+  --scrollbar-thumb-hover: rgba(255, 255, 255, 0.28);
 }
 
 * {
   box-sizing: border-box;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
+  scrollbar-width: thin;
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-track,
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: var(--scrollbar-thumb);
+  background-clip: padding-box;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+  background-clip: padding-box;
 }
 
 html {
@@ -191,8 +219,6 @@ button *,
   padding: 5px;
   overflow-x: hidden;
   overflow-y: auto;
-  scrollbar-width: thin;
-  scrollbar-color: rgba(148, 163, 184, 0.58) transparent;
   border: 1px solid var(--line);
   border-radius: 12px;
   background: var(--surface);
@@ -909,29 +935,6 @@ code {
 
 .app-update-popover__content {
   padding: 12px 16px 16px;
-}
-
-.settings-update-release-notes__content::-webkit-scrollbar,
-.app-update-popover__content::-webkit-scrollbar {
-  width: 10px;
-}
-
-.settings-update-release-notes__content::-webkit-scrollbar-track,
-.app-update-popover__content::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.settings-update-release-notes__content::-webkit-scrollbar-thumb,
-.app-update-popover__content::-webkit-scrollbar-thumb {
-  border: 2px solid transparent;
-  border-radius: 999px;
-  background: rgba(148, 163, 184, 0.55);
-  background-clip: padding-box;
-}
-
-.settings-update-release-notes__content::-webkit-scrollbar-thumb:hover,
-.app-update-popover__content::-webkit-scrollbar-thumb:hover {
-  background: rgba(100, 116, 139, 0.75);
 }
 
 .settings-update-release-notes__markdown,
@@ -1740,55 +1743,6 @@ code {
 
 .page-content > * {
   animation: page-surface-in var(--motion-slow) var(--ease-emphasized);
-}
-
-.page-content::-webkit-scrollbar,
-.tools-section::-webkit-scrollbar,
-.sidebar::-webkit-scrollbar,
-.local-install-workspace::-webkit-scrollbar,
-.skill-file-dialog__preview::-webkit-scrollbar,
-.mcp-edit-dialog__body::-webkit-scrollbar,
-.mcp-market-config-preview::-webkit-scrollbar,
-.app-select__popover::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
-}
-
-.page-content::-webkit-scrollbar-track,
-.tools-section::-webkit-scrollbar-track,
-.sidebar::-webkit-scrollbar-track,
-.local-install-workspace::-webkit-scrollbar-track,
-.skill-file-dialog__preview::-webkit-scrollbar-track,
-.mcp-edit-dialog__body::-webkit-scrollbar-track,
-.mcp-market-config-preview::-webkit-scrollbar-track,
-.app-select__popover::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.page-content::-webkit-scrollbar-thumb,
-.tools-section::-webkit-scrollbar-thumb,
-.sidebar::-webkit-scrollbar-thumb,
-.local-install-workspace::-webkit-scrollbar-thumb,
-.skill-file-dialog__preview::-webkit-scrollbar-thumb,
-.mcp-edit-dialog__body::-webkit-scrollbar-thumb,
-.mcp-market-config-preview::-webkit-scrollbar-thumb,
-.app-select__popover::-webkit-scrollbar-thumb {
-  border: 2px solid transparent;
-  border-radius: 999px;
-  background: rgba(148, 163, 184, 0.58);
-  background-clip: padding-box;
-}
-
-.page-content::-webkit-scrollbar-thumb:hover,
-.tools-section::-webkit-scrollbar-thumb:hover,
-.sidebar::-webkit-scrollbar-thumb:hover,
-.local-install-workspace::-webkit-scrollbar-thumb:hover,
-.skill-file-dialog__preview::-webkit-scrollbar-thumb:hover,
-.mcp-edit-dialog__body::-webkit-scrollbar-thumb:hover,
-.mcp-market-config-preview::-webkit-scrollbar-thumb:hover,
-.app-select__popover::-webkit-scrollbar-thumb:hover {
-  background: rgba(100, 116, 139, 0.66);
-  background-clip: padding-box;
 }
 
 .panel-card,
@@ -4971,27 +4925,6 @@ code {
   scrollbar-gutter: stable;
 }
 
-.market-install-scroll::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
-}
-
-.market-install-scroll::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.market-install-scroll::-webkit-scrollbar-thumb {
-  border: 2px solid transparent;
-  border-radius: 999px;
-  background: rgba(148, 163, 184, 0.58);
-  background-clip: padding-box;
-}
-
-.market-install-scroll::-webkit-scrollbar-thumb:hover {
-  background: rgba(100, 116, 139, 0.66);
-  background-clip: padding-box;
-}
-
 .mcp-market-config-preview {
   max-height: 220px;
   overflow: auto;
@@ -7521,8 +7454,6 @@ code {
   border-right: 1px solid var(--line);
   background: linear-gradient(180deg, rgba(248, 250, 253, 0.92), rgba(242, 246, 251, 0.78));
   overflow: auto;
-  scrollbar-width: thin;
-  scrollbar-color: rgba(119, 134, 156, 0.28) transparent;
 }
 
 .skill-file-dialog__tree-item {
@@ -7878,6 +7809,8 @@ code {
 .skill-diff__editor .cm-scroller {
   container-type: inline-size;
   overflow: auto;
+  overscroll-behavior-y: none;
+  scrollbar-gutter: stable;
   font-family: inherit;
   line-height: 1.65;
 }
@@ -15575,32 +15508,6 @@ button.settings-form-item:disabled {
   border-color: #3b3b3b;
   background: #202020;
   box-shadow: 0 1px 0 rgba(255, 255, 255, 0.02) inset;
-}
-
-:root[data-theme="dark"] .page-content::-webkit-scrollbar-thumb,
-:root[data-theme="dark"] .tools-section::-webkit-scrollbar-thumb,
-:root[data-theme="dark"] .sidebar::-webkit-scrollbar-thumb,
-:root[data-theme="dark"] .local-install-workspace::-webkit-scrollbar-thumb,
-:root[data-theme="dark"] .skill-file-dialog__preview::-webkit-scrollbar-thumb,
-:root[data-theme="dark"] .mcp-edit-dialog__body::-webkit-scrollbar-thumb,
-:root[data-theme="dark"] .mcp-market-config-preview::-webkit-scrollbar-thumb,
-:root[data-theme="dark"] .market-install-scroll::-webkit-scrollbar-thumb,
-:root[data-theme="dark"] .app-select__popover::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.17);
-  background-clip: padding-box;
-}
-
-:root[data-theme="dark"] .page-content::-webkit-scrollbar-thumb:hover,
-:root[data-theme="dark"] .tools-section::-webkit-scrollbar-thumb:hover,
-:root[data-theme="dark"] .sidebar::-webkit-scrollbar-thumb:hover,
-:root[data-theme="dark"] .local-install-workspace::-webkit-scrollbar-thumb:hover,
-:root[data-theme="dark"] .skill-file-dialog__preview::-webkit-scrollbar-thumb:hover,
-:root[data-theme="dark"] .mcp-edit-dialog__body::-webkit-scrollbar-thumb:hover,
-:root[data-theme="dark"] .mcp-market-config-preview::-webkit-scrollbar-thumb:hover,
-:root[data-theme="dark"] .market-install-scroll::-webkit-scrollbar-thumb:hover,
-:root[data-theme="dark"] .app-select__popover::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.28);
-  background-clip: padding-box;
 }
 
 :root[data-theme="dark"] .skills-view-toggle {

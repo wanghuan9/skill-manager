@@ -62,6 +62,38 @@ type SkillDiffViewProps = {
 
 const externalContentSync = Annotation.define<boolean>();
 
+type DiffDisplayDocuments = {
+  original: string;
+  current: string;
+  hasEofBoundaryAnchor: boolean;
+};
+
+function needsEofBoundaryAnchor(original: string, current: string) {
+  return original.length > 0
+    && current.length > 0
+    && !original.endsWith("\n")
+    && !current.endsWith("\n");
+}
+
+function buildDiffDisplayDocuments(original: string, current: string): DiffDisplayDocuments {
+  const hasEofBoundaryAnchor = needsEofBoundaryAnchor(original, current);
+  if (!hasEofBoundaryAnchor) {
+    return { original, current, hasEofBoundaryAnchor: false };
+  }
+  return {
+    original: `${original}\n`,
+    current: `${current}\n`,
+    hasEofBoundaryAnchor: true,
+  };
+}
+
+function removeEofBoundaryAnchor(content: string, hasEofBoundaryAnchor: boolean) {
+  if (!hasEofBoundaryAnchor || !content.endsWith("\n")) {
+    return content;
+  }
+  return content.slice(0, -1);
+}
+
 function parseHunkLines(lines: string[], header: string): SkillDiffLine[] {
   const range = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(header);
   let oldLine = Number(range?.[1] ?? 1);
@@ -163,6 +195,8 @@ class RevertChunkGutterMarker extends GutterMarker {
     private readonly position: number,
     private readonly label: string,
     private readonly onRevert?: (expectedContent: string, content: string) => void,
+    private readonly onRevertStart?: () => void,
+    private readonly onRevertEnd?: () => void,
   ) {
     super();
   }
@@ -208,8 +242,13 @@ class RevertChunkGutterMarker extends GutterMarker {
     button.onmousedown = (event) => {
       event.preventDefault();
       const expectedContent = view.state.doc.toString();
-      rejectChunk(view, this.position);
-      this.onRevert?.(expectedContent, view.state.doc.toString());
+      this.onRevertStart?.();
+      try {
+        rejectChunk(view, this.position);
+        this.onRevert?.(expectedContent, view.state.doc.toString());
+      } finally {
+        this.onRevertEnd?.();
+      }
     };
     return button;
   }
@@ -255,19 +294,26 @@ function buildAddedLineNumberMarkers(state: EditorState) {
     return RangeSet.empty;
   }
 
+  let lastLineStart = -1;
   const builder = new RangeSetBuilder<GutterMarker>();
   for (const chunk of chunkInfo.chunks) {
-    if (chunk.fromB >= chunk.toB) {
-      continue;
-    }
+    for (const change of chunk.changes) {
+      const firstPosition = Math.min(chunk.fromB + change.fromB, state.doc.length);
+      const endPosition = Math.min(chunk.fromB + change.toB, state.doc.length);
+      if (firstPosition >= endPosition) {
+        continue;
+      }
 
-    const firstPosition = Math.min(chunk.fromB, state.doc.length);
-    const lastPosition = Math.max(firstPosition, Math.min(chunk.toB, state.doc.length) - 1);
-    const firstLineNumber = state.doc.lineAt(firstPosition).number;
-    const lastLineNumber = state.doc.lineAt(lastPosition).number;
-    for (let lineNumber = firstLineNumber; lineNumber <= lastLineNumber; lineNumber += 1) {
-      const line = state.doc.line(lineNumber);
-      builder.add(line.from, line.from, addedLineNumberMarker);
+      const lastPosition = Math.max(firstPosition, endPosition - 1);
+      const firstLineNumber = state.doc.lineAt(firstPosition).number;
+      const lastLineNumber = state.doc.lineAt(lastPosition).number;
+      for (let lineNumber = firstLineNumber; lineNumber <= lastLineNumber; lineNumber += 1) {
+        const lineStart = state.doc.line(lineNumber).from;
+        if (lineStart > lastLineStart) {
+          builder.add(lineStart, lineStart, addedLineNumberMarker);
+          lastLineStart = lineStart;
+        }
+      }
     }
   }
   return builder.finish();
@@ -307,6 +353,8 @@ function buildDiffLineNumberExtensions() {
 function buildRevertChunkGutter(
   label: string,
   onRevert?: (expectedContent: string, content: string) => void,
+  onRevertStart?: () => void,
+  onRevertEnd?: () => void,
 ) {
   return gutter({
     class: "skill-diff__revert-gutter-column",
@@ -319,7 +367,13 @@ function buildRevertChunkGutter(
       const builder = new RangeSetBuilder<GutterMarker>();
       for (const chunk of chunkInfo.chunks) {
         const line = view.state.doc.lineAt(chunk.fromB).from;
-        builder.add(line, line, new RevertChunkGutterMarker(chunk.fromB, label, onRevert));
+        builder.add(line, line, new RevertChunkGutterMarker(
+          chunk.fromB,
+          label,
+          onRevert,
+          onRevertStart,
+          onRevertEnd,
+        ));
       }
       return builder.finish();
     },
@@ -346,6 +400,15 @@ function SkillDiffEditor({
   const { t } = useTranslate();
   const editorHostRef = useRef<HTMLDivElement | null>(null);
   const editorViewRef = useRef<EditorView | null>(null);
+  const hasEofBoundaryAnchorRef = useRef(false);
+  const isRevertingChunkRef = useRef(false);
+  const revertExpectedHasEofBoundaryAnchorRef = useRef(false);
+  const scrollSnapshotRef = useRef<{
+    content: string;
+    path: string;
+    snapshot: ReturnType<EditorView["scrollSnapshot"]>;
+  } | null>(null);
+  const editorContentRef = useRef(content);
   const onContentChangeRef = useRef(onContentChange);
   const onRevertHunkRef = useRef(onRevertHunk);
 
@@ -363,15 +426,39 @@ function SkillDiffEditor({
       return;
     }
 
+    const displayDocuments = buildDiffDisplayDocuments(change.originalContent, content);
+    const savedScroll = scrollSnapshotRef.current;
+    const scrollTo = savedScroll?.path === change.path
+      && savedScroll.content === displayDocuments.current
+      ? savedScroll.snapshot
+      : undefined;
+    scrollSnapshotRef.current = null;
+    hasEofBoundaryAnchorRef.current = displayDocuments.hasEofBoundaryAnchor;
+    editorContentRef.current = content;
+
     const editorView = new EditorView({
       parent: editorHost,
-      doc: content,
+      doc: displayDocuments.current,
+      scrollTo,
       extensions: [
         minimalSetup,
         readOnly ? [] : Prec.highest(buildRevertChunkGutter(
           t("skill.changes.revertHunk"),
           (expectedContent, nextContent) => {
-            onRevertHunkRef.current?.(expectedContent, nextContent);
+            onRevertHunkRef.current?.(
+              removeEofBoundaryAnchor(
+                expectedContent,
+                revertExpectedHasEofBoundaryAnchorRef.current,
+              ),
+              removeEofBoundaryAnchor(nextContent, hasEofBoundaryAnchorRef.current),
+            );
+          },
+          () => {
+            revertExpectedHasEofBoundaryAnchorRef.current = hasEofBoundaryAnchorRef.current;
+            isRevertingChunkRef.current = true;
+          },
+          () => {
+            isRevertingChunkRef.current = false;
           },
         )),
         lineNumbers(),
@@ -384,7 +471,7 @@ function SkillDiffEditor({
           "aria-label": t(isUpdatePreview ? "skill.updates.editor" : "skill.changes.editor"),
         }),
         unifiedMergeView({
-          original: change.originalContent,
+          original: displayDocuments.original,
           collapseUnchanged: displayMode === "changes"
             ? { margin: 2, minSize: 1 }
             : undefined,
@@ -397,7 +484,42 @@ function SkillDiffEditor({
             (transaction) => transaction.annotation(externalContentSync),
           );
           if (update.docChanged && !isExternalSync) {
-            onContentChangeRef.current(update.state.doc.toString());
+            const hadEofBoundaryAnchor = hasEofBoundaryAnchorRef.current;
+            let changedEofBoundaryAnchor = false;
+            if (hadEofBoundaryAnchor && !isRevertingChunkRef.current) {
+              const anchorPosition = update.startState.doc.length - 1;
+              update.changes.iterChangedRanges((fromA, toA) => {
+                if (fromA <= anchorPosition && toA > anchorPosition) {
+                  changedEofBoundaryAnchor = true;
+                }
+              });
+            }
+
+            const updatedDocument = update.state.doc.toString();
+            const nextContent = removeEofBoundaryAnchor(
+              updatedDocument,
+              hadEofBoundaryAnchor && !changedEofBoundaryAnchor,
+            );
+            const hasEofBoundaryAnchor = needsEofBoundaryAnchor(
+              change.originalContent ?? "",
+              nextContent,
+            );
+            const normalizedCurrent = hasEofBoundaryAnchor ? `${nextContent}\n` : nextContent;
+            hasEofBoundaryAnchorRef.current = hasEofBoundaryAnchor;
+            editorContentRef.current = nextContent;
+
+            if (normalizedCurrent !== updatedDocument) {
+              const normalizationChanges = normalizedCurrent === `${updatedDocument}\n`
+                ? { from: updatedDocument.length, insert: "\n" }
+                : `${normalizedCurrent}\n` === updatedDocument
+                  ? { from: updatedDocument.length - 1, to: updatedDocument.length, insert: "" }
+                  : { from: 0, to: updatedDocument.length, insert: normalizedCurrent };
+              update.view.dispatch({
+                changes: normalizationChanges,
+                annotations: [externalContentSync.of(true), Transaction.addToHistory.of(false)],
+              });
+            }
+            onContentChangeRef.current(nextContent);
           }
         }),
       ],
@@ -409,6 +531,11 @@ function SkillDiffEditor({
     editorView.dom.querySelector(".cm-changeGutter")?.setAttribute("aria-hidden", "true");
 
     return () => {
+      scrollSnapshotRef.current = {
+        content: editorView.state.doc.toString(),
+        path: change.path,
+        snapshot: editorView.scrollSnapshot(),
+      };
       if (editorViewRef.current === editorView) {
         editorViewRef.current = null;
       }
@@ -418,15 +545,32 @@ function SkillDiffEditor({
 
   useEffect(() => {
     const editorView = editorViewRef.current;
-    if (!editorView || editorView.state.doc.toString() === content) {
+    if (!editorView || change.originalContent == null) {
+      return;
+    }
+    if (editorContentRef.current === content) {
       return;
     }
 
+    const displayDocuments = buildDiffDisplayDocuments(change.originalContent, content);
+    hasEofBoundaryAnchorRef.current = displayDocuments.hasEofBoundaryAnchor;
+    editorContentRef.current = content;
+    if (editorView.state.doc.toString() === displayDocuments.current) {
+      return;
+    }
+
+    const changes = editorView.state.changes({
+      from: 0,
+      to: editorView.state.doc.length,
+      insert: displayDocuments.current,
+    });
+    const scrollSnapshot = editorView.scrollSnapshot().map(changes);
     editorView.dispatch({
-      changes: { from: 0, to: editorView.state.doc.length, insert: content },
+      changes,
+      effects: scrollSnapshot ? [scrollSnapshot] : [],
       annotations: [externalContentSync.of(true), Transaction.addToHistory.of(false)],
     });
-  }, [content]);
+  }, [change.originalContent, content]);
 
   const changeStatus = normalizeSkillChangeStatus(change.status).toLowerCase();
   return <div className={`skill-diff__editor is-${changeStatus}`} ref={editorHostRef} />;

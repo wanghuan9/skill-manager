@@ -42,10 +42,18 @@ describe("install theme styles", () => {
     );
   });
 
-  test("uses the thin Skill scrollbar style for branch menus", () => {
-    expect(getRuleBody(".app-select__popover::-webkit-scrollbar")).toContain("width: 10px");
-    expect(getRuleBody(".app-select__popover::-webkit-scrollbar-thumb")).toContain(
+  test("uses the thin Skill scrollbar style throughout the app", () => {
+    expect(getRuleBody("*")).toContain("scrollbar-width: thin");
+    expect(getRuleBody("*::-webkit-scrollbar")).toContain("width: 10px");
+    expect(getRuleBody("*::-webkit-scrollbar")).toContain("height: 10px");
+    expect(getRuleBody("*::-webkit-scrollbar-thumb")).toContain(
       "border: 2px solid transparent",
+    );
+    expect(getRuleBody(".skill-diff__editor .cm-scroller")).toContain(
+      "overscroll-behavior-y: none",
+    );
+    expect(getRuleBody(".skill-diff__editor .cm-scroller")).toContain(
+      "scrollbar-gutter: stable",
     );
   });
 });
