@@ -160,6 +160,17 @@ test("deduplicates batch plugin updates that share the same repository", async (
 });
 
 test("switches plugins to cards, opens details in a dialog, and restores the preference", async () => {
+  const updatePreviewSpy = vi.spyOn(skillClient, "fetchPluginUpdatePreview").mockResolvedValue({
+    currentBranch: "main",
+    remoteBranch: "origin/main",
+    commitsToPull: 1,
+    changedFiles: [{
+      path: "skills/repo-scout/SKILL.md",
+      status: "M",
+      diff: "@@ -1 +1 @@\n-old\n+new",
+    }],
+    hasLocalChanges: false,
+  });
   const firstRender = renderWithI18n(<PluginsRoute />);
 
   await screen.findByText("Repo Scout");
@@ -190,6 +201,8 @@ test("switches plugins to cards, opens details in a dialog, and restores the pre
   expect(repoScoutCard?.querySelector(".tool-list-row__grid-footer")).toHaveTextContent("SkillDock 安装");
   expect(repoScoutCard).not.toHaveTextContent("Git 仓库");
   expect(repoScoutCard?.querySelector(".tool-list-row__actions > .tool-list-row__chevron")).toBeNull();
+  expect(within(repoScoutCard as HTMLElement).getByRole("button", { name: "关闭 Repo Scout 插件" }))
+    .toBeInTheDocument();
 
   await userEvent.click(screen.getByRole("button", { name: "展开 Repo Scout" }));
   const detailDialog = screen.getByRole("dialog", { name: "Repo Scout" });
@@ -202,9 +215,8 @@ test("switches plugins to cards, opens details in a dialog, and restores the pre
   });
   expect(updatePreviewButton).toHaveTextContent("更新预览");
   expect(updatePreviewButton.querySelector(".skill-card__update-preview-detail-icon")).not.toBeNull();
-  const toggleButton = within(detailDialog).getByRole("button", { name: "关闭 Repo Scout 插件" });
-  expect(toggleButton.querySelector("span")).toBeNull();
-  expect(toggleButton).toHaveClass("is-icon-only");
+  expect(within(detailDialog).queryByRole("button", { name: "关闭 Repo Scout 插件" }))
+    .not.toBeInTheDocument();
   expect(within(detailDialog).queryByRole("button", { name: "删除 Repo Scout 插件" })).not.toBeInTheDocument();
   expect(within(repoScoutCard as HTMLElement).getByRole("button", { name: "删除 Repo Scout 插件" }))
     .toBeInTheDocument();
@@ -212,6 +224,20 @@ test("switches plugins to cards, opens details in a dialog, and restores the pre
     .toHaveTextContent("可更新");
   expect(detailDialog.querySelector(".skill-card-detail-modal__actions .plugins-page__action-status"))
     .toBeNull();
+
+  await userEvent.click(updatePreviewButton);
+  await waitFor(() => expect(detailDialog).not.toBeInTheDocument());
+  const fileDialog = screen.getByRole("dialog", { name: "Repo Scout" });
+  expect(fileDialog).toHaveClass("skill-file-dialog");
+  expect(document.querySelector(".skill-file-dialog-backdrop")).not.toBeNull();
+  expect(document.querySelector(".skill-card-detail-modal__backdrop")).toBeNull();
+  expect(screen.getAllByRole("dialog")).toHaveLength(1);
+  expect(await screen.findByText("skills/repo-scout/SKILL.md")).toBeInTheDocument();
+  expect(updatePreviewSpy).toHaveBeenCalledTimes(1);
+
+  await userEvent.keyboard("{Escape}");
+  const restoredDetailDialog = await screen.findByRole("dialog", { name: "Repo Scout" });
+  expect(restoredDetailDialog).toHaveClass("skill-card-detail-modal");
 
   await userEvent.keyboard("{Escape}");
   expect(screen.queryByRole("dialog", { name: "Repo Scout" })).not.toBeInTheDocument();

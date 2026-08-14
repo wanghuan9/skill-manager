@@ -3524,7 +3524,7 @@ export function PluginsRoute(props: PluginsRouteProps = {}) {
                   ? { label: collabBadge.label, tone: collabBadge.tone }
                   : undefined}
                 details={renderPluginDetails(plugin)}
-                expanded={expandedId === pluginKey}
+                expanded={expandedId === pluginKey && !gitPreviewState}
                 selectionMode={batchSelection.isSelecting}
                 selected={batchSelection.selectedIds.has(pluginKey)}
                 selectionLabel={t("batch.item.plugin", { name: pluginDisplayName })}
@@ -3585,6 +3585,7 @@ export function PluginsRoute(props: PluginsRouteProps = {}) {
                     className: getPluginToggleButtonClassName(plugin),
                     modalClassName: plugin.enabledState === "enabled" ? "is-warning" : "is-success",
                     modalIconOnly: true,
+                    hideInModal: true,
                     icon: (
                       <PowerToggleIcon
                         isSpinning={isTogglePending}
