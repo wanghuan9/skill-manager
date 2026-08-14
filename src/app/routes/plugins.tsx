@@ -18,14 +18,21 @@ import { waitForNextPaint } from "@/app/utils/wait-for-next-paint";
 import {
   deletePlugin,
   fetchInstalledPlugins,
-  fetchStartupInstalledPlugins,
+  fetchLocalPluginStates,
   fetchPluginComponentPreview,
+  fetchPluginFileBrowser,
+  fetchPluginFileContent,
+  fetchPluginLocalChanges,
+  fetchPluginUpdatePreview,
+  fetchStartupInstalledPlugins,
   openExternalLink,
   openPluginInEditor,
   openPathInFinder,
   refreshLocalPluginState,
   refreshPluginStates,
+  revertPluginChange,
   savePluginComponentPreview,
+  savePluginFileContent,
   setPluginEnabled,
   shouldUseFixtureData,
   subscribePluginLibraryChanges,
@@ -34,9 +41,11 @@ import {
 import {
   buildInitialCollapsedDirectories,
   collectAncestorDirectoryPaths,
+  SkillFileDialog,
   SkillFileContentSurface,
   SkillFileTreeSidebar,
   SkillFileViewModeToggle,
+  type SkillFilePanelMode,
   type SkillFileViewMode,
 } from "@/features/skills/components/SkillFileDialog";
 import {
@@ -48,6 +57,10 @@ import {
   type ListGridViewMode,
 } from "@/features/skills/components/ListGridViewToggle";
 import { PowerToggleIcon } from "@/features/skills/components/PowerToggleIcon";
+import {
+  LocalChangesIcon,
+  UpdatePreviewDetailIcon,
+} from "@/features/skills/components/GitPreviewIcons";
 import { buildOpenToolOptions } from "@/features/skills/utils/open-tools";
 import { getToolLogoUrl } from "@/features/skills/utils/tool-logo";
 import {
@@ -59,6 +72,7 @@ import { useSkillWorkspace } from "@/features/skills/state/skill-workspace";
 import {
   cachePlugins,
   getCachedPlugins,
+  mergeStartupPluginStatusCache,
   subscribePluginsChange,
 } from "@/features/skills/utils/plugin-cache";
 import {
@@ -94,6 +108,10 @@ type PreviewState = {
   preview: PluginComponentPreview | null;
   isLoading: boolean;
   errorMessage: string;
+};
+type PluginGitPreviewState = {
+  plugin: PluginSummary;
+  mode: SkillFilePanelMode;
 };
 type PluginScanSession = {
   isScanning: boolean;
@@ -132,11 +150,10 @@ const FALLBACK_OPEN_TOOL_ID = "finder";
 const maxVisibleComponentsPerSection = 5;
 const maxVisibleHostCoverageEntries = 5;
 const PLUGIN_LIBRARY_CHANGE_DEBOUNCE_MS = 500;
+const PLUGIN_MUTATION_REFRESH_DELAY_MS = PLUGIN_LIBRARY_CHANGE_DEBOUNCE_MS * 3;
 const AUTO_PLUGIN_STATE_REFRESH_INTERVAL_MS = 10 * 60 * 1000;
 const AUTO_PLUGIN_STATE_REFRESH_COOLDOWN_MS = 60 * 1000;
-const STARTUP_PLUGIN_SYNC_COOLDOWN_MS = 1_500;
 const PLUGIN_LOCAL_ALIGN_COOLDOWN_MS = 2_000;
-const PLUGIN_HEAVY_REFRESH_AFTER_STARTUP_SYNC_DELAY_MS = 800;
 const pluginEnabledOrder: Record<PluginSummary["enabledState"], number> = {
   enabled: 0,
   disabled: 1,
@@ -390,6 +407,21 @@ function OpenFolderIcon() {
   );
 }
 
+function ViewFileIcon() {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+      <path
+        d="M6 2.75h5.25L15.5 7v10.25H6A1.25 1.25 0 0 1 4.75 16V4A1.25 1.25 0 0 1 6 2.75Z"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinejoin="round"
+      />
+      <path d="M11.25 2.75V7H15.5" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
+      <path d="M7.75 10h4.5M7.75 13h4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 function FolderIcon() {
   return (
     <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
@@ -566,6 +598,7 @@ function buildAllTabPlugins(plugins: PluginSummary[]): PluginSummary[] {
       (plugin) => plugin.installState === "broken" || plugin.status === "scan-error",
     );
     const updateAvailable = sortedGroup.some((plugin) => plugin.updateAvailable);
+    const localChangeCount = Math.max(...sortedGroup.map((plugin) => plugin.localChangeCount ?? 0));
 
     let enabledState: PluginSummary["enabledState"] = "unknown";
     if (hasEnabledInstallation) {
@@ -600,13 +633,17 @@ function buildAllTabPlugins(plugins: PluginSummary[]): PluginSummary[] {
     const installSource = sortedGroup.some((plugin) => plugin.installSource === "skilldock")
       ? "skilldock"
       : primaryPlugin.installSource;
-    const collabStatus: PluginSummary["collabStatus"] = sortedGroup.some((plugin) => plugin.collabStatus === "pending-push")
-      ? "pending-push"
-      : sortedGroup.some((plugin) => plugin.collabStatus === "update-available")
-        ? "update-available"
-        : sortedGroup.some((plugin) => plugin.collabStatus === "diverged")
-          ? "diverged"
-          : "clean";
+    const collabStatus: PluginSummary["collabStatus"] = sortedGroup.some(
+      (plugin) => plugin.collabStatus === "pending-commit",
+    )
+      ? "pending-commit"
+      : sortedGroup.some((plugin) => plugin.collabStatus === "pending-push")
+        ? "pending-push"
+        : sortedGroup.some((plugin) => plugin.collabStatus === "update-available")
+          ? "update-available"
+          : sortedGroup.some((plugin) => plugin.collabStatus === "diverged")
+            ? "diverged"
+            : "clean";
     const statusText = updateAvailable
       ? "Shared plugin package has updates available."
       : hasBrokenInstallation
@@ -623,6 +660,7 @@ function buildAllTabPlugins(plugins: PluginSummary[]): PluginSummary[] {
       installSource,
       collabStatus,
       updateAvailable,
+      localChangeCount,
       statusText,
     };
   });
@@ -644,6 +682,36 @@ function listPluginActionTargets(
   return allPlugins.filter((candidate) => (
     buildPluginAggregateKey(candidate) === aggregateKey
   ));
+}
+
+function findPluginGitPreviewState(
+  plugin: PluginSummary,
+  allPlugins: PluginSummary[],
+  includeAllHosts: boolean,
+): PluginGitPreviewState | null {
+  const targets = listPluginActionTargets(plugin, allPlugins, includeAllHosts);
+  const localChangeTarget = targets.find((candidate) => (
+    candidate.isGitRepo && candidate.collabStatus === "pending-commit"
+  ));
+  if (localChangeTarget) {
+    return { plugin: localChangeTarget, mode: "changes" };
+  }
+
+  const updateTarget = targets.find((candidate) => (
+    candidate.isGitRepo
+    && candidate.updateStrategy === "git"
+    && candidate.collabStatus === "update-available"
+  ));
+  if (updateTarget) {
+    return { plugin: updateTarget, mode: "updates" };
+  }
+
+  const fileTarget = targets.find((candidate) => (
+    candidate.rootPath.trim()
+    && candidate.installState !== "broken"
+    && candidate.status !== "scan-error"
+  ));
+  return fileTarget ? { plugin: fileTarget, mode: "files" } : null;
 }
 
 function getPluginUpdateOperationKey(plugin: PluginSummary) {
@@ -1014,6 +1082,9 @@ function getPluginCollabBadge(
 ) {
   if (plugin.collabStatus === "update-available") {
     return { label: t("plugins.collab.updateAvailable"), tone: "positive" as const };
+  }
+  if (plugin.collabStatus === "pending-commit") {
+    return { label: t("plugins.collab.pendingCommit"), tone: "pending-commit" as const };
   }
   if (plugin.collabStatus === "pending-push") {
     return { label: t("plugins.collab.pendingPush"), tone: "info" as const };
@@ -1564,6 +1635,37 @@ export function PluginsRoute(props: PluginsRouteProps = {}) {
   const [errorMessage, setErrorMessage] = useState("");
   const [actionErrorMessage, setActionErrorMessage] = useState("");
   const [previewState, setPreviewState] = useState<PreviewState | null>(null);
+  const [gitPreviewState, setGitPreviewState] = useState<PluginGitPreviewState | null>(null);
+  const gitPreviewLoaders = useMemo(() => {
+    if (!gitPreviewState) {
+      return null;
+    }
+
+    const target = {
+      hostTool: gitPreviewState.plugin.hostTool,
+      rootPath: gitPreviewState.plugin.rootPath,
+      repoRootPath: gitPreviewState.plugin.repoRootPath,
+      pluginRelativePath: gitPreviewState.plugin.pluginRelativePath,
+    };
+
+    return {
+      loadFileBrowser: () => fetchPluginFileBrowser(target),
+      loadFileContent: (relativePath: string) => fetchPluginFileContent({ ...target, relativePath }),
+      saveFileContent: (relativePath: string, content: string) => savePluginFileContent({
+        ...target,
+        relativePath,
+        content,
+      }),
+      loadLocalChanges: () => fetchPluginLocalChanges(target),
+      revertLocalChange: (input: {
+        relativePath: string;
+        hunkIndex?: number;
+        expectedPatch?: string;
+        staged?: boolean;
+      }) => revertPluginChange({ ...target, ...input }),
+      loadUpdatePreview: () => fetchPluginUpdatePreview(target),
+    };
+  }, [gitPreviewState]);
   const [previewViewMode, setPreviewViewMode] = useState<SkillFileViewMode>("preview");
   const [previewCollapsedDirectories, setPreviewCollapsedDirectories] = useState<Record<string, boolean>>({});
   const [isPreviewDirty, setIsPreviewDirty] = useState(false);
@@ -1593,11 +1695,14 @@ export function PluginsRoute(props: PluginsRouteProps = {}) {
   const pendingPluginUpdateIdsRef = useRef(new Set<string>());
   const localAlignInFlightRef = useRef<Promise<PluginSummary[]> | null>(null);
   const pluginRefreshDebounceTimerRef = useRef<number | null>(null);
+  const pluginLibraryRefreshSuppressedUntilRef = useRef(0);
   const pluginLocalRefreshInFlightRef = useRef(new Map<string, Promise<void>>());
   const pluginStateRefreshInFlightRef = useRef<Promise<void> | null>(null);
-  const deferredHeavyRefreshTimerRef = useRef<number | null>(null);
+  const pluginStateRefreshGenerationRef = useRef(0);
+  const localPluginStatesRefreshInFlightRef = useRef<Promise<void> | null>(null);
+  const localPluginStatesRefreshQueuedRef = useRef(false);
   const lastPluginAutoRefreshAtRef = useRef(0);
-  const startupPluginSyncInFlightRef = useRef<Promise<void> | null>(null);
+  const startupPluginSyncInFlightRef = useRef<Promise<PluginSummary[] | void> | null>(null);
   const lastStartupPluginSyncAtRef = useRef(0);
   const lastPluginLocalAlignAtRef = useRef(0);
   const wasPluginRefreshingRef = useRef(isRefreshing || isReloading);
@@ -1688,9 +1793,16 @@ export function PluginsRoute(props: PluginsRouteProps = {}) {
         if (!isActive()) {
           return;
         }
-        setPlugins((current) => current.map((candidate) => (
-          getPluginInstanceKey(candidate) === refreshKey ? refreshedPlugin : candidate
-        )));
+        pluginStateRefreshGenerationRef.current += 1;
+        setPlugins((current) => {
+          const nextPlugins = current.map((candidate) => (
+            getPluginInstanceKey(candidate) === refreshKey ? refreshedPlugin : candidate
+          ));
+          if (!shouldUseFixtureData()) {
+            cachePlugins(nextPlugins);
+          }
+          return nextPlugins;
+        });
       } catch (error) {
         console.warn("Failed to refresh plugin local state", error);
       } finally {
@@ -1727,10 +1839,14 @@ export function PluginsRoute(props: PluginsRouteProps = {}) {
     }
 
     lastPluginAutoRefreshAtRef.current = now;
+    const refreshGeneration = pluginStateRefreshGenerationRef.current;
     const refreshPromise = (async () => {
       try {
         const refreshedPlugins = await refreshPluginStates();
-        if (!isActive()) {
+        if (
+          !isActive()
+          || refreshGeneration !== pluginStateRefreshGenerationRef.current
+        ) {
           return;
         }
         setPlugins((current) => {
@@ -1751,6 +1867,57 @@ export function PluginsRoute(props: PluginsRouteProps = {}) {
 
     pluginStateRefreshInFlightRef.current = refreshPromise;
     return refreshPromise;
+  }
+
+  async function refreshLocalPluginStatesInBackground(isActive: () => boolean) {
+    if (localPluginStatesRefreshInFlightRef.current) {
+      localPluginStatesRefreshQueuedRef.current = true;
+      return localPluginStatesRefreshInFlightRef.current;
+    }
+
+    let refreshPromise: Promise<void> | null = null;
+    refreshPromise = (async () => {
+      try {
+        do {
+          localPluginStatesRefreshQueuedRef.current = false;
+          try {
+            const refreshedPlugins = await fetchLocalPluginStates();
+            if (!isActive()) {
+              return;
+            }
+            pluginStateRefreshGenerationRef.current += 1;
+            setPlugins((current) => {
+              const nextPlugins = mergePluginsByInstance(current, refreshedPlugins);
+              if (!shouldUseFixtureData()) {
+                cachePlugins(nextPlugins);
+              }
+              return nextPlugins;
+            });
+          } catch (error) {
+            console.warn("Failed to refresh local plugin states", error);
+          }
+        } while (localPluginStatesRefreshQueuedRef.current && isActive());
+      } finally {
+        if (localPluginStatesRefreshInFlightRef.current === refreshPromise) {
+          localPluginStatesRefreshInFlightRef.current = null;
+          localPluginStatesRefreshQueuedRef.current = false;
+        }
+      }
+    })();
+
+    localPluginStatesRefreshInFlightRef.current = refreshPromise;
+    return refreshPromise;
+  }
+
+  function scheduleLocalPluginStatesRefreshAfterMutation(isActive: () => boolean) {
+    pluginLibraryRefreshSuppressedUntilRef.current = Date.now() + PLUGIN_MUTATION_REFRESH_DELAY_MS;
+    if (pluginRefreshDebounceTimerRef.current !== null) {
+      window.clearTimeout(pluginRefreshDebounceTimerRef.current);
+    }
+    pluginRefreshDebounceTimerRef.current = window.setTimeout(() => {
+      pluginRefreshDebounceTimerRef.current = null;
+      void refreshLocalPluginStatesInBackground(isActive);
+    }, PLUGIN_MUTATION_REFRESH_DELAY_MS);
   }
 
   async function alignPluginsLocalState() {
@@ -1800,8 +1967,10 @@ export function PluginsRoute(props: PluginsRouteProps = {}) {
         if (!isActive()) {
           return;
         }
-        commitPlugins(nextPlugins);
+        const mergedPlugins = mergeStartupPluginStatusCache(nextPlugins, pluginsRef.current);
+        commitPlugins(mergedPlugins);
         setErrorMessage("");
+        return mergedPlugins;
       })
       .catch((error) => {
         console.warn("Failed to align installed plugins from startup scan", error);
@@ -1973,55 +2142,30 @@ export function PluginsRoute(props: PluginsRouteProps = {}) {
     }
 
     let active = true;
-    const refreshPluginStatesIfNeeded = () => {
-      void refreshPluginStatesInBackground(
+    const refreshFocusedPluginStates = async () => {
+      await refreshLocalPluginStatesInBackground(() => active);
+      await refreshPluginStatesInBackground(
         () => active,
         { minimumIntervalMs: AUTO_PLUGIN_STATE_REFRESH_COOLDOWN_MS },
-      );
-    };
-    const syncPluginStartupStateIfNeeded = () => {
-      void syncPluginsStartupState(
-        () => active,
-        { minimumIntervalMs: STARTUP_PLUGIN_SYNC_COOLDOWN_MS },
       );
     };
     const handleVisibilityChange = () => {
       if (document.visibilityState !== "visible") {
         return;
       }
-      syncPluginStartupStateIfNeeded();
-      if (deferredHeavyRefreshTimerRef.current !== null) {
-        window.clearTimeout(deferredHeavyRefreshTimerRef.current);
-      }
-      deferredHeavyRefreshTimerRef.current = window.setTimeout(() => {
-        deferredHeavyRefreshTimerRef.current = null;
-        refreshPluginStatesIfNeeded();
-      }, PLUGIN_HEAVY_REFRESH_AFTER_STARTUP_SYNC_DELAY_MS);
+      void refreshFocusedPluginStates();
     };
     const intervalId = window.setInterval(
-      refreshPluginStatesIfNeeded,
+      () => void refreshPluginStatesInBackground(() => active),
       AUTO_PLUGIN_STATE_REFRESH_INTERVAL_MS,
     );
-    const handleFocus = () => {
-      syncPluginStartupStateIfNeeded();
-      if (deferredHeavyRefreshTimerRef.current !== null) {
-        window.clearTimeout(deferredHeavyRefreshTimerRef.current);
-      }
-      deferredHeavyRefreshTimerRef.current = window.setTimeout(() => {
-        deferredHeavyRefreshTimerRef.current = null;
-        refreshPluginStatesIfNeeded();
-      }, PLUGIN_HEAVY_REFRESH_AFTER_STARTUP_SYNC_DELAY_MS);
-    };
+    const handleFocus = () => void refreshFocusedPluginStates();
     window.addEventListener("focus", handleFocus);
     document.addEventListener("visibilitychange", handleVisibilityChange);
 
     return () => {
       active = false;
       window.clearInterval(intervalId);
-      if (deferredHeavyRefreshTimerRef.current !== null) {
-        window.clearTimeout(deferredHeavyRefreshTimerRef.current);
-        deferredHeavyRefreshTimerRef.current = null;
-      }
       window.removeEventListener("focus", handleFocus);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
@@ -2037,6 +2181,10 @@ export function PluginsRoute(props: PluginsRouteProps = {}) {
 
     void subscribePluginLibraryChanges(({ changedPaths }) => {
       if (!active) {
+        return;
+      }
+
+      if (Date.now() < pluginLibraryRefreshSuppressedUntilRef.current) {
         return;
       }
 
@@ -2059,8 +2207,8 @@ export function PluginsRoute(props: PluginsRouteProps = {}) {
           return changedPaths.some((changedPath) => changedPath.startsWith(packageRoot));
         });
 
-        for (const plugin of changedPluginTargets) {
-          void refreshPluginLocalStateInBackground(plugin, () => active);
+        if (changedPluginTargets.length > 0) {
+          void refreshLocalPluginStatesInBackground(() => active);
         }
       }, PLUGIN_LIBRARY_CHANGE_DEBOUNCE_MS);
     }).then((cleanup) => {
@@ -3320,6 +3468,12 @@ export function PluginsRoute(props: PluginsRouteProps = {}) {
             const openActionLabel = getPluginOpenActionAriaLabel(plugin, t);
             const updateActionLabel = getPluginUpdateActionLabel(plugin, isUpdatePending, t);
             const collabBadge = getPluginCollabBadge(plugin, t);
+            const gitChangePreview = findPluginGitPreviewState(
+              plugin,
+              plugins,
+              activeHost === "all",
+            );
+            const localChangeCount = gitChangePreview?.plugin.localChangeCount ?? 0;
             const componentSummaryBadges = getPluginComponentSummaryLabels(plugin).map((label) => ({
               label,
               tone: "info" as const,
@@ -3335,12 +3489,11 @@ export function PluginsRoute(props: PluginsRouteProps = {}) {
                 name={pluginDisplayName}
                 subtitle={getPluginSubtitle(plugin, t)}
                 leading={<PluginListIcon name={pluginDisplayName} />}
-                badges={[
+                badges={viewMode === "grid" ? [] : [
                   {
                     key: "enabled-state",
                     label: renderPluginEnabledBadge(plugin, t),
-                    tone:
-                      plugin.enabledState === "enabled" ? "positive" : "neutral",
+                    tone: plugin.enabledState === "enabled" ? "info" : "neutral",
                   },
                   ...componentSummaryBadges,
                   ...(activeHost === "all" && hostCoverageBadge
@@ -3350,7 +3503,13 @@ export function PluginsRoute(props: PluginsRouteProps = {}) {
                 gridBadges={componentSummaryBadges}
                 gridMeta={(
                   <>
-                    <span>{getPluginInstallSourceLabel(plugin, t)}</span>
+                    <span
+                      className={`status-badge skill-card__grid-enabled-badge ${
+                        plugin.enabledState === "enabled" ? "tone-info" : "tone-neutral"
+                      }`}
+                    >
+                      {renderPluginEnabledBadge(plugin, t)}
+                    </span>
                     <div className="skill-card__summary-tools">
                       {renderPluginHostCoverageList(enabledHostCoverageEntries, t)}
                     </div>
@@ -3358,9 +3517,12 @@ export function PluginsRoute(props: PluginsRouteProps = {}) {
                 )}
                 gridFooter={(
                   <span className="skill-card__grid-source-text">
-                    {getPluginSourceTypeLabel(plugin, t)}
+                    {getPluginInstallSourceLabel(plugin, t)}
                   </span>
                 )}
+                modalBadge={collabBadge
+                  ? { label: collabBadge.label, tone: collabBadge.tone }
+                  : undefined}
                 details={renderPluginDetails(plugin)}
                 expanded={expandedId === pluginKey}
                 selectionMode={batchSelection.isSelecting}
@@ -3380,6 +3542,7 @@ export function PluginsRoute(props: PluginsRouteProps = {}) {
                           key: "collab-status",
                           label: collabBadge.label,
                           className: "plugins-page__action-status",
+                          hideInModal: true,
                           content: (
                             <span className={`status-badge tone-${collabBadge.tone}`}>
                               {collabBadge.label}
@@ -3421,6 +3584,7 @@ export function PluginsRoute(props: PluginsRouteProps = {}) {
                     ),
                     className: getPluginToggleButtonClassName(plugin),
                     modalClassName: plugin.enabledState === "enabled" ? "is-warning" : "is-success",
+                    modalIconOnly: true,
                     icon: (
                       <PowerToggleIcon
                         isSpinning={isTogglePending}
@@ -3435,6 +3599,60 @@ export function PluginsRoute(props: PluginsRouteProps = {}) {
                     disabled:
                       isTogglePending || isDeleting || !canTogglePlugin(plugin),
                   },
+                  ...(gitChangePreview
+                    ? [
+                        {
+                          key: "git-preview",
+                          label: gitChangePreview.mode === "changes"
+                            ? t("plugins.card.tooltip.viewFilesWithChanges")
+                            : gitChangePreview.mode === "updates"
+                              ? t("plugins.card.tooltip.viewUpdateContents")
+                              : t("plugins.card.tooltip.viewFiles"),
+                          modalLabel: gitChangePreview.mode === "changes"
+                            ? t("skill.card.action.viewChanges")
+                            : gitChangePreview.mode === "updates"
+                              ? t("skill.card.action.viewUpdateContents")
+                              : t("skill.card.action.viewFiles"),
+                          ariaLabel: gitChangePreview.mode === "changes"
+                            ? t("plugins.card.aria.viewFilesWithChanges", { name: pluginDisplayName })
+                            : gitChangePreview.mode === "updates"
+                              ? t("plugins.card.aria.viewUpdateContents", { name: pluginDisplayName })
+                              : t("plugins.card.aria.viewFiles", { name: pluginDisplayName }),
+                          className: "skill-card__icon-button skill-card__file-preview-button",
+                          icon: (
+                            <>
+                              <ViewFileIcon />
+                              {gitChangePreview.mode === "changes" && localChangeCount > 0 ? (
+                                <span className="skill-card__change-count" aria-hidden="true">
+                                  {localChangeCount}
+                                </span>
+                              ) : null}
+                            </>
+                          ),
+                          modalIcon: gitChangePreview.mode === "changes"
+                            ? (
+                                <>
+                                  <LocalChangesIcon />
+                                  {localChangeCount > 0 ? (
+                                    <span className="skill-card__change-count" aria-hidden="true">
+                                      {localChangeCount}
+                                    </span>
+                                  ) : null}
+                                </>
+                              )
+                            : gitChangePreview.mode === "updates"
+                              ? <UpdatePreviewDetailIcon />
+                              : <ViewFileIcon />,
+                          tooltip: gitChangePreview.mode === "changes"
+                            ? t("plugins.card.tooltip.viewFilesWithChanges")
+                            : gitChangePreview.mode === "updates"
+                              ? t("plugins.card.tooltip.viewUpdateContents")
+                              : t("plugins.card.tooltip.viewFiles"),
+                          onClick: () => setGitPreviewState(gitChangePreview),
+                          disabled: isDeleting || isUpdatePending,
+                        },
+                      ]
+                    : []),
                   {
                     key: "open-folder",
                     label: openActionLabel,
@@ -3453,6 +3671,7 @@ export function PluginsRoute(props: PluginsRouteProps = {}) {
                         modalLabel: t("plugins.action.delete.confirm"),
                         ariaLabel: t("plugins.action.delete.confirmAria", { name: pluginDisplayName }),
                         className: "skill-card__delete-confirm-button",
+                        hideInModal: true,
                         tooltip: t("plugins.action.delete.confirmAria", { name: pluginDisplayName }),
                         onClick: () => void handlePluginDelete(plugin),
                         disabled: isDeleting,
@@ -3461,6 +3680,8 @@ export function PluginsRoute(props: PluginsRouteProps = {}) {
                         key: "delete",
                         label: deleteActionLabel,
                         modalLabel: language === "en" ? "Delete" : "删除",
+                        modalIconOnly: true,
+                        hideInModal: true,
                         ariaLabel: deleteActionLabel,
                         className: "skill-card__icon-button skill-card__icon-button--delete plugins-page__delete-icon-button",
                         icon: <DeleteIcon />,
@@ -3484,6 +3705,41 @@ export function PluginsRoute(props: PluginsRouteProps = {}) {
         onCancel={() => setIsBatchDeleteConfirming(false)}
         onConfirm={() => void handleBatchDeletePlugins()}
       />
+      {gitPreviewState ? (
+        <SkillFileDialog
+          key={`${getPluginInstanceKey(gitPreviewState.plugin)}:${gitPreviewState.mode}`}
+          skill={{
+            name: getPluginDisplayName(gitPreviewState.plugin),
+            gitLinked: true,
+            collabStatus: gitPreviewState.plugin.collabStatus,
+            localPath: gitPreviewState.plugin.rootPath,
+            localChangeCount: gitPreviewState.plugin.localChangeCount ?? 0,
+            sourceLabel: gitPreviewState.plugin.sourceLabel,
+            sourceType: gitPreviewState.plugin.sourceType,
+            sourceUrl: gitPreviewState.plugin.sourceUrl,
+          }}
+          isOpen
+          initialMode={gitPreviewState.mode}
+          resourceKind="plugin"
+          showFiles
+          loadFileBrowser={gitPreviewLoaders?.loadFileBrowser}
+          loadFileContent={gitPreviewLoaders?.loadFileContent}
+          saveFileContent={gitPreviewLoaders?.saveFileContent}
+          loadLocalChanges={gitPreviewState.mode === "changes"
+            ? gitPreviewLoaders?.loadLocalChanges
+            : undefined}
+          revertLocalChange={gitPreviewState.mode === "changes"
+            ? gitPreviewLoaders?.revertLocalChange
+            : undefined}
+          loadUpdatePreview={gitPreviewState.mode === "updates"
+            ? gitPreviewLoaders?.loadUpdatePreview
+            : undefined}
+          onLocalChangesChanged={() => {
+            scheduleLocalPluginStatesRefreshAfterMutation(() => true);
+          }}
+          onClose={() => setGitPreviewState(null)}
+        />
+      ) : null}
       {previewState ? (
         <div
           className="dialog-backdrop plugins-page__preview-backdrop"

@@ -1,7 +1,10 @@
 import type { PluginSummary } from "@/features/skills/state/skill-store";
-
 const PLUGINS_UPDATED_EVENT = "skilldock:plugins-updated";
 const PLUGINS_CACHE_STORAGE_KEY = "skilldock.pluginsCache";
+const STARTUP_CACHED_REMOTE_COLLAB_STATUSES = new Set<PluginSummary["collabStatus"]>([
+  "update-available",
+  "diverged",
+]);
 
 declare global {
   interface Window {
@@ -83,6 +86,44 @@ export function cachePlugins(plugins: PluginSummary[] | null) {
   window.__SKILLM_PLUGINS__ = plugins;
   writePluginsToStorage(plugins);
   notifyPluginsUpdated(plugins);
+}
+
+function getPluginCacheIdentity(plugin: PluginSummary) {
+  const instancePath = plugin.rootPath || plugin.manifestPath || plugin.id;
+  return `${plugin.hostTool}::${instancePath}::${plugin.id}`;
+}
+
+export function mergeStartupPluginStatusCache(
+  plugins: PluginSummary[],
+  cachedPlugins: PluginSummary[],
+) {
+  if (cachedPlugins.length === 0) {
+    return plugins;
+  }
+
+  const cachedByIdentity = new Map(
+    cachedPlugins.map((plugin) => [getPluginCacheIdentity(plugin), plugin]),
+  );
+  return plugins.map((plugin) => {
+    const cachedPlugin = cachedByIdentity.get(getPluginCacheIdentity(plugin));
+    if (
+      !cachedPlugin
+      || plugin.collabStatus !== "clean"
+      || !STARTUP_CACHED_REMOTE_COLLAB_STATUSES.has(cachedPlugin.collabStatus)
+    ) {
+      return plugin;
+    }
+
+    return {
+      ...plugin,
+      collabStatus: cachedPlugin.collabStatus,
+      statusText: cachedPlugin.statusText,
+      updateAvailable: cachedPlugin.updateAvailable,
+      remoteUpdatedAt: cachedPlugin.remoteUpdatedAt,
+      lastEditor: cachedPlugin.lastEditor,
+      lastScannedAt: cachedPlugin.lastScannedAt,
+    };
+  });
 }
 
 export function subscribePluginsChange(listener: (plugins: PluginSummary[] | null) => void) {

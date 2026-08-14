@@ -29,6 +29,7 @@ beforeEach(() => {
   mockedUseSkillWorkspace.mockReturnValue({
     defaultOpenToolId: "finder",
     language: "zh-CN",
+    markSkillAsActive: vi.fn(),
     toolConfigs: [],
   } as unknown as ReturnType<typeof useSkillWorkspace>);
   mockedListen.mockReset();
@@ -36,6 +37,7 @@ beforeEach(() => {
   vi.spyOn(skillClient, "fetchStartupInstalledPlugins").mockResolvedValue(pluginFixtures);
   vi.spyOn(skillClient, "fetchInstalledPlugins").mockResolvedValue(pluginFixtures);
   vi.spyOn(skillClient, "refreshPluginStates").mockResolvedValue(pluginFixtures);
+  vi.spyOn(skillClient, "fetchLocalPluginStates").mockResolvedValue(pluginFixtures);
   vi.spyOn(skillClient, "refreshLocalPluginState").mockImplementation(async (input) => {
     const matchedPlugin = pluginFixtures.find((plugin) => (
       plugin.hostTool === input.hostTool && plugin.rootPath === input.rootPath
@@ -161,6 +163,15 @@ test("switches plugins to cards, opens details in a dialog, and restores the pre
   const firstRender = renderWithI18n(<PluginsRoute />);
 
   await screen.findByText("Repo Scout");
+  const repoScoutListRow = screen.getByRole("button", { name: "展开 Repo Scout" })
+    .closest(".tool-list-row");
+  const listEnabledBadge = repoScoutListRow?.querySelector(
+    ".tool-list-row__title-row > .status-badge",
+  );
+  expect(listEnabledBadge).toHaveTextContent("已启用");
+  expect(listEnabledBadge).toHaveClass("tone-info");
+  expect(repoScoutListRow).not.toHaveTextContent("Git 仓库");
+
   await userEvent.click(screen.getByRole("button", { name: "卡片" }));
 
   expect(document.querySelector(".plugins-page > .card-list")).toHaveClass("tool-card-grid");
@@ -169,10 +180,15 @@ test("switches plugins to cards, opens details in a dialog, and restores the pre
   const eccCard = screen.getByRole("button", { name: "展开 ecc" }).closest(".tool-list-row");
   expect(repoScoutCard?.querySelectorAll(".tool-list-row__grid-badges > .status-badge")).toHaveLength(6);
   expect(eccCard?.querySelectorAll(".tool-list-row__grid-badges > .status-badge")).toHaveLength(1);
-  expect(repoScoutCard?.querySelector(".tool-list-row__grid-meta > span")).toHaveTextContent("SkillDock 安装");
+  const gridEnabledBadge = repoScoutCard?.querySelector(
+    ".tool-list-row__grid-meta > .skill-card__grid-enabled-badge",
+  );
+  expect(gridEnabledBadge).toHaveTextContent("已启用");
+  expect(gridEnabledBadge).toHaveClass("tone-info");
   expect(repoScoutCard?.querySelector(".tool-list-row__grid-meta .plugins-page__host-coverage-icon")).not.toBeNull();
   expect(repoScoutCard?.querySelector(".skill-card__git-source-badge")).toBeNull();
-  expect(repoScoutCard?.querySelector(".tool-list-row__grid-footer")).toHaveTextContent("Git 仓库");
+  expect(repoScoutCard?.querySelector(".tool-list-row__grid-footer")).toHaveTextContent("SkillDock 安装");
+  expect(repoScoutCard).not.toHaveTextContent("Git 仓库");
   expect(repoScoutCard?.querySelector(".tool-list-row__actions > .tool-list-row__chevron")).toBeNull();
 
   await userEvent.click(screen.getByRole("button", { name: "展开 Repo Scout" }));
@@ -181,6 +197,21 @@ test("switches plugins to cards, opens details in a dialog, and restores the pre
   expect(detailDialog.querySelectorAll(".tool-list-row__modal-badges > .status-badge")).toHaveLength(6);
   expect(within(detailDialog).getByText("基本信息")).toBeInTheDocument();
   expect(within(detailDialog).getByRole("button", { name: /打开.*Repo Scout/ })).toBeInTheDocument();
+  const updatePreviewButton = within(detailDialog).getByRole("button", {
+    name: "查看 Repo Scout 插件更新预览",
+  });
+  expect(updatePreviewButton).toHaveTextContent("更新预览");
+  expect(updatePreviewButton.querySelector(".skill-card__update-preview-detail-icon")).not.toBeNull();
+  const toggleButton = within(detailDialog).getByRole("button", { name: "关闭 Repo Scout 插件" });
+  expect(toggleButton.querySelector("span")).toBeNull();
+  expect(toggleButton).toHaveClass("is-icon-only");
+  expect(within(detailDialog).queryByRole("button", { name: "删除 Repo Scout 插件" })).not.toBeInTheDocument();
+  expect(within(repoScoutCard as HTMLElement).getByRole("button", { name: "删除 Repo Scout 插件" }))
+    .toBeInTheDocument();
+  expect(detailDialog.querySelector(".skill-card-detail-modal__title > .status-badge"))
+    .toHaveTextContent("可更新");
+  expect(detailDialog.querySelector(".skill-card-detail-modal__actions .plugins-page__action-status"))
+    .toBeNull();
 
   await userEvent.keyboard("{Escape}");
   expect(screen.queryByRole("dialog", { name: "Repo Scout" })).not.toBeInTheDocument();
@@ -242,7 +273,7 @@ test("reconciles plugin config with a startup scan even when the plugin list is 
   fixtureSpy.mockRestore();
 });
 
-test("reconciles plugin config again when returning to the plugin page window", async () => {
+test("refreshes local plugin state again when returning to the plugin page window", async () => {
   const fixtureSpy = vi.spyOn(skillClient, "shouldUseFixtureData").mockReturnValue(false);
   const initialPlugin: PluginSummary = {
     ...pluginFixtures[0],
@@ -270,7 +301,9 @@ test("reconciles plugin config again when returning to the plugin page window", 
   };
   const startupSpy = vi
     .spyOn(skillClient, "fetchStartupInstalledPlugins")
-    .mockResolvedValueOnce([initialPlugin])
+    .mockResolvedValueOnce([initialPlugin]);
+  const localStatesSpy = vi
+    .spyOn(skillClient, "fetchLocalPluginStates")
     .mockResolvedValueOnce([syncedPlugin]);
   const remoteRefreshSpy = vi.spyOn(skillClient, "refreshPluginStates").mockResolvedValue([syncedPlugin]);
   const localRefreshSpy = vi.spyOn(skillClient, "refreshLocalPluginState");
@@ -284,7 +317,10 @@ test("reconciles plugin config again when returning to the plugin page window", 
   });
 
   await waitFor(() => {
-    expect(startupSpy).toHaveBeenCalledTimes(2);
+    expect(startupSpy).toHaveBeenCalledTimes(1);
+  });
+  await waitFor(() => {
+    expect(localStatesSpy).toHaveBeenCalledTimes(1);
   });
   await waitFor(() => {
     expect(remoteRefreshSpy).toHaveBeenCalledTimes(1);
@@ -293,6 +329,58 @@ test("reconciles plugin config again when returning to the plugin page window", 
     expect(screen.getByText("已启用")).toBeInTheDocument();
   });
   expect(localRefreshSpy).not.toHaveBeenCalled();
+  fixtureSpy.mockRestore();
+});
+
+test("refreshes pending commit and pending push state on every focus", async () => {
+  const fixtureSpy = vi.spyOn(skillClient, "shouldUseFixtureData").mockReturnValue(false);
+  const pendingCommitPlugin: PluginSummary = {
+    ...pluginFixtures[0],
+    installSource: "skilldock",
+    updateMode: "auto",
+    updateStrategy: "git",
+    collabStatus: "pending-commit",
+    updateAvailable: false,
+    statusText: "插件目录存在本地未提交改动。",
+  };
+  const pendingPushPlugin: PluginSummary = {
+    ...pendingCommitPlugin,
+    collabStatus: "pending-push",
+    statusText: "插件目录存在待推送提交。",
+  };
+  const cleanPlugin: PluginSummary = {
+    ...pendingCommitPlugin,
+    collabStatus: "clean",
+    statusText: "插件目录已是最新。",
+  };
+  vi.spyOn(skillClient, "fetchStartupInstalledPlugins").mockResolvedValueOnce([
+    pendingCommitPlugin,
+  ]);
+  const remoteRefreshSpy = vi
+    .spyOn(skillClient, "refreshPluginStates")
+    .mockResolvedValue([pendingCommitPlugin]);
+  const localStatesSpy = vi
+    .spyOn(skillClient, "fetchLocalPluginStates")
+    .mockResolvedValueOnce([pendingPushPlugin])
+    .mockResolvedValueOnce([cleanPlugin]);
+
+  renderWithI18n(<PluginsRoute />);
+
+  await screen.findByText("待提交");
+  await waitFor(() => {
+    expect(remoteRefreshSpy).toHaveBeenCalledTimes(1);
+  });
+
+  window.dispatchEvent(new Event("focus"));
+  await screen.findByText("待推送");
+
+  window.dispatchEvent(new Event("focus"));
+  await waitFor(() => {
+    expect(screen.queryByText("待推送")).not.toBeInTheDocument();
+  });
+
+  expect(localStatesSpy).toHaveBeenCalledTimes(2);
+  expect(remoteRefreshSpy).toHaveBeenCalledTimes(1);
   fixtureSpy.mockRestore();
 });
 
@@ -1593,24 +1681,365 @@ test("prompts before updating a hash-based plugin with local modifications", asy
   updateSpy.mockRestore();
 });
 
-test("shows pending push status without an update action", async () => {
+test("places pending commit and update statuses at the top of plugin cards", async () => {
   const plugins: PluginSummary[] = [
     {
       ...pluginFixtures[0],
-      collabStatus: "pending-push",
+      name: "Pending Plugin",
+      manifestName: "pending-plugin",
+      id: "pending-plugin",
+      rootPath: "/Users/demo/workspace/pending-plugin",
+      collabStatus: "pending-commit",
+      localChangeCount: 2,
       updateAvailable: false,
       statusText: "插件目录存在本地未提交改动。",
     },
+    {
+      ...pluginFixtures[0],
+      name: "Update Plugin",
+      manifestName: "update-plugin",
+      id: "update-plugin",
+      rootPath: "/Users/demo/workspace/update-plugin",
+      collabStatus: "update-available",
+      updateAvailable: true,
+      statusText: "远端存在插件目录更新。",
+    },
   ];
   vi.spyOn(skillClient, "fetchStartupInstalledPlugins").mockResolvedValueOnce(plugins);
+  window.localStorage.setItem("plugins:view-mode", "grid");
 
   renderWithI18n(<PluginsRoute />);
 
-  await screen.findByRole("tab", { name: /Codex/ });
-  await userEvent.click(screen.getByRole("tab", { name: /Codex/ }));
+  const pendingCard = (await screen.findByRole("button", { name: "展开 pending-plugin" }))
+    .closest(".tool-list-row");
+  const updateCard = screen.getByRole("button", { name: "展开 update-plugin" })
+    .closest(".tool-list-row");
 
-  expect(screen.getByText("待推送")).toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: "更新 Repo Scout 插件" })).not.toBeInTheDocument();
+  const pendingStatus = pendingCard?.querySelector(".plugins-page__action-status .status-badge");
+  expect(pendingStatus).toHaveTextContent("待提交");
+  expect(pendingStatus).toHaveClass("tone-pending-commit");
+  expect(updateCard?.querySelector(".plugins-page__action-status")).toHaveTextContent("可更新");
+  expect(within(updateCard as HTMLElement).getByRole("button", { name: "更新 update-plugin 插件" }))
+    .toBeInTheDocument();
+
+  await userEvent.click(screen.getByRole("button", { name: "展开 pending-plugin" }));
+  const detailDialog = screen.getByRole("dialog", { name: "pending-plugin" });
+  expect(detailDialog.querySelector(".skill-card-detail-modal__title > .status-badge"))
+    .toHaveTextContent("待提交");
+  const localChangesButton = within(detailDialog).getByRole("button", {
+    name: "查看 pending-plugin 插件文件与本地变更",
+  });
+  expect(localChangesButton).toHaveTextContent("本地变更");
+  expect(within(localChangesButton).getByText("2")).toHaveClass("skill-card__change-count");
+  expect(localChangesButton.querySelector("svg")).not.toHaveClass("skill-card__update-preview-detail-icon");
+});
+
+test("opens the shared Skill diff dialog for plugin update previews", async () => {
+  const updatePreviewSpy = vi.spyOn(skillClient, "fetchPluginUpdatePreview").mockResolvedValue({
+    currentBranch: "main",
+    remoteBranch: "origin/main",
+    commitsToPull: 1,
+    changedFiles: [{
+      path: "skills/repo-scout/SKILL.md",
+      status: "M",
+      diff: "@@ -1 +1 @@\n-old\n+new",
+    }],
+    hasLocalChanges: false,
+  });
+
+  renderWithI18n(<PluginsRoute />);
+
+  await screen.findByText("Repo Scout");
+  await userEvent.click(screen.getByRole("button", { name: "查看 Repo Scout 插件更新预览" }));
+
+  expect(await screen.findByRole("dialog", { name: "Repo Scout" })).toBeInTheDocument();
+  expect(await screen.findByText("skills/repo-scout/SKILL.md")).toBeInTheDocument();
+  expect(updatePreviewSpy).toHaveBeenCalledWith({
+    hostTool: "codex",
+    rootPath: "/Users/demo/workspace/repo-scout",
+    repoRootPath: "/Users/demo/workspace/repo-scout",
+    pluginRelativePath: "",
+  });
+});
+
+test("opens plugin local changes in the shared Skill diff dialog", async () => {
+  const pendingPlugin: PluginSummary = {
+    ...pluginFixtures[0],
+    manifestName: "repo-scout",
+    collabStatus: "pending-commit",
+    localChangeCount: 2,
+    updateAvailable: false,
+    statusText: "插件目录存在本地未提交改动。",
+  };
+  const cleanCursorPlugin: PluginSummary = {
+    ...pendingPlugin,
+    id: "repo-scout-cursor",
+    hostTool: "cursor",
+    rootPath: "/Users/demo/.cursor/plugins/local/repo-scout",
+    collabStatus: "clean",
+    localChangeCount: 0,
+    statusText: "插件目录已是最新。",
+  };
+  vi.spyOn(skillClient, "fetchStartupInstalledPlugins").mockResolvedValueOnce([
+    cleanCursorPlugin,
+    pendingPlugin,
+  ]);
+  const deferredChanges: { resolve?: (changes: Awaited<ReturnType<typeof skillClient.fetchPluginLocalChanges>>) => void } = {};
+  const localChangesSpy = vi.spyOn(skillClient, "fetchPluginLocalChanges").mockImplementationOnce(
+    () => new Promise((resolve) => {
+      deferredChanges.resolve = resolve;
+    }),
+  ).mockResolvedValue([]);
+  const saveHunkSpy = vi.spyOn(skillClient, "savePluginFileContent").mockImplementation(async (input) => ({
+    path: input.relativePath,
+    content: input.content,
+  }));
+
+  renderWithI18n(<PluginsRoute />);
+
+  const previewButton = await screen.findByRole("button", { name: "查看 repo-scout 插件文件与本地变更" });
+  const toggleButton = previewButton.parentElement?.querySelector(".plugins-page__toggle-icon-button");
+  expect(toggleButton).toBeInstanceOf(HTMLButtonElement);
+  if (!(toggleButton instanceof HTMLButtonElement)) {
+    throw new Error("missing plugin toggle button");
+  }
+  expect(toggleButton.compareDocumentPosition(previewButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(within(previewButton).getByText("2")).toHaveClass("skill-card__change-count");
+  await userEvent.click(previewButton);
+
+  expect(await screen.findByRole("dialog", { name: "repo-scout" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "本地变更 …" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "本地变更 0" })).not.toBeInTheDocument();
+  await act(async () => {
+    deferredChanges.resolve?.([{
+      path: "commands/review.md",
+      status: "M",
+      diff: "@@ -1 +1 @@\n-old\n+local",
+      stagedDiff: "",
+      unstagedDiff: "@@ -1 +1 @@\n-old\n+local",
+      originalContent: "old",
+      currentContent: "local",
+    }]);
+  });
+  expect(await screen.findByText("commands/review.md")).toBeInTheDocument();
+  const revertHunkButton = await screen.findByRole("button", { name: "回退此变更块" });
+  await userEvent.click(revertHunkButton);
+  await waitFor(() => {
+    expect(screen.getByRole("textbox", { name: "可编辑的文件变更" })).toHaveTextContent("old");
+  });
+  expect(screen.getByText("未保存")).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "保存" }));
+  await waitFor(() => {
+    expect(saveHunkSpy).toHaveBeenCalledWith({
+      hostTool: "codex",
+      rootPath: "/Users/demo/workspace/repo-scout",
+      repoRootPath: "/Users/demo/workspace/repo-scout",
+      pluginRelativePath: "",
+      relativePath: "commands/review.md",
+      content: "old",
+    });
+  });
+  await userEvent.type(screen.getByPlaceholderText("搜索插件、工具或组件"), "repo");
+  await userEvent.click(screen.getByRole("button", { name: "全部文件" }));
+  expect(localChangesSpy).toHaveBeenCalledTimes(2);
+  expect(localChangesSpy).toHaveBeenNthCalledWith(1, {
+    hostTool: "codex",
+    rootPath: "/Users/demo/workspace/repo-scout",
+    repoRootPath: "/Users/demo/workspace/repo-scout",
+    pluginRelativePath: "",
+  });
+});
+
+test("keeps the file preview available for clean plugins", async () => {
+  const cleanPlugin: PluginSummary = {
+    ...pluginFixtures[0],
+    collabStatus: "clean",
+    updateAvailable: false,
+    localChangeCount: 0,
+  };
+  vi.spyOn(skillClient, "fetchStartupInstalledPlugins").mockResolvedValueOnce([cleanPlugin]);
+  const browserSpy = vi.spyOn(skillClient, "fetchPluginFileBrowser").mockResolvedValue({
+    skillName: "repo-scout",
+    rootName: "repo-scout",
+    entries: [
+      { path: "", name: "repo-scout", entryType: "directory", depth: 0 },
+      { path: "README.md", name: "README.md", entryType: "file", depth: 1 },
+      { path: "commands.md", name: "commands.md", entryType: "file", depth: 1 },
+    ],
+    initialFilePath: "README.md",
+    previewMode: "full",
+  });
+  vi.spyOn(skillClient, "fetchPluginFileContent").mockImplementation(async (input) => ({
+    path: input.relativePath,
+    content: input.relativePath === "README.md" ? "# Repo Scout" : "# Commands",
+  }));
+  const saveSpy = vi.spyOn(skillClient, "savePluginFileContent").mockImplementation(async (input) => ({
+    path: input.relativePath,
+    content: input.content,
+  }));
+  const refreshSpy = vi.mocked(skillClient.fetchLocalPluginStates);
+  refreshSpy.mockClear();
+  refreshSpy.mockResolvedValue([cleanPlugin]);
+  const pluginLibraryChange: { handler?: (payload: { changedPaths: string[] }) => void } = {};
+  vi.spyOn(skillClient, "subscribePluginLibraryChanges").mockImplementation(async (handler) => {
+    pluginLibraryChange.handler = handler;
+    return () => undefined;
+  });
+
+  renderWithI18n(<PluginsRoute />);
+
+  await userEvent.click(await screen.findByRole("button", { name: "查看 Repo Scout 插件文件" }));
+
+  expect(await screen.findByRole("dialog", { name: "Repo Scout" })).toBeInTheDocument();
+  expect((await screen.findAllByText("README.md")).length).toBeGreaterThan(0);
+  expect(browserSpy).toHaveBeenCalledWith({
+    hostTool: "codex",
+    rootPath: "/Users/demo/workspace/repo-scout",
+    repoRootPath: "/Users/demo/workspace/repo-scout",
+    pluginRelativePath: "",
+  });
+  await userEvent.click(screen.getByRole("button", { name: "commands.md" }));
+  expect(await screen.findByText("Commands")).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "编辑" }));
+  const editor = screen.getByRole("textbox");
+  await userEvent.click(editor);
+  await userEvent.keyboard("{End} edited");
+  await userEvent.click(screen.getByRole("button", { name: "保存" }));
+  await waitFor(() => {
+    expect(saveSpy).toHaveBeenCalledWith({
+      hostTool: "codex",
+      rootPath: "/Users/demo/workspace/repo-scout",
+      repoRootPath: "/Users/demo/workspace/repo-scout",
+      pluginRelativePath: "",
+      relativePath: "commands.md",
+      content: expect.stringContaining(" edited"),
+    });
+  });
+  pluginLibraryChange.handler?.({
+    changedPaths: ["/Users/demo/workspace/repo-scout/commands.md"],
+  });
+  await waitFor(() => {
+    expect(refreshSpy).toHaveBeenCalledTimes(1);
+  }, { timeout: 2_500 });
+  expect(browserSpy).toHaveBeenCalledTimes(1);
+  expect(screen.getByRole("button", { name: "commands.md" })).toHaveClass("is-selected");
+});
+
+test("reverts a whole plugin file and refreshes plugin state", async () => {
+  const pendingPlugin: PluginSummary = {
+    ...pluginFixtures[0],
+    manifestName: "repo-scout",
+    collabStatus: "pending-commit",
+    localChangeCount: 1,
+    updateAvailable: false,
+  };
+  vi.spyOn(skillClient, "fetchStartupInstalledPlugins").mockResolvedValueOnce([pendingPlugin]);
+  vi.spyOn(skillClient, "fetchPluginLocalChanges").mockResolvedValue([{
+    path: "commands/review.md",
+    status: "M",
+    diff: "@@ -1 +1 @@\n-old\n+local",
+    stagedDiff: "",
+    unstagedDiff: "@@ -1 +1 @@\n-old\n+local",
+    originalContent: "old",
+    currentContent: "local",
+  }]);
+  const revertSpy = vi.spyOn(skillClient, "revertPluginChange").mockResolvedValue();
+  const refreshSpy = vi.mocked(skillClient.fetchLocalPluginStates);
+  refreshSpy.mockClear();
+  refreshSpy.mockResolvedValue([pendingPlugin]);
+
+  renderWithI18n(<PluginsRoute />);
+
+  await userEvent.click(await screen.findByRole("button", {
+    name: "查看 repo-scout 插件文件与本地变更",
+  }));
+  await screen.findByRole("textbox", { name: "可编辑的文件变更" });
+  await userEvent.click(screen.getByRole("button", { name: "回退文件" }));
+  await userEvent.click(await screen.findByRole("button", { name: "确认回退" }));
+
+  await waitFor(() => {
+    expect(revertSpy).toHaveBeenCalledWith({
+      hostTool: "codex",
+      rootPath: "/Users/demo/workspace/repo-scout",
+      repoRootPath: "/Users/demo/workspace/repo-scout",
+      pluginRelativePath: "",
+      relativePath: "commands/review.md",
+    });
+  });
+  await waitFor(() => {
+    expect(refreshSpy).toHaveBeenCalled();
+  });
+});
+
+test("uses plugin-specific copy for an empty plugin file tree", async () => {
+  const cleanPlugin: PluginSummary = {
+    ...pluginFixtures[0],
+    collabStatus: "clean",
+    updateAvailable: false,
+    localChangeCount: 0,
+  };
+  vi.spyOn(skillClient, "fetchStartupInstalledPlugins").mockResolvedValueOnce([cleanPlugin]);
+  vi.spyOn(skillClient, "fetchPluginFileBrowser").mockResolvedValue({
+    skillName: "repo-scout",
+    rootName: "repo-scout",
+    entries: [{ path: "", name: "repo-scout", entryType: "directory", depth: 0 }],
+    initialFilePath: null,
+    previewMode: "full",
+  });
+
+  renderWithI18n(<PluginsRoute />);
+
+  await userEvent.click(await screen.findByRole("button", { name: "查看 Repo Scout 插件文件" }));
+
+  expect(await screen.findByText("当前插件没有可预览的文本文件。")).toBeInTheDocument();
+  expect(screen.queryByText("当前 skill 没有可编辑的文本文件。")).not.toBeInTheDocument();
+});
+
+test("shows plugin files in the shared file tree", async () => {
+  const pendingPlugin: PluginSummary = {
+    ...pluginFixtures[0],
+    manifestName: "repo-scout",
+    collabStatus: "pending-commit",
+    updateAvailable: false,
+  };
+  vi.spyOn(skillClient, "fetchStartupInstalledPlugins").mockResolvedValueOnce([pendingPlugin]);
+  vi.spyOn(skillClient, "fetchPluginLocalChanges").mockResolvedValue([]);
+  const browserSpy = vi.spyOn(skillClient, "fetchPluginFileBrowser").mockResolvedValue({
+    skillName: "repo-scout",
+    rootName: "repo-scout",
+    entries: [
+      { path: "", name: "repo-scout", entryType: "directory", depth: 0 },
+      { path: "commands", name: "commands", entryType: "directory", depth: 1 },
+      { path: "commands/review.md", name: "review.md", entryType: "file", depth: 2 },
+    ],
+    initialFilePath: "commands/review.md",
+    previewMode: "full",
+  });
+  const contentSpy = vi.spyOn(skillClient, "fetchPluginFileContent").mockResolvedValue({
+    path: "commands/review.md",
+    content: "# Review command",
+  });
+
+  renderWithI18n(<PluginsRoute />);
+
+  await userEvent.click(await screen.findByRole("button", { name: "查看 repo-scout 插件文件与本地变更" }));
+  await userEvent.click(screen.getByRole("button", { name: "全部文件" }));
+
+  expect(await screen.findByText("review.md")).toBeInTheDocument();
+  expect(await screen.findByText("Review command")).toBeInTheDocument();
+  expect(browserSpy).toHaveBeenCalledWith({
+    hostTool: "codex",
+    rootPath: "/Users/demo/workspace/repo-scout",
+    repoRootPath: "/Users/demo/workspace/repo-scout",
+    pluginRelativePath: "",
+  });
+  expect(contentSpy).toHaveBeenCalledWith({
+    hostTool: "codex",
+    rootPath: "/Users/demo/workspace/repo-scout",
+    repoRootPath: "/Users/demo/workspace/repo-scout",
+    pluginRelativePath: "",
+    relativePath: "commands/review.md",
+  });
 });
 
 test("refreshes plugin states after plugin library changes", async () => {
@@ -1624,17 +2053,29 @@ test("refreshes plugin states after plugin library changes", async () => {
     updateAvailable: false,
     statusText: "插件目录存在本地未提交改动。",
   };
-  const refreshSpy = vi.spyOn(skillClient, "refreshLocalPluginState").mockResolvedValueOnce(refreshedPlugin);
+  const initialPlugin: PluginSummary = {
+    ...refreshedPlugin,
+    collabStatus: "clean",
+    statusText: "插件目录已是最新。",
+  };
+  const refreshSpy = vi.mocked(skillClient.fetchLocalPluginStates);
+  refreshSpy.mockClear();
+  refreshSpy.mockResolvedValue([initialPlugin]);
   const pluginLibraryChange: { handler?: (payload: { changedPaths: string[] }) => void } = {};
   vi.spyOn(skillClient, "subscribePluginLibraryChanges").mockImplementation(async (handler) => {
     pluginLibraryChange.handler = handler;
     return () => undefined;
   });
-  vi.spyOn(skillClient, "fetchStartupInstalledPlugins").mockResolvedValueOnce([refreshedPlugin]);
+  vi.spyOn(skillClient, "fetchStartupInstalledPlugins").mockResolvedValueOnce([initialPlugin]);
 
   renderWithI18n(<PluginsRoute />);
 
   await screen.findByRole("tab", { name: /全部/ });
+  await act(async () => {
+    await new Promise((resolve) => window.setTimeout(resolve, 0));
+  });
+  refreshSpy.mockClear();
+  refreshSpy.mockResolvedValue([refreshedPlugin]);
   if (!pluginLibraryChange.handler) {
     throw new Error("plugin library change handler was not registered");
   }
@@ -1642,9 +2083,6 @@ test("refreshes plugin states after plugin library changes", async () => {
 
   await waitFor(() => {
     expect(refreshSpy).toHaveBeenCalledTimes(1);
-  });
-  await waitFor(() => {
-    expect(screen.getByText("待推送")).toBeInTheDocument();
   });
 });
 

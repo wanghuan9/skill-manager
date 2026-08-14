@@ -1,5 +1,5 @@
 use std::collections::BTreeSet;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{mpsc, OnceLock};
 use std::thread;
 
@@ -7,6 +7,7 @@ use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
+use crate::git_metadata::{git_state_metadata_repository_root, is_git_metadata_path};
 use crate::workspace::managed_workspace_root_option;
 
 static PLUGIN_LIBRARY_WATCHER_STARTED: OnceLock<()> = OnceLock::new();
@@ -106,6 +107,13 @@ fn classify_plugin_change_paths(paths: &[PathBuf], watched_roots: &[PathBuf]) ->
     let mut matched_paths = BTreeSet::new();
 
     for path in paths {
+        if git_state_metadata_repository_root(path).is_some() {
+            if watched_roots.iter().any(|root| path.starts_with(root)) {
+                matched_paths.insert(path.display().to_string());
+            }
+            continue;
+        }
+
         if is_git_metadata_path(path) {
             continue;
         }
@@ -118,23 +126,22 @@ fn classify_plugin_change_paths(paths: &[PathBuf], watched_roots: &[PathBuf]) ->
     matched_paths.into_iter().collect()
 }
 
-fn is_git_metadata_path(path: &Path) -> bool {
-    path.components()
-        .any(|component| component.as_os_str() == ".git")
-}
-
 #[cfg(test)]
 mod tests {
     use super::classify_plugin_change_paths;
     use std::path::PathBuf;
 
     #[test]
-    fn classify_plugin_change_paths_ignores_git_metadata_paths() {
+    fn classify_plugin_change_paths_keeps_git_state_and_ignores_git_objects() {
         let watched_roots = vec![PathBuf::from("/Users/demo/.skilldock/plugins")];
 
         let matched = classify_plugin_change_paths(
             &[
                 PathBuf::from("/Users/demo/.skilldock/plugins/browser/.git/index"),
+                PathBuf::from(
+                    "/Users/demo/.skilldock/plugins/browser/.git/refs/remotes/origin/main",
+                ),
+                PathBuf::from("/Users/demo/.skilldock/plugins/browser/.git/objects/ab/cd"),
                 PathBuf::from("/Users/demo/.skilldock/plugins/browser/.skilldock-package.json"),
             ],
             &watched_roots,
@@ -142,7 +149,11 @@ mod tests {
 
         assert_eq!(
             matched,
-            vec!["/Users/demo/.skilldock/plugins/browser/.skilldock-package.json"]
+            vec![
+                "/Users/demo/.skilldock/plugins/browser/.git/index",
+                "/Users/demo/.skilldock/plugins/browser/.git/refs/remotes/origin/main",
+                "/Users/demo/.skilldock/plugins/browser/.skilldock-package.json",
+            ]
         );
     }
 

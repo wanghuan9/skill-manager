@@ -95,6 +95,8 @@ pub struct PluginSummary {
     #[serde(default)]
     pub local_modified: bool,
     #[serde(default)]
+    pub local_change_count: usize,
+    #[serde(default)]
     pub local_modified_source: String,
     pub installed_at: String,
     pub updated_at: String,

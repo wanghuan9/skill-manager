@@ -26,4 +26,34 @@ describe("install theme styles", () => {
     expect(getRuleBody(".local-install-dropzone.is-selected")).toContain("var(--success)");
     expect(getRuleBody(".local-install-dropzone.is-selected")).toContain("var(--surface)");
   });
+
+  test("keeps long Git branch names inside the install form", () => {
+    expect(getRuleBody(".repo-form__source-row")).toContain(
+      "grid-template-columns: minmax(0, 1fr) 260px",
+    );
+    expect(getRuleBody(".repo-form__field--branch .app-select__trigger")).toContain(
+      "overflow: hidden",
+    );
+    expect(getRuleBody(".repo-form__field--branch .app-select__trigger")).toContain(
+      "height: 40px",
+    );
+    expect(getRuleBody(".repo-form__field--branch .app-select__value")).toContain(
+      "text-overflow: ellipsis",
+    );
+  });
+
+  test("uses the thin Skill scrollbar style throughout the app", () => {
+    expect(getRuleBody("*")).toContain("scrollbar-width: thin");
+    expect(getRuleBody("*::-webkit-scrollbar")).toContain("width: 10px");
+    expect(getRuleBody("*::-webkit-scrollbar")).toContain("height: 10px");
+    expect(getRuleBody("*::-webkit-scrollbar-thumb")).toContain(
+      "border: 2px solid transparent",
+    );
+    expect(getRuleBody(".skill-diff__editor .cm-scroller")).toContain(
+      "overscroll-behavior-y: none",
+    );
+    expect(getRuleBody(".skill-diff__editor .cm-scroller")).toContain(
+      "scrollbar-gutter: stable",
+    );
+  });
 });

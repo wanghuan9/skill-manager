@@ -15,6 +15,8 @@ import {
 import { useSkillWorkspace } from "@/features/skills/state/skill-workspace";
 import type {
   GitChangeFile,
+  SkillFileBrowserSnapshot,
+  SkillFileDocument,
   SkillFileEntry,
   SkillSummary,
   UpdatePreviewSnapshot,
@@ -45,7 +47,14 @@ type SkillFileDialogProps = {
   readOnly?: boolean;
   initialMode?: SkillFilePanelMode;
   onLocalChangesChanged?: () => void;
+  loadLocalChanges?: () => Promise<GitChangeFile[]>;
+  loadFileBrowser?: () => Promise<SkillFileBrowserSnapshot>;
+  loadFileContent?: (relativePath: string) => Promise<SkillFileDocument>;
+  saveFileContent?: (relativePath: string, content: string) => Promise<SkillFileDocument>;
+  revertLocalChange?: (input: SkillRevertInput & { relativePath: string }) => Promise<void>;
   loadUpdatePreview?: () => Promise<UpdatePreviewSnapshot>;
+  showFiles?: boolean;
+  resourceKind?: "skill" | "plugin";
   updateLabel?: string;
   revertUpdateFile?: (relativePath: string) => Promise<UpdatePreviewSnapshot>;
   revertUpdateHunk?: (
@@ -176,7 +185,9 @@ export function SkillFileViewModeToggle({
 function SkillFilePanelModeToggle({
   mode,
   changeCount,
+  isChangesLoading,
   updateCount,
+  canShowFiles,
   canShowChanges,
   canShowUpdates,
   updateLabel,
@@ -184,7 +195,9 @@ function SkillFilePanelModeToggle({
 }: {
   mode: SkillFilePanelMode;
   changeCount: number;
+  isChangesLoading: boolean;
   updateCount: number;
+  canShowFiles: boolean;
   canShowChanges: boolean;
   canShowUpdates: boolean;
   updateLabel?: string;
@@ -193,14 +206,16 @@ function SkillFilePanelModeToggle({
   const { t } = useTranslate();
   return (
     <div className="skill-file-dialog__panel-toggle" role="group" aria-label={t("skill.files.panelMode")}>
-      <button
-        className={mode === "files" ? "is-selected" : ""}
-        type="button"
-        aria-pressed={mode === "files"}
-        onClick={() => onModeChange("files")}
-      >
-        {t("skill.files.allFiles")}
-      </button>
+      {canShowFiles ? (
+        <button
+          className={mode === "files" ? "is-selected" : ""}
+          type="button"
+          aria-pressed={mode === "files"}
+          onClick={() => onModeChange("files")}
+        >
+          {t("skill.files.allFiles")}
+        </button>
+      ) : null}
       {canShowChanges ? (
         <button
           className={mode === "changes" ? "is-selected" : ""}
@@ -208,7 +223,7 @@ function SkillFilePanelModeToggle({
           aria-pressed={mode === "changes"}
           onClick={() => onModeChange("changes")}
         >
-          {t("skill.files.localChanges", { count: changeCount })}
+          {t("skill.files.localChanges", { count: isChangesLoading ? "…" : changeCount })}
         </button>
       ) : null}
       {canShowUpdates ? (
@@ -659,7 +674,14 @@ export function SkillFileDialog({
   readOnly = false,
   initialMode = "files",
   onLocalChangesChanged,
+  loadLocalChanges,
+  loadFileBrowser,
+  loadFileContent,
+  saveFileContent,
+  revertLocalChange,
   loadUpdatePreview,
+  showFiles = true,
+  resourceKind = "skill",
   updateLabel,
   revertUpdateFile,
   revertUpdateHunk,
@@ -699,12 +721,14 @@ export function SkillFileDialog({
   const [changeFiles, setChangeFiles] = useState<GitChangeFile[]>([]);
   const [updateFiles, setUpdateFiles] = useState<GitChangeFile[]>([]);
   const [hasLoadedBrowser, setHasLoadedBrowser] = useState(false);
+  const [loadedChangesVersion, setLoadedChangesVersion] = useState(-1);
   const [hasLoadedUpdates, setHasLoadedUpdates] = useState(false);
   const [updatesRefreshVersion, setUpdatesRefreshVersion] = useState(0);
   const [changesRefreshVersion, setChangesRefreshVersion] = useState(0);
   const [browserRefreshVersion, setBrowserRefreshVersion] = useState(0);
   const [pendingRevert, setPendingRevert] = useState<PendingSkillRevert | null>(null);
-  const canUseChanges = Boolean(skill.gitLinked) && !toolId && !readOnly;
+  const canUseChanges = Boolean(loadLocalChanges)
+    || (Boolean(skill.gitLinked) && !toolId && !readOnly);
   const canUseUpdatePreview = (
     Boolean(skill.gitLinked)
     || skill.updateDriver === "agent-skills-cli"
@@ -720,6 +744,8 @@ export function SkillFileDialog({
     || (canUseUpdatePreview
       && (skill.collabStatus === "update-available" || initialMode === "updates"));
   const canEditUpdates = Boolean(loadUpdatePreview && revertUpdateHunk) && !readOnly;
+  const canRevertLocalFile = Boolean(revertLocalChange)
+    || (!readOnly && resourceKind === "skill" && !toolId);
   const activeChangeFiles = panelMode === "updates" ? updateFiles : changeFiles;
   const skillPath = skill.canonicalPath ?? skill.localPath ?? "";
 
@@ -750,12 +776,14 @@ export function SkillFileDialog({
     setErrorMessage("");
 
     try {
-      const document = await saveSkillFileContent({
-        skillName: skill.name,
-        skillPath,
-        relativePath: selectedPath,
-        content,
-      });
+      const document = saveFileContent
+        ? await saveFileContent(selectedPath, content)
+        : await saveSkillFileContent({
+          skillName: skill.name,
+          skillPath,
+          relativePath: selectedPath,
+          content,
+        });
       setContent(document.content);
       setHasDirtyChanges(false);
       if (panelMode === "updates" && loadUpdatePreview) {
@@ -768,17 +796,21 @@ export function SkillFileDialog({
         setChangesRefreshVersion((current) => current + 1);
         setHasLoadedUpdates(false);
       }
-      setHasLoadedBrowser(false);
-      setBrowserRefreshVersion((current) => current + 1);
+      if (!saveFileContent) {
+        setHasLoadedBrowser(false);
+        setBrowserRefreshVersion((current) => current + 1);
+      }
       onLocalChangesChanged?.();
       setIsSaving(false);
-      void refreshSkillLocalGitState(skill.name, skillPath).catch((error) => {
-        reportFailure(error, {
-          operation: "refresh_skill_local_git_state",
-          fallbackMessage: t("skill.files.error.refreshState"),
-          context: { skillName: skill.name },
+      if (!saveFileContent) {
+        void refreshSkillLocalGitState(skill.name, skillPath).catch((error) => {
+          reportFailure(error, {
+            operation: "refresh_skill_local_git_state",
+            fallbackMessage: t("skill.files.error.refreshState"),
+            context: { skillName: skill.name },
+          });
         });
-      });
+      }
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : t("skill.files.error.save"));
       setIsSaving(false);
@@ -794,6 +826,7 @@ export function SkillFileDialog({
     readOnly,
     reportFailure,
     saveSkillFileContent,
+    saveFileContent,
     selectedChange,
     selectedPath,
     skillPath,
@@ -823,9 +856,11 @@ export function SkillFileDialog({
       setErrorMessage("");
 
       try {
-        const snapshot = toolId
-          ? await loadToolSkillFileBrowser({ toolId, skillName: skill.name })
-          : await loadSkillFileBrowser(skill.name, skillPath);
+        const snapshot = loadFileBrowser
+          ? await loadFileBrowser()
+          : toolId
+            ? await loadToolSkillFileBrowser({ toolId, skillName: skill.name })
+            : await loadSkillFileBrowser(skill.name, skillPath);
         if (!active) {
           return;
         }
@@ -839,17 +874,19 @@ export function SkillFileDialog({
         setSelectedPath(initialPath);
 
         if (initialPath) {
-          const document = toolId
-            ? await loadToolSkillFileContent({
-                toolId,
-                skillName: skill.name,
-                relativePath: initialPath,
-              })
-            : await loadSkillFileContent({
-                skillName: skill.name,
-                skillPath,
-                relativePath: initialPath,
-              });
+          const document = loadFileContent
+            ? await loadFileContent(initialPath)
+            : toolId
+              ? await loadToolSkillFileContent({
+                  toolId,
+                  skillName: skill.name,
+                  relativePath: initialPath,
+                })
+              : await loadSkillFileContent({
+                  skillName: skill.name,
+                  skillPath,
+                  relativePath: initialPath,
+                });
           if (!active) {
             return;
           }
@@ -863,7 +900,13 @@ export function SkillFileDialog({
           return;
         }
 
-        setErrorMessage(error instanceof Error ? error.message : t("skill.files.error.load"));
+        setErrorMessage(
+          error instanceof Error
+            ? error.message
+            : resourceKind === "plugin" && typeof error === "string" && error.trim()
+              ? error
+              : t(resourceKind === "plugin" ? "plugins.files.error.load" : "skill.files.error.load"),
+        );
         setEntries([]);
         setSelectedPath("");
         setContent("");
@@ -886,9 +929,12 @@ export function SkillFileDialog({
     hasLoadedBrowser,
     loadSkillFileBrowser,
     loadSkillFileContent,
+    loadFileBrowser,
+    loadFileContent,
     loadToolSkillFileBrowser,
     loadToolSkillFileContent,
     panelMode,
+    resourceKind,
     skill.name,
     skillPath,
     t,
@@ -896,7 +942,12 @@ export function SkillFileDialog({
   ]);
 
   useEffect(() => {
-    if (!isOpen || !showChangesTab || panelMode === "updates") {
+    if (
+      !isOpen
+      || !showChangesTab
+      || panelMode === "updates"
+      || loadedChangesVersion === changesRefreshVersion
+    ) {
       return;
     }
 
@@ -904,11 +955,14 @@ export function SkillFileDialog({
     async function loadChanges() {
       setIsChangesLoading(true);
       try {
-        const changes = await loadSkillLocalChanges(skill.name, skillPath);
+        const changes = loadLocalChanges
+          ? await loadLocalChanges()
+          : await loadSkillLocalChanges(skill.name, skillPath);
         if (!active) {
           return;
         }
         setChangeFiles(changes);
+        setLoadedChangesVersion(changesRefreshVersion);
       } catch (error) {
         if (active) {
           setErrorMessage(error instanceof Error ? error.message : t("skill.changes.error.load"));
@@ -925,7 +979,18 @@ export function SkillFileDialog({
     return () => {
       active = false;
     };
-  }, [changesRefreshVersion, isOpen, loadSkillLocalChanges, panelMode, showChangesTab, skill.name, skillPath, t]);
+  }, [
+    changesRefreshVersion,
+    isOpen,
+    loadedChangesVersion,
+    loadLocalChanges,
+    loadSkillLocalChanges,
+    panelMode,
+    showChangesTab,
+    skill.name,
+    skillPath,
+    t,
+  ]);
 
   useEffect(() => {
     if (
@@ -1028,6 +1093,7 @@ export function SkillFileDialog({
       setChangeFiles([]);
       setUpdateFiles([]);
       setHasLoadedBrowser(false);
+      setLoadedChangesVersion(-1);
       setHasLoadedUpdates(false);
       setUpdatesRefreshVersion(0);
       setPendingRevert(null);
@@ -1099,17 +1165,19 @@ export function SkillFileDialog({
     setErrorMessage("");
 
     try {
-      const document = toolId
-        ? await loadToolSkillFileContent({
-            toolId,
-            skillName: skill.name,
-            relativePath: path,
-          })
-        : await loadSkillFileContent({
-            skillName: skill.name,
-            skillPath,
-            relativePath: path,
-          });
+      const document = loadFileContent
+        ? await loadFileContent(path)
+        : toolId
+          ? await loadToolSkillFileContent({
+              toolId,
+              skillName: skill.name,
+              relativePath: path,
+            })
+          : await loadSkillFileContent({
+              skillName: skill.name,
+              skillPath,
+              relativePath: path,
+            });
       setSelectedPath(path);
       setSelectedFilePath(path);
       setCollapsedDirectories((current) => {
@@ -1122,7 +1190,13 @@ export function SkillFileDialog({
       setContent(document.content);
       setHasDirtyChanges(false);
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : t("skill.files.error.load"));
+      setErrorMessage(
+        error instanceof Error
+          ? error.message
+          : resourceKind === "plugin" && typeof error === "string" && error.trim()
+            ? error
+            : t(resourceKind === "plugin" ? "plugins.files.error.load" : "skill.files.error.load"),
+      );
     } finally {
       setIsLoading(false);
     }
@@ -1229,12 +1303,19 @@ export function SkillFileDialog({
         setUpdateFiles(preview.changedFiles);
         setHasLoadedUpdates(true);
       } else {
-        await revertSkillChange({
-          skillName: skill.name,
-          skillPath,
+        const revertInput = {
           relativePath: pendingRevert.path,
           ...pendingRevert.input,
-        });
+        };
+        if (revertLocalChange) {
+          await revertLocalChange(revertInput);
+        } else {
+          await revertSkillChange({
+            skillName: skill.name,
+            skillPath,
+            ...revertInput,
+          });
+        }
         setChangesRefreshVersion((current) => current + 1);
       }
       setHasLoadedBrowser(false);
@@ -1269,9 +1350,11 @@ export function SkillFileDialog({
               <SkillFilePanelModeToggle
                 mode={panelMode}
                 changeCount={changeFiles.length}
+                isChangesLoading={isChangesLoading}
                 updateCount={hasLoadedUpdates
                   ? updateFiles.length
                   : skill.updateFileCount ?? updateFiles.length}
+                canShowFiles={showFiles}
                 canShowChanges={showChangesTab}
                 canShowUpdates={canShowUpdates}
                 updateLabel={updateLabel}
@@ -1309,8 +1392,8 @@ export function SkillFileDialog({
           {panelMode !== "files" ? (
             <SkillChangeTreeSidebar
               changes={activeChangeFiles}
-              isLoading={panelMode === "updates" && isUpdatesLoading}
-              loadingLabel={t("skill.updates.loading")}
+              isLoading={panelMode === "updates" ? isUpdatesLoading : isChangesLoading}
+              loadingLabel={t(panelMode === "updates" ? "skill.updates.loading" : "skill.files.loading")}
               selectedPath={selectedPath}
               onSelectFile={(path) => void handleSelectFile(path)}
             />
@@ -1344,7 +1427,9 @@ export function SkillFileDialog({
                   : undefined}
                 readOnly={readOnly || (panelMode === "updates" && !canEditUpdates)}
                 isUpdatePreview={panelMode === "updates"}
-                canRevertFile={panelMode === "updates" && Boolean(revertUpdateFile)}
+                canRevertFile={panelMode === "updates"
+                  ? Boolean(revertUpdateFile)
+                  : canRevertLocalFile}
                 emptyLabel={panelMode === "updates" ? t("skill.updates.empty") : undefined}
               />
             ) : (
@@ -1358,7 +1443,7 @@ export function SkillFileDialog({
                 hasDirtyChanges={hasDirtyChanges}
                 noEditableFileLabel={t("skill.files.noEditableFile")}
                 unsavedLabel={t("skill.files.unsaved")}
-                emptyLabel={t("skill.files.empty")}
+                emptyLabel={t(resourceKind === "plugin" ? "plugins.files.empty" : "skill.files.empty")}
                 emptyMarkdownLabel={t("skill.files.emptyMarkdown")}
                 onContentChange={handleContentChange}
                 onSelectFile={(path) => void handleSelectFile(path)}
