@@ -506,7 +506,7 @@ export function SkillDiffView({
               {isSaving ? t("skill.files.saving") : t("skill.files.save")}
             </button>
           ) : null}
-          {!readOnly || canRevertFile ? (
+          {canRevertFile ? (
             <button
               className="secondary-button secondary-button--compact skill-diff__revert-file"
               type="button"

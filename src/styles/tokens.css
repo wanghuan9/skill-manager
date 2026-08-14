@@ -4219,6 +4219,11 @@ code {
   white-space: nowrap;
 }
 
+.skill-card-detail-modal__action.is-icon-only {
+  width: 38px;
+  padding-inline: 0;
+}
+
 .skill-card-detail-modal__action svg {
   width: 15px;
   height: 15px;

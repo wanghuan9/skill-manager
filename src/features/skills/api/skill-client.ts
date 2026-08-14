@@ -123,6 +123,13 @@ type SavePluginComponentPreviewInput = PluginComponentPreviewInput & {
   content: string;
 };
 
+type PluginPreviewTargetInput = {
+  hostTool: PluginHostTool;
+  rootPath: string;
+  repoRootPath: string;
+  pluginRelativePath: string;
+};
+
 type SetPluginEnabledInput = {
   pluginId: string;
   hostTool: PluginHostTool;
@@ -729,6 +736,7 @@ function normalizePluginSummary(plugin: LegacyPluginSummary): PluginSummary {
     updateAvailable: plugin.updateAvailable ?? false,
     baselineHash: plugin.baselineHash ?? "",
     localModified: Boolean(plugin.localModified),
+    localChangeCount: plugin.localChangeCount ?? 0,
     installedAt: plugin.installedAt ?? "",
     updatedAt: fallbackUpdatedAt,
     remoteUpdatedAt,
@@ -954,6 +962,69 @@ export async function updatePlugin(input: UpdatePluginInput): Promise<PluginSumm
     pluginFixtures[0],
   );
   return normalizePluginSummary(plugin);
+}
+
+export async function fetchPluginLocalChanges(
+  input: PluginPreviewTargetInput,
+): Promise<GitChangeFile[]> {
+  return invokeOrFallback("get_plugin_local_changes", input, []);
+}
+
+export async function fetchPluginFileBrowser(
+  input: PluginPreviewTargetInput,
+): Promise<SkillFileBrowserSnapshot> {
+  const pluginName = input.rootPath.split("/").filter(Boolean).pop() || "plugin";
+  const fallback: SkillFileBrowserSnapshot = {
+    skillName: pluginName,
+    rootName: pluginName,
+    entries: [{ path: "", name: pluginName, entryType: "directory", depth: 0 }],
+    initialFilePath: null,
+    previewMode: "full",
+  };
+  return invokeOrFallback("get_plugin_file_browser", input, fallback);
+}
+
+export async function fetchPluginFileContent(
+  input: PluginPreviewTargetInput & { relativePath: string },
+): Promise<SkillFileDocument> {
+  const fallback: SkillFileDocument = { path: input.relativePath, content: "" };
+  return invokeOrFallback("get_plugin_file_content", input, fallback);
+}
+
+export async function savePluginFileContent(
+  input: PluginPreviewTargetInput & { relativePath: string; content: string },
+): Promise<SkillFileDocument> {
+  const fallback: SkillFileDocument = { path: input.relativePath, content: input.content };
+  return invokeOrFallback("save_plugin_file_content", input, fallback);
+}
+
+export async function revertPluginChange(
+  input: PluginPreviewTargetInput & {
+    relativePath: string;
+    hunkIndex?: number;
+    expectedPatch?: string;
+    staged?: boolean;
+  },
+): Promise<void> {
+  return invokeOrFallback("revert_plugin_change", {
+    ...input,
+    hunkIndex: input.hunkIndex ?? null,
+    expectedPatch: input.expectedPatch ?? null,
+    staged: input.staged ?? false,
+  }, undefined);
+}
+
+export async function fetchPluginUpdatePreview(
+  input: PluginPreviewTargetInput,
+): Promise<UpdatePreviewSnapshot> {
+  const fallback: UpdatePreviewSnapshot = {
+    currentBranch: "main",
+    remoteBranch: "origin/main",
+    commitsToPull: 0,
+    changedFiles: [],
+    hasLocalChanges: false,
+  };
+  return invokeOrFallback("get_plugin_update_preview", input, fallback);
 }
 
 export async function deletePlugin(input: DeletePluginInput): Promise<void> {

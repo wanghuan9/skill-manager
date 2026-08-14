@@ -99,6 +99,7 @@ export type PluginSummary = {
   updateAvailable: boolean;
   baselineHash: string;
   localModified: boolean;
+  localChangeCount?: number;
   installedAt: string;
   updatedAt: string;
   remoteUpdatedAt: string;

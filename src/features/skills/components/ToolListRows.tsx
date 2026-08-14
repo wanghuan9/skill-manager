@@ -16,12 +16,15 @@ type RowAction = {
   content?: ReactNode;
   modalLabel?: string;
   modalClassName?: string;
+  modalIcon?: ReactNode;
+  modalIconOnly?: boolean;
+  hideInModal?: boolean;
 };
 
 type RowBadge = {
   key?: string;
   label: ReactNode;
-  tone?: "neutral" | "positive" | "info" | "warning";
+  tone?: "neutral" | "positive" | "info" | "warning" | "pending-commit";
 };
 
 type ToolListRowProps = {
@@ -41,6 +44,7 @@ type ToolListRowProps = {
   gridBadges?: RowBadge[];
   gridMeta?: ReactNode;
   gridFooter?: ReactNode;
+  modalBadge?: RowBadge;
   selectionMode?: boolean;
   selected?: boolean;
   selectionLabel?: string;
@@ -76,6 +80,7 @@ export function ToolListRow(props: ToolListRowProps) {
     gridBadges = [],
     gridMeta,
     gridFooter,
+    modalBadge,
     selectionMode = false,
     selected = false,
     selectionLabel,
@@ -103,40 +108,42 @@ export function ToolListRow(props: ToolListRowProps) {
     };
   }, [expanded, layout, onExpandedChange]);
 
-  const actionButtons = (modal: boolean) => actions.map((action) => {
-    if (action.content) {
-      return (
-        <span key={action.key} className={action.className}>
-          {action.content}
-        </span>
-      );
-    }
+  const actionButtons = (modal: boolean) => actions
+    .filter((action) => !modal || !action.hideInModal)
+    .map((action) => {
+      if (action.content) {
+        return (
+          <span key={action.key} className={action.className}>
+            {action.content}
+          </span>
+        );
+      }
 
-    const isIconAction = Boolean(action.icon);
-    const modalClassName = action.modalClassName
-      ?? (action.className?.includes("--update") ? "is-primary" : "");
-    const buttonClassName = modal
-      ? `secondary-button secondary-button--compact skill-card-detail-modal__action${modalClassName ? ` ${modalClassName}` : ""}`
-      : action.className ?? (isIconAction ? "skill-card__icon-button" : "secondary-button secondary-button--compact");
-    return (
-      <button
-        key={action.key}
-        className={buttonClassName}
-        type="button"
-        onClick={action.onClick}
-        disabled={action.disabled}
-        aria-label={action.ariaLabel ?? action.label}
-        data-tooltip={modal ? undefined : action.tooltip}
-      >
-        {modal ? (
-          <>
-            {action.icon}
-            <span>{action.modalLabel ?? action.label}</span>
-          </>
-        ) : action.icon ?? action.label}
-      </button>
-    );
-  });
+      const isIconAction = Boolean(action.icon);
+      const modalClassName = action.modalClassName
+        ?? (action.className?.includes("--update") ? "is-primary" : "");
+      const buttonClassName = modal
+        ? `secondary-button secondary-button--compact skill-card-detail-modal__action${action.modalIconOnly ? " is-icon-only" : ""}${modalClassName ? ` ${modalClassName}` : ""}`
+        : action.className ?? (isIconAction ? "skill-card__icon-button" : "secondary-button secondary-button--compact");
+      return (
+        <button
+          key={action.key}
+          className={buttonClassName}
+          type="button"
+          onClick={action.onClick}
+          disabled={action.disabled}
+          aria-label={action.ariaLabel ?? action.label}
+          data-tooltip={modal && !action.modalIconOnly ? undefined : action.tooltip}
+        >
+          {modal ? (
+            <>
+              {action.modalIcon ?? action.icon}
+              {action.modalIconOnly ? null : <span>{action.modalLabel ?? action.label}</span>}
+            </>
+          ) : action.icon ?? action.label}
+        </button>
+      );
+    });
 
   return (
     <article
@@ -214,7 +221,7 @@ export function ToolListRow(props: ToolListRowProps) {
                 <div className="skill-card-detail-modal__copy">
                   <div className="skill-card-detail-modal__title">
                     <h3>{name}</h3>
-                    <ToolListRowBadges badges={badges.slice(0, 1)} />
+                    <ToolListRowBadges badges={modalBadge ? [modalBadge] : badges.slice(0, 1)} />
                   </div>
                 </div>
                 {gridBadges.length > 0 ? (

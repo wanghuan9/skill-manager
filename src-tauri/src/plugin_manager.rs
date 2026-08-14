@@ -14,6 +14,9 @@ use serde_json::Value as JsonValue;
 use sha2::{Digest, Sha256};
 use toml_edit::{DocumentMut, Item, Table};
 
+use crate::git_changes::{
+    collect_ref_changes, collect_working_tree_changes, revert_working_tree_change,
+};
 use crate::git_divergence::{local_branch_divergence_counts, resolve_remote_branch};
 use crate::library::{
     configure_git_network_command, configure_hidden_subprocess, git_command,
@@ -23,8 +26,9 @@ use crate::library::{
     tree_relative_path_for_branch, with_temporary_discovery_repo_resolved, CloneProgressCallback,
 };
 use crate::models::{
-    CliToolSummary, PluginComponentPreview, PluginComponentSummary, PluginProbeResult,
-    PluginScopeSummary, PluginSummary, SkillFileEntry,
+    CliToolSummary, GitChangeFile, PluginComponentPreview, PluginComponentSummary,
+    PluginProbeResult, PluginScopeSummary, PluginSummary, SkillFileBrowserSnapshot,
+    SkillFileDocument, SkillFileEntry, UpdatePreviewSnapshot,
 };
 use crate::state;
 use crate::workspace::{
@@ -55,6 +59,7 @@ const OPENCODE_DISABLED_PLUGIN_DIR: &str = ".skilldock/disabled-plugins/opencode
 
 static PLUGIN_UPDATE_CACHE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 static PLUGIN_GIT_FETCH_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+static PLUGIN_LIST_MEMORY_CACHE: OnceLock<Mutex<Vec<PluginSummary>>> = OnceLock::new();
 
 #[derive(Debug, Deserialize, Default)]
 struct CodexConfigFile {
@@ -309,6 +314,7 @@ struct PluginGitState {
     collab_status: String,
     status_text: String,
     update_available: bool,
+    local_change_count: usize,
     remote_updated_at: String,
     local_updated_at: String,
     last_editor: String,
@@ -702,6 +708,11 @@ fn plugin_list_cache_file() -> Option<PathBuf> {
 }
 
 fn save_plugin_list_cache(plugins: &[PluginSummary]) {
+    let mut memory_cache = plugin_list_memory_cache()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    *memory_cache = plugins.to_vec();
+    drop(memory_cache);
     let Some(cache_file) = plugin_list_cache_file() else {
         return;
     };
@@ -715,6 +726,102 @@ fn save_plugin_list_cache(plugins: &[PluginSummary]) {
         return;
     };
     let _ = fs::write(cache_file, payload);
+}
+
+fn plugin_list_memory_cache() -> &'static Mutex<Vec<PluginSummary>> {
+    PLUGIN_LIST_MEMORY_CACHE.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+fn find_cached_previewable_plugin(host_tool: &str, root_path: &str) -> Option<PluginSummary> {
+    let mut memory_cache = plugin_list_memory_cache()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    if memory_cache.is_empty() {
+        *memory_cache = workspace_file_candidates(PLUGIN_LIST_CACHE_FILE_NAME)
+            .into_iter()
+            .find_map(|path| fs::read_to_string(path).ok())
+            .and_then(|contents| serde_json::from_str(&contents).ok())
+            .unwrap_or_default();
+    }
+    find_previewable_plugin(&memory_cache, host_tool, root_path).cloned()
+}
+
+fn find_previewable_plugin<'a>(
+    plugins: &'a [PluginSummary],
+    host_tool: &str,
+    root_path: &str,
+) -> Option<&'a PluginSummary> {
+    plugins.iter().find(|plugin| {
+        plugin.host_tool == host_tool
+            && (plugin.root_path == root_path
+                || paths_refer_to_same_dir(Path::new(&plugin.root_path), Path::new(root_path)))
+            && plugin.install_state == "installed"
+            && !matches!(plugin.status.as_str(), "broken" | "scan-error")
+    })
+}
+
+fn resolve_scanned_plugin_for_preview(
+    host_tool: &str,
+    root_path: &str,
+) -> Result<PluginSummary, String> {
+    if let Some(plugin) = find_cached_previewable_plugin(host_tool, root_path) {
+        if is_current_host_plugin_registration(host_tool, root_path) {
+            return Ok(plugin);
+        }
+        return Err("只能预览已安装插件的文件。".to_string());
+    }
+
+    let plugins = list_installed_plugins_blocking_with_mode(PluginScanMode::Local)?;
+    save_plugin_list_cache(&plugins);
+    find_previewable_plugin(&plugins, host_tool, root_path)
+        .cloned()
+        .ok_or_else(|| "只能预览已安装插件的文件。".to_string())
+}
+
+fn is_current_host_plugin_registration(host_tool: &str, root_path: &str) -> bool {
+    let Some(home_dir) = workspace::home_dir_option() else {
+        return false;
+    };
+    match host_tool {
+        "codex" => is_current_codex_plugin_registration(&home_dir, root_path),
+        "claude-code" => is_current_claude_plugin_registration(&home_dir, root_path),
+        _ => false,
+    }
+}
+
+fn is_current_codex_plugin_registration(home_dir: &Path, root_path: &str) -> bool {
+    let config_path = home_dir.join(".codex/config.toml");
+    let Ok(config_content) = fs::read_to_string(&config_path) else {
+        return false;
+    };
+    let Ok(config) = parse_codex_config(&config_content) else {
+        return false;
+    };
+    let cache_root = home_dir.join(".codex/plugins/cache");
+    config.plugins.iter().any(|(plugin_key, _)| {
+        let Some((plugin_name, marketplace_name)) = split_enabled_plugin_key(plugin_key) else {
+            return false;
+        };
+        let Some(marketplace_config) = config.marketplaces.get(marketplace_name) else {
+            return false;
+        };
+        resolve_configured_codex_plugin_root(
+            &cache_root,
+            marketplace_name,
+            marketplace_config,
+            plugin_name,
+        )
+        .is_some_and(|plugin_root| paths_refer_to_same_dir(&plugin_root, Path::new(root_path)))
+    })
+}
+
+fn is_current_claude_plugin_registration(home_dir: &Path, root_path: &str) -> bool {
+    let installed_state_path = home_dir.join(".claude/plugins/installed_plugins.json");
+    read_claude_installed_plugins(&installed_state_path).is_ok_and(|installed_state| {
+        installed_state.plugins.values().flatten().any(|entry| {
+            paths_refer_to_same_dir(Path::new(&entry.install_path), Path::new(root_path))
+        })
+    })
 }
 
 fn refresh_and_persist_local_plugin_state(
@@ -953,6 +1060,461 @@ fn update_plugin_blocking(host_tool: &str, root_path: &str) -> Result<PluginSumm
         "hash" => update_hash_plugin(host_tool, &target_root),
         _ => Err("该插件当前不支持更新".to_string()),
     }
+}
+
+struct PluginGitPreviewTarget {
+    scope_path: PathBuf,
+    repo_root: PathBuf,
+    plugin_relative_path: String,
+    current_branch: String,
+}
+
+fn plugin_git_preview_target(
+    host_tool: &str,
+    root_path: &str,
+    repo_root_path: &str,
+    plugin_relative_path: &str,
+) -> Result<PluginGitPreviewTarget, String> {
+    let requested_root = Path::new(root_path);
+    let target_root = canonicalize_existing_dir(Path::new(root_path))?;
+    ensure_plugin_manifest_for_host(host_tool, &target_root)?;
+    let repo_root = canonicalize_existing_dir(Path::new(repo_root_path))?;
+    let scope_path = if plugin_relative_path.trim().is_empty() {
+        repo_root.clone()
+    } else {
+        repo_root.join(plugin_relative_path)
+    };
+    let canonical_scope_path = canonicalize_existing_dir(&scope_path)?;
+    if !canonical_scope_path.starts_with(&repo_root) {
+        return Err("插件目录不在关联的 Git 仓库内。".into());
+    }
+    let actual_repo_root = find_git_root(&canonical_scope_path)
+        .and_then(|path| canonicalize_existing_dir(&path).ok())
+        .ok_or_else(|| "该插件未关联 Git 仓库，无法生成变更预览。".to_string())?;
+    if actual_repo_root != repo_root {
+        return Err("插件 Git 仓库信息不匹配。".into());
+    }
+    let expected_target = if host_tool == "cursor" && target_root != canonical_scope_path {
+        managed_plugin_root_for_cursor_plugin_path(&target_root)
+            .and_then(|path| canonicalize_existing_dir(&path).ok())
+    } else {
+        Some(target_root.clone())
+    };
+    if expected_target.as_ref() != Some(&canonical_scope_path) {
+        return Err("插件目录与关联的 Git 仓库不匹配。".into());
+    }
+    if !is_installed_plugin_preview_path(host_tool, requested_root, &canonical_scope_path) {
+        return Err("只能预览已安装插件的文件。".into());
+    }
+
+    let current_branch =
+        run_git_at(&repo_root, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap_or_default();
+
+    Ok(PluginGitPreviewTarget {
+        scope_path: canonical_scope_path,
+        repo_root,
+        plugin_relative_path: plugin_relative_path.to_string(),
+        current_branch,
+    })
+}
+
+fn is_installed_plugin_preview_path(
+    host_tool: &str,
+    requested_root: &Path,
+    canonical_scope_path: &Path,
+) -> bool {
+    let Some(home_dir) = workspace::home_dir_option() else {
+        return false;
+    };
+    let mut allowed_roots = vec![home_dir.join(".skilldock/plugins")];
+    match host_tool {
+        "codex" => allowed_roots.extend([
+            home_dir.join(".codex/plugins"),
+            home_dir.join(".codex/marketplaces"),
+        ]),
+        "claude-code" => allowed_roots.push(home_dir.join(".claude/plugins")),
+        "cursor" => allowed_roots.push(home_dir.join(".cursor/plugins")),
+        "opencode" => allowed_roots.extend([
+            home_dir.join(".config/opencode/plugins"),
+            home_dir.join(".skilldock/disabled-plugins/opencode"),
+        ]),
+        _ => return false,
+    }
+    if host_tool == "cursor" {
+        allowed_roots.push(cursor_disabled_plugins_root(&home_dir));
+    }
+
+    let normalized_requested_root = normalize_lexical_path(requested_root);
+    allowed_roots.into_iter().any(|allowed_root| {
+        let normalized_allowed_root = normalize_lexical_path(&allowed_root);
+        if normalized_requested_root.starts_with(&normalized_allowed_root) {
+            return true;
+        }
+        canonicalize_existing_dir(&allowed_root)
+            .is_ok_and(|canonical_root| canonical_scope_path.starts_with(canonical_root))
+    })
+}
+
+fn plugin_file_preview_scope(host_tool: &str, root_path: &str) -> Result<PathBuf, String> {
+    let requested_root = Path::new(root_path);
+    let target_root = canonicalize_existing_dir(requested_root)?;
+    let has_host_manifest = ensure_plugin_manifest_for_host(host_tool, &target_root).is_ok();
+    let is_standard_install = has_host_manifest
+        && is_installed_plugin_preview_path(host_tool, requested_root, &target_root);
+    if !is_standard_install {
+        resolve_scanned_plugin_for_preview(host_tool, root_path)?;
+    }
+    if host_tool == "cursor" || host_tool == "codex" {
+        let managed_root = if host_tool == "cursor" {
+            managed_plugin_root_for_cursor_plugin_path(&target_root).filter(|managed_root| {
+                cursor_install_links_to_managed_source(&target_root, managed_root)
+            })
+        } else {
+            managed_plugin_package_root_from_source_metadata(&target_root).and_then(
+                |package_root| {
+                    let relative_path = read_plugin_package_identity(&package_root)
+                        .map(|identity| PathBuf::from(identity.plugin_relative_path))
+                        .unwrap_or_default();
+                    Some(if relative_path.as_os_str().is_empty() {
+                        package_root
+                    } else {
+                        package_root.join(relative_path)
+                    })
+                },
+            )
+        };
+        if managed_root.is_none() {
+            return Ok(target_root);
+        }
+        let managed_root = managed_root
+            .and_then(|path| canonicalize_existing_dir(&path).ok())
+            .ok_or_else(|| format!("无法定位 {host_tool} 插件的托管源目录。"))?;
+        if managed_plugin_package_root_for_path(&managed_root).is_none() {
+            return Err(format!("{host_tool} 插件托管源目录不属于 SkillDock。"));
+        }
+        return Ok(managed_root);
+    }
+    Ok(target_root)
+}
+
+fn cursor_install_links_to_managed_source(install_root: &Path, managed_root: &Path) -> bool {
+    if paths_refer_to_same_dir(install_root, managed_root) {
+        return true;
+    }
+    let Ok(entries) = fs::read_dir(install_root) else {
+        return false;
+    };
+    entries.flatten().any(|entry| {
+        let install_entry = entry.path();
+        fs::symlink_metadata(&install_entry).is_ok_and(|metadata| metadata.file_type().is_symlink())
+            && paths_refer_to_same_dir(&install_entry, &managed_root.join(entry.file_name()))
+    })
+}
+
+fn collect_plugin_file_entries(
+    base_path: &Path,
+    current_path: &Path,
+    depth: usize,
+    entries: &mut Vec<SkillFileEntry>,
+) -> Result<bool, String> {
+    let mut child_paths = fs::read_dir(current_path)
+        .map_err(|error| format!("读取插件目录失败: {error}"))?
+        .flatten()
+        .map(|entry| entry.path())
+        .collect::<Vec<_>>();
+    child_paths.sort();
+
+    let mut has_visible_child = false;
+    for child_path in child_paths {
+        let Some(name) = child_path.file_name().and_then(|value| value.to_str()) else {
+            continue;
+        };
+        if name.starts_with('.') || matches!(name, "node_modules" | "dist" | "target") {
+            continue;
+        }
+
+        if child_path.is_dir() {
+            let canonical_child = fs::canonicalize(&child_path)
+                .map_err(|error| format!("解析插件目录失败: {error}"))?;
+            if !canonical_child.starts_with(base_path) {
+                continue;
+            }
+            let directory_index = entries.len();
+            let relative_path = child_path
+                .strip_prefix(base_path)
+                .map_err(|error| format!("解析插件目录路径失败: {error}"))?
+                .to_string_lossy()
+                .to_string();
+            entries.push(SkillFileEntry {
+                path: relative_path,
+                name: name.to_string(),
+                entry_type: "directory".into(),
+                depth,
+            });
+            if collect_plugin_file_entries(base_path, &canonical_child, depth + 1, entries)? {
+                has_visible_child = true;
+            } else {
+                entries.truncate(directory_index);
+            }
+            continue;
+        }
+
+        if !crate::git_changes::is_supported_text_file(&child_path) {
+            continue;
+        }
+        let relative_path = child_path
+            .strip_prefix(base_path)
+            .map_err(|error| format!("解析插件文件路径失败: {error}"))?
+            .to_string_lossy()
+            .to_string();
+        entries.push(SkillFileEntry {
+            path: relative_path,
+            name: name.to_string(),
+            entry_type: "file".into(),
+            depth,
+        });
+        has_visible_child = true;
+    }
+
+    Ok(has_visible_child)
+}
+
+fn plugin_preview_file_path(scope_path: &Path, relative_path: &str) -> Result<PathBuf, String> {
+    if relative_path.trim().is_empty() {
+        return Err("文件路径不能为空".into());
+    }
+    let relative = Path::new(relative_path);
+    if relative.is_absolute()
+        || relative.components().any(|component| match component {
+            Component::Normal(name) => name.to_string_lossy().starts_with('.'),
+            _ => true,
+        })
+    {
+        return Err("不允许访问插件目录之外的文件".into());
+    }
+
+    let full_path = scope_path.join(relative);
+    let canonical_file =
+        fs::canonicalize(&full_path).map_err(|error| format!("读取插件文件失败: {error}"))?;
+    if !canonical_file.starts_with(scope_path)
+        || !canonical_file.is_file()
+        || !crate::git_changes::is_supported_text_file(&canonical_file)
+        || canonical_file.strip_prefix(scope_path).is_ok_and(|path| {
+            path.components()
+                .any(|component| component.as_os_str().to_string_lossy().starts_with('.'))
+        })
+    {
+        return Err("不允许访问插件目录之外的文件".into());
+    }
+    Ok(canonical_file)
+}
+
+#[tauri::command]
+pub async fn get_plugin_local_changes(
+    host_tool: String,
+    root_path: String,
+    repo_root_path: String,
+    plugin_relative_path: String,
+) -> Result<Vec<GitChangeFile>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let target = plugin_git_preview_target(
+            &host_tool,
+            &root_path,
+            &repo_root_path,
+            &plugin_relative_path,
+        )?;
+        collect_working_tree_changes(&path_to_string(&target.scope_path))
+    })
+    .await
+    .map_err(|error| format!("后台加载插件本地变更失败: {error}"))?
+}
+
+#[tauri::command]
+pub async fn get_plugin_file_browser(
+    host_tool: String,
+    root_path: String,
+    repo_root_path: String,
+    plugin_relative_path: String,
+) -> Result<SkillFileBrowserSnapshot, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        drop((repo_root_path, plugin_relative_path));
+        let scope_path = plugin_file_preview_scope(&host_tool, &root_path)?;
+        let root_name = scope_path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or("plugin")
+            .to_string();
+        let mut entries = vec![SkillFileEntry {
+            path: String::new(),
+            name: root_name.clone(),
+            entry_type: "directory".into(),
+            depth: 0,
+        }];
+        collect_plugin_file_entries(&scope_path, &scope_path, 1, &mut entries)?;
+        let initial_file_path = entries
+            .iter()
+            .find(|entry| entry.entry_type == "file")
+            .map(|entry| entry.path.clone());
+
+        Ok(SkillFileBrowserSnapshot {
+            skill_name: root_name.clone(),
+            root_name,
+            entries,
+            initial_file_path,
+            preview_mode: "full".into(),
+        })
+    })
+    .await
+    .map_err(|error| format!("后台加载插件文件树失败: {error}"))?
+}
+
+#[tauri::command]
+pub async fn get_plugin_file_content(
+    host_tool: String,
+    root_path: String,
+    repo_root_path: String,
+    plugin_relative_path: String,
+    relative_path: String,
+) -> Result<SkillFileDocument, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        drop((repo_root_path, plugin_relative_path));
+        let scope_path = plugin_file_preview_scope(&host_tool, &root_path)?;
+        let full_path = plugin_preview_file_path(&scope_path, &relative_path)?;
+        let content =
+            fs::read_to_string(full_path).map_err(|error| format!("读取插件文件失败: {error}"))?;
+        Ok(SkillFileDocument {
+            path: relative_path,
+            content,
+        })
+    })
+    .await
+    .map_err(|error| format!("后台读取插件文件失败: {error}"))?
+}
+
+#[tauri::command]
+pub async fn save_plugin_file_content(
+    host_tool: String,
+    root_path: String,
+    repo_root_path: String,
+    plugin_relative_path: String,
+    relative_path: String,
+    content: String,
+) -> Result<SkillFileDocument, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        save_plugin_file_content_blocking(
+            &host_tool,
+            &root_path,
+            &repo_root_path,
+            &plugin_relative_path,
+            &relative_path,
+            &content,
+        )
+    })
+    .await
+    .map_err(|error| format!("后台保存插件文件失败: {error}"))?
+}
+
+fn save_plugin_file_content_blocking(
+    host_tool: &str,
+    root_path: &str,
+    repo_root_path: &str,
+    plugin_relative_path: &str,
+    relative_path: &str,
+    content: &str,
+) -> Result<SkillFileDocument, String> {
+    let _ = (repo_root_path, plugin_relative_path);
+    let scope_path = plugin_file_preview_scope(host_tool, root_path)?;
+    let full_path = plugin_preview_file_path(&scope_path, relative_path)?;
+    fs::write(&full_path, content).map_err(|error| format!("保存插件文件失败: {error}"))?;
+    Ok(SkillFileDocument {
+        path: relative_path.to_string(),
+        content: content.to_string(),
+    })
+}
+
+#[tauri::command]
+pub async fn revert_plugin_change(
+    host_tool: String,
+    root_path: String,
+    repo_root_path: String,
+    plugin_relative_path: String,
+    relative_path: String,
+    hunk_index: Option<usize>,
+    expected_patch: Option<String>,
+    staged: bool,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        revert_plugin_change_blocking(
+            &host_tool,
+            &root_path,
+            &repo_root_path,
+            &plugin_relative_path,
+            &relative_path,
+            hunk_index,
+            expected_patch.as_deref(),
+            staged,
+        )
+    })
+    .await
+    .map_err(|error| format!("后台回退插件本地变更失败: {error}"))?
+}
+
+fn revert_plugin_change_blocking(
+    host_tool: &str,
+    root_path: &str,
+    repo_root_path: &str,
+    plugin_relative_path: &str,
+    relative_path: &str,
+    hunk_index: Option<usize>,
+    expected_patch: Option<&str>,
+    staged: bool,
+) -> Result<(), String> {
+    let target =
+        plugin_git_preview_target(host_tool, root_path, repo_root_path, plugin_relative_path)?;
+    revert_working_tree_change(
+        &path_to_string(&target.scope_path),
+        relative_path,
+        hunk_index,
+        expected_patch,
+        staged,
+    )
+}
+
+#[tauri::command]
+pub async fn get_plugin_update_preview(
+    host_tool: String,
+    root_path: String,
+    repo_root_path: String,
+    plugin_relative_path: String,
+) -> Result<UpdatePreviewSnapshot, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let target = plugin_git_preview_target(
+            &host_tool,
+            &root_path,
+            &repo_root_path,
+            &plugin_relative_path,
+        )?;
+        let current_branch = target.current_branch.trim().to_string();
+        let remote_branch = resolve_remote_branch(&target.repo_root, &current_branch)
+            .ok_or_else(|| "插件当前分支没有可比较的远端分支。".to_string())?;
+        let pathspec = target.plugin_relative_path.trim();
+        let (commits_to_pull, _) =
+            local_branch_divergence_counts(&target.repo_root, &current_branch, pathspec)
+                .ok_or_else(|| "无法计算插件与远端分支的差异。".to_string())?;
+        let scope_value = path_to_string(&target.scope_path);
+        let uncommitted_files = collect_working_tree_changes(&scope_value)?;
+        let changed_files = collect_ref_changes(&scope_value, "HEAD", &remote_branch)?;
+
+        Ok(UpdatePreviewSnapshot {
+            current_branch,
+            remote_branch,
+            commits_to_pull,
+            changed_files,
+            has_local_changes: !uncommitted_files.is_empty(),
+        })
+    })
+    .await
+    .map_err(|error| format!("后台加载插件更新预览失败: {error}"))?
 }
 
 #[tauri::command]
@@ -2004,6 +2566,7 @@ fn build_claude_marketplace_entry_summary(
         update_available: git_state.update_available,
         baseline_hash: String::new(),
         local_modified: false,
+        local_change_count: git_state.local_change_count,
         local_modified_source: String::new(),
         installed_at: if install_entry.installed_at.trim().is_empty() {
             modified_at.clone()
@@ -8015,6 +8578,7 @@ fn build_installed_plugin_summary_with_manifest(
         update_available: git_state.update_available,
         baseline_hash: String::new(),
         local_modified: false,
+        local_change_count: git_state.local_change_count,
         local_modified_source: String::new(),
         installed_at: if descriptor.installed_at.trim().is_empty() {
             modified_at.clone()
@@ -8394,10 +8958,22 @@ fn plugin_git_state(repo_root: &Path, plugin_relative_path: &Path) -> PluginGitS
     let branch = run_git_at(repo_root, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap_or_default();
     let commit = run_git_at(repo_root, &["rev-parse", "--short", "HEAD"]).unwrap_or_default();
     let scoped_path = normalize_relative_path(plugin_relative_path);
-    let status_args = scoped_git_args(&["status", "--porcelain"], &scoped_path);
-    let working_tree_dirty = run_git_dynamic_at(repo_root, &status_args)
-        .map(|output| !output.trim().is_empty())
-        .unwrap_or(false);
+    let status_args = scoped_git_args(
+        &[
+            "status",
+            "--porcelain",
+            "-z",
+            "--no-renames",
+            "--untracked-files=all",
+        ],
+        &scoped_path,
+    );
+    let status_output = run_git_dynamic_at(repo_root, &status_args).unwrap_or_default();
+    let local_change_count = status_output
+        .split('\0')
+        .filter(|record| !record.is_empty())
+        .count();
+    let working_tree_dirty = local_change_count > 0;
 
     let remote_counts = local_branch_divergence_counts(repo_root, &branch, &scoped_path);
     let (collab_status, status_text, update_available) =
@@ -8440,6 +9016,7 @@ fn plugin_git_state(repo_root: &Path, plugin_relative_path: &Path) -> PluginGitS
         collab_status: collab_status.to_string(),
         status_text,
         update_available,
+        local_change_count,
         remote_updated_at,
         local_updated_at,
         last_editor,
@@ -8595,6 +9172,7 @@ fn enrich_git_plugin_summary(
     enriched.collab_status = git_state.collab_status;
     enriched.status_text = git_state.status_text;
     enriched.update_available = git_state.update_available;
+    enriched.local_change_count = git_state.local_change_count;
     enriched.remote_updated_at = git_state.remote_updated_at;
     enriched.local_updated_at = git_state.local_updated_at;
     enriched.last_editor = git_state.last_editor;
@@ -11573,6 +12151,41 @@ exit 0
     }
 
     #[test]
+    fn plugin_git_state_counts_changes_inside_nested_plugin_scope() {
+        let temp_dir = temp_test_dir("plugin-git-change-count");
+        let repo_root = temp_dir.join("repo");
+        let plugin_root = repo_root.join("plugins/demo-plugin");
+        fs::create_dir_all(&plugin_root).expect("create plugin directory");
+        fs::create_dir_all(repo_root.join("plugins/other-plugin"))
+            .expect("create other plugin directory");
+        fs::write(plugin_root.join("first.md"), "first\n").expect("write first plugin file");
+        fs::write(plugin_root.join("second.md"), "second\n").expect("write second plugin file");
+        fs::write(repo_root.join("plugins/other-plugin/README.md"), "other\n")
+            .expect("write other plugin file");
+        commit_test_repo(&repo_root, None);
+        fs::write(plugin_root.join("first.md"), "first changed\n")
+            .expect("modify first plugin file");
+        fs::write(plugin_root.join("new.md"), "new\n").expect("write new plugin file");
+        fs::create_dir_all(plugin_root.join("new-directory"))
+            .expect("create untracked plugin directory");
+        fs::write(plugin_root.join("new-directory/one.md"), "one\n")
+            .expect("write first nested untracked file");
+        fs::write(plugin_root.join("new-directory/two.md"), "two\n")
+            .expect("write second nested untracked file");
+        fs::write(
+            repo_root.join("plugins/other-plugin/README.md"),
+            "other changed\n",
+        )
+        .expect("modify other plugin file");
+
+        let git_state = super::plugin_git_state(&repo_root, Path::new("plugins/demo-plugin"));
+
+        assert_eq!(git_state.local_change_count, 4);
+        assert_eq!(git_state.collab_status, "pending-commit");
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
     fn plugin_git_state_uses_real_git_committer_for_last_editor() {
         let _guard = TEST_ENV_LOCK.lock().expect("lock test env");
         let temp_dir = temp_test_dir("plugin-last-editor-committer");
@@ -12663,15 +13276,15 @@ exit 0
         )
         .expect("write settings");
 
-        let previous_home = env::var_os("HOME");
-        env::set_var("HOME", &home_dir);
-
-        let plugins = list_installed_plugins().expect("list plugins");
-
-        match previous_home {
-            Some(value) => env::set_var("HOME", value),
-            None => env::remove_var("HOME"),
-        }
+        let (preview_scope, plugins) = crate::workspace::with_test_home(&home_dir, || {
+            let preview_scope = super::plugin_file_preview_scope(
+                "claude-code",
+                install_root.to_str().expect("plugin path"),
+            )
+            .expect("resolve manifest-free Claude plugin");
+            let plugins = list_installed_plugins().expect("list plugins");
+            (preview_scope, plugins)
+        });
 
         assert_eq!(plugins.len(), 1);
         assert_eq!(plugins[0].host_tool, "claude-code");
@@ -12686,6 +13299,23 @@ exit 0
         assert_eq!(plugins[0].components.len(), 1);
         assert_eq!(plugins[0].components[0].asset_type, "lsp");
         assert_eq!(plugins[0].components[0].name, "jdtls");
+        assert_eq!(
+            preview_scope,
+            fs::canonicalize(&install_root).expect("canonical plugin root")
+        );
+
+        fs::write(
+            home_dir.join(".claude/plugins/installed_plugins.json"),
+            r#"{"version":2,"plugins":{}}"#,
+        )
+        .expect("remove Claude plugin registration");
+        assert!(crate::workspace::with_test_home(&home_dir, || {
+            super::plugin_file_preview_scope(
+                "claude-code",
+                install_root.to_str().expect("plugin path"),
+            )
+        })
+        .is_err());
 
         let _ = fs::remove_dir_all(temp_dir);
     }
@@ -16907,6 +17537,7 @@ source = "__SOURCE__"
             update_available: false,
             baseline_hash: String::new(),
             local_modified: false,
+            local_change_count: 0,
             local_modified_source: String::new(),
             installed_at: String::new(),
             updated_at: String::new(),
@@ -16965,6 +17596,7 @@ source = "__SOURCE__"
             update_available: false,
             baseline_hash: String::new(),
             local_modified: false,
+            local_change_count: 0,
             local_modified_source: String::new(),
             installed_at: String::new(),
             updated_at: String::new(),
@@ -17264,6 +17896,453 @@ source = "__SOURCE__"
 
         assert!(target.disabled_host_tools.is_empty());
         assert!(target.plugin_relative_path.is_empty());
+    }
+
+    #[test]
+    fn plugin_file_browser_lists_supported_files_and_skips_generated_directories() {
+        let temp_dir = temp_test_dir("plugin-file-browser");
+        let plugin_root = temp_dir.join("demo-plugin");
+        fs::create_dir_all(plugin_root.join("commands")).expect("create commands directory");
+        fs::create_dir_all(plugin_root.join("node_modules/package"))
+            .expect("create generated directory");
+        fs::write(plugin_root.join("commands/review.md"), "# review\n").expect("write plugin file");
+        fs::write(plugin_root.join("node_modules/package/index.js"), "ignored")
+            .expect("write generated file");
+        fs::write(plugin_root.join("image.png"), [0_u8, 1, 2]).expect("write binary file");
+        let canonical_root = fs::canonicalize(&plugin_root).expect("canonical plugin root");
+        let mut entries = Vec::new();
+
+        super::collect_plugin_file_entries(&canonical_root, &canonical_root, 1, &mut entries)
+            .expect("collect plugin files");
+
+        assert!(entries
+            .iter()
+            .any(|entry| entry.path == "commands/review.md"));
+        assert!(!entries
+            .iter()
+            .any(|entry| entry.path.contains("node_modules")));
+        assert!(!entries.iter().any(|entry| entry.path == "image.png"));
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn plugin_file_content_rejects_parent_directory_paths() {
+        let temp_dir = temp_test_dir("plugin-file-content-scope");
+        let plugin_root = temp_dir.join("demo-plugin");
+        fs::create_dir_all(&plugin_root).expect("create plugin directory");
+        fs::write(plugin_root.join("README.md"), "demo").expect("write plugin file");
+        fs::write(plugin_root.join(".secret.md"), "secret").expect("write hidden plugin file");
+        fs::write(plugin_root.join("image.png"), [0_u8, 1, 2]).expect("write binary plugin file");
+        let canonical_root = fs::canonicalize(&plugin_root).expect("canonical plugin root");
+
+        let file = super::plugin_preview_file_path(&canonical_root, "README.md")
+            .expect("resolve plugin file");
+        assert_eq!(fs::read_to_string(file).expect("read plugin file"), "demo");
+        assert!(super::plugin_preview_file_path(&canonical_root, "../outside.md").is_err());
+        assert!(super::plugin_preview_file_path(&canonical_root, ".secret.md").is_err());
+        assert!(super::plugin_preview_file_path(&canonical_root, "image.png").is_err());
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn plugin_file_preview_accepts_installed_non_git_plugin() {
+        let _guard = TEST_ENV_LOCK.lock().expect("lock test environment");
+        let temp_dir = temp_test_dir("non-git-plugin-file-preview");
+        let home_dir = temp_dir.join("home");
+        let plugin_root = home_dir.join(".skilldock/plugins/demo-plugin");
+        fs::create_dir_all(plugin_root.join(".codex-plugin"))
+            .expect("create plugin manifest directory");
+        fs::write(
+            plugin_root.join(".codex-plugin/plugin.json"),
+            r#"{"name":"demo-plugin","version":"1.0.0"}"#,
+        )
+        .expect("write plugin manifest");
+        fs::write(plugin_root.join("README.md"), "demo\n").expect("write plugin file");
+
+        let scope = crate::workspace::with_test_home(&home_dir, || {
+            super::plugin_file_preview_scope("codex", plugin_root.to_str().expect("plugin path"))
+                .expect("resolve installed non-git plugin")
+        });
+
+        assert_eq!(
+            scope,
+            fs::canonicalize(&plugin_root).expect("canonical plugin root")
+        );
+
+        let cursor_root = home_dir.join(".cursor/plugins/local/standalone-plugin");
+        fs::create_dir_all(cursor_root.join(".cursor-plugin"))
+            .expect("create standalone Cursor manifest directory");
+        fs::write(
+            cursor_root.join(".cursor-plugin/plugin.json"),
+            r#"{"name":"standalone-plugin","displayName":"Standalone","version":"1.0.0"}"#,
+        )
+        .expect("write standalone Cursor manifest");
+        fs::write(cursor_root.join("README.md"), "standalone\n")
+            .expect("write standalone Cursor file");
+        let same_name_package = home_dir.join(".skilldock/plugins/standalone-package");
+        let same_name_managed_root = same_name_package.join("plugins/standalone-plugin");
+        fs::create_dir_all(same_name_managed_root.join(".cursor-plugin"))
+            .expect("create same-name managed Cursor manifest directory");
+        fs::write(
+            same_name_managed_root.join(".cursor-plugin/plugin.json"),
+            r#"{"name":"standalone-plugin","displayName":"Standalone","version":"1.0.0"}"#,
+        )
+        .expect("write same-name managed Cursor manifest");
+        fs::write(same_name_managed_root.join("README.md"), "managed copy\n")
+            .expect("write same-name managed file");
+        write_plugin_package_identity(
+            &same_name_package,
+            "https://example.com/standalone-package.git",
+            Path::new("plugins/standalone-plugin"),
+        )
+        .expect("write same-name package identity");
+        let cursor_scope = crate::workspace::with_test_home(&home_dir, || {
+            super::plugin_file_preview_scope(
+                "cursor",
+                cursor_root.to_str().expect("Cursor plugin path"),
+            )
+            .expect("resolve host-installed Cursor plugin")
+        });
+        assert_eq!(
+            cursor_scope,
+            fs::canonicalize(&cursor_root).expect("canonical Cursor plugin root")
+        );
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn plugin_file_preview_accepts_scanned_codex_bundled_plugin() {
+        let _guard = TEST_ENV_LOCK.lock().expect("lock test environment");
+        let temp_dir = temp_test_dir("bundled-plugin-file-preview");
+        let home_dir = temp_dir.join("home");
+        let marketplace_root = home_dir.join(".codex/.tmp/bundled-marketplaces/openai-bundled");
+        let plugin_root = marketplace_root.join("plugins/computer-use");
+        fs::create_dir_all(plugin_root.join(".codex-plugin"))
+            .expect("create plugin manifest directory");
+        fs::create_dir_all(plugin_root.join("skills/computer-use"))
+            .expect("create plugin skill directory");
+        fs::write(
+            plugin_root.join(".codex-plugin/plugin.json"),
+            r#"{"name":"computer-use","version":"1.0.0"}"#,
+        )
+        .expect("write plugin manifest");
+        fs::write(
+            plugin_root.join("skills/computer-use/SKILL.md"),
+            "# Computer Use\n",
+        )
+        .expect("write plugin skill");
+        fs::create_dir_all(marketplace_root.join(".agents/plugins"))
+            .expect("create marketplace manifest directory");
+        fs::write(
+            marketplace_root.join(".agents/plugins/marketplace.json"),
+            r#"{"plugins":[{"name":"computer-use","source":{"path":"./plugins/computer-use"}}]}"#,
+        )
+        .expect("write marketplace manifest");
+        fs::create_dir_all(home_dir.join(".codex")).expect("create Codex directory");
+        fs::write(
+            home_dir.join(".codex/config.toml"),
+            format!(
+                r#"[plugins."computer-use@openai-bundled"]
+enabled = true
+
+[marketplaces.openai-bundled]
+source = "{}"
+"#,
+                marketplace_root.to_string_lossy()
+            ),
+        )
+        .expect("write Codex config");
+
+        let scope = crate::workspace::with_test_home(&home_dir, || {
+            super::plugin_file_preview_scope("codex", plugin_root.to_str().expect("plugin path"))
+                .expect("resolve bundled plugin")
+        });
+
+        assert_eq!(
+            scope,
+            fs::canonicalize(&plugin_root).expect("canonical plugin root")
+        );
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn plugin_file_preview_rejects_unscanned_directory_outside_install_roots() {
+        let _guard = TEST_ENV_LOCK.lock().expect("lock test environment");
+        let temp_dir = temp_test_dir("unscanned-plugin-file-preview");
+        let home_dir = temp_dir.join("home");
+        let plugin_root = temp_dir.join("outside-plugin");
+        fs::create_dir_all(plugin_root.join(".codex-plugin"))
+            .expect("create plugin manifest directory");
+        fs::write(
+            plugin_root.join(".codex-plugin/plugin.json"),
+            r#"{"name":"outside-plugin","version":"1.0.0"}"#,
+        )
+        .expect("write plugin manifest");
+
+        let result = crate::workspace::with_test_home(&home_dir, || {
+            super::plugin_file_preview_scope("codex", plugin_root.to_str().expect("plugin path"))
+        });
+
+        assert!(result.is_err());
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn plugin_file_preview_resolves_codex_and_cursor_content_links_to_managed_source() {
+        let _guard = TEST_ENV_LOCK.lock().expect("lock test environment");
+        let temp_dir = temp_test_dir("linked-plugin-file-preview");
+        let home_dir = temp_dir.join("home");
+        let package_root = home_dir.join(".skilldock/plugins/demo-package");
+        let managed_root = package_root.join("plugins/demo-plugin");
+        let codex_root = home_dir.join(".codex/plugins/cache/skilldock/demo-plugin/1.0.0");
+        let cursor_root = home_dir.join(".cursor/plugins/local/demo-plugin");
+        let cursor_disabled_root = home_dir.join(".skilldock/disabled-plugins/cursor/demo-plugin");
+        fs::create_dir_all(managed_root.join(".codex-plugin"))
+            .expect("create Codex manifest directory");
+        fs::create_dir_all(managed_root.join(".cursor-plugin"))
+            .expect("create Cursor manifest directory");
+        fs::create_dir_all(managed_root.join("commands")).expect("create plugin command directory");
+        fs::write(
+            managed_root.join(".codex-plugin/plugin.json"),
+            r#"{"name":"demo-plugin","version":"1.0.0"}"#,
+        )
+        .expect("write Codex manifest");
+        fs::write(
+            managed_root.join(".cursor-plugin/plugin.json"),
+            r#"{"name":"demo-plugin","displayName":"Demo Plugin","version":"1.0.0"}"#,
+        )
+        .expect("write Cursor manifest");
+        fs::write(managed_root.join("commands/review.md"), "# Review\n")
+            .expect("write plugin command");
+        write_plugin_package_identity(
+            &package_root,
+            "https://example.com/demo-package.git",
+            Path::new("plugins/demo-plugin"),
+        )
+        .expect("write package identity");
+        let mut probe = super::probe_plugin_root(&managed_root, Some("codex".to_string()));
+        probe.source_type = "git".to_string();
+        probe.source_url = "https://example.com/demo-package.git".to_string();
+        write_skilldock_plugin_source_metadata(&managed_root, &probe)
+            .expect("write plugin source metadata");
+        super::mirror_codex_plugin_cache_dir(&managed_root, &codex_root)
+            .expect("create Codex content links");
+        super::link_cursor_plugin_dir_contents(&managed_root, &cursor_root)
+            .expect("create Cursor content links");
+        super::link_cursor_plugin_dir_contents(&managed_root, &cursor_disabled_root)
+            .expect("create disabled Cursor content links");
+
+        crate::workspace::with_test_home(&home_dir, || {
+            for (host_tool, install_root) in [
+                ("codex", &codex_root),
+                ("cursor", &cursor_root),
+                ("cursor", &cursor_disabled_root),
+            ] {
+                let scope = super::plugin_file_preview_scope(
+                    host_tool,
+                    install_root.to_str().expect("install root"),
+                )
+                .expect("resolve linked plugin preview scope");
+                assert_eq!(
+                    scope,
+                    fs::canonicalize(&managed_root).expect("managed root")
+                );
+                let mut entries = Vec::new();
+                super::collect_plugin_file_entries(&scope, &scope, 1, &mut entries)
+                    .expect("collect managed plugin files");
+                assert!(entries
+                    .iter()
+                    .any(|entry| entry.path == "commands/review.md"));
+            }
+        });
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn nested_plugin_preview_target_collects_local_changes_without_scanning_hosts() {
+        let _guard = TEST_ENV_LOCK.lock().expect("lock test environment");
+        let temp_dir = temp_test_dir("nested-plugin-preview");
+        let home_dir = temp_dir.join("home");
+        let repo_root = home_dir.join(".skilldock/plugins/package");
+        let plugin_root = repo_root.join("plugins/demo-plugin");
+        let skill_file = plugin_root.join("skills/demo/SKILL.md");
+        fs::create_dir_all(plugin_root.join(".codex-plugin"))
+            .expect("create plugin manifest directory");
+        fs::create_dir_all(skill_file.parent().expect("skill parent"))
+            .expect("create plugin skill directory");
+        fs::write(
+            plugin_root.join(".codex-plugin/plugin.json"),
+            r#"{"name":"demo-plugin","version":"1.0.0"}"#,
+        )
+        .expect("write plugin manifest");
+        let original_content = [
+            "# Demo", "line 2", "line 3", "line 4", "line 5", "line 6", "line 7", "line 8",
+            "line 9", "line 10", "line 11", "line 12",
+        ]
+        .join("\n")
+            + "\n";
+        fs::write(&skill_file, &original_content).expect("write plugin skill");
+        commit_test_repo(&repo_root, None);
+        let saved_content = original_content.replace("line 2", "saved line 2");
+
+        let target = crate::workspace::with_test_home(&home_dir, || {
+            let document = super::save_plugin_file_content_blocking(
+                "codex",
+                plugin_root.to_str().expect("plugin path"),
+                repo_root.to_str().expect("repo path"),
+                "plugins/demo-plugin",
+                "skills/demo/SKILL.md",
+                &saved_content,
+            )
+            .expect("save nested plugin file");
+            assert_eq!(document.path, "skills/demo/SKILL.md");
+            assert_eq!(document.content, saved_content);
+            assert!(super::save_plugin_file_content_blocking(
+                "codex",
+                plugin_root.to_str().expect("plugin path"),
+                repo_root.to_str().expect("repo path"),
+                "plugins/demo-plugin",
+                "../outside.md",
+                "outside",
+            )
+            .is_err());
+
+            super::plugin_git_preview_target(
+                "codex",
+                plugin_root.to_str().expect("plugin path"),
+                repo_root.to_str().expect("repo path"),
+                "plugins/demo-plugin",
+            )
+            .expect("resolve nested plugin preview target")
+        });
+        let changes = crate::git_changes::collect_working_tree_changes(
+            target.scope_path.to_str().expect("scope path"),
+        )
+        .expect("collect nested plugin changes");
+
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].path, "skills/demo/SKILL.md");
+        crate::workspace::with_test_home(&home_dir, || {
+            super::revert_plugin_change_blocking(
+                "codex",
+                plugin_root.to_str().expect("plugin path"),
+                repo_root.to_str().expect("repo path"),
+                "plugins/demo-plugin",
+                "skills/demo/SKILL.md",
+                None,
+                None,
+                false,
+            )
+            .expect("revert whole plugin file");
+        });
+        assert_eq!(
+            fs::read_to_string(&skill_file).expect("read reverted file"),
+            original_content
+        );
+
+        let two_hunk_content = original_content
+            .replace("line 2", "changed line 2")
+            .replace("line 10", "changed line 10");
+        fs::write(&skill_file, two_hunk_content).expect("write two plugin changes");
+        let changes = crate::git_changes::collect_working_tree_changes(
+            target.scope_path.to_str().expect("scope path"),
+        )
+        .expect("collect two plugin hunks");
+        let first_patch = crate::git_changes::extract_diff_hunk_patch(&changes[0].unstaged_diff, 0)
+            .expect("extract first plugin hunk");
+        crate::workspace::with_test_home(&home_dir, || {
+            super::revert_plugin_change_blocking(
+                "codex",
+                plugin_root.to_str().expect("plugin path"),
+                repo_root.to_str().expect("repo path"),
+                "plugins/demo-plugin",
+                "skills/demo/SKILL.md",
+                Some(0),
+                Some(&first_patch),
+                false,
+            )
+            .expect("revert one plugin hunk");
+        });
+        let partially_reverted =
+            fs::read_to_string(&skill_file).expect("read partially reverted file");
+        assert!(partially_reverted.contains("line 2"));
+        assert!(!partially_reverted.contains("changed line 2"));
+        assert!(partially_reverted.contains("changed line 10"));
+
+        crate::workspace::with_test_home(&home_dir, || {
+            super::revert_plugin_change_blocking(
+                "codex",
+                plugin_root.to_str().expect("plugin path"),
+                repo_root.to_str().expect("repo path"),
+                "plugins/demo-plugin",
+                "skills/demo/SKILL.md",
+                None,
+                None,
+                false,
+            )
+            .expect("clean remaining tracked change");
+        });
+        let untracked_file = plugin_root.join("notes/draft.md");
+        fs::create_dir_all(untracked_file.parent().expect("untracked parent"))
+            .expect("create untracked directory");
+        fs::write(&untracked_file, "draft\n").expect("write untracked plugin file");
+        let changes = crate::git_changes::collect_working_tree_changes(
+            target.scope_path.to_str().expect("scope path"),
+        )
+        .expect("collect untracked plugin change");
+        let untracked_change = changes
+            .iter()
+            .find(|change| change.path == "notes/draft.md")
+            .expect("find untracked plugin change");
+        let untracked_patch =
+            crate::git_changes::extract_diff_hunk_patch(&untracked_change.unstaged_diff, 0)
+                .expect("extract untracked plugin hunk");
+        crate::workspace::with_test_home(&home_dir, || {
+            super::revert_plugin_change_blocking(
+                "codex",
+                plugin_root.to_str().expect("plugin path"),
+                repo_root.to_str().expect("repo path"),
+                "plugins/demo-plugin",
+                "notes/draft.md",
+                Some(0),
+                Some(&untracked_patch),
+                false,
+            )
+            .expect("revert untracked plugin hunk");
+        });
+        assert!(!untracked_file.exists());
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn plugin_preview_rejects_uninstalled_git_repository() {
+        let _guard = TEST_ENV_LOCK.lock().expect("lock test environment");
+        let temp_dir = temp_test_dir("uninstalled-plugin-preview");
+        let home_dir = temp_dir.join("home");
+        let repo_root = temp_dir.join("outside-repository");
+        fs::create_dir_all(repo_root.join(".codex-plugin"))
+            .expect("create plugin manifest directory");
+        fs::write(
+            repo_root.join(".codex-plugin/plugin.json"),
+            r#"{"name":"outside-plugin","version":"1.0.0"}"#,
+        )
+        .expect("write plugin manifest");
+        fs::write(repo_root.join("README.md"), "outside\n").expect("write plugin file");
+        commit_test_repo(&repo_root, None);
+
+        let result = crate::workspace::with_test_home(&home_dir, || {
+            super::plugin_git_preview_target(
+                "codex",
+                repo_root.to_str().expect("plugin path"),
+                repo_root.to_str().expect("repo path"),
+                "",
+            )
+        });
+
+        assert!(result.is_err());
+        let _ = fs::remove_dir_all(temp_dir);
     }
 
     #[cfg(unix)]

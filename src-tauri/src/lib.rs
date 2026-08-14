@@ -5,6 +5,7 @@ mod backup_snapshot;
 mod clawhub_market;
 mod commands;
 mod diagnostics;
+mod git_changes;
 mod git_divergence;
 mod git_metadata;
 mod git_state;
@@ -160,6 +161,12 @@ pub fn run() {
             plugin_manager::install_selected_plugin_probes,
             plugin_manager::get_plugin_component_preview,
             plugin_manager::save_plugin_component_preview,
+            plugin_manager::get_plugin_local_changes,
+            plugin_manager::get_plugin_file_browser,
+            plugin_manager::get_plugin_file_content,
+            plugin_manager::save_plugin_file_content,
+            plugin_manager::revert_plugin_change,
+            plugin_manager::get_plugin_update_preview,
             plugin_manager::set_plugin_enabled,
             plugin_manager::update_plugin,
             plugin_manager::delete_plugin,
