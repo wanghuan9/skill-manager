@@ -69,6 +69,16 @@ test("places plugin batch selection after the filter and before refresh", async 
   expect(batchModeButton.compareDocumentPosition(refreshButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 });
 
+test("sorts plugins by local updated time in descending order", async () => {
+  renderWithI18n(<PluginsRoute />);
+
+  await screen.findByText("ecc");
+
+  expect(screen.getAllByRole("button", { name: /^展开 / })
+    .map((button) => button.getAttribute("aria-label")))
+    .toEqual(["展开 ecc", "展开 Repo Scout"]);
+});
+
 test("hydrates plugins from runtime cache before the refresh request resolves", async () => {
   const fixtureSpy = vi.spyOn(skillClient, "shouldUseFixtureData").mockReturnValue(false);
   const cachedPlugins: PluginSummary[] = [
@@ -2114,6 +2124,46 @@ test("refreshes plugin states after plugin library changes", async () => {
   });
 });
 
+test("shows runtime copy sync failures from plugin library changes", async () => {
+  vi.spyOn(skillClient, "shouldUseFixtureData").mockReturnValue(false);
+  const pluginLibraryChange: {
+    handler?: (payload: { changedPaths: string[]; syncError?: string }) => void;
+  } = {};
+  vi.spyOn(skillClient, "subscribePluginLibraryChanges").mockImplementation(async (handler) => {
+    pluginLibraryChange.handler = handler;
+    return () => undefined;
+  });
+
+  renderWithI18n(<PluginsRoute />);
+
+  await screen.findByRole("tab", { name: /全部/ });
+  if (!pluginLibraryChange.handler) {
+    throw new Error("plugin library change handler was not registered");
+  }
+  await act(async () => {
+    pluginLibraryChange.handler?.({
+      changedPaths: [],
+      syncError: "同步 SkillDock 插件运行时副本失败: demo",
+    });
+  });
+
+  expect(await screen.findByText("同步 SkillDock 插件运行时副本失败: demo")).toBeInTheDocument();
+});
+
+test("shows a pending startup runtime copy sync failure after subscribing", async () => {
+  vi.spyOn(skillClient, "shouldUseFixtureData").mockReturnValue(false);
+  vi.spyOn(skillClient, "subscribePluginLibraryChanges").mockResolvedValue(() => undefined);
+  vi.spyOn(skillClient, "takePendingPluginLibrarySyncError").mockResolvedValue(
+    "同步 SkillDock 插件运行时副本失败: startup",
+  );
+
+  renderWithI18n(<PluginsRoute />);
+
+  expect(
+    await screen.findByText("同步 SkillDock 插件运行时副本失败: startup"),
+  ).toBeInTheDocument();
+});
+
 test("shows diverged status without an update action", async () => {
   const plugins: PluginSummary[] = [
     {
@@ -2420,12 +2470,12 @@ test("keeps the current plugin order after toggling its enabled state", async ()
 
   const getPluginOrder = () => screen.getAllByRole("button", { name: /^展开 / })
     .map((button) => button.getAttribute("aria-label"));
-  expect(getPluginOrder()).toEqual(["展开 Repo Scout", "展开 ecc"]);
+  expect(getPluginOrder()).toEqual(["展开 ecc", "展开 Repo Scout"]);
 
   await userEvent.click(screen.getByRole("button", { name: "开启 ecc 插件" }));
 
   expect(await screen.findByRole("button", { name: "关闭 ecc 插件" })).toBeInTheDocument();
-  expect(getPluginOrder()).toEqual(["展开 Repo Scout", "展开 ecc"]);
+  expect(getPluginOrder()).toEqual(["展开 ecc", "展开 Repo Scout"]);
 });
 
 test("toggles Cursor plugin enabled state from the plugin list", async () => {

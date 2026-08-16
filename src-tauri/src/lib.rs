@@ -65,6 +65,13 @@ pub fn run() {
             if let Err(error) = plugin_watcher::start_plugin_library_watcher(app.handle().clone()) {
                 log::warn!("Failed to start plugin library watcher: {error}");
             }
+            let reconcile_app_handle = app.handle().clone();
+            std::thread::spawn(move || {
+                if let Err(error) = plugin_manager::reconcile_all_skilldock_runtime_copies() {
+                    log::warn!("Failed to reconcile SkillDock plugin runtime copies: {error}");
+                    plugin_watcher::emit_plugin_library_sync_error(&reconcile_app_handle, error);
+                }
+            });
             Ok(())
         })
         .plugin(tauri_plugin_dialog::init())
@@ -150,6 +157,7 @@ pub fn run() {
             commands::refresh_local_git_states,
             commands::refresh_local_git_state,
             plugin_manager::list_startup_installed_plugins,
+            plugin_watcher::take_pending_plugin_library_sync_error,
             plugin_manager::list_installed_plugins,
             plugin_manager::refresh_plugin_states,
             plugin_manager::refresh_local_plugin_states,

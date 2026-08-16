@@ -1248,6 +1248,7 @@ export async function subscribeSkillLibraryRefreshes(
 
 type PluginLibraryChangeEvent = {
   changedPaths: string[];
+  syncError?: string;
 };
 
 export async function subscribePluginLibraryChanges(
@@ -1260,6 +1261,13 @@ export async function subscribePluginLibraryChanges(
   return listen<PluginLibraryChangeEvent>("plugin-library-changed", (event) => {
     handler(event.payload);
   });
+}
+
+export async function takePendingPluginLibrarySyncError(): Promise<string | null> {
+  if (shouldUseFixtureData()) {
+    return null;
+  }
+  return invoke<string | null>("take_pending_plugin_library_sync_error");
 }
 
 export async function refreshLocalPluginState(input: {

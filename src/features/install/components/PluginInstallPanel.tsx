@@ -753,40 +753,46 @@ export function PluginInstallPanel() {
     setIsInstalling(true);
     setCloneProgressMessage("正在准备安装...");
     try {
-      const newlyInstalledPlugins = (
-        await Promise.all(
+      const installResults = await Promise.allSettled(
         selectedProbeInstallTargets
           .filter((target) => target.hostTools.length > 0)
           .map((target) => installSelectedPluginProbes({
             probes: [target.probe],
             hostTools: target.hostTools,
           })),
-        )
-      ).flat();
+      );
+      const newlyInstalledPlugins = installResults.flatMap((result) =>
+        result.status === "fulfilled" ? result.value : []
+      );
+      if (newlyInstalledPlugins.length > 0) {
+        const mergedInstalledPlugins = mergeInstalledPlugins(installedPlugins, newlyInstalledPlugins);
+        if (!shouldUseFixtureData()) {
+          cachePlugins(mergedInstalledPlugins);
+        }
+        setInstalledPlugins(mergedInstalledPlugins);
+      }
+      const failedInstall = installResults.find((result) => result.status === "rejected");
+      if (failedInstall?.status === "rejected") {
+        throw failedInstall.reason;
+      }
       notify({ message: t("install.plugin.success.selectedInstalled"), tone: "success" });
       setSelectedPluginRoots([]);
-      const mergedInstalledPlugins = mergeInstalledPlugins(installedPlugins, newlyInstalledPlugins);
-      if (!shouldUseFixtureData()) {
-        cachePlugins(mergedInstalledPlugins);
-      }
-      setInstalledPlugins(mergedInstalledPlugins);
-      void refreshWorkspace({ showRefreshing: false });
-      void refreshPluginStates()
-        .then((nextInstalledPlugins) => {
-          if (!shouldUseFixtureData()) {
-            cachePlugins(nextInstalledPlugins);
-          }
-          setInstalledPlugins(nextInstalledPlugins);
-        })
-        .catch((error) => {
-          console.warn("Failed to refresh installed plugins after install:", error);
-        });
     } catch (error) {
       reportFailure(error, {
         operation: "install_selected_plugin_probes",
         fallbackMessage: t("install.plugin.error.installFailed"),
       });
     } finally {
+      void refreshWorkspace({ showRefreshing: false });
+      try {
+        const nextInstalledPlugins = await refreshPluginStates();
+        if (!shouldUseFixtureData()) {
+          cachePlugins(nextInstalledPlugins);
+        }
+        setInstalledPlugins(nextInstalledPlugins);
+      } catch (error) {
+        console.warn("Failed to refresh installed plugins after install:", error);
+      }
       setIsInstalling(false);
       setCloneProgressMessage(null);
     }

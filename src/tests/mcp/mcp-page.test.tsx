@@ -449,8 +449,10 @@ test("keeps MCP import progress state when switching away and back", async () =>
   await userEvent.click(screen.getByRole("button", { name: "MCP" }));
   await screen.findByText("context7");
   const toolbar = await screen.findByLabelText("MCP 工具栏");
-  const importButton = within(toolbar).getAllByRole("button")[1];
-  await userEvent.click(importButton);
+  const importButton = within(toolbar).queryByRole("button", { name: "扫描导入" });
+  if (importButton) {
+    await userEvent.click(importButton);
+  }
 
   await waitFor(() => {
     expect(within(toolbar).getByRole("button", { name: "扫描中..." })).toBeDisabled();

@@ -1160,6 +1160,109 @@ test("updates the shared plugin cache right after plugin install completes", asy
   installSpy.mockRestore();
 });
 
+test("refreshes installed hosts after a plugin install partially fails", async () => {
+  const sourceUrl = "https://github.com/example/example-plugin";
+  const partiallyInstalledPlugin: PluginSummary = {
+    id: "cursor:example-plugin",
+    packageId: "example-plugin",
+    manifestName: "example-plugin",
+    name: "example-plugin",
+    description: "Example plugin",
+    hostTool: "cursor",
+    relatedHostTools: [],
+    kind: "plugin-repo",
+    rootPath: "/Users/demo/.cursor/plugins/local/example-plugin",
+    displayRootPath: "/Users/demo/.cursor/plugins/local/example-plugin",
+    repoRootPath: "/Users/demo/.skilldock/plugins/example-plugin",
+    pluginRelativePath: "",
+    manifestPath: "/Users/demo/.cursor/plugins/local/example-plugin/.cursor-plugin/plugin.json",
+    sourceType: "git",
+    sourceLabel: "skilldock",
+    sourceUrl,
+    sourceRef: "main",
+    sourceRevision: "abc123",
+    currentVersion: "1.0.0",
+    currentBranch: "main",
+    currentCommit: "abc123",
+    collabStatus: "clean",
+    statusText: "",
+    isGitRepo: true,
+    updateMode: "auto",
+    updateStrategy: "git",
+    updateAvailable: false,
+    baselineHash: "",
+    localModified: false,
+    installedAt: "1",
+    updatedAt: "1",
+    remoteUpdatedAt: "",
+    localUpdatedAt: "",
+    lastEditor: "",
+    lastScannedAt: "1",
+    status: "ready",
+    installState: "installed",
+    installSource: "skilldock",
+    enabledState: "enabled",
+    scopes: [],
+    components: [],
+  };
+  const branchSpy = vi.spyOn(skillClient, "fetchGitRepoBranches").mockResolvedValue([
+    { name: "main", isDefault: true, isSelected: true },
+  ]);
+  const probeSpy = vi.spyOn(skillClient, "probePluginSourceCandidates").mockResolvedValue([{
+    tool: "codex",
+    compatibleHostTools: ["codex", "cursor"],
+    kind: "plugin-repo",
+    manifestName: "example-plugin",
+    name: "example-plugin",
+    description: "Example plugin",
+    pluginRoot: "/tmp/example-plugin",
+    repoRoot: "/tmp/example-plugin",
+    pluginRelativePath: "",
+    manifestPath: "/tmp/example-plugin/.codex-plugin/plugin.json",
+    marketplaceManifestPath: "",
+    components: [],
+    sourceType: "git",
+    sourceUrl,
+    isGitRepo: true,
+    gitRoot: "/tmp/example-plugin",
+    confidence: "high",
+    installStrategy: "codex-marketplace",
+    warnings: [],
+  }]);
+  const fixtureSpy = vi.spyOn(skillClient, "shouldUseFixtureData").mockReturnValue(false);
+  const fetchInstalledPluginsSpy = vi.spyOn(skillClient, "fetchInstalledPlugins").mockResolvedValue([]);
+  const refreshPluginStatesSpy = vi
+    .spyOn(skillClient, "refreshPluginStates")
+    .mockResolvedValue([partiallyInstalledPlugin]);
+  const installSpy = vi
+    .spyOn(skillClient, "installSelectedPluginProbes")
+    .mockRejectedValue(new Error("Codex 安装失败"));
+
+  render(<App />);
+  await clickNavInstall();
+  await userEvent.click(screen.getByRole("tab", { name: "Plugin" }));
+  await userEvent.type(screen.getByRole("textbox", { name: "Git 仓库地址" }), sourceUrl);
+  await waitFor(() => {
+    expect(screen.getByRole("combobox", { name: "Git 分支" })).toHaveAttribute("data-value", "main");
+  });
+  await userEvent.click(screen.getByRole("button", { name: "识别插件" }));
+  await screen.findByRole("button", { name: "选择插件 example-plugin" });
+  await userEvent.click(screen.getByRole("button", { name: "安装到选中宿主" }));
+
+  await waitFor(() => {
+    expect(refreshPluginStatesSpy).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("alert")).toHaveTextContent("Codex 安装失败");
+    expect(screen.getByRole("button", { name: "example-plugin 已安装到 Cursor" })).toBeInTheDocument();
+  });
+
+  branchSpy.mockRestore();
+  probeSpy.mockRestore();
+  fixtureSpy.mockRestore();
+  fetchInstalledPluginsSpy.mockRestore();
+  refreshPluginStatesSpy.mockRestore();
+  installSpy.mockRestore();
+});
+
 test("shows newly installed plugin before the follow-up plugin refresh resolves", async () => {
   const sourceUrl = "https://github.com/raisely/cursor-plugin.git";
   const installedPlugin: PluginSummary = {

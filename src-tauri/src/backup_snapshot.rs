@@ -691,19 +691,14 @@ fn write_portable_mcp_state(staging_root: &Path) -> Result<usize, String> {
 
 fn write_portable_plugins(staging_root: &Path) -> Result<usize, String> {
     let plugins_root = staging_root.join("plugins");
-    let cursor_disabled_root = staging_root.join("cursor-disabled");
+    let legacy_cursor_disabled_root = staging_root.join("cursor-disabled");
     fs::create_dir_all(&plugins_root).map_err(|error| format!("创建插件备份目录失败: {error}"))?;
-    fs::create_dir_all(&cursor_disabled_root)
-        .map_err(|error| format!("创建 Cursor 关闭插件备份目录失败: {error}"))?;
+    fs::create_dir_all(&legacy_cursor_disabled_root)
+        .map_err(|error| format!("创建兼容插件备份目录失败: {error}"))?;
 
     let mut targets = Vec::new();
     for source in collect_portable_plugin_sources()? {
-        let category_root = if source.cursor_was_disabled {
-            &cursor_disabled_root
-        } else {
-            &plugins_root
-        };
-        let target = category_root.join(&source.directory_name);
+        let target = plugins_root.join(&source.directory_name);
         let content_hash = copy_portable_directory(&source.source_root, &target)?;
         targets.push(PortablePluginTarget {
             schema_version: PORTABLE_PLUGIN_SCHEMA_VERSION,
@@ -1132,22 +1127,18 @@ pub fn apply_portable_workspace_snapshot(
         }
     }
     for target in &targets {
-        let (source_root, destination_root) = if target.cursor_was_disabled {
-            (
-                repo_path.join("cursor-disabled"),
-                cursor_disabled_root.clone(),
-            )
-        } else {
-            (repo_path.join("plugins"), managed_root.clone())
-        };
-        let source = source_root.join(&target.directory_name);
+        let source = [repo_path.join("plugins"), repo_path.join("cursor-disabled")]
+            .into_iter()
+            .map(|root| root.join(&target.directory_name))
+            .find(|candidate| candidate.is_dir())
+            .unwrap_or_else(|| repo_path.join("plugins").join(&target.directory_name));
         if !source.is_dir() {
             report
                 .warnings
                 .push(format!("插件备份缺失，已跳过: {}", target.package_id));
             continue;
         }
-        let destination = destination_root.join(&target.directory_name);
+        let destination = managed_root.join(&target.directory_name);
         if restore_plugin_directory(&source, &destination)? {
             report.restored_plugins += 1;
         }
@@ -1982,7 +1973,7 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_copies_managed_plugins_and_cursor_disabled_plugins_safely() {
+    fn snapshot_copies_managed_plugins_without_derived_cursor_runtime_copies() {
         with_temp_home(|home| {
             let managed = home.join(".skilldock/plugins/demo-plugin");
             fs::create_dir_all(managed.join("node_modules/dependency"))
@@ -2006,13 +1997,13 @@ mod tests {
             assert!(repo.join("plugins/demo-plugin/plugin.json").is_file());
             assert!(!repo.join("plugins/demo-plugin/.env").exists());
             assert!(!repo.join("plugins/demo-plugin/node_modules").exists());
-            assert!(repo
+            assert!(!repo
                 .join("cursor-disabled/cursor-plugin/plugin.json")
-                .is_file());
+                .exists());
             let targets = fs::read_to_string(repo.join(".skilldock/plugin-targets.json"))
                 .expect("read plugin targets");
             assert!(targets.contains("demo-plugin"));
-            assert!(targets.contains("cursor-plugin"));
+            assert!(!targets.contains("cursor-plugin"));
             assert!(!targets.contains("secret"));
         });
     }

@@ -13,7 +13,7 @@ import { ToolbarGoInstallButton } from "@/app/components/ToolbarGoInstallButton"
 import { AppSelect } from "@/app/components/AppSelect";
 import { useNotifications } from "@/app/notifications";
 import { formatSkillLastEditor } from "@/features/skills/utils/skill-editor";
-import { formatSkillUpdatedAt } from "@/features/skills/utils/skill-time";
+import { formatSkillUpdatedAt, parseSkillTimestamp } from "@/features/skills/utils/skill-time";
 import { waitForNextPaint } from "@/app/utils/wait-for-next-paint";
 import {
   deletePlugin,
@@ -36,6 +36,7 @@ import {
   setPluginEnabled,
   shouldUseFixtureData,
   subscribePluginLibraryChanges,
+  takePendingPluginLibrarySyncError,
   updatePlugin,
 } from "@/features/skills/api/skill-client";
 import {
@@ -926,6 +927,12 @@ function PluginHostCoverageIcon({
 }
 
 function comparePlugins(left: PluginSummary, right: PluginSummary) {
+  const localUpdatedDiff = parseSkillTimestamp(right.localUpdatedAt)
+    - parseSkillTimestamp(left.localUpdatedAt);
+  if (localUpdatedDiff !== 0) {
+    return localUpdatedDiff;
+  }
+
   return (
     pluginEnabledOrder[left.enabledState] -
       pluginEnabledOrder[right.enabledState] ||
@@ -1695,6 +1702,7 @@ export function PluginsRoute(props: PluginsRouteProps = {}) {
   const localAlignInFlightRef = useRef<Promise<PluginSummary[]> | null>(null);
   const pluginRefreshDebounceTimerRef = useRef<number | null>(null);
   const pluginLibraryRefreshSuppressedUntilRef = useRef(0);
+  const lastPluginLibrarySyncErrorRef = useRef("");
   const pluginLocalRefreshInFlightRef = useRef(new Map<string, Promise<void>>());
   const pluginStateRefreshInFlightRef = useRef<Promise<void> | null>(null);
   const pluginStateRefreshGenerationRef = useRef(0);
@@ -2177,10 +2185,23 @@ export function PluginsRoute(props: PluginsRouteProps = {}) {
 
     let active = true;
     let unlisten: (() => void) | null = null;
+    const notifyPluginLibrarySyncError = (syncError: string) => {
+      if (!syncError || lastPluginLibrarySyncErrorRef.current === syncError) {
+        return;
+      }
+      lastPluginLibrarySyncErrorRef.current = syncError;
+      notify({ message: syncError, tone: "error" });
+    };
 
-    void subscribePluginLibraryChanges(({ changedPaths }) => {
+    void subscribePluginLibraryChanges(({ changedPaths, syncError }) => {
       if (!active) {
         return;
+      }
+
+      if (syncError) {
+        notifyPluginLibrarySyncError(syncError);
+      } else {
+        lastPluginLibrarySyncErrorRef.current = "";
       }
 
       if (Date.now() < pluginLibraryRefreshSuppressedUntilRef.current) {
@@ -2216,6 +2237,15 @@ export function PluginsRoute(props: PluginsRouteProps = {}) {
         return;
       }
       unlisten = cleanup;
+      void takePendingPluginLibrarySyncError()
+        .then((syncError) => {
+          if (active && syncError) {
+            notifyPluginLibrarySyncError(syncError);
+          }
+        })
+        .catch((error) => {
+          console.error("Failed to read pending plugin sync error:", error);
+        });
     }).catch((error) => {
       console.error("Failed to subscribe to plugin library changes:", error);
     });
@@ -2231,7 +2261,7 @@ export function PluginsRoute(props: PluginsRouteProps = {}) {
       }
       pluginLocalRefreshInFlightRef.current.clear();
     };
-  }, [t]);
+  }, [notify, t]);
 
   useEffect(() => {
     setToolbarContainer(document.getElementById("plugins-header-toolbar-slot"));
