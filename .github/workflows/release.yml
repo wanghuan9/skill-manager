@@ -1,0 +1,316 @@
+name: Release
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Release tag to create or repair, for example v1.0.9"
+        required: true
+        type: string
+      source_ref:
+        description: "Public source branch, tag, or commit to build"
+        required: true
+        default: main
+        type: string
+
+concurrency:
+  group: release-${{ inputs.release_tag || github.event.release.tag_name }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    permissions:
+      contents: write
+    env:
+      RELEASE_TAG: ${{ inputs.release_tag || github.event.release.tag_name }}
+      SOURCE_REF: ${{ inputs.source_ref || github.event.release.tag_name }}
+      CARGO_PROFILE_RELEASE_OPT_LEVEL: "2"
+      CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "64"
+      CARGO_PROFILE_RELEASE_LTO: "false"
+      CARGO_PROFILE_RELEASE_STRIP: "symbols"
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Public desktop support policy: macOS Apple Silicon and Windows x64 only.
+          - platform: macos-latest
+            target: aarch64-apple-darwin
+            args: --target aarch64-apple-darwin
+          - platform: windows-latest
+            target: x86_64-pc-windows-msvc
+            args: >-
+              --target x86_64-pc-windows-msvc
+              --bundles nsis
+              --config src-tauri/tauri.windows.conf.json
+              --config '{"bundle":{"createUpdaterArtifacts":true}}'
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - name: Check existing public release assets
+        id: public_release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          release_json="$RUNNER_TEMP/public-release.json"
+          http_status="$(curl --silent --write-out '%{http_code}' \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header "Accept: application/vnd.github+json" \
+            --location \
+            --output "$release_json" \
+            "https://api.github.com/repos/wanghuan9/skilldock/releases/tags/${RELEASE_TAG}")"
+
+          echo "exists=false" >> "$GITHUB_OUTPUT"
+          echo "complete=false" >> "$GITHUB_OUTPUT"
+
+          case "$http_status" in
+            200)
+              echo "exists=true" >> "$GITHUB_OUTPUT"
+              existing_updater_dir="$RUNNER_TEMP/existing-updater"
+              existing_updater_url="$(jq -r '
+                [.assets[] | select(.name == "latest.json") | .browser_download_url][0] // empty
+              ' "$release_json")"
+              if [[ -n "$existing_updater_url" ]]; then
+                mkdir -p "$existing_updater_dir"
+                curl --fail --silent --show-error --location \
+                  --output "$existing_updater_dir/latest.json" \
+                  "$existing_updater_url"
+              fi
+              complete=false
+              case "${{ matrix.target }}" in
+                aarch64-apple-darwin)
+                  if jq -e '
+                    [.assets[].name] as $names
+                    | any($names[]; endswith("_aarch64.dmg"))
+                    and any($names[]; endswith("_aarch64.app.tar.gz"))
+                    and any($names[]; endswith("_aarch64.app.tar.gz.sig"))
+                  ' "$release_json" >/dev/null; then
+                    complete=true
+                  fi
+                  ;;
+                x86_64-pc-windows-msvc)
+                  if jq -e '
+                    [.assets[].name] as $names
+                    | any($names[]; endswith("_x64-setup.exe"))
+                    and any($names[]; endswith("_x64-setup.exe.sig"))
+                  ' "$release_json" >/dev/null; then
+                    complete=true
+                  fi
+                  ;;
+                *)
+                  echo "Unsupported release target: ${{ matrix.target }}" >&2
+                  exit 1
+                  ;;
+              esac
+              if [[ "$complete" == "true" ]]; then
+                echo "complete=true" >> "$GITHUB_OUTPUT"
+                echo "Public release ${RELEASE_TAG} already has complete ${{ matrix.target }} assets; skipping build."
+              else
+                echo "Public release ${RELEASE_TAG} is missing ${{ matrix.target }} assets; building this target."
+              fi
+              ;;
+            404)
+              echo "Public release ${RELEASE_TAG} does not exist; building this target."
+              ;;
+            *)
+              echo "Unexpected GitHub API status while checking public release: $http_status" >&2
+              exit 1
+              ;;
+          esac
+
+      - uses: actions/checkout@v7
+        if: steps.public_release.outputs.complete != 'true'
+        with:
+          fetch-depth: 0
+          ref: ${{ env.SOURCE_REF }}
+
+      - uses: actions/setup-node@v7
+        if: steps.public_release.outputs.complete != 'true'
+        with:
+          node-version: 20
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+        if: steps.public_release.outputs.complete != 'true'
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2.9.1
+        if: steps.public_release.outputs.complete != 'true'
+        with:
+          workspaces: "./src-tauri -> target"
+          shared-key: public-${{ matrix.target }}
+          cache-workspace-crates: true
+          cache-on-failure: true
+
+      - run: npm ci --prefer-offline --no-audit --no-fund
+        if: steps.public_release.outputs.complete != 'true'
+
+      - name: Verify release source
+        if: steps.public_release.outputs.complete != 'true'
+        id: release_source
+        shell: bash
+        run: |
+          set -euo pipefail
+          package_version="$(node -p 'require("./package.json").version')"
+          tauri_version="$(node -p 'require("./src-tauri/tauri.conf.json").version')"
+          cargo_version="$(awk -F' = ' '/^version = / { gsub(/"/, "", $2); print $2; exit }' src-tauri/Cargo.toml)"
+          expected_tag="v${package_version}"
+
+          [[ "$RELEASE_TAG" == "$expected_tag" ]] || {
+            echo "Release tag $RELEASE_TAG does not match package version $expected_tag" >&2
+            exit 1
+          }
+          [[ "$package_version" == "$tauri_version" ]] || {
+            echo "package.json and tauri.conf.json versions differ" >&2
+            exit 1
+          }
+          [[ "$package_version" == "$cargo_version" ]] || {
+            echo "package.json and Cargo.toml versions differ" >&2
+            exit 1
+          }
+
+          source_sha="$(git rev-parse HEAD)"
+          echo "sha=$source_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Generate release notes
+        if: steps.public_release.outputs.complete != 'true'
+        id: release_notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          existing_release="$RUNNER_TEMP/public-release.json"
+          if [[ "${{ steps.public_release.outputs.exists }}" == "true" ]]; then
+            jq -r '.body // ""' "$existing_release" > release-notes.md
+          else
+            curated_notes="docs/release/notes/${RELEASE_TAG}.md"
+            if [[ -f "$curated_notes" ]]; then
+              cp "$curated_notes" release-notes.md
+            else
+              node scripts/generate-release-notes.cjs \
+                --tag "${RELEASE_TAG}" \
+                --output release-notes.md \
+                --summary-output release-summary.txt
+            fi
+          fi
+          {
+            echo "body<<EOF"
+            cat release-notes.md
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Verify release secrets
+        if: steps.public_release.outputs.complete != 'true'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          required=(
+            TAURI_SIGNING_PRIVATE_KEY
+          )
+          if [[ "${{ matrix.target }}" == "aarch64-apple-darwin" ]]; then
+            required+=(
+              APPLE_CERTIFICATE
+              APPLE_CERTIFICATE_PASSWORD
+              APPLE_ID
+              APPLE_PASSWORD
+              APPLE_TEAM_ID
+              KEYCHAIN_PASSWORD
+            )
+          fi
+
+          missing=()
+          for name in "${required[@]}"; do
+            if [[ -z "${!name:-}" ]]; then
+              missing+=("$name")
+            fi
+          done
+
+          if (( ${#missing[@]} > 0 )); then
+            printf 'Missing required release secret(s): %s\n' "${missing[*]}" >&2
+            printf '\nConfigure them on the SkillDock repository:\n' >&2
+            printf 'https://github.com/wanghuan9/skilldock/settings/secrets/actions\n' >&2
+            exit 1
+          fi
+
+      - uses: tauri-apps/tauri-action@v0
+        if: steps.public_release.outputs.complete != 'true'
+        env:
+          APPLE_CERTIFICATE: ${{ matrix.target == 'aarch64-apple-darwin' && secrets.APPLE_CERTIFICATE || '' }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ matrix.target == 'aarch64-apple-darwin' && secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
+          APPLE_ID: ${{ matrix.target == 'aarch64-apple-darwin' && secrets.APPLE_ID || '' }}
+          APPLE_PASSWORD: ${{ matrix.target == 'aarch64-apple-darwin' && secrets.APPLE_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ matrix.target == 'aarch64-apple-darwin' && secrets.APPLE_TEAM_ID || '' }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          KEYCHAIN_PASSWORD: ${{ matrix.target == 'aarch64-apple-darwin' && secrets.KEYCHAIN_PASSWORD || '' }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          owner: wanghuan9
+          repo: skilldock
+          tagName: ${{ env.RELEASE_TAG }}
+          releaseCommitish: ${{ steps.release_source.outputs.sha }}
+          releaseName: SkillDock ${{ env.RELEASE_TAG }}
+          releaseBody: ${{ steps.release_notes.outputs.body }}
+          releaseDraft: false
+          prerelease: false
+          updaterJsonPreferNsis: true
+          args: ${{ matrix.args }}
+
+      - name: Verify macOS signature and notarization
+        if: >-
+          steps.public_release.outputs.complete != 'true' &&
+          matrix.target == 'aarch64-apple-darwin'
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          app_path="src-tauri/target/${{ matrix.target }}/release/bundle/macos/SkillDock.app"
+          codesign --verify --deep --strict --verbose=2 "$app_path"
+          signature_output="$(codesign -dv --verbose=4 "$app_path" 2>&1)"
+          grep -Fq "Authority=Developer ID Application:" <<<"$signature_output"
+          grep -Fq "TeamIdentifier=${APPLE_TEAM_ID}" <<<"$signature_output"
+          spctl --assess --type execute --verbose=4 "$app_path"
+          xcrun stapler validate "$app_path"
+
+      - name: Preserve existing updater metadata
+        if: >-
+          steps.public_release.outputs.exists == 'true' &&
+          steps.public_release.outputs.complete != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          existing_updater="$RUNNER_TEMP/existing-updater/latest.json"
+          if [[ ! -f "$existing_updater" ]]; then
+            echo "Existing release has no latest.json metadata to preserve."
+            exit 0
+          fi
+
+          updated_updater_dir="$RUNNER_TEMP/updated-updater"
+          merged_updater_dir="$RUNNER_TEMP/merged-updater"
+          mkdir -p "$updated_updater_dir" "$merged_updater_dir"
+          gh release download "$RELEASE_TAG" \
+            --repo wanghuan9/skilldock \
+            --pattern latest.json \
+            --dir "$updated_updater_dir"
+          jq -s '.[1] * .[0]' \
+            "$updated_updater_dir/latest.json" \
+            "$existing_updater" \
+            > "$merged_updater_dir/latest.json"
+          gh release upload "$RELEASE_TAG" \
+            "$merged_updater_dir/latest.json" \
+            --repo wanghuan9/skilldock \
+            --clobber
