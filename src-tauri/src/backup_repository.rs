@@ -322,10 +322,15 @@ fn ensure_askpass_script() -> Result<std::path::PathBuf, String> {
 }
 
 fn git_command(repo_path: &Path, args: &[&str], token: Option<&str>) -> Result<Command, String> {
+    let token = token.filter(|value| !value.trim().is_empty());
     let mut command = Command::new("git");
-    command.current_dir(repo_path).args(args);
+    command.current_dir(repo_path);
+    if token.is_some() {
+        command.args(["-c", "credential.helper="]);
+    }
+    command.args(args);
     command.env("GIT_TERMINAL_PROMPT", "0");
-    if let Some(token) = token.filter(|value| !value.trim().is_empty()) {
+    if let Some(token) = token {
         let askpass = ensure_askpass_script()?;
         command.env("GIT_ASKPASS", askpass);
         command.env(ASKPASS_USERNAME_ENV, "x-access-token");
@@ -478,12 +483,19 @@ pub(crate) fn git(repo_path: &Path, args: &[&str], token: Option<&str>) -> Resul
     if output.status.success() {
         return Ok(String::from_utf8_lossy(&output.stdout).trim().to_string());
     }
-    let message = String::from_utf8_lossy(&output.stderr).trim().to_string();
-    Err(if message.is_empty() {
-        format!("Git 备份命令失败: {}", args.join(" "))
-    } else {
-        message
-    })
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    if !stderr.is_empty() {
+        return Err(stderr);
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if !stdout.is_empty() {
+        return Err(stdout);
+    }
+    Err(format!(
+        "Git 备份命令失败: {}（{}）",
+        args.join(" "),
+        output.status
+    ))
 }
 
 pub(crate) fn git_success(repo_path: &Path, args: &[&str]) -> bool {
@@ -495,9 +507,8 @@ pub(crate) fn git_success(repo_path: &Path, args: &[&str]) -> bool {
 fn ensure_local_repository(repo_path: &Path, remote_url: &str) -> Result<(), String> {
     archive_repository_for_different_remote(repo_path, remote_url)?;
     fs::create_dir_all(repo_path).map_err(|error| format!("创建本地备份仓库失败: {error}"))?;
-    if !repo_path.join(".git").is_dir() && git(repo_path, &["init", "-b", "main"], None).is_err() {
-        git(repo_path, &["init"], None)?;
-        git(repo_path, &["checkout", "-B", "main"], None)?;
+    if !is_usable_local_repository(repo_path) {
+        initialize_local_repository_with(|args| git(repo_path, args, None))?;
     }
     git(
         repo_path,
@@ -526,11 +537,59 @@ fn ensure_local_repository(repo_path: &Path, remote_url: &str) -> Result<(), Str
     Ok(())
 }
 
+fn initialize_local_repository_with<F>(mut run_git: F) -> Result<(), String>
+where
+    F: FnMut(&[&str]) -> Result<String, String>,
+{
+    match run_git(&["init", "-b", "main"]) {
+        Ok(_) => Ok(()),
+        Err(primary_error) => {
+            if let Err(fallback_error) = run_git(&["init"]) {
+                return Err(format!(
+                    "初始化本地备份仓库失败；git init -b main: {primary_error}；git init: {fallback_error}"
+                ));
+            }
+            run_git(&["checkout", "-B", "main"]).map_err(|checkout_error| {
+                format!(
+                    "初始化本地备份仓库主分支失败；git init -b main: {primary_error}；git checkout -B main: {checkout_error}"
+                )
+            })?;
+            Ok(())
+        }
+    }
+}
+
+fn is_usable_local_repository(repo_path: &Path) -> bool {
+    let Ok(worktree_root) = git(repo_path, &["rev-parse", "--show-toplevel"], None) else {
+        return false;
+    };
+    match (
+        fs::canonicalize(repo_path),
+        fs::canonicalize(Path::new(&worktree_root)),
+    ) {
+        (Ok(repo_path), Ok(worktree_root)) => repo_path == worktree_root,
+        _ => false,
+    }
+}
+
 fn archive_repository_for_different_remote(
     repo_path: &Path,
     remote_url: &str,
 ) -> Result<(), String> {
-    if !repo_path.join(".git").is_dir() {
+    let metadata = match fs::symlink_metadata(repo_path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(format!("检查本地备份仓库失败: {error}")),
+    };
+    if !is_usable_local_repository(repo_path) {
+        let is_empty_directory = metadata.file_type().is_dir()
+            && fs::read_dir(repo_path)
+                .map_err(|error| format!("读取本地备份仓库失败: {error}"))?
+                .next()
+                .is_none();
+        if !is_empty_directory {
+            archive_local_repository(repo_path)?;
+        }
         return Ok(());
     }
     let bound_remote = git(
@@ -546,6 +605,10 @@ fn archive_repository_for_different_remote(
         return Ok(());
     }
 
+    archive_local_repository(repo_path)
+}
+
+fn archive_local_repository(repo_path: &Path) -> Result<(), String> {
     let parent = repo_path
         .parent()
         .ok_or_else(|| "本地备份仓库路径无效".to_string())?;
@@ -1515,8 +1578,9 @@ mod tests {
     use super::{
         advance_operation_progress, cloud_backup_node_from_payloads, cloud_node_has_data,
         commit_snapshot, commit_snapshot_with_message, deleted_cloud_backup_node_ids,
-        ensure_local_repository, git, is_backup_control_commit, latest_nonempty_cloud_commit,
-        latest_restore_commit, map_item_progress, map_progress_percent, parse_cloud_node,
+        ensure_local_repository, git, git_command, initialize_local_repository_with,
+        is_backup_control_commit, latest_nonempty_cloud_commit, latest_restore_commit,
+        map_item_progress, map_progress_percent, parse_cloud_node,
         parse_deleted_cloud_backup_nodes, parse_git_progress_percent, push_branch_with_retry,
         reconcile_backup_settings_for_account, reconcile_remote, remote_snapshot_has_data,
         status_from_settings, upload_current_snapshot, validate_cloud_commit,
@@ -1729,6 +1793,50 @@ mod tests {
     }
 
     #[test]
+    fn authenticated_git_commands_ignore_system_credential_helpers() {
+        let temp_home = std::env::temp_dir().join(format!(
+            "skilldock-backup-git-credentials-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&temp_home).expect("create temp home");
+
+        with_test_home(&temp_home, || {
+            let authenticated = git_command(
+                &temp_home,
+                &["fetch", "--prune", "origin", "main"],
+                Some("oauth-token"),
+            )
+            .expect("build authenticated Git command");
+            let authenticated_args = authenticated
+                .get_args()
+                .map(|value| value.to_string_lossy().to_string())
+                .collect::<Vec<_>>();
+            assert_eq!(
+                authenticated_args,
+                vec![
+                    "-c",
+                    "credential.helper=",
+                    "fetch",
+                    "--prune",
+                    "origin",
+                    "main"
+                ]
+            );
+
+            let local = git_command(&temp_home, &["status", "--short"], None)
+                .expect("build local Git command");
+            let local_args = local
+                .get_args()
+                .map(|value| value.to_string_lossy().to_string())
+                .collect::<Vec<_>>();
+            assert_eq!(local_args, vec!["status", "--short"]);
+        });
+
+        let _ = fs::remove_dir_all(temp_home);
+    }
+
+    #[test]
     fn preserves_enabled_backup_for_the_same_github_account() {
         let settings = GithubBackupSettings {
             enabled: true,
@@ -1846,6 +1954,94 @@ mod tests {
             .path();
         assert!(archived_repository.join(".git").is_dir());
         assert!(archived_repository.join("local-history.txt").is_file());
+        let _ = fs::remove_dir_all(temp_root);
+    }
+
+    #[test]
+    fn falls_back_when_git_init_does_not_support_initial_branch() {
+        let mut calls = Vec::new();
+
+        initialize_local_repository_with(|args| {
+            calls.push(args.join(" "));
+            if args == ["init", "-b", "main"] {
+                Err("error: unknown switch `b'".to_string())
+            } else {
+                Ok(String::new())
+            }
+        })
+        .expect("initialize with legacy Git fallback");
+
+        assert_eq!(calls, vec!["init -b main", "init", "checkout -B main"]);
+    }
+
+    #[test]
+    fn reports_both_git_init_failures() {
+        let error = initialize_local_repository_with(|args| {
+            if args == ["init", "-b", "main"] {
+                Err("first init failure".to_string())
+            } else {
+                Err("fallback init failure".to_string())
+            }
+        })
+        .expect_err("both initialization attempts should fail");
+
+        assert!(error.contains("first init failure"));
+        assert!(error.contains("fallback init failure"));
+    }
+
+    #[test]
+    fn recovers_invalid_local_cache_without_overwriting_existing_remote_history() {
+        let temp_root = std::env::temp_dir().join(format!(
+            "skilldock-backup-recovery-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        let remote = temp_root.join("remote.git");
+        let seed = temp_root.join("seed");
+        let repository = temp_root.join("repo");
+        fs::create_dir_all(&temp_root).expect("create test root");
+        initialize_bare_repository(&remote);
+        let remote_url = remote.to_string_lossy().to_string();
+
+        ensure_local_repository(&seed, &remote_url).expect("initialize remote seed");
+        fs::write(seed.join("remote-history.txt"), "preserved").expect("write remote history");
+        commit_snapshot(&seed).expect("commit remote history");
+        push_branch_with_retry(&seed, "").expect("push remote history");
+        let remote_head_before = git(&seed, &["rev-parse", "HEAD"], None).expect("read seed head");
+
+        fs::create_dir_all(repository.join(".git")).expect("create invalid git directory");
+        fs::write(repository.join("stale-cache.txt"), "archive me")
+            .expect("write stale cache marker");
+
+        ensure_local_repository(&repository, &remote_url).expect("recover local repository");
+        reconcile_remote(&repository, "").expect("fetch existing remote history");
+
+        assert_eq!(
+            fs::read_to_string(repository.join("remote-history.txt"))
+                .expect("read restored remote history"),
+            "preserved"
+        );
+        assert!(!repository.join("stale-cache.txt").exists());
+        assert_eq!(
+            git(&repository, &["rev-parse", "HEAD"], None).expect("read recovered head"),
+            remote_head_before
+        );
+        assert_eq!(
+            git(&remote, &["rev-parse", "refs/heads/main"], None).expect("read remote head"),
+            remote_head_before
+        );
+
+        let archived_repository = fs::read_dir(temp_root.join("repository-archive"))
+            .expect("read repository archive")
+            .next()
+            .expect("archived repository")
+            .expect("read archived repository")
+            .path();
+        assert_eq!(
+            fs::read_to_string(archived_repository.join("stale-cache.txt"))
+                .expect("read archived marker"),
+            "archive me"
+        );
         let _ = fs::remove_dir_all(temp_root);
     }
 
