@@ -41,6 +41,19 @@ function checkPushedHead(worktree: string) {
   );
 }
 
+function checkDefaultBranchWorkflow(worktree: string) {
+  return spawnSync(
+    "bash",
+    [
+      "-c",
+      'source "$1"; require_release_workflow_on_default_branch',
+      "bash",
+      publishScript,
+    ],
+    { cwd: worktree, encoding: "utf8" },
+  );
+}
+
 afterEach(() => {
   for (const root of temporaryRoots.splice(0)) {
     fs.rmSync(root, { recursive: true, force: true });
@@ -65,5 +78,25 @@ describe("release source guard", () => {
     expect(unpushedResult.stderr).toContain(
       "push the exact release commit first",
     );
+  });
+
+  test("requires release infrastructure on the default branch", () => {
+    const worktree = createPublishedRepository();
+
+    const missingWorkflowResult = checkDefaultBranchWorkflow(worktree);
+    expect(missingWorkflowResult.status).not.toBe(0);
+    expect(missingWorkflowResult.stderr).toContain(
+      "release workflow is not available on the default branch",
+    );
+
+    const workflowDirectory = path.join(worktree, ".github/workflows");
+    fs.mkdirSync(workflowDirectory, { recursive: true });
+    fs.writeFileSync(path.join(workflowDirectory, "release.yml"), "name: Release\n");
+    runGit(worktree, ["add", ".github/workflows/release.yml"]);
+    runGit(worktree, ["commit", "-m", "add release workflow"]);
+    runGit(worktree, ["push", "origin", "main"]);
+
+    const availableWorkflowResult = checkDefaultBranchWorkflow(worktree);
+    expect(availableWorkflowResult.status).toBe(0);
   });
 });

@@ -17,6 +17,7 @@ describe("public release workflow contract", () => {
       'SOURCE_REPO_URL="https://github.com/wanghuan9/skilldock.git"',
     );
     expect(publishScript).toContain("require_pushed_head");
+    expect(publishScript).toContain("require_release_workflow_on_default_branch");
     expect(publishScript).toContain('--target "$head_sha"');
     expect(publishScript).toContain("--draft");
     expect(publishScript).toContain('--draft=false');

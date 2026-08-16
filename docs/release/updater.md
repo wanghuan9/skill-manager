@@ -18,6 +18,8 @@
 
 推荐先把待发布 feature 分支合入 `main` 再发布。确实需要从 feature 分支发布时也可以执行，但该分支必须已经推送；发布脚本会让版本 tag 精确指向该分支的当前提交，不会错误绑定到 `main`。
 
+`release` 和 `workflow_dispatch` 事件要求 workflow 文件已经存在于 GitHub 默认分支。因此首次启用这套公开发布流程时，必须先把 `.github/workflows/release.yml` 合入 `main`。完成首次启用后，后续构建源仍可以选择任意已推送 feature 分支。
+
 ## 版本号
 
 发布前同步修改：

@@ -110,6 +110,16 @@ require_pushed_head() {
   printf '%s\n' "$head"
 }
 
+require_release_workflow_on_default_branch() {
+  local default_ref
+  default_ref="$(git symbolic-ref --quiet refs/remotes/origin/HEAD 2>/dev/null \
+    || printf 'refs/remotes/origin/main')"
+
+  if ! git cat-file -e "$default_ref:.github/workflows/release.yml" 2>/dev/null; then
+    die "release workflow is not available on the default branch; merge the release infrastructure before publishing"
+  fi
+}
+
 require_release_tag_available() {
   local tag="$1"
   local head remote_sha
@@ -460,6 +470,7 @@ main() {
   require_clean_tree
   local head_sha
   head_sha="$(require_pushed_head)"
+  require_release_workflow_on_default_branch
   verify_updater_endpoint
   verify_macos_signing_config
   resolve_apple_notarization_credentials
