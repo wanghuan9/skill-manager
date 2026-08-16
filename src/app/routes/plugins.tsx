@@ -3626,6 +3626,7 @@ export function PluginsRoute(props: PluginsRouteProps = {}) {
                               ? t("plugins.card.aria.viewUpdateContents", { name: pluginDisplayName })
                               : t("plugins.card.aria.viewFiles", { name: pluginDisplayName }),
                           className: "skill-card__icon-button skill-card__file-preview-button",
+                          modalClassName: "skill-card__file-preview-button",
                           icon: (
                             <>
                               <ViewFileIcon />

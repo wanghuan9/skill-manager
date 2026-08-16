@@ -1768,6 +1768,7 @@ test("places pending commit and update statuses at the top of plugin cards", asy
     name: "查看 pending-plugin 插件文件与本地变更",
   });
   expect(localChangesButton).toHaveTextContent("本地变更");
+  expect(localChangesButton).toHaveClass("skill-card__file-preview-button");
   expect(within(localChangesButton).getByText("2")).toHaveClass("skill-card__change-count");
   expect(localChangesButton.querySelector("svg")).not.toHaveClass("skill-card__update-preview-detail-icon");
 });
