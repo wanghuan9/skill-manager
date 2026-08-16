@@ -35,6 +35,14 @@ const RELEASE_NOTE_COVERAGE_RULES = [
     notePattern: /工作区|目录|路径|迁移/i,
   },
   {
+    id: "backup",
+    label: "云端备份",
+    pathPatterns: [
+      /^src-tauri\/src\/backup_(?:repository|merge)\.rs$/,
+    ],
+    notePattern: /备份|恢复|云端/i,
+  },
+  {
     id: "mcp",
     label: "MCP 管理",
     pathPatterns: [

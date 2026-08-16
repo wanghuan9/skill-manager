@@ -106,6 +106,7 @@ describe("release notes item limit", () => {
   test("detects user-facing change areas from the complete tag diff", () => {
     const areas = detectChangedAreas([
       "src-tauri/src/workspace.rs",
+      "src-tauri/src/backup_repository.rs",
       "src-tauri/src/mcp_manager.rs",
       "src-tauri/src/plugin_manager.rs",
       "src-tauri/src/git_changes.rs",
@@ -116,6 +117,7 @@ describe("release notes item limit", () => {
 
     expect(areas.map((area) => area.id)).toEqual([
       "workspace",
+      "backup",
       "mcp",
       "plugins",
       "git-workflow",
@@ -172,6 +174,7 @@ describe("release notes item limit", () => {
   test("accepts curated notes only when every changed product area is represented", () => {
     const areas = detectChangedAreas([
       "src-tauri/src/workspace.rs",
+      "src-tauri/src/backup_repository.rs",
       "src-tauri/src/mcp_manager.rs",
       "src-tauri/src/plugin_manager.rs",
       "src-tauri/src/git_changes.rs",
@@ -187,6 +190,7 @@ describe("release notes item limit", () => {
       "",
       "## 修复",
       "",
+      "- 修复云端备份初始化问题。",
       "* 修复 MCP 市场安装同步问题。",
       "- 修复 Cursor、Codex 和 Claude Code 插件运行副本同步问题。",
       "- 修复应用更新提示交互。",
