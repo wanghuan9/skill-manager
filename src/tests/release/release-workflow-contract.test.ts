@@ -34,6 +34,10 @@ describe("public release workflow contract", () => {
       "releaseCommitish: ${{ steps.release_source.outputs.sha }}",
     );
     expect(workflow).toContain("GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}");
+    expect(workflow).toContain('--curated-notes "$curated_notes"');
+    expect(workflow).toContain('--curated-notes release-notes.md');
+    expect(workflow).toContain('--current-ref "${{ steps.release_source.outputs.sha }}"');
+    expect(workflow).not.toContain('cp "$curated_notes" release-notes.md');
     expect(workflow).not.toContain("PUBLIC_RELEASE_TOKEN");
     expect(workflow).not.toContain("releaseCommitish: main");
   });

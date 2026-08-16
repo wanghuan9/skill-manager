@@ -24,6 +24,100 @@ const SECTION_NAME_MAP = {
   修复: "fixes",
   优化: "improvements",
 };
+const RELEASE_NOTE_COVERAGE_RULES = [
+  {
+    id: "workspace",
+    label: "工作区与目录迁移",
+    pathPatterns: [
+      /^src-tauri\/src\/(?:workspace|backup_snapshot)\.rs$/,
+      /^src\/app\/(?:path-utils\.ts|routes\/settings\.tsx)$/,
+    ],
+    notePattern: /工作区|目录|路径|迁移/i,
+  },
+  {
+    id: "mcp",
+    label: "MCP 管理",
+    pathPatterns: [
+      /^src-tauri\/src\/mcp_manager\.rs$/,
+      /^src-tauri\/src\/agent_skills_cli\.rs$/,
+      /^src\/app\/routes\/mcp\.tsx$/,
+      /^src\/features\/install\/components\/McpMarketplacePanel\.tsx$/,
+      /^src\/features\/skills\/utils\/mcp-workspace-cache\.ts$/,
+    ],
+    notePattern: /MCP/i,
+  },
+  {
+    id: "plugins",
+    label: "插件管理与宿主运行时",
+    pathPatterns: [
+      /^src-tauri\/src\/plugin_(?:manager|watcher)\.rs$/,
+      /^src\/app\/routes\/plugins\.tsx$/,
+      /^src\/features\/install\/components\/PluginInstallPanel\.tsx$/,
+      /^src\/features\/skills\/utils\/plugin-cache\.ts$/,
+    ],
+    notePattern: /插件|plugin|Cursor|Codex|Claude Code|OpenCode/i,
+  },
+  {
+    id: "git-workflow",
+    label: "Git 状态与差异工作流",
+    pathPatterns: [
+      /^src-tauri\/src\/git_(?:state|changes|divergence|metadata)\.rs$/,
+      /^src-tauri\/src\/skill_watcher\.rs$/,
+      /^src\/features\/skills\/components\/(?:GitPreviewIcons|SkillDiffView|SkillFileDialog)\.tsx$/,
+    ],
+    notePattern: /Git|差异|待提交|待推送|回退/i,
+  },
+  {
+    id: "publishing",
+    label: "Skill 发布",
+    pathPatterns: [
+      /^src\/features\/publishing\//,
+      /^src-tauri\/src\/(?:publishing_|github_(?:api|credentials)\.rs$)/,
+    ],
+    addedPathPatterns: [],
+    notePattern: /发布|SkillHub/i,
+  },
+  {
+    id: "app-update",
+    label: "应用更新提示",
+    pathPatterns: [
+      /^src\/features\/app-update\//,
+    ],
+    addedPathPatterns: [],
+    notePattern: /应用更新|版本更新|更新提示/i,
+  },
+  {
+    id: "skills",
+    label: "Skill 管理",
+    pathPatterns: [
+      /^src-tauri\/src\/(?:commands|library|models|state)\.rs$/,
+      /^src\/features\/skills\//,
+    ],
+    addedPathPatterns: [],
+    notePattern: /\bSkill\b|技能/i,
+  },
+  {
+    id: "interface",
+    label: "界面与交互",
+    pathPatterns: [
+      /^src-tauri\/src\/lib\.rs$/,
+      /^src\/app\/i18n\.tsx$/,
+      /^src\/styles\//,
+    ],
+    addedPathPatterns: [
+      /^src-tauri\/src\/lib\.rs$/,
+      /^src\/app\/i18n\.tsx$/,
+    ],
+    notePattern: /界面|交互|弹窗|提示|角标/i,
+  },
+];
+const PRODUCTION_CODE_PATH_PATTERNS = [
+  /^src-tauri\/src\/.*\.rs$/,
+  /^src\/.*\.(?:ts|tsx|css)$/,
+];
+const NON_PRODUCTION_CODE_PATH_PATTERNS = [
+  /^src\/tests\//,
+];
 const SKIPPED_SUBJECT_PATTERNS = [
   /^fix$/i,
   /^chore:\s*bump version/i,
@@ -569,7 +663,106 @@ function limitSections(sections, maxItems = MAX_RELEASE_NOTE_ITEMS) {
 }
 
 function countReleaseNoteItems(notes) {
-  return notes.split(/\r?\n/).filter((line) => /^-\s+/.test(line.trim())).length;
+  return notes.split(/\r?\n/).filter((line) => /^[-*]\s+/.test(line.trim())).length;
+}
+
+function detectChangedAreas(paths) {
+  return RELEASE_NOTE_COVERAGE_RULES.filter((rule) => (
+    paths.some((path) => rule.pathPatterns.some((pattern) => pattern.test(path)))
+  ));
+}
+
+function findUnclassifiedProductionPaths(paths, addedPaths = []) {
+  const addedPathSet = new Set(addedPaths);
+  return paths.filter((path) => {
+    const isProductionCode = PRODUCTION_CODE_PATH_PATTERNS.some((pattern) => pattern.test(path));
+    const isExcluded = NON_PRODUCTION_CODE_PATH_PATTERNS.some((pattern) => pattern.test(path));
+    const isClassified = RELEASE_NOTE_COVERAGE_RULES.some((rule) => (
+      (addedPathSet.has(path) ? rule.addedPathPatterns ?? rule.pathPatterns : rule.pathPatterns)
+        .some((pattern) => pattern.test(path))
+    ));
+    return isProductionCode && !isExcluded && !isClassified;
+  });
+}
+
+function parseCuratedReleaseNotes(notes) {
+  const sections = Object.fromEntries(SECTION_ORDER.map((key) => [key, []]));
+  const items = [];
+  const unclassifiedItems = [];
+  let currentSection = "";
+
+  for (const rawLine of notes.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    const headingMatch = line.match(/^#{1,6}\s+(.+)$/);
+    if (headingMatch) {
+      currentSection = resolveSectionName(headingMatch[1]);
+      continue;
+    }
+
+    const bulletMatch = line.match(/^[-*]\s+(.+)$/);
+    if (!bulletMatch) {
+      continue;
+    }
+
+    const item = cleanBullet(bulletMatch[1]);
+    if (currentSection) {
+      uniquePush(sections[currentSection], item);
+      items.push(item);
+    } else {
+      unclassifiedItems.push(item);
+    }
+  }
+
+  return { sections, items, unclassifiedItems };
+}
+
+function validateCuratedReleaseNotes(notes, changedAreas, unclassifiedPaths = []) {
+  const parsed = parseCuratedReleaseNotes(notes);
+  const itemCount = parsed.items.length + parsed.unclassifiedItems.length;
+  if (itemCount === 0) {
+    throw new Error("手写发布日志必须至少包含一条分点说明");
+  }
+  if (itemCount > MAX_RELEASE_NOTE_ITEMS) {
+    throw new Error(`手写发布日志最多包含 ${MAX_RELEASE_NOTE_ITEMS} 条，当前为 ${itemCount} 条`);
+  }
+  if (parsed.unclassifiedItems.length > 0) {
+    throw new Error("手写发布日志包含未归入新增、修复或优化章节的条目");
+  }
+  if (unclassifiedPaths.length > 0) {
+    throw new Error(
+      `版本差异包含未归类的生产代码，请更新发布日志领域规则：${unclassifiedPaths.join("、")}`,
+    );
+  }
+
+  const releaseNoteText = parsed.items.join("\n");
+  const missingAreas = changedAreas.filter((area) => !area.notePattern.test(releaseNoteText));
+  if (missingAreas.length > 0) {
+    throw new Error(
+      `手写发布日志未覆盖完整版本差异：${missingAreas.map((area) => area.label).join("、")}`,
+    );
+  }
+
+  return parsed.sections;
+}
+
+function readChangedFiles(range) {
+  const paths = [];
+  const addedPaths = [];
+  const output = runGit(["diff", "--name-status", range]);
+
+  for (const line of output.split("\n").filter(Boolean)) {
+    const [status, ...statusPaths] = line.split("\t");
+    const path = statusPaths.at(-1)?.trim();
+    if (!path) {
+      continue;
+    }
+    paths.push(path);
+    if (/^[AC]/.test(status)) {
+      addedPaths.push(path);
+    }
+  }
+
+  return { paths, addedPaths };
 }
 
 function renderNotes(sections) {
@@ -642,10 +835,32 @@ function renderSummary(sections) {
   return `${summaryItems.join("；")}。`;
 }
 
-function buildReleaseArtifact(version, currentRef, previousTag) {
+function buildReleaseArtifact(version, currentRef, previousTag, curatedNotes = "") {
   const range = previousTag ? `${previousTag}..${currentRef}` : currentRef;
-  const commits = parseCommits(range);
-  const sections = limitSections(buildSections(commits));
+  if (curatedNotes) {
+    const changedFiles = readChangedFiles(range);
+    const changedAreas = detectChangedAreas(changedFiles.paths);
+    const unclassifiedPaths = findUnclassifiedProductionPaths(
+      changedFiles.paths,
+      changedFiles.addedPaths,
+    );
+    const sections = validateCuratedReleaseNotes(
+      curatedNotes,
+      changedAreas,
+      unclassifiedPaths,
+    );
+
+    return {
+      version,
+      range,
+      pub_date: resolveRefDate(currentRef) || undefined,
+      body: `${curatedNotes.trim()}\n`,
+      summary: renderSummary(sections),
+      changedAreas,
+    };
+  }
+
+  const sections = limitSections(buildSections(parseCommits(range)));
 
   return {
     version,
@@ -653,10 +868,26 @@ function buildReleaseArtifact(version, currentRef, previousTag) {
     pub_date: resolveRefDate(currentRef) || undefined,
     body: renderNotes(sections),
     summary: renderSummary(sections),
+    changedAreas: [],
   };
 }
 
-function buildReleaseHistory(currentVersion, currentTag) {
+function applyArchivedReleaseNotes(artifact, tag) {
+  const archivedNotesPath = `docs/release/notes/${tag}.md`;
+  if (!fs.existsSync(archivedNotesPath)) {
+    return artifact;
+  }
+
+  const archivedNotes = fs.readFileSync(archivedNotesPath, "utf8");
+  const sections = parseCuratedReleaseNotes(archivedNotes).sections;
+  return {
+    ...artifact,
+    body: `${archivedNotes.trim()}\n`,
+    summary: renderSummary(sections),
+  };
+}
+
+function buildReleaseHistory(currentVersion, currentTag, currentArtifact) {
   const tags = readVersionTags();
   if (!tags.includes(currentTag)) {
     tags.push(currentTag);
@@ -664,13 +895,20 @@ function buildReleaseHistory(currentVersion, currentTag) {
 
   return tags
     .map((tag, index) => {
+      if (tag === currentTag && currentArtifact) {
+        return currentArtifact;
+      }
+
       const currentRef = tag === currentTag ? resolveCurrentRef(currentTag) : tag;
       const previousTag = index > 0 ? tags[index - 1] : "";
       const version = tag === currentTag ? currentVersion : versionFromTag(tag);
-      return buildReleaseArtifact(version, currentRef, previousTag);
+      return applyArchivedReleaseNotes(
+        buildReleaseArtifact(version, currentRef, previousTag),
+        tag,
+      );
     })
     .reverse()
-    .map(({ range, ...artifact }) => artifact);
+    .map(({ range, changedAreas, ...artifact }) => artifact);
 }
 
 function main() {
@@ -680,15 +918,17 @@ function main() {
   const output = args.output || DEFAULT_OUTPUT;
   const summaryOutput = args["summary-output"] || DEFAULT_SUMMARY_OUTPUT;
   const historyOutput = args["history-output"] || "";
-  const currentRef = resolveCurrentRef(tag);
+  const curatedNotesPath = args["curated-notes"] || "";
+  const currentRef = args["current-ref"] || resolveCurrentRef(tag);
   const previousTag = args["previous-tag"] || resolvePreviousTag(tag, currentRef);
-  const artifact = buildReleaseArtifact(version, currentRef, previousTag);
+  const curatedNotes = curatedNotesPath ? fs.readFileSync(curatedNotesPath, "utf8") : "";
+  const artifact = buildReleaseArtifact(version, currentRef, previousTag, curatedNotes);
 
   fs.writeFileSync(output, artifact.body);
   fs.writeFileSync(summaryOutput, `${artifact.summary}\n`);
 
   if (historyOutput) {
-    const history = buildReleaseHistory(version, tag);
+    const history = buildReleaseHistory(version, tag, artifact);
     fs.writeFileSync(historyOutput, `${JSON.stringify(history, null, 2)}\n`);
   }
 
@@ -696,6 +936,10 @@ function main() {
   console.log(`Range: ${artifact.range}`);
   console.log(`Output: ${output}`);
   console.log(`Summary: ${summaryOutput}`);
+  if (curatedNotesPath) {
+    console.log(`Curated notes: ${curatedNotesPath}`);
+    console.log(`Diff coverage: ${artifact.changedAreas.map((area) => area.id).join(", ") || "none"}`);
+  }
   if (historyOutput) {
     console.log(`History: ${historyOutput}`);
   }
@@ -709,6 +953,9 @@ module.exports = {
   MAX_RELEASE_NOTE_ITEMS,
   buildSections,
   countReleaseNoteItems,
+  detectChangedAreas,
+  findUnclassifiedProductionPaths,
   isPublicVersionTag,
   limitSections,
+  validateCuratedReleaseNotes,
 };

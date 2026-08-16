@@ -8,14 +8,23 @@ const {
   MAX_RELEASE_NOTE_ITEMS,
   buildSections,
   countReleaseNoteItems,
+  detectChangedAreas,
+  findUnclassifiedProductionPaths,
   isPublicVersionTag,
   limitSections,
+  validateCuratedReleaseNotes,
 } = require("../../../scripts/generate-release-notes.cjs") as {
   MAX_RELEASE_NOTE_ITEMS: number;
   buildSections: (commits: Array<{ subject: string; body: string }>) => ReleaseNoteSections;
   countReleaseNoteItems: (notes: string) => number;
+  detectChangedAreas: (paths: string[]) => Array<{ id: string; label: string }>;
+  findUnclassifiedProductionPaths: (paths: string[], addedPaths?: string[]) => string[];
   isPublicVersionTag: (tag: string) => boolean;
   limitSections: (sections: ReleaseNoteSections) => ReleaseNoteSections;
+  validateCuratedReleaseNotes: (
+    notes: string,
+    changedAreas: Array<{ id: string; label: string }>,
+  ) => void;
 };
 
 describe("release notes item limit", () => {
@@ -92,5 +101,98 @@ describe("release notes item limit", () => {
     expect(isPublicVersionTag("v1.0.8")).toBe(true);
     expect(isPublicVersionTag("v1.0.8-beta.1")).toBe(true);
     expect(isPublicVersionTag("internal-v1.0.8")).toBe(false);
+  });
+
+  test("detects user-facing change areas from the complete tag diff", () => {
+    const areas = detectChangedAreas([
+      "src-tauri/src/workspace.rs",
+      "src-tauri/src/mcp_manager.rs",
+      "src-tauri/src/plugin_manager.rs",
+      "src-tauri/src/git_changes.rs",
+      "src/features/publishing/PublishingWorkbench.tsx",
+      "src/features/app-update/AppUpdateAutoPrompt.tsx",
+      "scripts/publish-release.sh",
+    ]);
+
+    expect(areas.map((area) => area.id)).toEqual([
+      "workspace",
+      "mcp",
+      "plugins",
+      "git-workflow",
+      "publishing",
+      "app-update",
+    ]);
+  });
+
+  test("rejects curated notes that omit a changed product area", () => {
+    const areas = detectChangedAreas([
+      "src-tauri/src/mcp_manager.rs",
+      "src-tauri/src/plugin_manager.rs",
+    ]);
+    const incompleteNotes = "## 修复\n\n- 修复插件运行副本同步问题。\n";
+
+    expect(() => validateCuratedReleaseNotes(incompleteNotes, areas)).toThrow(
+      "MCP 管理",
+    );
+  });
+
+  test("fails closed when changed production code has no release-note area", () => {
+    expect(findUnclassifiedProductionPaths([
+      "src/features/skills/components/NewProductPanel.tsx",
+      "src/tests/new-product/new-product.test.tsx",
+      "scripts/publish-release.sh",
+    ], ["src/features/skills/components/NewProductPanel.tsx"])).toEqual([
+      "src/features/skills/components/NewProductPanel.tsx",
+    ]);
+  });
+
+  test("fails closed for new app-update production files without an explicit rule", () => {
+    const newPath = "src/features/app-update/NewCapability.tsx";
+
+    expect(findUnclassifiedProductionPaths([newPath], [newPath])).toEqual([newPath]);
+  });
+
+  test("does not count the SkillDock product name as Skill management coverage", () => {
+    const areas = detectChangedAreas(["src-tauri/src/commands.rs"]);
+
+    expect(() => validateCuratedReleaseNotes(
+      "## 新增\n\n- SkillDock 增加目录迁移。\n",
+      areas,
+    )).toThrow("Skill 管理");
+  });
+
+  test("rejects bullets outside supported release-note sections", () => {
+    const notes = "## 其他\n\n- MCP 与插件变更。\n";
+
+    expect(() => validateCuratedReleaseNotes(notes, [])).toThrow(
+      "未归入新增、修复或优化章节",
+    );
+  });
+
+  test("accepts curated notes only when every changed product area is represented", () => {
+    const areas = detectChangedAreas([
+      "src-tauri/src/workspace.rs",
+      "src-tauri/src/mcp_manager.rs",
+      "src-tauri/src/plugin_manager.rs",
+      "src-tauri/src/git_changes.rs",
+      "src/features/publishing/PublishingWorkbench.tsx",
+      "src/features/app-update/AppUpdateAutoPrompt.tsx",
+    ]);
+    const completeNotes = [
+      "## 新增",
+      "",
+      "- 工作区采用新目录结构并自动迁移旧数据。",
+      "- 插件新增文件编辑、Git 差异预览、待提交和待推送状态。",
+      "- 新增 SkillHub 发布工作台。",
+      "",
+      "## 修复",
+      "",
+      "* 修复 MCP 市场安装同步问题。",
+      "- 修复 Cursor、Codex 和 Claude Code 插件运行副本同步问题。",
+      "- 修复应用更新提示交互。",
+      "",
+    ].join("\n");
+
+    expect(() => validateCuratedReleaseNotes(completeNotes, areas)).not.toThrow();
   });
 });

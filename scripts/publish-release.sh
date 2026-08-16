@@ -509,16 +509,25 @@ main() {
 
   rm -rf "$RELEASE_ASSET_DIR"
   mkdir -p "$RELEASE_ASSET_DIR"
+  local curated_release_notes="docs/release/notes/$tag.md"
+  local curated_release_notes_args=()
+  if [[ -f "$curated_release_notes" ]]; then
+    curated_release_notes_args=(--curated-notes "$curated_release_notes")
+  fi
   node scripts/generate-release-notes.cjs \
     --tag "$tag" \
     --output "$RELEASE_NOTES_PATH" \
     --summary-output "$RELEASE_SUMMARY_PATH" \
-    --history-output "$RELEASE_HISTORY_PATH"
-  local curated_release_notes="docs/release/notes/$tag.md"
-  if [[ -f "$curated_release_notes" ]]; then
-    cp "$curated_release_notes" "$RELEASE_NOTES_PATH"
-  fi
+    "${curated_release_notes_args[@]}"
   review_release_notes
+  # The editor may change the generated file. Validate the exact text that will be
+  # published against the complete tag diff before assembling release assets.
+  node scripts/generate-release-notes.cjs \
+    --tag "$tag" \
+    --output "$RELEASE_NOTES_PATH" \
+    --summary-output "$RELEASE_SUMMARY_PATH" \
+    --history-output "$RELEASE_HISTORY_PATH" \
+    --curated-notes "$RELEASE_NOTES_PATH"
 
   local assets=()
   while IFS= read -r asset; do

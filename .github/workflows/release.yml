@@ -187,14 +187,26 @@ jobs:
           else
             curated_notes="docs/release/notes/${RELEASE_TAG}.md"
             if [[ -f "$curated_notes" ]]; then
-              cp "$curated_notes" release-notes.md
+              node scripts/generate-release-notes.cjs \
+                --tag "${RELEASE_TAG}" \
+                --current-ref "${{ steps.release_source.outputs.sha }}" \
+                --output release-notes.md \
+                --summary-output release-summary.txt \
+                --curated-notes "$curated_notes"
             else
               node scripts/generate-release-notes.cjs \
                 --tag "${RELEASE_TAG}" \
+                --current-ref "${{ steps.release_source.outputs.sha }}" \
                 --output release-notes.md \
                 --summary-output release-summary.txt
             fi
           fi
+          node scripts/generate-release-notes.cjs \
+            --tag "${RELEASE_TAG}" \
+            --current-ref "${{ steps.release_source.outputs.sha }}" \
+            --output release-notes.md \
+            --summary-output release-summary.txt \
+            --curated-notes release-notes.md
           {
             echo "body<<EOF"
             cat release-notes.md

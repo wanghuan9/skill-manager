@@ -61,6 +61,21 @@ afterEach(() => {
 });
 
 describe("release source guard", () => {
+  test("validates curated notes through the full-range generator instead of copying them", () => {
+    const script = fs.readFileSync(publishScript, "utf8");
+
+    expect(script).toContain('--curated-notes "$curated_release_notes"');
+    expect(script).toContain('--curated-notes "$RELEASE_NOTES_PATH"');
+    expect(script).not.toContain('cp "$curated_release_notes" "$RELEASE_NOTES_PATH"');
+    const firstValidation = script.indexOf('--curated-notes "$curated_release_notes"');
+    const review = script.indexOf("review_release_notes", firstValidation);
+    const finalValidation = script.indexOf('--curated-notes "$RELEASE_NOTES_PATH"', review);
+
+    expect(firstValidation).toBeGreaterThanOrEqual(0);
+    expect(review).toBeGreaterThan(firstValidation);
+    expect(finalValidation).toBeGreaterThan(review);
+  });
+
   test("accepts the exact upstream commit and rejects an unpushed commit", () => {
     const worktree = createPublishedRepository();
     const pushedHead = runGit(worktree, ["rev-parse", "HEAD"]);
