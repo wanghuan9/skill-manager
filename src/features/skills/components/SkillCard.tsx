@@ -302,15 +302,15 @@ export function SkillCard({
     !normalizedTagDraft || tag.toLocaleLowerCase().includes(normalizedTagDraft)
   ));
   const exactExistingTag = existingTags.find((tag) => tag.toLocaleLowerCase() === normalizedTagDraft);
-  const skillTools = mergeSkillToolsWithInstalledTools(skill.tools, toolConfigs);
+  const skillTools = mergeSkillToolsWithInstalledTools(skill.tools, toolConfigs)
+    .sort(compareToolsByDisplayOrder);
   const skillDescription = formatSkillDescription(skill.description) || t("skills.description.empty");
   const summaryDescription = formatSummaryDescription(skill.description, t("skills.description.empty"));
   const remoteUpdatedAt = formatSkillUpdatedAt(skill.remoteUpdatedAt);
   const localUpdatedAt = formatSkillUpdatedAt(skill.localUpdatedAt);
   const remoteUpdater = formatSkillLastEditor(skill.lastEditor) || t("skill.card.remoteUpdaterUnknown");
   const enabledTools = skillTools
-    .filter((tool) => isToolEnabledStatus(tool.statusLabel))
-    .sort(compareToolsByDisplayOrder);
+    .filter((tool) => isToolEnabledStatus(tool.statusLabel));
   const totalToolCount = skillTools.length;
   const allToolsEnabled = totalToolCount > 0 && enabledTools.length === totalToolCount;
   const hasPartiallyEnabledTools = enabledTools.length > 0 && !allToolsEnabled;

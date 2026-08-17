@@ -550,7 +550,7 @@ test("keeps expanded enabled tools in a stable shared order", async () => {
 
   const { container } = renderSkillCardWithProviders(skillWithManyTools);
   const enabledToolsButton = screen.getByRole("button", {
-    name: "已启用工具：Claude Code、Codex、OpenCode、Cursor、Gemini CLI、Antigravity、Devin、Continue",
+    name: "已启用工具：Claude Code、Codex、Cursor、OpenCode、Gemini CLI、Antigravity、Devin、Continue",
   });
 
   expect(enabledToolsButton).toHaveTextContent("已启用 8");
@@ -559,6 +559,11 @@ test("keeps expanded enabled tools in a stable shared order", async () => {
 
   expect(container.querySelectorAll(".skill-card__tool-icon")).toHaveLength(8);
   expect(container.querySelector(".skill-card__title-row .skill-card__summary-tools")).toBeInTheDocument();
+
+  await userEvent.click(screen.getByRole("button", { name: /展开 multi-search-engine/ }));
+  const toolPillNames = [...container.querySelectorAll(".tool-pill__name")]
+    .map((element) => element.textContent);
+  expect(toolPillNames.slice(0, 4)).toEqual(["Claude Code", "Codex", "Cursor", "OpenCode"]);
 });
 
 test("shows up to six enabled tools in the card summary", () => {
