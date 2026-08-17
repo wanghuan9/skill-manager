@@ -98,10 +98,13 @@ const RELEASE_NOTE_COVERAGE_RULES = [
     id: "skills",
     label: "Skill 管理",
     pathPatterns: [
-      /^src-tauri\/src\/(?:commands|library|models|state)\.rs$/,
+      /^src-tauri\/src\/(?:clawhub_market|commands|library|models|skillhub_market|state)\.rs$/,
+      /^src\/app\/routes\/skills\.tsx$/,
       /^src\/features\/skills\//,
     ],
-    addedPathPatterns: [],
+    addedPathPatterns: [
+      /^src\/features\/skills\/utils\/skill-tag-color\.ts$/,
+    ],
     notePattern: /\bSkill\b|技能/i,
   },
   {
@@ -109,6 +112,7 @@ const RELEASE_NOTE_COVERAGE_RULES = [
     label: "界面与交互",
     pathPatterns: [
       /^src-tauri\/src\/lib\.rs$/,
+      /^src\/app\/(?:App\.tsx|components\/AppSelect\.tsx)$/,
       /^src\/app\/i18n\.tsx$/,
       /^src\/styles\//,
     ],

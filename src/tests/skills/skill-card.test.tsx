@@ -98,7 +98,7 @@ test("keeps ownership beside the name and collaboration status in the right acti
   const titleRow = container.querySelector(".skill-card__title-row");
   const actions = container.querySelector(".skill-card__list-actions");
 
-  expect(titleRow).toHaveTextContent("drawio-diagram+ 标签SkillDock已启用 2");
+  expect(titleRow).toHaveTextContent("drawio-diagramSkillDock已启用 2+ 标签");
   expect(titleRow).not.toHaveTextContent("待推送");
   expect(titleRow?.querySelector(".skill-card__owner-badge")).toHaveClass(
     "status-badge",
