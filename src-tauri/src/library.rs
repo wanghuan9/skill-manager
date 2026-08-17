@@ -2423,6 +2423,15 @@ pub fn create_skill_symlink(
     }
 
     let symlink_path = tool_path.join(normalized_skill_name);
+    let entry_already_points_to_skill = skill_path == symlink_path
+        || skill_path
+            .canonicalize()
+            .ok()
+            .zip(symlink_path.canonicalize().ok())
+            .is_some_and(|(source, target)| source == target);
+    if entry_already_points_to_skill {
+        return Ok(());
+    }
 
     if fs::symlink_metadata(&symlink_path).is_ok() {
         if is_skill_link_entry(&symlink_path) {
@@ -3669,6 +3678,30 @@ url.git@git.example.com:example-org/.insteadof https://git.example.com/example-o
                 std::env::remove_var("HOME");
             }
         }
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn create_skill_symlink_accepts_skill_already_in_tool_directory() {
+        let temp_dir = temp_test_dir("skill-already-in-tool-directory");
+        let tool_skills_dir = temp_dir.join("tool-skills");
+        let skill_dir = tool_skills_dir.join("demo");
+        fs::create_dir_all(&skill_dir).expect("create direct skill directory");
+        fs::write(skill_dir.join("SKILL.md"), "# demo").expect("write direct skill");
+
+        create_skill_symlink(
+            skill_dir.to_string_lossy().as_ref(),
+            "demo",
+            tool_skills_dir.to_string_lossy().as_ref(),
+        )
+        .expect("direct skill should already be available to the tool");
+
+        assert!(skill_dir.is_dir());
+        assert!(!fs::symlink_metadata(&skill_dir)
+            .expect("read direct skill metadata")
+            .file_type()
+            .is_symlink());
+
         let _ = fs::remove_dir_all(temp_dir);
     }
 

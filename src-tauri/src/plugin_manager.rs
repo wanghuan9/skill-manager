@@ -682,9 +682,11 @@ pub fn align_portable_plugin_targets(
                 .iter()
                 .any(|disabled_host| disabled_host == host_tool)
             {
-                if let Err(error) =
-                    set_plugin_enabled(host_tool.clone(), path_to_string(&source_root), false)
-                {
+                if let Err(error) = set_plugin_enabled_blocking(
+                    host_tool.clone(),
+                    path_to_string(&source_root),
+                    false,
+                ) {
                     warnings.push(format!(
                         "{} 未能恢复 {} 停用状态: {error}",
                         target.package_id, host_tool
@@ -1016,7 +1018,19 @@ pub fn open_plugin_in_editor(root_path: &str, editor_id: &str) -> Result<(), Str
 }
 
 #[tauri::command]
-pub fn set_plugin_enabled(
+pub async fn set_plugin_enabled(
+    host_tool: String,
+    root_path: String,
+    enabled: bool,
+) -> Result<PluginSummary, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        set_plugin_enabled_blocking(host_tool, root_path, enabled)
+    })
+    .await
+    .map_err(|error| format!("插件启停任务失败: {error}"))?
+}
+
+fn set_plugin_enabled_blocking(
     host_tool: String,
     root_path: String,
     enabled: bool,
@@ -2943,7 +2957,13 @@ fn set_opencode_plugin_enabled(root_path: &str, enabled: bool) -> Result<PluginS
     } else {
         ensure_opencode_links_disabled(&home_dir, &plugin_root)?;
     }
-    find_plugin_after_enabled_change("opencode", &plugin_root)
+    build_opencode_plugin_summary(
+        &home_dir,
+        &plugin_root,
+        if enabled { "enabled" } else { "disabled" },
+        PluginScanMode::Local,
+    )
+    .ok_or_else(|| "OpenCode 插件启用状态已写入，但重新读取插件状态失败".to_string())
 }
 
 fn delete_opencode_plugin(root_path: &str) -> Result<(), String> {
@@ -12557,11 +12577,11 @@ mod tests {
         paths_refer_to_same_dir, plugin_discovery_repo_key, plugin_git_state,
         plugin_probe_source_url, probe_plugin_repo, probe_plugin_source_candidates_blocking,
         read_plugin_package_identity, read_skilldock_plugin_source_metadata,
-        resolve_shared_plugin_package_id, run_git_at, set_plugin_enabled,
-        shared_plugin_package_id_candidates, shared_plugin_package_repo_root,
-        update_clean_plugin_repo_to_fetched_ref, write_plugin_package_identity,
-        write_skilldock_plugin_source_metadata, FetchedPluginCheckoutTarget,
-        PLUGIN_STATUS_PENDING_PUSH,
+        resolve_shared_plugin_package_id, run_git_at,
+        set_plugin_enabled_blocking as set_plugin_enabled, shared_plugin_package_id_candidates,
+        shared_plugin_package_repo_root, update_clean_plugin_repo_to_fetched_ref,
+        write_plugin_package_identity, write_skilldock_plugin_source_metadata,
+        FetchedPluginCheckoutTarget, PLUGIN_STATUS_PENDING_PUSH,
     };
     use crate::library::parse_market_source_url;
     use crate::models::{PluginComponentSummary, PluginProbeResult, PluginSummary};
@@ -20678,8 +20698,10 @@ source = "__SOURCE__"
         let previous_home = env::var_os("HOME");
         env::set_var("HOME", &home_dir);
 
-        super::ensure_opencode_links_enabled(&home_dir, &plugin_root)
-            .expect("enable OpenCode links");
+        let enabled_plugin =
+            super::set_opencode_plugin_enabled(plugin_root.to_string_lossy().as_ref(), true)
+                .expect("enable OpenCode plugin");
+        assert_eq!(enabled_plugin.enabled_state, "enabled");
         let expected_links = super::opencode_expected_links(&home_dir, &plugin_root)
             .expect("resolve expected OpenCode links");
         assert_eq!(expected_links.len(), 1);
@@ -20708,8 +20730,10 @@ source = "__SOURCE__"
             .join("user-custom.ts");
         std::os::unix::fs::symlink(&first_entry, &custom_link)
             .expect("create user-owned same-source link");
-        super::ensure_opencode_links_disabled(&home_dir, &plugin_root)
-            .expect("disable OpenCode links");
+        let disabled_plugin =
+            super::set_opencode_plugin_enabled(plugin_root.to_string_lossy().as_ref(), false)
+                .expect("disable OpenCode plugin");
+        assert_eq!(disabled_plugin.enabled_state, "disabled");
         assert!(fs::symlink_metadata(&first_link).is_err());
         assert!(fs::symlink_metadata(&custom_link)
             .expect("read preserved user link")
