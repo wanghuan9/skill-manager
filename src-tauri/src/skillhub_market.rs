@@ -440,6 +440,7 @@ fn install_skill_package(
             skill_entries: vec![local_path],
             path_error: String::new(),
             content_hash: marketplace_package::directory_content_hash(&skill_dir)?,
+            tag: String::new(),
             marketplace_owner: String::new(),
             marketplace_slug: slug.to_string(),
             marketplace_version: version.to_string(),

@@ -837,6 +837,7 @@ fn build_installed_skill(
             skill_entries: vec![target.to_string_lossy().to_string()],
             path_error: String::new(),
             content_hash: String::new(),
+            tag: String::new(),
             marketplace_owner: skill.owner.clone(),
             marketplace_slug: skill.slug.clone(),
             marketplace_version: skill.version.clone(),

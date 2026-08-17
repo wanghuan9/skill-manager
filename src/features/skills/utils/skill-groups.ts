@@ -1,8 +1,10 @@
 import type { SkillSummary } from "@/features/skills/state/skill-store";
 
-export type SkillSourceGroup = {
+export type SkillGroup = {
   id: string;
   label: string;
+  kind: "source" | "tag";
+  isUntagged?: boolean;
   skills: SkillSummary[];
 };
 
@@ -119,7 +121,7 @@ function resolveInitialGroupLabel(skill: SkillSummary, options: GroupLabelOption
   return resolveFallbackGroupLabel(skill, options);
 }
 
-export function groupSkillsBySource(skills: SkillSummary[], options: GroupLabelOptions = {}): SkillSourceGroup[] {
+export function groupSkillsBySource(skills: SkillSummary[], options: GroupLabelOptions = {}): SkillGroup[] {
   const groupedItems = skills.map((skill) => {
     const parsedRepository = parseRepository(skill.sourceUrl);
     const preferredLabel = resolveInitialGroupLabel(skill, options);
@@ -151,8 +153,41 @@ export function groupSkillsBySource(skills: SkillSummary[], options: GroupLabelO
   return [...groupMap.entries()]
     .sort(([leftLabel], [rightLabel]) => leftLabel.localeCompare(rightLabel))
     .map(([label, groupedSkills]) => ({
-      id: label,
+      id: `source:${label}`,
       label,
+      kind: "source" as const,
       skills: groupedSkills,
+    }));
+}
+
+export function groupSkillsByTag(skills: SkillSummary[], untaggedLabel: string): SkillGroup[] {
+  const groupMap = new Map<string, { label: string; skills: SkillSummary[] }>();
+  skills.forEach((skill) => {
+    const tag = skill.tag?.trim() ?? "";
+    const normalizedTag = tag.toLocaleLowerCase();
+    const currentGroup = groupMap.get(normalizedTag) ?? {
+      label: tag || untaggedLabel,
+      skills: [],
+    };
+    currentGroup.skills.push(skill);
+    groupMap.set(normalizedTag, currentGroup);
+  });
+
+  return [...groupMap.entries()]
+    .sort(([leftKey, leftGroup], [rightKey, rightGroup]) => {
+      if (!leftKey) {
+        return 1;
+      }
+      if (!rightKey) {
+        return -1;
+      }
+      return leftGroup.label.localeCompare(rightGroup.label);
+    })
+    .map(([normalizedTag, group]) => ({
+      id: `tag:${normalizedTag || "untagged"}`,
+      label: group.label,
+      kind: "tag",
+      isUntagged: !normalizedTag,
+      skills: group.skills,
     }));
 }

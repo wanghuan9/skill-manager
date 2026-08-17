@@ -176,11 +176,18 @@ test("lists only installed tools that expose a real Skill directory", () => {
   const tools: ToolConfig[] = [
     codex,
     { ...codex, id: "claude-code", name: "Claude Code", skillsPath: "/Users/demo/.claude/skills" },
+    { ...codex, id: "opencode", name: "OpenCode", skillsPath: "/Users/demo/.opencode/skills" },
     { ...codex, id: "intellij", name: "IntelliJ IDEA", skillsPath: "/Users/demo/.junie/skills" },
     { ...codex, id: "junie", name: "Junie", skillsPath: "/Users/demo/.junie/skills" },
-    { ...codex, id: "cursor", name: "Cursor", statusLabel: "未安装" },
+    { ...codex, id: "cursor", name: "Cursor", skillsPath: "/Users/demo/.cursor/skills" },
     { ...codex, id: "vscode", name: "VS Code", skillsPath: "" },
   ];
 
-  expect(listSkillSourceTools(tools).map((tool) => tool.id)).toEqual(["claude-code", "codex", "junie"]);
+  expect(listSkillSourceTools(tools).map((tool) => tool.id)).toEqual([
+    "claude-code",
+    "codex",
+    "cursor",
+    "opencode",
+    "junie",
+  ]);
 });

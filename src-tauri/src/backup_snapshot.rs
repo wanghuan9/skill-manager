@@ -66,6 +66,8 @@ pub struct BackupSkillMetadata {
     #[serde(default)]
     pub local_change_count: usize,
     #[serde(default)]
+    pub tag: String,
+    #[serde(default)]
     pub enabled_hosts: BTreeMap<String, bool>,
     pub tools: BTreeMap<String, bool>,
     pub content_hash: String,
@@ -918,6 +920,7 @@ pub fn write_current_library_snapshot_with_progress(
             git_linked: skill.git_linked,
             collab_status: skill.collab_status.clone(),
             local_change_count: skill.local_change_count,
+            tag: skill.instance.tag.clone(),
             enabled_hosts,
             tools,
             content_hash,
@@ -1233,6 +1236,7 @@ fn restored_skill_with_git_state(
             management_owner: "skilldock".to_string(),
             update_driver: metadata.update_driver.clone(),
             skill_entries: vec![local_path.to_string_lossy().to_string()],
+            tag: metadata.tag.clone(),
             ..Default::default()
         },
         tools: if metadata.enabled_hosts.is_empty() {

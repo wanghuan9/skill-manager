@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -223,6 +225,8 @@ pub struct SkillInstanceMetadata {
     pub path_error: String,
     #[serde(default)]
     pub content_hash: String,
+    #[serde(default)]
+    pub tag: String,
     pub marketplace_owner: String,
     #[serde(default)]
     pub marketplace_slug: String,
@@ -466,6 +470,8 @@ pub struct BackupStatus {
 #[serde(rename_all = "camelCase")]
 pub struct WorkspacePersistence {
     pub installed_skills: Vec<SkillSummary>,
+    #[serde(default)]
+    pub skill_tags: BTreeMap<String, String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

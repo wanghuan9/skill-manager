@@ -38,6 +38,7 @@ afterEach(() => {
 
 test("switches between list, grouped, and card views", () => {
   const onViewModeChange = vi.fn();
+  const onGroupModeChange = vi.fn();
 
   mockedUseSkillWorkspace.mockReturnValue({
     language: "zh-CN",
@@ -56,17 +57,56 @@ test("switches between list, grouped, and card views", () => {
         onStatusFilterChange={vi.fn()}
         viewMode="list"
         onViewModeChange={onViewModeChange}
+        groupMode="source"
+        onGroupModeChange={onGroupModeChange}
       />
     </NotificationProvider>,
   );
 
   expect(screen.getByRole("group", { name: "Skill 展示方式" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "列表" })).toHaveAttribute("aria-pressed", "true");
-  fireEvent.click(screen.getByRole("button", { name: "分组" }));
+  fireEvent.click(screen.getByRole("button", { name: "按来源分组" }));
+  fireEvent.click(screen.getByRole("combobox", { name: "选择分组方式" }));
+  fireEvent.click(screen.getByRole("option", { name: "按标签分组" }));
   fireEvent.click(screen.getByRole("button", { name: "卡片" }));
 
+  expect(onGroupModeChange).toHaveBeenCalledWith("tag");
   expect(onViewModeChange).toHaveBeenNthCalledWith(1, "grouped");
-  expect(onViewModeChange).toHaveBeenNthCalledWith(2, "grid");
+  expect(onViewModeChange).toHaveBeenNthCalledWith(2, "grouped");
+  expect(onViewModeChange).toHaveBeenNthCalledWith(3, "grid");
+});
+
+test("uses the remembered tag grouping from the main group button", () => {
+  const onViewModeChange = vi.fn();
+  const onGroupModeChange = vi.fn();
+
+  mockedUseSkillWorkspace.mockReturnValue({
+    language: "zh-CN",
+    installedSkills: installedSkillFixtures,
+    isLoading: false,
+    refreshWorkspace: vi.fn(),
+    updateAllSkills: vi.fn(),
+  } as unknown as ReturnType<typeof useSkillWorkspace>);
+
+  renderWithI18n(
+    <NotificationProvider>
+      <SkillListToolbar
+        query=""
+        statusFilter="all"
+        onQueryChange={vi.fn()}
+        onStatusFilterChange={vi.fn()}
+        viewMode="list"
+        onViewModeChange={onViewModeChange}
+        groupMode="tag"
+        onGroupModeChange={onGroupModeChange}
+      />
+    </NotificationProvider>,
+  );
+
+  fireEvent.click(screen.getByRole("button", { name: "按标签分组" }));
+
+  expect(onViewModeChange).toHaveBeenCalledWith("grouped");
+  expect(onGroupModeChange).not.toHaveBeenCalled();
 });
 
 test("offers list and card views for a tool source", () => {
@@ -95,7 +135,7 @@ test("offers list and card views for a tool source", () => {
   );
 
   expect(screen.getByRole("button", { name: "列表" })).toHaveAttribute("aria-pressed", "true");
-  expect(screen.queryByRole("button", { name: "分组" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("combobox", { name: "选择分组方式" })).not.toBeInTheDocument();
   expect(screen.queryByLabelText("按托管方筛选 Skill")).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "卡片" }));
   fireEvent.click(screen.getByRole("button", { name: "列表" }));

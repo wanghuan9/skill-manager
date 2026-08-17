@@ -77,7 +77,8 @@ export function filterSkills(skills: SkillSummary[], options: FilterOptions) {
       skill.name.toLowerCase().includes(normalizedQuery) ||
       skill.sourceLabel.toLowerCase().includes(normalizedQuery) ||
       skill.description.toLowerCase().includes(normalizedQuery) ||
-      skill.sourceType.toLowerCase().includes(normalizedQuery);
+      skill.sourceType.toLowerCase().includes(normalizedQuery) ||
+      skill.tag?.toLowerCase().includes(normalizedQuery);
     const matchesStatus = matchesStatusFilter(skill, options.status);
     const matchesOwner = ownerFilter === "all" || resolveSkillManagementOwner(skill) === ownerFilter;
 

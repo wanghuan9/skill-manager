@@ -1,9 +1,11 @@
 import { expect, test } from "vitest";
 import {
+  readSkillGroupModePreference,
   readSkillGroupCollapsedState,
   resolveSkillViewModePreference,
   SKILL_GROUPED_DEFAULT_THRESHOLD,
   writeSkillGroupCollapsedState,
+  writeSkillGroupModePreference,
 } from "@/features/skills/utils/skill-view-preference";
 
 test("defaults to list view when installed skill count is at or below threshold", () => {
@@ -32,4 +34,12 @@ test("reads and writes collapsed group state", () => {
     "team-skills": false,
     "best-skills": true,
   });
+});
+
+test("reads and writes the group mode preference", () => {
+  writeSkillGroupModePreference("tag");
+  expect(readSkillGroupModePreference()).toBe("tag");
+
+  writeSkillGroupModePreference("source");
+  expect(readSkillGroupModePreference()).toBe("source");
 });

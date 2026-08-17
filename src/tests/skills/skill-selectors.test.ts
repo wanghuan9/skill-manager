@@ -105,6 +105,18 @@ describe("filterSkills", () => {
     expect(skills.map((skill) => skill.name)).toEqual(["diagram-helper"]);
   });
 
+  it("matches query against skill tags", () => {
+    const skills = filterSkills(
+      [
+        createSkill({ name: "diagram-helper", tag: "研发工具" }),
+        createSkill({ name: "release-helper", tag: "发布" }),
+      ],
+      { query: "研发", status: "all" },
+    );
+
+    expect(skills.map((skill) => skill.name)).toEqual(["diagram-helper"]);
+  });
+
   it("combines management owner, query, and status filters", () => {
     const skills = filterSkills(
       [

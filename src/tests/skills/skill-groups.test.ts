@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SkillSummary } from "@/features/skills/state/skill-store";
-import { groupSkillsBySource } from "@/features/skills/utils/skill-groups";
+import { groupSkillsBySource, groupSkillsByTag } from "@/features/skills/utils/skill-groups";
 
 function createSkill(overrides: Partial<SkillSummary>): SkillSummary {
   return {
@@ -110,5 +110,30 @@ describe("groupSkillsBySource", () => {
 
     expect(groups).toHaveLength(1);
     expect(groups[0]?.label).toBe("open.feishu.cn");
+  });
+});
+
+describe("groupSkillsByTag", () => {
+  it("groups each skill once and places untagged skills last", () => {
+    const groups = groupSkillsByTag([
+      createSkill({ name: "untagged" }),
+      createSkill({ name: "writing", tag: "写作" }),
+      createSkill({ name: "coding", tag: "研发" }),
+    ], "未打标签");
+
+    expect(groups.map((group) => group.label)).toEqual(["写作", "研发", "未打标签"]);
+    expect(groups.map((group) => group.id)).toEqual(["tag:写作", "tag:研发", "tag:untagged"]);
+    expect(groups.flatMap((group) => group.skills).map((skill) => skill.name)).toHaveLength(3);
+  });
+
+  it("treats tags as case-insensitive while preserving the display label", () => {
+    const groups = groupSkillsByTag([
+      createSkill({ name: "first", tag: "Code" }),
+      createSkill({ name: "second", tag: "code" }),
+    ], "Untagged");
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0]?.label).toBe("Code");
+    expect(groups[0]?.skills.map((skill) => skill.name)).toEqual(["first", "second"]);
   });
 });

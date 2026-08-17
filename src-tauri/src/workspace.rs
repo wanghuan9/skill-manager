@@ -36,10 +36,11 @@ const WORKSPACE_LAYOUT_DIRECTORIES: [&str; 11] = [
 ];
 const WORKSPACE_MIGRATION_PARENT_DIRECTORIES: [&str; 5] =
     ["config", "data", "data/publishing", "credentials", "cache"];
-const WORKSPACE_FILE_MOVES: [WorkspaceFileMove; 11] = [
+const WORKSPACE_FILE_MOVES: [WorkspaceFileMove; 12] = [
     WorkspaceFileMove::new("settings.json", "config/settings.json"),
     WorkspaceFileMove::new("mcp-servers.json", "config/mcp-servers.json"),
     WorkspaceFileMove::new("state.json", "data/state.json"),
+    WorkspaceFileMove::new("skill-tags.json", "data/skill-tags.json"),
     WorkspaceFileMove::new(
         "publish-state.json",
         "data/publishing/legacy-marketplace.json",

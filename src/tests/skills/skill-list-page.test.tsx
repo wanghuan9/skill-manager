@@ -12,6 +12,11 @@ beforeEach(() => {
   window.localStorage.clear();
 });
 
+async function switchToSourceGroupedView() {
+  await userEvent.click(screen.getByRole("combobox", { name: "选择分组方式" }));
+  await userEvent.click(screen.getByRole("option", { name: "按来源分组" }));
+}
+
 test("preserves the current Skill header layout and opens Skill install", async () => {
   const { container } = render(<App />);
   const header = container.querySelector(".page-header--split");
@@ -112,7 +117,7 @@ test("confirms managed Skill batch deletion without losing the selection on canc
 test("temporarily expands grouped Skills while batch selection is active", async () => {
   render(<App />);
 
-  await userEvent.click(screen.getByRole("button", { name: "分组" }));
+  await switchToSourceGroupedView();
   expect(screen.queryByRole("heading", { name: "skill-publisher" })).not.toBeInTheDocument();
 
   await userEvent.click(screen.getByRole("button", { name: "批量选择" }));
@@ -130,7 +135,7 @@ test("selects, partially selects, and deselects a grouped Skill source", async (
   const user = userEvent.setup();
   render(<App />);
 
-  await user.click(screen.getByRole("button", { name: "分组" }));
+  await switchToSourceGroupedView();
   await user.click(screen.getByRole("button", { name: "批量选择" }));
 
   const selectGroupButton = screen.getByRole("button", { name: "全选分组 team-skills" });
@@ -203,11 +208,11 @@ test("shows a tool source as three-column cards with modal details", async () =>
   const user = userEvent.setup();
   const { container } = render(<App />);
 
-  await user.click(screen.getByRole("button", { name: "分组" }));
+  await switchToSourceGroupedView();
   await user.click(screen.getByRole("tab", { name: "Codex 5" }));
 
   expect(screen.getByRole("button", { name: "列表" })).toHaveAttribute("aria-pressed", "true");
-  expect(screen.queryByRole("button", { name: "分组" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("combobox", { name: "选择分组方式" })).not.toBeInTheDocument();
 
   await user.click(screen.getByRole("button", { name: "卡片" }));
 
@@ -293,7 +298,7 @@ test("opens and focuses the corresponding managed Skill from a tool directory", 
   const user = userEvent.setup();
   render(<App />);
 
-  await user.click(screen.getByRole("button", { name: "分组" }));
+  await switchToSourceGroupedView();
   await user.click(screen.getByRole("combobox", { name: "筛选 Skill" }));
   await user.click(screen.getByRole("option", { name: "可更新 (1)" }));
   await user.click(screen.getByRole("tab", { name: "Codex 5" }));
@@ -314,7 +319,7 @@ test("closes the managed Skill detail opened from a tool card", async () => {
   const user = userEvent.setup();
   render(<App />);
 
-  await user.click(screen.getByRole("button", { name: "分组" }));
+  await switchToSourceGroupedView();
   await user.click(screen.getByRole("tab", { name: "Codex 5" }));
   await user.click(screen.getByRole("button", { name: "卡片" }));
 
@@ -334,7 +339,7 @@ test("does not reopen a managed Skill detail after leaving and returning to Skil
   const user = userEvent.setup();
   render(<App />);
 
-  await user.click(screen.getByRole("button", { name: "分组" }));
+  await switchToSourceGroupedView();
   await user.click(screen.getByRole("tab", { name: "Codex 5" }));
   await user.click(screen.getByRole("button", { name: "卡片" }));
 
@@ -488,7 +493,7 @@ test("uses list view by default when installed skill count is at or below thresh
   expect(screen.getByRole("heading", { name: "skill-publisher" })).toBeInTheDocument();
   expect(screen.getByRole("heading", { name: "drawio-diagram" })).toBeInTheDocument();
   expect(screen.getByRole("heading", { name: "excalidraw-diagram" })).toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: /来源分组/ })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /^(展开|收起)来源分组/ })).not.toBeInTheDocument();
 });
 
 test("keeps same-named skills separate when filtering for updates", async () => {
@@ -662,7 +667,7 @@ test("shows the grouped skill count beside the group title", async () => {
 
   render(<App />);
 
-  await user.click(screen.getByRole("button", { name: "分组" }));
+  await switchToSourceGroupedView();
 
   const teamGroupHeader = screen.getByRole("button", { name: "展开来源分组 team-skills" });
   const count = within(teamGroupHeader).getByText("2 个技能");
@@ -675,7 +680,7 @@ test("filters grouped skills by selected status", async () => {
 
   render(<App />);
 
-  await user.click(screen.getByRole("button", { name: "分组" }));
+  await switchToSourceGroupedView();
   await user.click(screen.getByRole("combobox", { name: "筛选 Skill" }));
   await user.click(screen.getByRole("option", { name: "可更新 (1)" }));
 
@@ -687,7 +692,7 @@ test("remembers expanded groups across app reopen", async () => {
   const user = userEvent.setup();
   const firstRender = render(<App />);
 
-  await user.click(screen.getByRole("button", { name: "分组" }));
+  await switchToSourceGroupedView();
   await user.click(screen.getByRole("button", { name: "展开来源分组 team-skills" }));
 
   expect(screen.getByRole("heading", { name: "skill-publisher" })).toBeInTheDocument();
@@ -708,16 +713,16 @@ test("remembers the user's last grouped view selection", async () => {
   const user = userEvent.setup();
   const firstRender = render(<App />);
 
-  await user.click(screen.getByRole("button", { name: "分组" }));
+  await switchToSourceGroupedView();
 
-  expect(screen.getByRole("button", { name: "分组" })).toBeInTheDocument();
+  expect(screen.getByRole("combobox", { name: "选择分组方式" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "展开来源分组 team-skills" })).toBeInTheDocument();
   expect(screen.queryByRole("heading", { name: "skill-publisher" })).not.toBeInTheDocument();
 
   firstRender.unmount();
   render(<App />);
 
-  expect(screen.getByRole("button", { name: "分组" })).toBeInTheDocument();
+  expect(screen.getByRole("combobox", { name: "选择分组方式" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "展开来源分组 team-skills" })).toBeInTheDocument();
   expect(screen.queryByRole("heading", { name: "skill-publisher" })).not.toBeInTheDocument();
 });

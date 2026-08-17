@@ -98,7 +98,7 @@ test("keeps ownership beside the name and collaboration status in the right acti
   const titleRow = container.querySelector(".skill-card__title-row");
   const actions = container.querySelector(".skill-card__list-actions");
 
-  expect(titleRow).toHaveTextContent("drawio-diagramSkillDock已启用 2");
+  expect(titleRow).toHaveTextContent("drawio-diagram+ 标签SkillDock已启用 2");
   expect(titleRow).not.toHaveTextContent("待推送");
   expect(titleRow?.querySelector(".skill-card__owner-badge")).toHaveClass(
     "status-badge",
@@ -108,6 +108,40 @@ test("keeps ownership beside the name and collaboration status in the right acti
   expect(actions).toHaveTextContent("待推送");
   expect(actions?.firstElementChild).toHaveTextContent("待推送");
   expect(actions?.firstElementChild?.tagName).toBe("SPAN");
+});
+
+test("adds a local tag from the compact editor", async () => {
+  const skill = installedSkillFixtures.find((item) => item.name === "drawio-diagram");
+  if (!skill) {
+    throw new Error("missing drawio-diagram fixture");
+  }
+  const setSkillTagSpy = vi.spyOn(skillClient, "setSkillTag");
+
+  renderSkillCardWithProviders({ ...skill, tag: "" });
+  await userEvent.click(screen.getByRole("button", { name: "添加标签" }));
+  await userEvent.type(screen.getByPlaceholderText("输入或搜索标签"), "研发");
+  await userEvent.keyboard("{Enter}");
+
+  await waitFor(() => {
+    expect(setSkillTagSpy).toHaveBeenCalledWith(expect.objectContaining({
+      skillName: "drawio-diagram",
+      tag: "研发",
+    }));
+  });
+  setSkillTagSpy.mockRestore();
+});
+
+test("keeps an empty tag slot in card layout", () => {
+  const skill = installedSkillFixtures.find((item) => item.name === "drawio-diagram");
+  if (!skill) {
+    throw new Error("missing drawio-diagram fixture");
+  }
+
+  const { container } = renderSkillCardWithProviders({ ...skill, tag: "" }, "grid");
+
+  expect(container.querySelector(".skill-card__tag-slot")).toContainElement(
+    screen.getByRole("button", { name: "添加标签" }),
+  );
 });
 
 test("shows Agent CLI update action only after an update is detected", () => {
@@ -516,7 +550,7 @@ test("keeps expanded enabled tools in a stable shared order", async () => {
 
   const { container } = renderSkillCardWithProviders(skillWithManyTools);
   const enabledToolsButton = screen.getByRole("button", {
-    name: "已启用工具：Claude Code、Codex、OpenCode、Cursor、Gemini CLI、Antigravity、Devin、Continue",
+    name: "已启用工具：Claude Code、Codex、Cursor、OpenCode、Gemini CLI、Antigravity、Devin、Continue",
   });
 
   expect(enabledToolsButton).toHaveTextContent("已启用 8");
@@ -525,6 +559,11 @@ test("keeps expanded enabled tools in a stable shared order", async () => {
 
   expect(container.querySelectorAll(".skill-card__tool-icon")).toHaveLength(8);
   expect(container.querySelector(".skill-card__title-row .skill-card__summary-tools")).toBeInTheDocument();
+
+  await userEvent.click(screen.getByRole("button", { name: /展开 multi-search-engine/ }));
+  const toolPillNames = [...container.querySelectorAll(".tool-pill__name")]
+    .map((element) => element.textContent);
+  expect(toolPillNames.slice(0, 4)).toEqual(["Claude Code", "Codex", "Cursor", "OpenCode"]);
 });
 
 test("shows up to six enabled tools in the card summary", () => {
