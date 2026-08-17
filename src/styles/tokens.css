@@ -3136,6 +3136,7 @@ code {
 .skill-card--grid:hover .skill-card__tag-slot .skill-card__tag:not(.has-tag),
 .skill-card--grid:focus-within .skill-card__tag-slot .skill-card__tag:not(.has-tag),
 .skill-card--grid .skill-card__tag-slot .skill-card__tag.is-editor-open {
+  border-color: color-mix(in srgb, var(--muted) 28%, var(--line) 72%);
   opacity: 1;
   pointer-events: auto;
 }
@@ -3150,6 +3151,7 @@ code {
   }
 
   .skill-card--grid .skill-card__tag-slot .skill-card__tag:not(.has-tag) {
+    border-color: color-mix(in srgb, var(--muted) 28%, var(--line) 72%);
     opacity: 1;
     pointer-events: auto;
   }
