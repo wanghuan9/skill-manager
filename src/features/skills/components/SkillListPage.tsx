@@ -13,9 +13,10 @@ import {
 import { SkillCard } from "@/features/skills/components/SkillCard";
 import { SkillSourceView } from "@/features/skills/components/SkillSourceView";
 import { useSkillWorkspace } from "@/features/skills/state/skill-workspace";
-import { groupSkillsBySource } from "@/features/skills/utils/skill-groups";
+import { groupSkillsBySource, groupSkillsByTag } from "@/features/skills/utils/skill-groups";
 import {
   readSkillGroupCollapsedState,
+  type SkillGroupMode,
   type SkillViewMode,
   writeSkillGroupCollapsedState,
 } from "@/features/skills/utils/skill-view-preference";
@@ -57,6 +58,8 @@ type SkillToolbarProps = {
   onManagementFilterChange?: (value: ToolSkillManagementFilter) => void;
   viewMode: SkillViewMode;
   onViewModeChange: (value: SkillViewMode) => void;
+  groupMode?: SkillGroupMode;
+  onGroupModeChange?: (value: SkillGroupMode) => void;
   onGoInstall?: () => void;
   isBatchSelecting?: boolean;
   onBatchSelectingChange?: (isSelecting: boolean) => void;
@@ -195,6 +198,8 @@ export function SkillListToolbar(props: SkillToolbarProps) {
     onManagementFilterChange = () => undefined,
     viewMode,
     onViewModeChange,
+    groupMode = "source",
+    onGroupModeChange = () => undefined,
     onGoInstall,
     isBatchSelecting = false,
     onBatchSelectingChange = () => undefined,
@@ -268,6 +273,10 @@ export function SkillListToolbar(props: SkillToolbarProps) {
     { value: "managed", label: t("skills.source.filter.managed") },
     { value: "unmanaged", label: t("skills.source.filter.unmanaged") },
     { value: "mismatch", label: t("skills.source.filter.mismatch") },
+  ];
+  const groupModeOptions: Array<{ value: SkillGroupMode; label: string }> = [
+    { value: "source", label: t("skills.group.mode.source") },
+    { value: "tag", label: t("skills.group.mode.tag") },
   ];
   const isManagedSource = activeSourceId === MANAGED_SKILL_SOURCE_ID;
   const managedFilterValue = ownerFilter === "all" ? statusFilter : ownerFilter;
@@ -367,16 +376,34 @@ export function SkillListToolbar(props: SkillToolbarProps) {
           <GridIcon />
         </button>
         {isManagedSource ? (
-          <button
-            className={`skills-view-toggle__button${viewMode === "grouped" ? " is-active" : ""}`}
-            type="button"
-            aria-pressed={viewMode === "grouped"}
-            aria-label={t("skills.view.grouped")}
-            data-tooltip={t("skills.view.grouped")}
-            onClick={() => onViewModeChange("grouped")}
-          >
-            <GroupIcon />
-          </button>
+          <div className={`skills-group-view-control${viewMode === "grouped" ? " is-active" : ""}`}>
+            <button
+              className={`skills-view-toggle__button skills-group-view-control__button${viewMode === "grouped" ? " is-active" : ""}`}
+              type="button"
+              aria-pressed={viewMode === "grouped"}
+              aria-label={t(groupMode === "source" ? "skills.group.mode.source" : "skills.group.mode.tag")}
+              data-tooltip={t(groupMode === "source" ? "skills.group.mode.source" : "skills.group.mode.tag")}
+              onClick={() => onViewModeChange("grouped")}
+            >
+              <GroupIcon />
+              {viewMode === "grouped" ? (
+                <span>{t(groupMode === "source" ? "skills.group.mode.sourceShort" : "skills.group.mode.tagShort")}</span>
+              ) : null}
+            </button>
+            <AppSelect
+              value={groupMode}
+              options={groupModeOptions}
+              onChange={(nextGroupMode) => {
+                onGroupModeChange(nextGroupMode);
+                onViewModeChange("grouped");
+              }}
+              ariaLabel={t("skills.group.mode.choose")}
+              className="skills-group-mode-select"
+              menuClassName="skills-group-mode-select__popover"
+              minMenuWidth={112}
+              selectedLabel={<span className="sr-only">{t("skills.group.mode.choose")}</span>}
+            />
+          </div>
         ) : null}
       </div>
       <div className="skill-status-filter">
@@ -458,6 +485,7 @@ type SkillListPageProps = {
   ownerFilter?: ManagedSkillOwnerFilter;
   managementFilter?: ToolSkillManagementFilter;
   viewMode: SkillViewMode;
+  groupMode?: SkillGroupMode;
   isBatchSelecting?: boolean;
   onBatchSelectingChange?: (isSelecting: boolean) => void;
 };
@@ -480,6 +508,7 @@ export function SkillListPage(props: SkillListPageProps) {
     ownerFilter = "all",
     managementFilter = "all",
     viewMode,
+    groupMode = "source",
     isBatchSelecting = false,
     onBatchSelectingChange = () => undefined,
     activeSourceId = MANAGED_SKILL_SOURCE_ID,
@@ -539,8 +568,10 @@ export function SkillListPage(props: SkillListPageProps) {
   const updatableSelectedSkills = selectedSkills.filter((skill) => skill.collabStatus === "update-available");
   const isBatchBusy = batchAction !== "";
   const groupedSkills = useMemo(
-    () => groupSkillsBySource(skills, { localLabel: t("skills.source.local") }),
-    [skills, t],
+    () => groupMode === "tag"
+      ? groupSkillsByTag(skills, t("skills.group.untagged"))
+      : groupSkillsBySource(skills, { localLabel: t("skills.source.local") }),
+    [groupMode, skills, t],
   );
   const skillGridRows = useMemo(() => {
     const rows: SkillSummary[][] = [];
@@ -550,8 +581,10 @@ export function SkillListPage(props: SkillListPageProps) {
     return rows;
   }, [skills]);
   const allGroupedSkills = useMemo(
-    () => groupSkillsBySource(orderedInstalledSkills, { localLabel: t("skills.source.local") }),
-    [orderedInstalledSkills, t],
+    () => groupMode === "tag"
+      ? groupSkillsByTag(orderedInstalledSkills, t("skills.group.untagged"))
+      : groupSkillsBySource(orderedInstalledSkills, { localLabel: t("skills.source.local") }),
+    [groupMode, orderedInstalledSkills, t],
   );
 
   useEffect(() => {
@@ -817,9 +850,11 @@ export function SkillListPage(props: SkillListPageProps) {
             const pendingCommitCount = group.skills.filter((skill) => skill.collabStatus === "pending-commit").length;
             const pendingPushCount = group.skills.filter((skill) => skill.collabStatus === "pending-push").length;
             const isCollapsed = batchSelection.isSelecting ? false : isGroupCollapsed(group.id);
-            const groupTone = resolveSkillGroupTone(group.skills[0]?.sourceType);
+            const groupTone = group.kind === "tag"
+              ? group.isUntagged ? "local" : "default"
+              : resolveSkillGroupTone(group.skills[0]?.sourceType);
             const groupSourceUrl = formatGroupSourceUrl(group.skills[0]?.sourceUrl ?? group.label);
-            const isGroupSourceLinkable = isHttpUrl(groupSourceUrl);
+            const isGroupSourceLinkable = group.kind === "source" && isHttpUrl(groupSourceUrl);
             const groupSkillIds = group.skills.map(getSkillIdentity);
             const selectedGroupSkillCount = groupSkillIds.filter((id) => batchSelection.selectedIds.has(id)).length;
             const isGroupSelected = groupSkillIds.length > 0 && selectedGroupSkillCount === groupSkillIds.length;
@@ -841,7 +876,12 @@ export function SkillListPage(props: SkillListPageProps) {
                   aria-expanded={batchSelection.isSelecting ? undefined : !isCollapsed}
                   aria-label={batchSelection.isSelecting
                     ? undefined
-                    : t(isCollapsed ? "skills.group.expand" : "skills.group.collapse", { label: group.label })}
+                    : t(
+                        group.kind === "tag"
+                          ? isCollapsed ? "skills.group.tag.expand" : "skills.group.tag.collapse"
+                          : isCollapsed ? "skills.group.source.expand" : "skills.group.source.collapse",
+                        { label: group.label },
+                      )}
                 >
                   <div className="skill-group-section__title">
                     <SkillGroupMonogram label={group.label} />
@@ -849,14 +889,14 @@ export function SkillListPage(props: SkillListPageProps) {
                       <div className="skill-group-section__name-row">
                         <h3>{group.label}</h3>
                         <span className="skill-group-section__badge" aria-hidden="true">
-                          {t("skills.group.badge")}
+                          {t(group.kind === "tag" ? "skills.group.tagBadge" : "skills.group.badge")}
                         </span>
                         <span className="skill-group-section__count">{t("skills.group.count", { count: group.skills.length })}</span>
                       </div>
                       <p className="skill-group-section__source">
                         <span>
-                          {t("skills.group.sourcePrefix")}
-                          {isGroupSourceLinkable ? (
+                          {group.kind === "tag" ? t("skills.group.tagDescription") : t("skills.group.sourcePrefix")}
+                          {group.kind === "source" && isGroupSourceLinkable ? (
                             <a
                               href={groupSourceUrl}
                               onClick={(event) => {
@@ -867,9 +907,9 @@ export function SkillListPage(props: SkillListPageProps) {
                             >
                               {groupSourceUrl}
                             </a>
-                          ) : (
+                          ) : group.kind === "source" ? (
                             groupSourceUrl
-                          )}
+                          ) : null}
                         </span>
                       </p>
                     </div>

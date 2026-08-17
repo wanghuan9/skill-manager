@@ -1,5 +1,9 @@
-import { useEffect, useRef, useState } from "react";
-import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import type {
+  FormEvent,
+  KeyboardEvent as ReactKeyboardEvent,
+  MouseEvent as ReactMouseEvent,
+} from "react";
 import { createPortal } from "react-dom";
 import { alignExpandedRowIntoView } from "@/app/utils/align-expanded-row";
 import { useTranslate } from "@/app/i18n";
@@ -20,6 +24,7 @@ import { openExternalLink } from "@/features/skills/api/skill-client";
 import { useSkillWorkspace } from "@/features/skills/state/skill-workspace";
 import type { SkillSummary } from "@/features/skills/state/skill-store";
 import { formatSkillDescription } from "@/features/skills/utils/skill-description";
+import { resolveSkillTagTone } from "@/features/skills/utils/skill-tag-color";
 import { formatSkillLastEditor } from "@/features/skills/utils/skill-editor";
 import { setSkillAllToolsEnabled } from "@/features/skills/utils/skill-bulk-status";
 import { mergeSkillToolsWithInstalledTools } from "@/features/skills/utils/skill-tools";
@@ -40,6 +45,11 @@ type SkillCardProps = {
 };
 
 const GRID_SUMMARY_TOOL_LIMIT = 6;
+const MAX_SKILL_TAG_LENGTH = 20;
+const TAG_EDITOR_FALLBACK_WIDTH = 248;
+const TAG_EDITOR_FALLBACK_HEIGHT = 48;
+const TAG_EDITOR_VIEWPORT_PADDING = 8;
+const TAG_EDITOR_GAP = 6;
 
 function SkillMonogram({ name }: { name: string }) {
   return (
@@ -250,9 +260,11 @@ export function SkillCard({
   const {
     appSettings,
     deleteSkill,
+    installedSkills,
     openPathInFinder,
     openSkillWithDefaultTool,
     setSkillAllToolStatuses,
+    setSkillTag,
     setToolSkillStatuses,
     toolConfigs,
     updateSkill,
@@ -264,9 +276,32 @@ export function SkillCard({
   const [isDeleting, setIsDeleting] = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
   const [isBulkUpdating, setIsBulkUpdating] = useState(false);
+  const [isSavingTag, setIsSavingTag] = useState(false);
+  const [showTagEditor, setShowTagEditor] = useState(false);
+  const [tagDraft, setTagDraft] = useState(skill.tag ?? "");
+  const [tagEditorPosition, setTagEditorPosition] = useState({ top: 0, left: 0 });
   const [showEnabledTools, setShowEnabledTools] = useState(false);
   const cardRef = useRef<HTMLElement | null>(null);
   const deleteActionRef = useRef<HTMLButtonElement | null>(null);
+  const tagActionRef = useRef<HTMLButtonElement | null>(null);
+  const detailTagActionRef = useRef<HTMLButtonElement | null>(null);
+  const activeTagActionRef = useRef<HTMLButtonElement | null>(null);
+  const tagEditorRef = useRef<HTMLDivElement | null>(null);
+  const existingTags = useMemo(() => {
+    const tagsByNormalizedValue = new Map<string, string>();
+    (installedSkills ?? []).forEach((installedSkill) => {
+      const tag = installedSkill.tag?.trim();
+      if (tag) {
+        tagsByNormalizedValue.set(tag.toLocaleLowerCase(), tag);
+      }
+    });
+    return [...tagsByNormalizedValue.values()].sort((left, right) => left.localeCompare(right));
+  }, [installedSkills]);
+  const normalizedTagDraft = tagDraft.trim().toLocaleLowerCase();
+  const matchingExistingTags = existingTags.filter((tag) => (
+    !normalizedTagDraft || tag.toLocaleLowerCase().includes(normalizedTagDraft)
+  ));
+  const exactExistingTag = existingTags.find((tag) => tag.toLocaleLowerCase() === normalizedTagDraft);
   const skillTools = mergeSkillToolsWithInstalledTools(skill.tools, toolConfigs);
   const skillDescription = formatSkillDescription(skill.description) || t("skills.description.empty");
   const summaryDescription = formatSummaryDescription(skill.description, t("skills.description.empty"));
@@ -318,6 +353,64 @@ export function SkillCard({
   const expanded = expandedProp ?? expandedState;
   const isGridLayout = layout === "grid";
 
+  function updateTagEditorPosition() {
+    const trigger = activeTagActionRef.current ?? tagActionRef.current;
+    if (!trigger) {
+      return;
+    }
+
+    const editorWidth = tagEditorRef.current?.offsetWidth ?? TAG_EDITOR_FALLBACK_WIDTH;
+    const editorHeight = tagEditorRef.current?.offsetHeight ?? TAG_EDITOR_FALLBACK_HEIGHT;
+    const rect = trigger.getBoundingClientRect();
+    const left = Math.min(
+      Math.max(rect.left, TAG_EDITOR_VIEWPORT_PADDING),
+      window.innerWidth - editorWidth - TAG_EDITOR_VIEWPORT_PADDING,
+    );
+    const top = rect.bottom + TAG_EDITOR_GAP + editorHeight <= window.innerHeight - TAG_EDITOR_VIEWPORT_PADDING
+      ? rect.bottom + TAG_EDITOR_GAP
+      : Math.max(TAG_EDITOR_VIEWPORT_PADDING, rect.top - editorHeight - TAG_EDITOR_GAP);
+    setTagEditorPosition({ top, left });
+  }
+
+  function handleTagActionClick(event: ReactMouseEvent<HTMLButtonElement>) {
+    event.stopPropagation();
+    activeTagActionRef.current = event.currentTarget;
+    setTagDraft(skill.tag ?? "");
+    updateTagEditorPosition();
+    setShowTagEditor(true);
+  }
+
+  async function saveTag(nextTag: string) {
+    if (isSavingTag) {
+      return;
+    }
+
+    setIsSavingTag(true);
+    try {
+      await setSkillTag({
+        skillName: skill.name,
+        skillPath: skill.canonicalPath ?? skill.localPath,
+        tag: nextTag,
+      });
+      setShowTagEditor(false);
+    } catch (error) {
+      reportFailure(error, {
+        operation: "set_skill_tag",
+        fallbackMessage: t("skill.card.tag.error"),
+      });
+    } finally {
+      setIsSavingTag(false);
+    }
+  }
+
+  function handleTagSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const normalizedTag = tagDraft.trim();
+    if (normalizedTag) {
+      void saveTag(exactExistingTag ?? normalizedTag);
+    }
+  }
+
   function handleSummaryClick() {
     if (selectionMode) {
       onSelectionToggle();
@@ -333,6 +426,41 @@ export function SkillCard({
     event.preventDefault();
     onSelectionToggle();
   }
+
+  useLayoutEffect(() => {
+    if (!showTagEditor) {
+      return;
+    }
+
+    function handlePointerDown(event: PointerEvent) {
+      const target = event.target as Node;
+      if (
+        !activeTagActionRef.current?.contains(target)
+        && !tagEditorRef.current?.contains(target)
+      ) {
+        setShowTagEditor(false);
+      }
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setShowTagEditor(false);
+        activeTagActionRef.current?.focus();
+      }
+    }
+
+    updateTagEditorPosition();
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("resize", updateTagEditorPosition);
+    window.addEventListener("scroll", updateTagEditorPosition, true);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("resize", updateTagEditorPosition);
+      window.removeEventListener("scroll", updateTagEditorPosition, true);
+    };
+  }, [showTagEditor]);
 
   useEffect(() => {
     if (autoAlignWhenExpanded && expanded) {
@@ -672,6 +800,32 @@ export function SkillCard({
       />
     </>
   );
+  function renderTagAction(
+    buttonRef: { current: HTMLButtonElement | null },
+    className = "",
+  ) {
+    const normalizedTag = skill.tag?.trim() ?? "";
+    const tagToneClass = normalizedTag
+      ? ` tag-tone-${resolveSkillTagTone(normalizedTag)}`
+      : "";
+    return !selectionMode ? (
+      <button
+        ref={buttonRef}
+        className={`skill-card__tag${normalizedTag ? " has-tag" : ""}${tagToneClass}${showTagEditor ? " is-editor-open" : ""}${className ? ` ${className}` : ""}`}
+        type="button"
+        aria-label={t(
+          skill.tag?.trim() ? "skill.card.tag.edit" : "skill.card.tag.add",
+          { tag: skill.tag ?? "" },
+        )}
+        aria-expanded={showTagEditor}
+        onClick={handleTagActionClick}
+      >
+        {normalizedTag || t("skill.card.tag.addShort")}
+      </button>
+    ) : null;
+  }
+
+  const tagAction = renderTagAction(tagActionRef);
 
   return (
     <>
@@ -718,6 +872,7 @@ export function SkillCard({
                           >
                             {enabledToolsCountLabel}
                           </button>
+                          {tagAction}
                           {showEnabledTools && enabledTools.length > 0 ? (
                             <div className="skill-card__summary-tools" aria-label={summaryToolsLabel}>
                               {enabledTools.map((tool) => (
@@ -729,6 +884,9 @@ export function SkillCard({
                       ) : null}
                     </div>
                     <p className="skill-card__summary-description">{summaryDescription}</p>
+                    {isGridLayout && !selectionMode ? (
+                      <div className="skill-card__tag-slot">{tagAction}</div>
+                    ) : null}
                     {isGridLayout ? (
                       <div className="skill-card__grid-meta">
                         <span className={`status-badge skill-card__grid-enabled-badge ${enabledTools.length > 0 ? "tone-info" : "tone-neutral"}`}>
@@ -819,6 +977,66 @@ export function SkillCard({
           </div>
         ) : null}
       </article>
+      {showTagEditor ? createPortal(
+        <div
+          ref={tagEditorRef}
+          className="skill-tag-editor"
+          role="dialog"
+          aria-label={t("skill.card.tag.dialog", { name: skill.name })}
+          style={tagEditorPosition}
+        >
+          <form className="skill-tag-editor__form" onSubmit={handleTagSubmit}>
+            <input
+              autoFocus
+              type="text"
+              maxLength={MAX_SKILL_TAG_LENGTH}
+              value={tagDraft}
+              placeholder={t("skill.card.tag.placeholder")}
+              onFocus={(event) => event.currentTarget.select()}
+              onChange={(event) => setTagDraft(event.target.value)}
+            />
+          </form>
+          {tagDraft.trim() && !exactExistingTag ? (
+            <button
+              className="skill-tag-editor__create"
+              type="button"
+              disabled={isSavingTag}
+              onClick={() => void saveTag(tagDraft.trim())}
+            >
+              <span aria-hidden="true">+</span>
+              <span>{t("skill.card.tag.create", { tag: tagDraft.trim() })}</span>
+            </button>
+          ) : null}
+          {matchingExistingTags.length > 0 ? (
+            <div className="skill-tag-editor__suggestions">
+              <div className="skill-tag-editor__options">
+                {matchingExistingTags.map((tag) => (
+                  <button
+                    key={tag.toLocaleLowerCase()}
+                    className={`tag-tone-${resolveSkillTagTone(tag)}${tag.toLocaleLowerCase() === skill.tag?.trim().toLocaleLowerCase() ? " is-selected" : ""}`}
+                    type="button"
+                    disabled={isSavingTag}
+                    onClick={() => void saveTag(tag)}
+                  >
+                    {tag}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : null}
+          {skill.tag?.trim() ? (
+            <button
+              className="skill-tag-editor__clear"
+              type="button"
+              disabled={isSavingTag}
+              onClick={() => void saveTag("")}
+            >
+              {t("skill.card.tag.clear")}
+            </button>
+          ) : null}
+        </div>,
+        document.body,
+      ) : null}
       {expanded && isGridLayout && !showFileDialog ? createPortal(
         <div
           className="skill-card-detail-modal__backdrop"
@@ -839,6 +1057,7 @@ export function SkillCard({
                   <div className="skill-card-detail-modal__title">
                     <h3>{skill.name}</h3>
                     <SkillStatusBadge status={skill.collabStatus} />
+                    {renderTagAction(detailTagActionRef, "skill-card-detail-modal__tag")}
                   </div>
                 </div>
               </div>

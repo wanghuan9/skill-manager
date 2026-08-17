@@ -46,7 +46,8 @@ use crate::models::{
 };
 use crate::state::{
     load_app_settings, load_installed_skills, normalize_skill_install_activation,
-    save_app_settings, save_installed_skills, scan_local_skill_candidates,
+    save_app_settings, save_installed_skill_tag, save_installed_skills,
+    scan_local_skill_candidates,
 };
 use crate::tool_adapters;
 use crate::workspace::{self, APP_BRAND_NAME};
@@ -60,6 +61,7 @@ const SKILL_LIBRARY_REFRESHED_EVENT: &str = "skill-library-refreshed";
 const LOCAL_SKILL_TOOL_STATE_CONCURRENCY: usize = 2;
 const PACKAGE_ID_HASH_LEN: usize = 8;
 const LOCAL_IMPORT_SOURCE_BACKUP_SUFFIX: &str = ".skilldock-import-backup";
+static SKILL_TAG_UPDATE_LOCK: Mutex<()> = Mutex::new(());
 
 pub(crate) fn default_installed_skills() -> Vec<SkillSummary> {
     Vec::new()
@@ -4492,13 +4494,14 @@ fn merge_refreshed_skill_states_with_latest_state(
         .into_iter()
         .map(|current_skill| {
             let instance_key = skill_instance_key(&current_skill);
-            let Some(refreshed_skill) = refreshed_by_instance.remove(&instance_key) else {
+            let Some(mut refreshed_skill) = refreshed_by_instance.remove(&instance_key) else {
                 return current_skill;
             };
             let Some(refresh_started_skill) = refresh_started_by_instance.get(&instance_key) else {
                 return current_skill;
             };
 
+            refreshed_skill.instance.tag = current_skill.instance.tag.clone();
             if current_skill.local_path == refresh_started_skill.local_path
                 && current_skill.commit_label == refresh_started_skill.commit_label
                 && current_skill.local_updated_at == refresh_started_skill.local_updated_at
@@ -6628,6 +6631,9 @@ pub async fn refresh_git_states() -> GitStateRefreshResult {
         crate::skillhub_market::refresh_installed_skill_update_states(refreshed_skills).await;
     let refreshed_skills =
         crate::clawhub_market::refresh_installed_skill_update_states(refreshed_skills).await;
+    let _tag_update_guard = SKILL_TAG_UPDATE_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let latest_skills = load_installed_skills(&default_installed_skills());
     let refreshed_skills = merge_refreshed_skill_states_with_latest_state(
         refreshed_skills,
@@ -8323,6 +8329,50 @@ pub fn save_skill_file_content(
     })
 }
 
+const MAX_SKILL_TAG_LENGTH: usize = 20;
+
+fn normalize_skill_tag(tag: &str) -> Result<String, String> {
+    let normalized_tag = tag.trim();
+    if normalized_tag.chars().count() > MAX_SKILL_TAG_LENGTH {
+        return Err(format!("标签不能超过 {MAX_SKILL_TAG_LENGTH} 个字符"));
+    }
+    if normalized_tag.chars().any(char::is_control) {
+        return Err("标签不能包含控制字符".to_string());
+    }
+
+    Ok(normalized_tag.to_string())
+}
+
+#[tauri::command]
+pub async fn set_skill_tag(
+    skill_name: String,
+    skill_path: Option<String>,
+    tag: String,
+) -> Result<SkillSummary, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let _update_guard = SKILL_TAG_UPDATE_LOCK
+            .lock()
+            .map_err(|_| "标签保存锁已失效，请重启应用后重试".to_string())?;
+        let normalized_tag = normalize_skill_tag(&tag)?;
+        let (mut installed_skills, skill_index) =
+            find_skill_instance(&skill_name, skill_path.as_deref())?;
+        installed_skills[skill_index].instance.tag = normalized_tag.clone();
+
+        // Persist by instance identity, then reload from disk before acknowledging the edit.
+        let tagged_skill = installed_skills[skill_index].clone();
+        save_installed_skill_tag(&installed_skills, &tagged_skill)?;
+        let (persisted_skills, persisted_skill_index) =
+            find_skill_instance(&skill_name, skill_path.as_deref())?;
+        let persisted_skill = persisted_skills[persisted_skill_index].clone();
+        if persisted_skill.instance.tag != normalized_tag {
+            return Err(format!("Skill 标签落盘校验失败: {skill_name}"));
+        }
+        Ok(persisted_skill)
+    })
+    .await
+    .map_err(|error| format!("保存 Skill 标签失败: {error}"))?
+}
+
 #[tauri::command]
 pub async fn delete_skill(skill_name: String, skill_path: Option<String>) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
@@ -8808,6 +8858,7 @@ mod tests {
         update_skill_blocking, update_skill_repo, MARKETPLACE_CACHE_VERSION,
         REFRESH_GIT_STATES_CONCURRENCY,
     };
+
     use crate::agent_skills_cli::{AgentSkillUpdateCheck, AgentSkillsCliStatus, CliSkillEntry};
     #[cfg(windows)]
     use crate::library::create_windows_directory_junction;
@@ -8829,6 +8880,14 @@ mod tests {
         Arc, Barrier,
     };
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn normalizes_and_validates_skill_tags() {
+        assert_eq!(super::normalize_skill_tag(" 研发 ").unwrap(), "研发");
+        assert_eq!(super::normalize_skill_tag("   ").unwrap(), "");
+        assert!(super::normalize_skill_tag("123456789012345678901").is_err());
+        assert!(super::normalize_skill_tag("研发\n工具").is_err());
+    }
 
     fn app_settings_fixture() -> AppSettings {
         AppSettings {
@@ -11682,6 +11741,7 @@ mod tests {
                 instance: Default::default(),
                 tools: vec![],
             }],
+            skill_tags: BTreeMap::new(),
         };
         fs::write(
             &legacy_state_file,

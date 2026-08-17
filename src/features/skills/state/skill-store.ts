@@ -181,6 +181,7 @@ export type SkillSummary = {
   skillEntries?: string[];
   pathError?: string;
   contentHash?: string;
+  tag?: string;
   marketplaceOwner?: string;
   marketplaceSlug?: string;
   marketplaceVersion?: string;

@@ -148,6 +148,7 @@ pub fn run() {
             commands::get_tool_skill_file_browser,
             commands::get_tool_skill_file_content,
             commands::save_skill_file_content,
+            commands::set_skill_tag,
             commands::delete_skill,
             commands::delete_tool_skill,
             commands::toggle_skill_tool_status,

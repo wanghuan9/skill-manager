@@ -260,6 +260,12 @@ type SetSkillAllToolStatusesInput = {
   toolNames: string[];
 };
 
+type SetSkillTagInput = {
+  skillName: string;
+  skillPath?: string;
+  tag: string;
+};
+
 type ToggleMcpAppInput = {
   serverId: string;
   appId: string;
@@ -565,6 +571,7 @@ function normalizeSkillSummary(skill: LegacySkillSummary): SkillSummary {
     skillEntries: skill.skillEntries ?? [skill.entryPath ?? skill.localPath ?? ""].filter(Boolean),
     pathError: skill.pathError ?? "",
     contentHash: skill.contentHash ?? "",
+    tag: skill.tag?.trim() ?? "",
     marketplaceOwner: skill.marketplaceOwner ?? "",
     marketplaceSlug: skill.marketplaceSlug ?? "",
     marketplaceVersion: skill.marketplaceVersion ?? "",
@@ -2048,6 +2055,11 @@ export async function saveSkillFileContent(input: SaveSkillFileInput): Promise<S
 
 export async function deleteSkill(skillName: string, skillPath?: string): Promise<void> {
   return invokeOrFallback("delete_skill", { skillName, skillPath }, undefined);
+}
+
+export async function setSkillTag(input: SetSkillTagInput): Promise<SkillSummary> {
+  const updatedSkill = await invoke<LegacySkillSummary>("set_skill_tag", input);
+  return normalizeSkillSummary(updatedSkill);
 }
 
 export async function deleteToolSkill(input: ToolSkillInput): Promise<void> {

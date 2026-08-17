@@ -1,5 +1,7 @@
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
@@ -16,6 +18,7 @@ use crate::workspace::{
 };
 
 const STATE_FILE_NAME: &str = "state.json";
+const SKILL_TAGS_FILE_NAME: &str = "skill-tags.json";
 const SETTINGS_FILE_NAME: &str = "settings.json";
 const EMPTY_DESCRIPTION_VALUES: [&str; 4] = ["", "---", "...", "未提供简介"];
 const RESERVED_WORKSPACE_DIR_NAMES: [&str; 12] = [
@@ -47,6 +50,7 @@ const APP_THEME_LIGHT: &str = "light";
 const APP_THEME_DARK: &str = "dark";
 const APP_THEME_SYSTEM: &str = "system";
 const PORTABLE_PREFERENCES_SCHEMA_VERSION: u32 = 1;
+static WORKSPACE_STATE_WRITE_LOCK: Mutex<()> = Mutex::new(());
 
 #[derive(Clone, Debug, Deserialize, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -75,6 +79,13 @@ struct SettingsPersistence {
     github_connection: GithubConnectionMetadata,
     #[serde(default)]
     github_backup: GithubBackupSettings,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct SkillTagPersistence {
+    #[serde(default)]
+    skill_tags: BTreeMap<String, String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -154,19 +165,36 @@ fn load_installed_skills_internal(
     default_skills: &[SkillSummary],
     persist_repairs: bool,
 ) -> Vec<SkillSummary> {
+    let persisted_skill_tag_file = load_skill_tag_persistence();
     let loaded_state = workspace_state_candidates()
         .into_iter()
         .find_map(|state_file| {
             let contents = fs::read_to_string(&state_file).ok()?;
             let persistence = serde_json::from_str::<WorkspacePersistence>(&contents).ok()?;
-            Some((state_file, persistence.installed_skills))
+            Some((state_file, persistence))
         });
     let loaded_from_legacy = loaded_state
         .as_ref()
         .is_some_and(|(path, _)| path.to_string_lossy().contains("/.skillm/"));
-    let persisted_skills = loaded_state
-        .map(|(_, skills)| skills)
-        .unwrap_or_else(|| default_skills.to_vec());
+    let (mut persisted_skills, legacy_skill_tags, migrated_legacy_skill_tags) = loaded_state
+        .map(|(_, persistence)| {
+            let mut skill_tags = persistence.skill_tags;
+            let migrated_legacy_skill_tags =
+                migrate_legacy_skill_tags(&persistence.installed_skills, &mut skill_tags);
+            let original_skill_tag_count = skill_tags.len();
+            merge_embedded_skill_tags(&persistence.installed_skills, &mut skill_tags);
+            let migrated_legacy_skill_tags =
+                migrated_legacy_skill_tags || original_skill_tag_count != skill_tags.len();
+            (
+                persistence.installed_skills,
+                skill_tags,
+                migrated_legacy_skill_tags,
+            )
+        })
+        .unwrap_or_else(|| (default_skills.to_vec(), BTreeMap::new(), false));
+    let should_create_skill_tag_file = persisted_skill_tag_file.is_none();
+    let persisted_skill_tags = persisted_skill_tag_file.unwrap_or(legacy_skill_tags);
+    apply_persisted_skill_tags(&mut persisted_skills, &persisted_skill_tags);
     let original_count = persisted_skills.len();
     let original_paths = persisted_skills
         .iter()
@@ -181,6 +209,8 @@ fn load_installed_skills_internal(
         .collect::<Vec<_>>();
     if persist_repairs
         && (loaded_from_legacy
+            || migrated_legacy_skill_tags
+            || should_create_skill_tag_file
             || filtered_skills.len() != original_count
             || filtered_skills
                 .iter()
@@ -389,6 +419,7 @@ fn build_agent_skill_summary(
             skill_entries: vec![entry_path.to_string_lossy().to_string()],
             path_error: path_error.to_string(),
             content_hash: String::new(),
+            tag: String::new(),
             marketplace_owner: String::new(),
             marketplace_slug: String::new(),
             marketplace_version: String::new(),
@@ -475,6 +506,37 @@ fn is_visible_managed_skill_instance(skill: &SkillSummary, compatibility_enabled
 }
 
 pub fn save_installed_skills(skills: &[SkillSummary]) -> Result<(), String> {
+    let _write_guard = WORKSPACE_STATE_WRITE_LOCK
+        .lock()
+        .map_err(|_| "状态文件写入锁已失效，请重启应用后重试".to_string())?;
+    let skill_tags = load_persisted_skill_tags();
+    save_skill_tag_persistence(&skill_tags)?;
+    save_workspace_persistence(skills, &skill_tags)
+}
+
+pub fn save_installed_skill_tag(
+    skills: &[SkillSummary],
+    tagged_skill: &SkillSummary,
+) -> Result<(), String> {
+    let _write_guard = WORKSPACE_STATE_WRITE_LOCK
+        .lock()
+        .map_err(|_| "状态文件写入锁已失效，请重启应用后重试".to_string())?;
+    let mut skill_tags = load_persisted_skill_tags();
+    let tag_key = skill_tag_key(tagged_skill);
+    let tag = tagged_skill.instance.tag.trim();
+    if tag.is_empty() {
+        skill_tags.remove(&tag_key);
+    } else {
+        skill_tags.insert(tag_key, tag.to_string());
+    }
+    save_skill_tag_persistence(&skill_tags)?;
+    save_workspace_persistence(skills, &skill_tags)
+}
+
+fn save_workspace_persistence(
+    skills: &[SkillSummary],
+    skill_tags: &BTreeMap<String, String>,
+) -> Result<(), String> {
     let state_file =
         workspace_state_file().ok_or_else(|| "无法定位用户目录，不能保存状态".to_string())?;
     let parent_dir = state_file
@@ -483,13 +545,15 @@ pub fn save_installed_skills(skills: &[SkillSummary]) -> Result<(), String> {
 
     fs::create_dir_all(parent_dir).map_err(|error| format!("创建状态目录失败: {error}"))?;
 
-    let normalized_skills = skills
+    let mut normalized_skills = skills
         .iter()
         .cloned()
         .map(normalize_skill_workspace_path)
         .collect::<Vec<_>>();
+    apply_persisted_skill_tags(&mut normalized_skills, skill_tags);
     let persistence = WorkspacePersistence {
         installed_skills: normalized_skills,
+        skill_tags: skill_tags.clone(),
     };
     let payload = serde_json::to_string_pretty(&persistence)
         .map_err(|error| format!("序列化状态失败: {error}"))?;
@@ -497,6 +561,117 @@ pub fn save_installed_skills(skills: &[SkillSummary]) -> Result<(), String> {
         .map_err(|error| format!("写入状态文件失败: {error}"))?;
     remove_legacy_workspace_file(STATE_FILE_NAME);
     Ok(())
+}
+
+fn load_persisted_skill_tags() -> BTreeMap<String, String> {
+    if let Some(skill_tags) = load_skill_tag_persistence() {
+        return skill_tags;
+    }
+
+    let Some((_, persistence)) = workspace_state_candidates()
+        .into_iter()
+        .find_map(|state_file| {
+            let contents = fs::read_to_string(&state_file).ok()?;
+            let persistence = serde_json::from_str::<WorkspacePersistence>(&contents).ok()?;
+            Some((state_file, persistence))
+        })
+    else {
+        return BTreeMap::new();
+    };
+    let mut skill_tags = persistence.skill_tags;
+    migrate_legacy_skill_tags(&persistence.installed_skills, &mut skill_tags);
+    merge_embedded_skill_tags(&persistence.installed_skills, &mut skill_tags);
+    skill_tags
+}
+
+fn load_skill_tag_persistence() -> Option<BTreeMap<String, String>> {
+    skill_tag_file_candidates().into_iter().find_map(|path| {
+        let contents = fs::read_to_string(path).ok()?;
+        let persistence = serde_json::from_str::<SkillTagPersistence>(&contents).ok()?;
+        Some(persistence.skill_tags)
+    })
+}
+
+fn save_skill_tag_persistence(skill_tags: &BTreeMap<String, String>) -> Result<(), String> {
+    let tag_file = skill_tag_file_path()
+        .ok_or_else(|| "无法定位用户目录，不能保存 Skill 标签".to_string())?;
+    let parent_dir = tag_file
+        .parent()
+        .ok_or_else(|| "Skill 标签目录无效".to_string())?;
+    fs::create_dir_all(parent_dir).map_err(|error| format!("创建 Skill 标签目录失败: {error}"))?;
+
+    let persistence = SkillTagPersistence {
+        skill_tags: skill_tags.clone(),
+    };
+    let payload = serde_json::to_string_pretty(&persistence)
+        .map_err(|error| format!("序列化 Skill 标签失败: {error}"))?;
+    atomic_write_workspace_file(&tag_file, &payload)
+        .map_err(|error| format!("写入 Skill 标签文件失败: {error}"))?;
+    remove_legacy_workspace_file(SKILL_TAGS_FILE_NAME);
+    Ok(())
+}
+
+fn legacy_skill_tag_key(skill_name: &str) -> String {
+    skill_name.trim().to_lowercase()
+}
+
+fn skill_tag_key(skill: &SkillSummary) -> String {
+    let instance_path = if skill.instance.canonical_path.trim().is_empty() {
+        &skill.local_path
+    } else {
+        &skill.instance.canonical_path
+    };
+    let normalized_path = display_path_value(&normalize_workspace_path(instance_path));
+    format!(
+        "{}\n{}",
+        legacy_skill_tag_key(&skill.name),
+        normalized_path.trim()
+    )
+}
+
+fn migrate_legacy_skill_tags(
+    skills: &[SkillSummary],
+    skill_tags: &mut BTreeMap<String, String>,
+) -> bool {
+    let mut migrated = false;
+    let mut legacy_keys = BTreeSet::new();
+    for skill in skills {
+        let legacy_key = legacy_skill_tag_key(&skill.name);
+        let Some(tag) = skill_tags.get(&legacy_key).cloned() else {
+            continue;
+        };
+        legacy_keys.insert(legacy_key);
+        if let std::collections::btree_map::Entry::Vacant(entry) =
+            skill_tags.entry(skill_tag_key(skill))
+        {
+            entry.insert(tag);
+            migrated = true;
+        }
+    }
+    for legacy_key in legacy_keys {
+        migrated |= skill_tags.remove(&legacy_key).is_some();
+    }
+    migrated
+}
+
+fn merge_embedded_skill_tags(skills: &[SkillSummary], skill_tags: &mut BTreeMap<String, String>) {
+    for skill in skills {
+        let tag = skill.instance.tag.trim();
+        if !tag.is_empty() {
+            skill_tags
+                .entry(skill_tag_key(skill))
+                .or_insert_with(|| tag.to_string());
+        }
+    }
+}
+
+fn apply_persisted_skill_tags(skills: &mut [SkillSummary], skill_tags: &BTreeMap<String, String>) {
+    for skill in skills {
+        skill.instance.tag = skill_tags
+            .get(&skill_tag_key(skill))
+            .cloned()
+            .unwrap_or_default();
+    }
 }
 
 pub fn load_app_settings() -> AppSettings {
@@ -905,6 +1080,14 @@ fn workspace_state_file() -> Option<PathBuf> {
 
 fn workspace_state_candidates() -> Vec<PathBuf> {
     workspace_file_candidates(STATE_FILE_NAME)
+}
+
+fn skill_tag_file_path() -> Option<PathBuf> {
+    workspace_file_path(SKILL_TAGS_FILE_NAME).ok()
+}
+
+fn skill_tag_file_candidates() -> Vec<PathBuf> {
+    workspace_file_candidates(SKILL_TAGS_FILE_NAME)
 }
 
 fn settings_file_path() -> Option<PathBuf> {
@@ -1529,6 +1712,7 @@ mod tests {
                         tools: vec![],
                     },
                 ],
+                skill_tags: BTreeMap::new(),
             };
             let legacy_state_file = temp_home.join(".skillm/state.json");
             let state_file = temp_home.join(".skilldock/data/state.json");
@@ -1591,6 +1775,7 @@ mod tests {
                     instance: Default::default(),
                     tools: vec![],
                 }],
+                skill_tags: BTreeMap::new(),
             };
             let legacy_state_file = temp_home.join(".skilldock/state.json");
             let state_file = temp_home.join(".skilldock/data/state.json");
@@ -1688,6 +1873,7 @@ mod tests {
                         tools: vec![],
                     },
                 ],
+                skill_tags: BTreeMap::new(),
             };
             let legacy_state_file = temp_home.join(".skillm/state.json");
             let state_file = temp_home.join(".skilldock/data/state.json");
@@ -2003,6 +2189,7 @@ mod tests {
                 state_path,
                 serde_json::to_string(&WorkspacePersistence {
                     installed_skills: vec![persisted],
+                    skill_tags: BTreeMap::new(),
                 })
                 .expect("serialize Agent skill state"),
             )

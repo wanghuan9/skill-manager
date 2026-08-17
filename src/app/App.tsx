@@ -38,9 +38,12 @@ import {
 import { SkillListToolbar } from "@/features/skills/components/SkillListPage";
 import type { ManagedSkillOwnerFilter, SkillStatusFilter } from "@/features/skills/state/skill-store";
 import {
+  readSkillGroupModePreference,
   readSkillViewModePreference,
   resolveSkillViewModePreference,
+  type SkillGroupMode,
   type SkillViewMode,
+  writeSkillGroupModePreference,
   writeSkillViewModePreference,
 } from "@/features/skills/utils/skill-view-preference";
 import {
@@ -316,6 +319,7 @@ function renderRoute(
   skillOwnerFilter: ManagedSkillOwnerFilter,
   skillManagementFilter: ToolSkillManagementFilter,
   skillViewMode: SkillViewMode,
+  skillGroupMode: SkillGroupMode,
   isSkillBatchSelecting: boolean,
   onSkillBatchSelectingChange: (isSelecting: boolean) => void,
   activeInstallCategory: InstallCategory,
@@ -379,6 +383,7 @@ function renderRoute(
       ownerFilter={skillOwnerFilter}
       managementFilter={skillManagementFilter}
       viewMode={skillViewMode}
+      groupMode={skillGroupMode}
       isBatchSelecting={isSkillBatchSelecting}
       onBatchSelectingChange={onSkillBatchSelectingChange}
     />
@@ -620,6 +625,7 @@ function AppContent() {
   const [skillViewMode, setSkillViewMode] = useState<SkillViewMode>(
     () => resolveSkillViewModePreference(initialSkillViewMode, installedSkills.length),
   );
+  const [skillGroupMode, setSkillGroupMode] = useState<SkillGroupMode>(readSkillGroupModePreference);
   const [isSkillBatchSelecting, setIsSkillBatchSelecting] = useState(false);
   const [hasSavedSkillViewPreference, setHasSavedSkillViewPreference] =
     useState(initialSkillViewMode !== null);
@@ -979,6 +985,11 @@ function AppContent() {
     writeSkillViewModePreference(nextViewMode);
   }
 
+  function handleSkillGroupModeChange(nextGroupMode: SkillGroupMode) {
+    setSkillGroupMode(nextGroupMode);
+    writeSkillGroupModePreference(nextGroupMode);
+  }
+
   function handleOpenSkillInstall(tab: InstallTab) {
     setActiveRoute("install");
     setActiveInstallCategory("skill");
@@ -1011,6 +1022,8 @@ function AppContent() {
       onManagementFilterChange={setSkillManagementFilter}
       viewMode={skillViewMode}
       onViewModeChange={handleSkillViewModeChange}
+      groupMode={skillGroupMode}
+      onGroupModeChange={handleSkillGroupModeChange}
       isBatchSelecting={isSkillBatchSelecting}
       onBatchSelectingChange={setIsSkillBatchSelecting}
       onGoInstall={() => handleOpenSkillInstall("market")}
@@ -1431,6 +1444,7 @@ function AppContent() {
               skillOwnerFilter,
               skillManagementFilter,
               skillViewMode,
+              skillGroupMode,
               isSkillBatchSelecting,
               setIsSkillBatchSelecting,
               activeInstallCategory,

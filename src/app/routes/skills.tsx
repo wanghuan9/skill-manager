@@ -1,7 +1,7 @@
 import { SkillListPage } from "@/features/skills/components/SkillListPage";
 import type { ManagedSkillOwnerFilter, SkillStatusFilter } from "@/features/skills/state/skill-store";
 import type { SkillSourceId, ToolSkillManagementFilter } from "@/features/skills/utils/skill-source-view";
-import type { SkillViewMode } from "@/features/skills/utils/skill-view-preference";
+import type { SkillGroupMode, SkillViewMode } from "@/features/skills/utils/skill-view-preference";
 
 type SkillsRouteProps = {
   activeSourceId: SkillSourceId;
@@ -16,6 +16,7 @@ type SkillsRouteProps = {
   ownerFilter: ManagedSkillOwnerFilter;
   managementFilter: ToolSkillManagementFilter;
   viewMode: SkillViewMode;
+  groupMode: SkillGroupMode;
   isBatchSelecting: boolean;
   onBatchSelectingChange: (isSelecting: boolean) => void;
 };
@@ -35,6 +36,7 @@ export function SkillsRoute(props: SkillsRouteProps) {
       ownerFilter={props.ownerFilter}
       managementFilter={props.managementFilter}
       viewMode={props.viewMode}
+      groupMode={props.groupMode}
       isBatchSelecting={props.isBatchSelecting}
       onBatchSelectingChange={props.onBatchSelectingChange}
     />

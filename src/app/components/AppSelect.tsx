@@ -1,6 +1,7 @@
 import {
   type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
+  type ReactNode,
   useEffect,
   useId,
   useRef,
@@ -22,7 +23,7 @@ type AppSelectProps<T extends string> = {
   className?: string;
   menuClassName?: string;
   minMenuWidth?: number;
-  selectedLabel?: string;
+  selectedLabel?: ReactNode;
   disabled?: boolean;
 };
 

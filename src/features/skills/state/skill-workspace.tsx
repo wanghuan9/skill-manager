@@ -48,6 +48,7 @@ import {
   refreshLocalGitState,
   revertSkillChange as revertSkillChangeRequest,
   saveSkillFileContent,
+  setSkillTag as setSkillTagRequest,
   setSkillAllToolStatuses,
   setToolSkillStatuses,
   shouldUseFixtureData,
@@ -164,6 +165,7 @@ type SkillWorkspaceContextValue = {
   updateSkill: (skillName: string, skillPath?: string) => Promise<void>;
   updateAllSkills: () => Promise<void>;
   deleteSkill: (skillName: string, skillPath?: string) => Promise<void>;
+  setSkillTag: (input: { skillName: string; skillPath?: string; tag: string }) => Promise<void>;
   deleteToolSkill: (input: { toolId: string; skillName: string }) => Promise<void>;
   markSkillAsActive: (skillName: string) => void;
   loadSkillFileBrowser: (skillName: string, skillPath?: string) => Promise<SkillFileBrowserSnapshot>;
@@ -366,6 +368,22 @@ function mergeUpdatedSkillsPreservingOrder(
   const newSkills = updatedSkills.filter((skill) => !currentSkillIdentities.has(getSkillIdentity(skill)));
 
   return [...newSkills, ...mergedSkills];
+}
+
+function mergeRefreshedSkillsPreservingTags(
+  currentSkills: SkillSummary[],
+  refreshedSkills: SkillSummary[],
+) {
+  const currentByIdentity = new Map(
+    currentSkills.map((skill) => [getSkillIdentity(skill), skill]),
+  );
+  return refreshedSkills.map((refreshedSkill) => {
+    const currentSkill = currentByIdentity.get(getSkillIdentity(refreshedSkill));
+    if (!currentSkill?.tag || refreshedSkill.tag) {
+      return refreshedSkill;
+    }
+    return { ...refreshedSkill, tag: currentSkill.tag };
+  });
 }
 
 function mergeLocalGitStates(
@@ -1328,7 +1346,9 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       startupWatchedSkillNamesRef.current = new Set(
         snapshot.installedSkills.map((skill) => skill.name),
       );
-      setInstalledSkills(snapshot.installedSkills);
+      setInstalledSkills((current) => (
+        mergeRefreshedSkillsPreservingTags(current, snapshot.installedSkills)
+      ));
       setLocalCandidates(snapshot.localCandidates);
       setToolSkillEntries(snapshot.toolSkillEntries);
     }).then((cleanup) => {
@@ -1654,6 +1674,16 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
     }
   }
 
+  async function handleSetSkillTag(input: { skillName: string; skillPath?: string; tag: string }) {
+    workspaceMutationVersionRef.current += 1;
+    try {
+      const updatedSkill = await setSkillTagRequest(input);
+      setInstalledSkills((current) => mergeUpdatedSkillsPreservingOrder(current, [updatedSkill]));
+    } finally {
+      workspaceMutationVersionRef.current += 1;
+    }
+  }
+
   async function handleDeleteToolSkill(input: { toolId: string; skillName: string }) {
     await deleteToolSkill(input);
     setToolSkillEntries((current) => current.filter((entry) => (
@@ -1852,6 +1882,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       updateSkill: handleUpdateSkill,
       updateAllSkills: handleUpdateAllSkills,
       deleteSkill: handleDeleteSkill,
+      setSkillTag: handleSetSkillTag,
       deleteToolSkill: handleDeleteToolSkill,
       markSkillAsActive,
       loadSkillFileBrowser: fetchSkillFileBrowser,
