@@ -157,6 +157,15 @@ Skills installed by SkillDock still live in `~/.skilldock/skills`. Turning compa
 
 If you prefer the command line, use Agent Skills CLI as the CLI entry point for Skills and SkillDock as the desktop management app: install and maintain `~/.agents/skills` through the CLI, then use SkillDock to inspect them visually, preview updates, and distribute them across tools without changing your existing CLI workflow.
 
+## Enterprise Skill Management and Internal Platform Integration
+
+SkillDock is well suited as a unified enterprise Skill management platform. It can connect to an internal marketplace for Skill discovery, download, installation, and updates, and integrate with an internal publishing platform for review, publishing, and listing.
+
+- **Connect an enterprise marketplace:** Discover, download, install, and update internal Skills in one place.
+- **Connect an enterprise publishing platform:** Submit local changes to existing enterprise review, publishing, and listing workflows.
+- **Easy to integrate and customize:** Publishing uses an adapter architecture, while marketplace integrations can reuse shared data models and installation flows, making it easier to extend SkillDock for internal APIs.
+- **Keep data under enterprise control:** Private code, credentials, and business data can remain inside the enterprise, with customization available under the MIT License.
+
 ## Download
 
 Download the latest [SkillDock release](https://github.com/wanghuan9/skilldock/releases/latest).

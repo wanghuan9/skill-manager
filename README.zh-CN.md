@@ -158,6 +158,15 @@ SkillDock 自己安装的 Skill 仍保存在 `~/.skilldock/skills`。关闭兼�
 
 对于习惯命令行的用户，可以将 Agent Skills CLI 作为 Skill 的命令行入口，将 SkillDock 作为桌面管理端：通过 CLI 安装和维护 `~/.agents/skills`，再通过 SkillDock 可视化查看、预览更新并统一分发到多个工具，无需改变原有 CLI 工作流。
 
+## 企业 Skill 管理与内部平台集成
+
+SkillDock 适合作为企业统一的 Skill 管理平台，对接公司内部商店完成 Skill 的发现、下载、安装和更新，并接入内部发布平台完成审核、发布和上架。
+
+- **接入企业商店：**统一发现、下载、安装和更新企业内部 Skill。
+- **接入企业发布平台：**将本地修改提交到企业现有的审核、发布和上架流程。
+- **方便二次集成：**发布能力采用适配器架构，商店接入可复用统一的数据模型和安装流程，便于按企业内部 API 扩展。
+- **数据自主可控：**私有代码、凭据和业务数据可保留在企业内部，并可基于 MIT 协议定制。
+
 ## 下载
 
 前往 [SkillDock 最新版本](https://github.com/wanghuan9/skilldock/releases/latest) 下载安装包。
