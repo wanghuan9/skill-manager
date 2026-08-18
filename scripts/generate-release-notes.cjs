@@ -133,6 +133,7 @@ const NON_PRODUCTION_CODE_PATH_PATTERNS = [
 ];
 const SKIPPED_SUBJECT_PATTERNS = [
   /^fix$/i,
+  /^[a-z]+:\[release-[^\]]+\]/i,
   /^chore:\s*bump version/i,
   /^chore:\s*发布\s+/,
   /^chore:\s*调整本地发布私钥路径/,
@@ -149,6 +150,7 @@ const SKIPPED_ITEM_PATTERNS = [
   /(Rust|前端验证|fallback 逻辑)/i,
 ];
 const NON_USER_FACING_TYPES = new Set(["chore", "docs", "test"]);
+const FEATURE_DEVELOPMENT_FIX_PATTERN = /修复|问题|异常|丢失|覆盖|崩溃|报错|错误|失败/i;
 const USER_FACING_PRODUCT_PATTERN = /SkillHub|ClawHub|ZCode|OpenCode|Claude Code|Codex|Cursor|Gemini CLI/i;
 const COMMIT_HIGHLIGHT_RULES = [
   {
@@ -404,6 +406,10 @@ function rewriteCommitHighlight(commit) {
 }
 
 function classify(text, type) {
+  if (/^优化/.test(text)) {
+    return "improvements";
+  }
+
   if (type === "feat" || /新增|增加|支持|接入|添加|上线/.test(text)) {
     return "features";
   }
@@ -419,7 +425,7 @@ function cleanBullet(text) {
   return text
     .replace(/[。.]?$/, "")
     .replace(/^[-*]\s*/, "")
-    .replace(/^新增[:：]?\s*/, "")
+    .replace(/^(?:新增|增加)[:：]?\s*/, "")
     .replace(/^修复[:：]?\s*/, "")
     .replace(/^优化[:：]?\s*/, "")
     .trim();
@@ -510,6 +516,7 @@ function extractExplicitReleaseNotes(body) {
 }
 
 function rewriteUserFacing(text, type) {
+  const section = classify(text.trim(), type);
   const cleaned = cleanBullet(text);
   if (!cleaned || shouldSkipItem(cleaned)) {
     return null;
@@ -525,7 +532,6 @@ function rewriteUserFacing(text, type) {
   }
 
   const asciiHeavy = /[A-Za-z]{4,}|\/|_/i.test(cleaned);
-  const section = classify(cleaned, type);
   if (asciiHeavy && !USER_FACING_PRODUCT_PATTERN.test(cleaned)) {
     return {
       section,
@@ -619,6 +625,12 @@ function buildSections(commits) {
     let addedItem = false;
 
     for (const item of items) {
+      // A feature commit describes the final shipped capability. Defects found while building it
+      // are implementation history and must not be presented as fixes to an earlier release.
+      if (type === "feat" && FEATURE_DEVELOPMENT_FIX_PATTERN.test(item)) {
+        continue;
+      }
+
       const rewritten = rewriteUserFacing(item, type);
       if (!rewritten) {
         continue;
@@ -746,7 +758,6 @@ function validateCuratedReleaseNotes(notes, changedAreas, unclassifiedPaths = []
       `版本差异包含未归类的生产代码，请更新发布日志领域规则：${unclassifiedPaths.join("、")}`,
     );
   }
-
   const releaseNoteText = parsed.items.join("\n");
   const missingAreas = changedAreas.filter((area) => !area.notePattern.test(releaseNoteText));
   if (missingAreas.length > 0) {
@@ -850,6 +861,7 @@ function renderSummary(sections) {
 
 function buildReleaseArtifact(version, currentRef, previousTag, curatedNotes = "") {
   const range = previousTag ? `${previousTag}..${currentRef}` : currentRef;
+  const commits = parseCommits(range);
   if (curatedNotes) {
     const changedFiles = readChangedFiles(range);
     const changedAreas = detectChangedAreas(changedFiles.paths);
@@ -873,7 +885,7 @@ function buildReleaseArtifact(version, currentRef, previousTag, curatedNotes = "
     };
   }
 
-  const sections = limitSections(buildSections(parseCommits(range)));
+  const sections = limitSections(buildSections(commits));
 
   return {
     version,
