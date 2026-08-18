@@ -1,6 +1,7 @@
 #[cfg(test)]
 use std::cell::Cell;
 use std::collections::{hash_map::DefaultHasher, BTreeMap, BTreeSet, HashMap};
+use std::env;
 use std::fs;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
@@ -10,8 +11,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-#[cfg(windows)]
-use crate::library::{command_for_executable, resolve_command_in_path};
+use crate::library::{command_for_executable, resolve_command_path};
 use crate::workspace::home_dir;
 use crate::{
     library::git_command,
@@ -1074,17 +1074,57 @@ fn run_with_program_in_home(
 }
 
 fn cli_command(program: &str) -> Result<Command, String> {
+    let search_paths = command_search_paths();
+    let executable = resolve_command_path(program, &search_paths)
+        .ok_or_else(|| format!("未找到 Agent Skills CLI 命令: {program}"))?;
+    let mut command = command_for_executable(&executable);
+    if let Ok(path) = env::join_paths(search_paths) {
+        command.env("PATH", path);
+    }
+    Ok(command)
+}
+
+fn command_search_paths() -> Vec<PathBuf> {
+    let mut paths = env::var_os("PATH")
+        .map(|value| env::split_paths(&value).collect::<Vec<_>>())
+        .unwrap_or_default();
+    for fallback in fallback_command_search_paths() {
+        if !paths.iter().any(|path| path == &fallback) {
+            paths.push(fallback);
+        }
+    }
+    paths
+}
+
+fn fallback_command_search_paths() -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    if let Ok(home_dir) = home_dir() {
+        #[cfg(windows)]
+        paths.push(home_dir.join("AppData/Roaming/npm"));
+        #[cfg(not(windows))]
+        {
+            paths.push(home_dir.join(".local/bin"));
+            paths.push(home_dir.join(".npm-global/bin"));
+            paths.push(home_dir.join(".cargo/bin"));
+        }
+    }
     #[cfg(windows)]
     {
-        let executable = resolve_command_in_path(program)
-            .ok_or_else(|| format!("未找到 Agent Skills CLI 命令: {program}"))?;
-        return Ok(command_for_executable(&executable));
+        if let Some(appdata) = env::var_os("APPDATA").filter(|value| !value.is_empty()) {
+            paths.push(PathBuf::from(appdata).join("npm"));
+        }
+        if let Some(program_files) = env::var_os("ProgramFiles").filter(|value| !value.is_empty()) {
+            paths.push(PathBuf::from(program_files).join("nodejs"));
+        }
     }
-
     #[cfg(not(windows))]
     {
-        Ok(Command::new(program))
+        paths.push(PathBuf::from("/opt/homebrew/bin"));
+        paths.push(PathBuf::from("/usr/local/bin"));
+        paths.push(PathBuf::from("/usr/bin"));
+        paths.push(PathBuf::from("/bin"));
     }
+    paths
 }
 
 fn command_error(output: &Output) -> String {
@@ -1579,6 +1619,133 @@ exit 1
 
         removed.expect("remove Agent CLI skill through CLI");
         assert!(incomplete.is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn remove_global_skill_uses_npx_from_user_fallback_with_narrow_path() {
+        let _guard = crate::workspace::TEST_ENV_LOCK.lock().expect("env lock");
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("read test time")
+            .as_nanos();
+        let temp_home = env::temp_dir().join(format!(
+            "skilldock-agent-npx-fallback-test-{}-{timestamp}",
+            std::process::id()
+        ));
+        let fallback_bin = temp_home.join(".npm-global/bin");
+        let skill_dir = temp_home.join(".agents/skills/demo");
+        let fake_node = fallback_bin.join("fake-node");
+        let fake_npx = fallback_bin.join("npx");
+        fs::create_dir_all(&fallback_bin).expect("create fallback executable path");
+        fs::create_dir_all(&skill_dir).expect("create Agent CLI skill path");
+        fs::write(skill_dir.join("SKILL.md"), "# demo\n").expect("write Agent CLI skill");
+        fs::write(
+            temp_home.join(".agents/.skill-lock.json"),
+            r#"{"version":3,"skills":{"demo":{"sourceType":"github","skillPath":"skills/demo/SKILL.md","skillFolderHash":"hash"}}}"#,
+        )
+        .expect("write Agent CLI lock");
+        fs::write(&fake_node, "#!/bin/sh\nexec /bin/sh \"$@\"\n")
+            .expect("write fake node executable");
+        fs::set_permissions(&fake_node, fs::Permissions::from_mode(0o755))
+            .expect("make fake node executable");
+        fs::write(
+            &fake_npx,
+            r#"#!/usr/bin/env fake-node
+if [ "$1" != "--yes" ] || [ "$2" != "skills" ]; then
+  exit 1
+fi
+if [ "$3" = "--version" ]; then
+  exit 0
+fi
+if [ "$3" = "remove" ]; then
+  rm -rf "$HOME/.agents/skills/$4"
+  printf '%s' '{"version":3,"skills":{}}' > "$HOME/.agents/.skill-lock.json"
+  exit 0
+fi
+exit 1
+"#,
+        )
+        .expect("write fake npx executable");
+        fs::set_permissions(&fake_npx, fs::Permissions::from_mode(0o755))
+            .expect("make fake npx executable");
+
+        let original_home = env::var_os("HOME");
+        let original_path = env::var_os("PATH");
+        let narrow_path = env::join_paths([PathBuf::from("/usr/bin"), PathBuf::from("/bin")])
+            .expect("join narrow PATH");
+        unsafe {
+            env::set_var("HOME", &temp_home);
+            env::set_var("PATH", narrow_path);
+        }
+
+        let result = remove_global_skill("demo");
+
+        match original_home {
+            Some(value) => unsafe { env::set_var("HOME", value) },
+            None => unsafe { env::remove_var("HOME") },
+        }
+        match original_path {
+            Some(value) => unsafe { env::set_var("PATH", value) },
+            None => unsafe { env::remove_var("PATH") },
+        }
+
+        result.expect("remove Agent CLI skill through npx fallback");
+        assert!(!skill_dir.exists());
+        let _ = fs::remove_dir_all(temp_home);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn command_search_paths_resolve_npx_cmd_from_windows_npm_directory() {
+        let _guard = crate::workspace::TEST_ENV_LOCK.lock().expect("env lock");
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("read test time")
+            .as_nanos();
+        let temp_home = env::temp_dir().join(format!(
+            "skilldock-agent-windows-command-test-{}-{timestamp}",
+            std::process::id()
+        ));
+        let appdata = temp_home.join("AppData/Roaming");
+        let npm_dir = appdata.join("npm");
+        let program_files = temp_home.join("Program Files");
+        let npx_command = npm_dir.join("npx.cmd");
+        fs::create_dir_all(&npm_dir).expect("create Windows npm directory");
+        fs::write(&npx_command, "@echo off\r\nexit /b 0\r\n").expect("write npx.cmd");
+
+        let original_home = env::var_os("HOME");
+        let original_user_profile = env::var_os("USERPROFILE");
+        let original_appdata = env::var_os("APPDATA");
+        let original_program_files = env::var_os("ProgramFiles");
+        let original_path = env::var_os("PATH");
+        unsafe {
+            env::set_var("HOME", &temp_home);
+            env::set_var("USERPROFILE", &temp_home);
+            env::set_var("APPDATA", &appdata);
+            env::set_var("ProgramFiles", &program_files);
+            env::set_var("PATH", "");
+        }
+
+        let search_paths = super::command_search_paths();
+        let resolved = crate::library::resolve_command_path("npx", &search_paths);
+
+        for (name, original) in [
+            ("HOME", original_home),
+            ("USERPROFILE", original_user_profile),
+            ("APPDATA", original_appdata),
+            ("ProgramFiles", original_program_files),
+            ("PATH", original_path),
+        ] {
+            match original {
+                Some(value) => unsafe { env::set_var(name, value) },
+                None => unsafe { env::remove_var(name) },
+            }
+        }
+
+        assert_eq!(resolved.as_deref(), Some(npx_command.as_path()));
+        assert!(search_paths.contains(&program_files.join("nodejs")));
+        let _ = fs::remove_dir_all(temp_home);
     }
 
     #[test]
