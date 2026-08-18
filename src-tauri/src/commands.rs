@@ -29,8 +29,9 @@ use crate::library::{
     clone_repo_skill, clone_shared_install_batch_repo, configure_git_network_command,
     configure_hidden_subprocess, create_skill_symlink, ensure_repo_skill_from_local_batch_source,
     ensure_repo_skill_with_resolved_ref_and_sparse_paths, get_tool_skills_path, git_command,
-    install_market_skill_from_source, is_skill_link_entry, is_ssh_git_url, parse_market_source_url,
-    reconcile_tool_skill_symlinks, remote_clone_candidates, remove_reserved_workspace_entries,
+    goose_config_dir_for_home, goose_skills_path_for_home, install_market_skill_from_source,
+    is_skill_link_entry, is_ssh_git_url, parse_market_source_url, reconcile_tool_skill_symlinks,
+    remote_clone_candidates, remove_reserved_workspace_entries,
     remove_reserved_workspace_symlinks_from_all_tools, remove_skill_link_entry,
     remove_skill_symlink, remove_tool_skill_entry, repo_cache_directory_root,
     resolve_clone_url_http_first, resolve_git_clone_url_with_instead_of, sanitize_storage_name,
@@ -2604,7 +2605,7 @@ fn mcp_config_path_for_tool(tool_id: &str, home_path: &Path) -> PathBuf {
         "gemini" => home_path.join(".gemini/settings.json"),
         "antigravity" => home_path.join(".gemini/config/mcp_config.json"),
         "github-copilot" => home_path.join(".copilot/mcp-config.json"),
-        "goose" => home_path.join(".config/goose/config.yaml"),
+        "goose" => goose_config_dir_for_home(home_path).join("config.yaml"),
         "hermes" => home_path.join(".hermes/config.yaml"),
         "iflow" => home_path.join(".iflow/settings.json"),
         "junie" => home_path.join(".junie/mcp/mcp.json"),
@@ -2900,12 +2901,12 @@ fn build_tool_configs() -> Vec<ToolConfig> {
         (
             "goose",
             "Goose",
-            home_path.join(".agents/skills"),
+            goose_skills_path_for_home(&home_path),
             true,
             "cli",
             vec!["cli"],
             false,
-            vec![home_path.join(".config/goose")],
+            vec![goose_config_dir_for_home(&home_path)],
             software_spec(&["Goose"], &["goose"]),
         ),
         (
@@ -4200,30 +4201,102 @@ fn find_skill_instance(
     skill_path: Option<&str>,
 ) -> Result<(Vec<SkillSummary>, usize), String> {
     let installed_skills = load_installed_skills(&default_installed_skills());
+    let skill_index = find_skill_index(&installed_skills, skill_name, skill_path)?;
+
+    Ok((installed_skills, skill_index))
+}
+
+fn find_skill_index(
+    installed_skills: &[SkillSummary],
+    skill_name: &str,
+    skill_path: Option<&str>,
+) -> Result<usize, String> {
     let requested_path = skill_path
         .map(str::trim)
         .filter(|path| !path.is_empty())
         .map(PathBuf::from)
         .map(|path| path.canonicalize().unwrap_or(path));
-    let skill_index = installed_skills
+    let matching_name_indices = installed_skills
         .iter()
-        .position(|skill| {
-            if skill.name != skill_name {
-                return false;
-            }
-            requested_path.as_ref().is_none_or(|requested| {
-                let instance_path = if skill.instance.canonical_path.trim().is_empty() {
-                    &skill.local_path
-                } else {
-                    &skill.instance.canonical_path
-                };
-                let current_path = PathBuf::from(instance_path);
-                current_path.canonicalize().unwrap_or(current_path) == *requested
-            })
-        })
-        .ok_or_else(|| format!("未找到技能 {skill_name}"))?;
+        .enumerate()
+        .filter_map(|(index, skill)| (skill.name == skill_name).then_some(index))
+        .collect::<Vec<_>>();
+    let Some(requested_path) = requested_path else {
+        return matching_name_indices
+            .first()
+            .copied()
+            .ok_or_else(|| format!("未找到技能 {skill_name}"));
+    };
 
-    Ok((installed_skills, skill_index))
+    let resolved_paths = matching_name_indices
+        .iter()
+        .map(|index| {
+            let skill = &installed_skills[*index];
+            let instance_path = if skill.instance.canonical_path.trim().is_empty() {
+                &skill.local_path
+            } else {
+                &skill.instance.canonical_path
+            };
+            let path = PathBuf::from(instance_path);
+            (*index, path.canonicalize().unwrap_or(path))
+        })
+        .collect::<Vec<_>>();
+    if let Some((index, _)) = resolved_paths
+        .iter()
+        .find(|(_, current_path)| current_path == &requested_path)
+    {
+        return Ok(*index);
+    }
+
+    let nested_matches = resolved_paths
+        .iter()
+        .filter(|(_, current_path)| {
+            current_path.starts_with(&requested_path)
+                && current_path.file_name().and_then(|name| name.to_str()) == Some(skill_name)
+                && current_path.join("SKILL.md").is_file()
+        })
+        .map(|(index, _)| *index)
+        .collect::<Vec<_>>();
+    match nested_matches.as_slice() {
+        [index] => Ok(*index),
+        [] => Err(format!("未找到技能 {skill_name}")),
+        _ => Err(format!(
+            "技能 {skill_name} 在指定目录下存在多个实例，请刷新后重试。"
+        )),
+    }
+}
+
+fn apply_skill_tool_distribution(
+    skill: &SkillSummary,
+    tool_skills_path: &str,
+    enabled: bool,
+) -> Result<(), String> {
+    if enabled {
+        create_skill_symlink(&skill.local_path, &skill.name, tool_skills_path)
+    } else {
+        remove_matching_skill_distribution(tool_skills_path, skill)
+    }
+}
+
+fn rollback_skill_tool_distributions(
+    completed_changes: &[(String, SkillSummary, bool)],
+) -> Vec<String> {
+    completed_changes
+        .iter()
+        .rev()
+        .filter_map(|(tool_skills_path, skill, was_enabled)| {
+            apply_skill_tool_distribution(skill, tool_skills_path, *was_enabled)
+                .err()
+                .map(|error| format!("{}: {error}", skill.name))
+        })
+        .collect()
+}
+
+fn bulk_distribution_error(error: String, rollback_errors: Vec<String>) -> String {
+    if rollback_errors.is_empty() {
+        return error;
+    }
+    format!("{error}；回滚失败：{}", rollback_errors.join("、"))
 }
 
 fn run_git_command_with_allowed_codes(
@@ -8699,7 +8772,7 @@ fn toggle_skill_tool_status_blocking(
         &[skill_name.to_string()],
         tool_names,
     );
-    let (_, skill_index) = find_skill_instance(skill_name, skill_path)?;
+    let skill_index = find_skill_index(&installed_skills, skill_name, skill_path)?;
     let tool_id = tool_name_to_id(tool_name)?;
     let tool_skills_path = get_tool_skills_path(&tool_id)?;
     let is_enabling = installed_skills[skill_index]
@@ -8707,19 +8780,21 @@ fn toggle_skill_tool_status_blocking(
         .iter()
         .find(|tool| tool.name == tool_name)
         .is_none_or(|tool| !tool_status_is_enabled(&tool.status_label));
+    let previous_skill = installed_skills[skill_index].clone();
     let updated_skill = set_skill_tool_enabled_status_at_index(
         &mut installed_skills,
         skill_index,
         tool_name,
         is_enabling,
     )?;
-    if is_enabling {
-        create_skill_symlink(&updated_skill.local_path, skill_name, &tool_skills_path)?;
-    } else {
-        remove_matching_skill_distribution(&tool_skills_path, &updated_skill)?;
-    }
+    apply_skill_tool_distribution(&updated_skill, &tool_skills_path, is_enabling)?;
 
-    save_installed_skills(&installed_skills)?;
+    if let Err(error) = save_installed_skills(&installed_skills) {
+        let was_enabled = !is_enabling;
+        let rollback_errors =
+            rollback_skill_tool_distributions(&[(tool_skills_path, previous_skill, was_enabled)]);
+        return Err(bulk_distribution_error(error, rollback_errors));
+    }
     Ok(installed_skills[skill_index].clone())
 }
 
@@ -8767,34 +8842,64 @@ fn set_tool_skill_statuses_blocking(
         tool_names,
     );
     let mut updated_skill_names = BTreeSet::new();
+    let mut completed_changes = Vec::new();
     for skill_name in &target_skill_names {
-        let updated =
-            set_skill_tool_enabled_status(&mut installed_skills, skill_name, tool_name, enabled)?;
+        let Some(skill_index) = installed_skills
+            .iter()
+            .position(|skill| skill.name == *skill_name)
+        else {
+            let rollback_errors = rollback_skill_tool_distributions(&completed_changes);
+            return Err(bulk_distribution_error(
+                format!("未找到技能 {skill_name}"),
+                rollback_errors,
+            ));
+        };
+        let previous_skill = installed_skills[skill_index].clone();
+        let was_enabled = previous_skill
+            .tools
+            .iter()
+            .find(|tool| tool.name == tool_name)
+            .is_some_and(|tool| tool_status_is_enabled(&tool.status_label));
+        if let Err(error) =
+            apply_skill_tool_distribution(&previous_skill, &tool_skills_path, enabled)
+        {
+            let rollback_errors = rollback_skill_tool_distributions(&completed_changes);
+            return Err(bulk_distribution_error(error, rollback_errors));
+        }
+        completed_changes.push((tool_skills_path.clone(), previous_skill, was_enabled));
+        let updated = match set_skill_tool_enabled_status_at_index(
+            &mut installed_skills,
+            skill_index,
+            tool_name,
+            enabled,
+        ) {
+            Ok(updated) => updated,
+            Err(error) => {
+                let rollback_errors = rollback_skill_tool_distributions(&completed_changes);
+                return Err(bulk_distribution_error(error, rollback_errors));
+            }
+        };
         updated_skill_names.insert(updated.name.clone());
         if !enabled {
-            remove_matching_skill_distribution(&tool_skills_path, &updated)?;
             let skill_path = PathBuf::from(&updated.local_path);
             if let Some(legacy_skill_dir_name) =
                 skill_path.file_name().and_then(|name| name.to_str())
             {
                 if legacy_skill_dir_name != skill_name {
-                    remove_skill_symlink(&tool_skills_path, legacy_skill_dir_name)?;
+                    if let Err(error) =
+                        remove_skill_symlink(&tool_skills_path, legacy_skill_dir_name)
+                    {
+                        let rollback_errors = rollback_skill_tool_distributions(&completed_changes);
+                        return Err(bulk_distribution_error(error, rollback_errors));
+                    }
                 }
             }
         }
     }
-
-    let enabled_skills = enabled_skills_for_tool(&installed_skills, tool_name)
-        .into_iter()
-        .filter(|skill| {
-            let entry_path = PathBuf::from(&tool_skills_path).join(&skill.name);
-            is_skill_link_entry(&entry_path)
-                || !entry_path.is_dir()
-                || !is_agent_cli_managed_skill(skill)
-        })
-        .collect::<Vec<_>>();
-    reconcile_tool_skill_symlinks(&tool_skills_path, &enabled_skills)?;
-    save_installed_skills(&installed_skills)?;
+    if let Err(error) = save_installed_skills(&installed_skills) {
+        let rollback_errors = rollback_skill_tool_distributions(&completed_changes);
+        return Err(bulk_distribution_error(error, rollback_errors));
+    }
 
     Ok(installed_skills
         .into_iter()
@@ -8839,7 +8944,7 @@ fn set_skill_all_tool_statuses_blocking(
         &[skill_name.to_string()],
         tool_names,
     );
-    let (_, skill_index) = find_skill_instance(skill_name, skill_path)?;
+    let skill_index = find_skill_index(&installed_skills, skill_name, skill_path)?;
     let target_tool_name_set = normalize_known_tool_names(tool_names)
         .into_iter()
         .collect::<BTreeSet<_>>();
@@ -8857,24 +8962,50 @@ fn set_skill_all_tool_statuses_blocking(
         return Ok(installed_skills[skill_index].clone());
     }
 
+    let original_skill = installed_skills[skill_index].clone();
+    let mut completed_changes = Vec::new();
     for tool_name in &target_tool_names {
-        let tool_id = tool_name_to_id(tool_name)?;
-        let tool_skills_path = get_tool_skills_path(&tool_id)?;
-        let updated_skill = set_skill_tool_enabled_status_at_index(
+        let tool_id = match tool_name_to_id(tool_name) {
+            Ok(tool_id) => tool_id,
+            Err(error) => {
+                let rollback_errors = rollback_skill_tool_distributions(&completed_changes);
+                return Err(bulk_distribution_error(error, rollback_errors));
+            }
+        };
+        let tool_skills_path = match get_tool_skills_path(&tool_id) {
+            Ok(tool_skills_path) => tool_skills_path,
+            Err(error) => {
+                let rollback_errors = rollback_skill_tool_distributions(&completed_changes);
+                return Err(bulk_distribution_error(error, rollback_errors));
+            }
+        };
+        let was_enabled = original_skill
+            .tools
+            .iter()
+            .find(|tool| tool.name == *tool_name)
+            .is_some_and(|tool| tool_status_is_enabled(&tool.status_label));
+        if let Err(error) =
+            apply_skill_tool_distribution(&original_skill, &tool_skills_path, enabled)
+        {
+            let rollback_errors = rollback_skill_tool_distributions(&completed_changes);
+            return Err(bulk_distribution_error(error, rollback_errors));
+        }
+        completed_changes.push((tool_skills_path, original_skill.clone(), was_enabled));
+        if let Err(error) = set_skill_tool_enabled_status_at_index(
             &mut installed_skills,
             skill_index,
             tool_name,
             enabled,
-        )?;
-
-        if enabled {
-            create_skill_symlink(&updated_skill.local_path, skill_name, &tool_skills_path)?;
-        } else {
-            remove_matching_skill_distribution(&tool_skills_path, &updated_skill)?;
+        ) {
+            let rollback_errors = rollback_skill_tool_distributions(&completed_changes);
+            return Err(bulk_distribution_error(error, rollback_errors));
         }
     }
 
-    save_installed_skills(&installed_skills)?;
+    if let Err(error) = save_installed_skills(&installed_skills) {
+        let rollback_errors = rollback_skill_tool_distributions(&completed_changes);
+        return Err(bulk_distribution_error(error, rollback_errors));
+    }
 
     Ok(installed_skills[skill_index].clone())
 }
@@ -8900,8 +9031,8 @@ mod tests {
         build_tool_skill_entries, cleanup_local_skill_install_on_error, collect_local_skill_dirs,
         collect_skills_manager_cached_items, collect_skillsmp_items, copy_local_skill_dir,
         delete_skill_blocking, detect_preferred_app_language_from_system,
-        ensure_intellij_git_project_files, import_local_skill, insert_trusted_project_path,
-        inspect_skill_tool_status, install_selected_local_skill_dirs,
+        ensure_intellij_git_project_files, find_skill_index, import_local_skill,
+        insert_trusted_project_path, inspect_skill_tool_status, install_selected_local_skill_dirs,
         intellij_trusted_locations_for_project, load_marketplace_cache_has_more,
         load_marketplace_cache_page, map_in_parallel_preserving_order,
         map_skillsmp_items_to_marketplace, merge_refreshed_skill_states_with_latest_state,
@@ -8926,7 +9057,7 @@ mod tests {
     };
     use crate::state::{load_installed_skills, save_installed_skills};
     use crate::workspace::TEST_ENV_LOCK;
-    use std::collections::BTreeSet;
+    use std::collections::{BTreeMap, BTreeSet};
     use std::env;
     use std::fs;
     #[cfg(unix)]
@@ -12299,6 +12430,149 @@ mod tests {
 
         restore_env_var("HOME", original_home);
         restore_env_var("PATH", original_path);
+        let _ = fs::remove_dir_all(temp_home);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn agent_cli_skill_can_toggle_goose_without_mutating_global_source() {
+        let _guard = TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let original_home = env::var_os("HOME");
+        let original_goose_path_root = env::var_os("GOOSE_PATH_ROOT");
+        let temp_home = temp_test_dir("agent-cli-goose-toggle-home");
+        let source = temp_home.join(".agents/skills/tdd");
+        fs::create_dir_all(&source).expect("create Agent CLI Skill");
+        fs::write(source.join("SKILL.md"), "# tdd\n").expect("write Agent CLI Skill");
+        fs::create_dir_all(temp_home.join(".skilldock"))
+            .expect("create SkillDock settings directory");
+        fs::write(
+            temp_home.join(".skilldock/settings.json"),
+            r#"{"agentSkillsCompatibilityEnabled":true}"#,
+        )
+        .expect("enable Agent CLI compatibility");
+
+        let mut skill = installed_skill_fixture(
+            "tdd",
+            "https://github.com/example/tdd.git",
+            source.to_string_lossy().as_ref(),
+        );
+        skill.instance.entry_path = source.to_string_lossy().to_string();
+        skill.instance.canonical_path = source.to_string_lossy().to_string();
+        skill.instance.management_owner = "agent-skills-cli".into();
+        skill.instance.update_driver = "agent-skills-cli".into();
+        skill.tools = vec![ToolSyncStatus {
+            name: "Goose".into(),
+            status_label: "未启用".into(),
+        }];
+
+        unsafe {
+            env::set_var("HOME", &temp_home);
+            env::remove_var("GOOSE_PATH_ROOT");
+        }
+        save_installed_skills(&[skill]).expect("save Agent CLI Skill");
+
+        set_skill_all_tool_statuses_blocking(
+            "tdd",
+            Some(source.to_string_lossy().as_ref()),
+            true,
+            &["Goose".into()],
+        )
+        .expect("enable Agent CLI Skill for Goose");
+        let goose_link = temp_home.join(".config/goose/skills/tdd");
+        assert!(goose_link.is_symlink());
+        assert!(source.join("SKILL.md").is_file());
+
+        set_skill_all_tool_statuses_blocking(
+            "tdd",
+            Some(source.to_string_lossy().as_ref()),
+            false,
+            &["Goose".into()],
+        )
+        .expect("disable Agent CLI Skill for Goose");
+        assert!(fs::symlink_metadata(goose_link).is_err());
+        assert!(source.join("SKILL.md").is_file());
+
+        restore_env_var("HOME", original_home);
+        restore_env_var("GOOSE_PATH_ROOT", original_goose_path_root);
+        let _ = fs::remove_dir_all(temp_home);
+    }
+
+    #[test]
+    fn find_skill_index_accepts_repo_root_for_nested_skill_instance() {
+        let temp_root = temp_test_dir("nested-skill-instance");
+        let skill_path = temp_root.join("skills/planning-with-files-zh");
+        fs::create_dir_all(&skill_path).expect("create nested Skill");
+        fs::write(skill_path.join("SKILL.md"), "# planning\n").expect("write SKILL.md");
+        let mut skill = installed_skill_fixture(
+            "planning-with-files-zh",
+            "https://github.com/example/planning-with-files-zh.git",
+            skill_path.to_string_lossy().as_ref(),
+        );
+        skill.instance.canonical_path = skill_path.to_string_lossy().to_string();
+
+        let index = find_skill_index(
+            &[skill],
+            "planning-with-files-zh",
+            Some(temp_root.to_string_lossy().as_ref()),
+        )
+        .expect("resolve nested Skill from repository root");
+
+        assert_eq!(index, 0);
+        let _ = fs::remove_dir_all(temp_root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn all_tools_enable_rolls_back_links_when_a_later_tool_fails() {
+        let _guard = TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let original_home = env::var_os("HOME");
+        let temp_home = temp_test_dir("all-tools-rollback-home");
+        let source = temp_home.join(".skilldock/skills/demo");
+        fs::create_dir_all(&source).expect("create managed Skill");
+        fs::write(source.join("SKILL.md"), "# demo\n").expect("write managed Skill");
+        let mut skill = installed_skill_fixture(
+            "demo",
+            "https://github.com/example/demo.git",
+            source.to_string_lossy().as_ref(),
+        );
+        skill.instance.canonical_path = source.to_string_lossy().to_string();
+        skill.tools = vec![
+            ToolSyncStatus {
+                name: "Claude Code".into(),
+                status_label: "未启用".into(),
+            },
+            ToolSyncStatus {
+                name: "Unknown Tool".into(),
+                status_label: "未启用".into(),
+            },
+        ];
+
+        unsafe {
+            env::set_var("HOME", &temp_home);
+        }
+        save_installed_skills(&[skill]).expect("save managed Skill");
+
+        let error = set_skill_all_tool_statuses_blocking(
+            "demo",
+            Some(source.to_string_lossy().as_ref()),
+            true,
+            &["Claude Code".into(), "Unknown Tool".into()],
+        )
+        .expect_err("unknown tool should fail the bulk operation");
+
+        assert!(error.contains("未知的工具名称"));
+        assert!(fs::symlink_metadata(temp_home.join(".claude/skills/demo")).is_err());
+        let persisted = load_installed_skills(&[]);
+        assert!(persisted[0]
+            .tools
+            .iter()
+            .all(|tool| tool.status_label == "未启用"));
+
+        restore_env_var("HOME", original_home);
         let _ = fs::remove_dir_all(temp_home);
     }
 

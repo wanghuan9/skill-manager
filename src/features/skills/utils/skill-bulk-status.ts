@@ -43,7 +43,7 @@ export async function setSkillAllToolsEnabled(input: SetSkillAllToolsEnabledInpu
     return [];
   } catch (error) {
     if (!isMissingBulkCommandError(error)) {
-      return [...input.toolNames];
+      throw error;
     }
   }
 

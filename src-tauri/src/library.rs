@@ -2829,6 +2829,37 @@ pub fn get_tool_skills_path(tool_id: &str) -> Result<String, String> {
         .to_string())
 }
 
+fn resolve_goose_config_dir(
+    home_path: &Path,
+    path_root: Option<PathBuf>,
+    app_data: Option<PathBuf>,
+    is_windows: bool,
+) -> PathBuf {
+    if let Some(path_root) = path_root.filter(|path| path.is_absolute()) {
+        return path_root.join("config");
+    }
+    if is_windows {
+        return app_data
+            .unwrap_or_else(|| home_path.join("AppData/Roaming"))
+            .join("Block/goose/config");
+    }
+    home_path.join(".config/goose")
+}
+
+pub(crate) fn goose_config_dir_for_home(home_path: &Path) -> PathBuf {
+    let path_root = env::var_os("GOOSE_PATH_ROOT")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from);
+    let app_data = env::var_os("APPDATA")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from);
+    resolve_goose_config_dir(home_path, path_root, app_data, cfg!(windows))
+}
+
+pub(crate) fn goose_skills_path_for_home(home_path: &Path) -> PathBuf {
+    goose_config_dir_for_home(home_path).join("skills")
+}
+
 fn tool_skills_path_for_home(tool_id: &str, home_path: &Path) -> Result<PathBuf, String> {
     let skills_path = match tool_id {
         "claude-code" => home_path.join(".claude/skills"),
@@ -2850,7 +2881,7 @@ fn tool_skills_path_for_home(tool_id: &str, home_path: &Path) -> Result<PathBuf,
         "cline" => home_path.join(".cline/skills"),
         "commandcode" => home_path.join(".commandcode/skills"),
         "crush" => home_path.join(".config/crush/skills"),
-        "goose" => home_path.join(".agents/skills"),
+        "goose" => goose_skills_path_for_home(home_path),
         "junie" => home_path.join(".junie/skills"),
         "kilo-code" => home_path.join(".kilocode/skills"),
         "kiro" => home_path.join(".kiro/skills"),
@@ -3035,11 +3066,11 @@ mod tests {
         install_market_skill_into_repo_dir, migrate_legacy_skill_symlinks,
         parse_git_url_instead_of_rules, parse_market_source_url, reconcile_tool_skill_symlinks,
         remote_clone_candidates, remove_reserved_workspace_entries, remove_skill_symlink,
-        remove_tool_skill_entry, repo_cache_lock, rewrite_git_clone_url_with_instead_of_rules,
-        run_git_in_dir, run_git_output, sanitize_storage_name, skill_dir_match_score,
-        ssh_clone_url_for_repository_url, summarize_git_error, tool_skills_path_for_home,
-        tree_relative_path_for_branch, MarketSourceSpec, RemoteCloneCandidate,
-        ResolvedRemoteSkillPath,
+        remove_tool_skill_entry, repo_cache_lock, resolve_goose_config_dir,
+        rewrite_git_clone_url_with_instead_of_rules, run_git_in_dir, run_git_output,
+        sanitize_storage_name, skill_dir_match_score, ssh_clone_url_for_repository_url,
+        summarize_git_error, tool_skills_path_for_home, tree_relative_path_for_branch,
+        MarketSourceSpec, RemoteCloneCandidate, ResolvedRemoteSkillPath,
     };
     #[cfg(windows)]
     use super::{create_windows_directory_junction, decode_windows_cmd_output, windows_cmd_path};
@@ -4019,10 +4050,15 @@ url.git@git.example.com:example-org/.insteadof https://git.example.com/example-o
 
     #[test]
     fn tool_skill_paths_follow_updated_official_locations() {
+        let _guard = TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         let original_home = std::env::var_os("HOME");
+        let original_goose_path_root = std::env::var_os("GOOSE_PATH_ROOT");
         let home_dir = temp_test_dir("tool-skill-paths-home");
         unsafe {
             std::env::set_var("HOME", &home_dir);
+            std::env::remove_var("GOOSE_PATH_ROOT");
         }
 
         assert_eq!(
@@ -4032,7 +4068,7 @@ url.git@git.example.com:example-org/.insteadof https://git.example.com/example-o
         assert_eq!(
             get_tool_skills_path("goose").expect("goose path"),
             home_dir
-                .join(".agents/skills")
+                .join(".config/goose/skills")
                 .to_string_lossy()
                 .to_string()
         );
@@ -4044,6 +4080,15 @@ url.git@git.example.com:example-org/.insteadof https://git.example.com/example-o
         } else {
             unsafe {
                 std::env::remove_var("HOME");
+            }
+        }
+        if let Some(path_root) = original_goose_path_root {
+            unsafe {
+                std::env::set_var("GOOSE_PATH_ROOT", path_root);
+            }
+        } else {
+            unsafe {
+                std::env::remove_var("GOOSE_PATH_ROOT");
             }
         }
         let _ = fs::remove_dir_all(home_dir);
@@ -4058,6 +4103,30 @@ url.git@git.example.com:example-org/.insteadof https://git.example.com/example-o
         });
         let path = tool_skills_path_for_home("codex", &home).expect("codex path");
         assert!(path.ends_with(Path::new(".codex").join("skills")));
+    }
+
+    #[test]
+    fn goose_config_path_uses_windows_app_data_and_path_root_override() {
+        let home = PathBuf::from(r"C:\Users\demo");
+        let app_data = PathBuf::from(r"C:\Users\demo\AppData\Roaming");
+        assert_eq!(
+            resolve_goose_config_dir(&home, None, Some(app_data.clone()), true),
+            app_data.join("Block/goose/config")
+        );
+        assert_eq!(
+            resolve_goose_config_dir(&home, None, None, true),
+            home.join("AppData/Roaming/Block/goose/config")
+        );
+
+        let path_root = PathBuf::from(if cfg!(windows) {
+            r"D:\goose-data"
+        } else {
+            "/opt/goose-data"
+        });
+        assert_eq!(
+            resolve_goose_config_dir(&home, Some(path_root.clone()), Some(app_data), true),
+            path_root.join("config")
+        );
     }
 
     #[test]

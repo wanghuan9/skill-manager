@@ -45,7 +45,7 @@
 | Roo Code | `roo-code` | `~/.roo/skills` | 支持 | `~/Library/Application Support/Code/User/globalStorage/RooVeterinaryInc.roo-cline/settings/mcp_settings.json` |
 | Kilo Code | `kilo-code` | `~/.kilocode/skills` | 支持 | `~/Library/Application Support/Code/User/globalStorage/kilocode.kilo-code/settings/mcp_settings.json` |
 | Kiro | `kiro` | `~/.kiro/skills` | 支持 | `~/.kiro/settings/mcp.json` |
-| Goose | `goose` | `~/.agents/skills` | 支持 | `~/.config/goose/config.yaml` |
+| Goose | `goose` | macOS/Linux：`~/.config/goose/skills`；Windows：`%APPDATA%\\Block\\goose\\config\\skills` | 支持 | macOS/Linux：`~/.config/goose/config.yaml`；Windows：`%APPDATA%\\Block\\goose\\config\\config.yaml` |
 | Junie | `junie` | `~/.junie/skills` | 支持 | `~/.junie/mcp/mcp.json` |
 | Augment | `augment` | `~/.augment/skills` | 支持 | `~/.augment/settings.json` |
 | CodeBuddy | `codebuddy` | `~/.codebuddy/skills` | 支持 | `~/.codebuddy/.mcp.json` |
@@ -65,7 +65,7 @@
 - `Trae`、`Trae CN` 的 `skills` 路径与 MCP 路径不在同一目录，这属于当前实现的预期行为。
 - `Droid` 当前使用 `~/.factory/skills` 与 `~/.factory/mcp.json`。
 - `Antigravity` 当前使用 Gemini 新版共享 skills 目录：`~/.gemini/config/skills`；MCP 配置仍位于 `~/.gemini/config/mcp_config.json`。
-- `Goose` 当前以 `~/.agents/skills` 作为首选 skill 路径，同时兼容扫描旧路径 `~/.config/goose/skills`。
+- `Goose` 使用自身配置目录作为 SkillDock 的独立启停目标；`~/.agents/skills` 仍作为 Agent Skills CLI 的共享来源目录扫描，但不再作为 Goose 的写入目录。设置 `GOOSE_PATH_ROOT` 时，Goose Skill 目录使用 `$GOOSE_PATH_ROOT/config/skills`。
 - `Pi` 核心不内置 MCP；MCP 通常由第三方扩展提供，因此 SkillDock 不猜测或写入 Pi MCP 配置。
 - `MiMo Code` 路径与 MCP 格式依据官方文档：全局配置位于 `~/.config/mimocode/`，MCP 使用 `mcp` 对象，并支持本地与远程 server。
 - `WorkBuddy` 当前使用用户确认的 `~/.workbuddy/skills` 与 `~/.workbuddy/.mcp.json`；官网暂未公开这两个本地文件路径。

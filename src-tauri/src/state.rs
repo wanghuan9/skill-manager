@@ -6,6 +6,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
+use crate::library::goose_skills_path_for_home;
 use crate::models::{
     AppSettings, GithubBackupSettings, GithubConnectionMetadata, SkillInstanceMetadata,
     SkillSummary, WorkspacePersistence,
@@ -927,7 +928,7 @@ pub fn scan_local_skill_candidates(installed_skills: &[SkillSummary]) -> Vec<(St
         home_dir.join(".qoder/skills"),
         home_dir.join(".qwen/skills"),
         home_dir.join(".roo/skills"),
-        home_dir.join(".config/goose/skills"),
+        goose_skills_path_for_home(&home_dir),
         home_dir.join(".openclaw/skills"),
         home_dir.join(".augment/skills"),
         home_dir.join(".kilocode/skills"),
@@ -1308,6 +1309,7 @@ fn read_skill_description(skill_file: &Path) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
     use std::env;
     use std::fs;
     use std::path::PathBuf;

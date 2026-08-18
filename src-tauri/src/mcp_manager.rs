@@ -18,7 +18,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter};
 
 use crate::commands::installed_mcp_tool_ids;
-use crate::library::{command_for_executable, resolve_command_path};
+use crate::library::{command_for_executable, goose_config_dir_for_home, resolve_command_path};
 use crate::state::{load_app_settings, normalize_mcp_install_activation};
 use crate::tool_adapters;
 use crate::workspace::{
@@ -1422,8 +1422,8 @@ fn target_app_specs() -> Result<Vec<McpTargetAppSpec>, String> {
         supported_app_spec(
             APP_GOOSE,
             "Goose",
-            home_dir.join(".config/goose/config.yaml"),
-            home_dir.join(".config/goose"),
+            goose_config_dir_for_home(&home_dir).join("config.yaml"),
+            goose_config_dir_for_home(&home_dir),
         ),
         supported_app_spec(
             APP_HERMES,
