@@ -150,7 +150,7 @@ const SKIPPED_ITEM_PATTERNS = [
   /(Rust|前端验证|fallback 逻辑)/i,
 ];
 const NON_USER_FACING_TYPES = new Set(["chore", "docs", "test"]);
-const FEATURE_DEVELOPMENT_FIX_PATTERN = /修复|问题|异常|丢失|覆盖|崩溃|报错|错误|失败/i;
+const FEATURE_DEVELOPMENT_FIX_PATTERN = /(?:修复|解决|避免).*(?:问题|异常|丢失|覆盖|崩溃|报错|错误|失败)|(?:问题|异常|丢失|覆盖|崩溃|报错|错误|失败).*(?:修复|解决|避免)/i;
 const USER_FACING_PRODUCT_PATTERN = /SkillHub|ClawHub|ZCode|OpenCode|Claude Code|Codex|Cursor|Gemini CLI/i;
 const COMMIT_HIGHLIGHT_RULES = [
   {
