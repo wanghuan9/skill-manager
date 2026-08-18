@@ -47,7 +47,6 @@ const RELEASE_NOTE_COVERAGE_RULES = [
     label: "MCP 管理",
     pathPatterns: [
       /^src-tauri\/src\/mcp_manager\.rs$/,
-      /^src-tauri\/src\/agent_skills_cli\.rs$/,
       /^src\/app\/routes\/mcp\.tsx$/,
       /^src\/features\/install\/components\/McpMarketplacePanel\.tsx$/,
       /^src\/features\/skills\/utils\/mcp-workspace-cache\.ts$/,
@@ -98,7 +97,7 @@ const RELEASE_NOTE_COVERAGE_RULES = [
     id: "skills",
     label: "Skill 管理",
     pathPatterns: [
-      /^src-tauri\/src\/(?:clawhub_market|commands|library|models|skillhub_market|state)\.rs$/,
+      /^src-tauri\/src\/(?:agent_skills_cli|clawhub_market|commands|library|models|skillhub_market|state)\.rs$/,
       /^src\/app\/routes\/skills\.tsx$/,
       /^src\/features\/skills\//,
     ],

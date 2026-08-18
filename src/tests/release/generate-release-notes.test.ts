@@ -126,6 +126,16 @@ describe("release notes item limit", () => {
     ]);
   });
 
+  test("classifies Agent Skills CLI changes as Skill management", () => {
+    const areas = detectChangedAreas(["src-tauri/src/agent_skills_cli.rs"]);
+
+    expect(areas.map((area) => area.id)).toEqual(["skills"]);
+    expect(() => validateCuratedReleaseNotes(
+      "## 修复\n\n- 修复 Agent Skills CLI 托管 Skill 删除失败的问题。\n",
+      areas,
+    )).not.toThrow();
+  });
+
   test("rejects curated notes that omit a changed product area", () => {
     const areas = detectChangedAreas([
       "src-tauri/src/mcp_manager.rs",
