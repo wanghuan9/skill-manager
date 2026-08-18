@@ -41,8 +41,8 @@ use crate::models::{
     AppSettings, GitAccountSummary, GitBranchOption, GitChangeFile, LocalInstallSkillCandidate,
     LocalSkillCandidate, MarketplaceSkill, MarketplaceSkillsPage, PushBranchOption,
     PushPreviewSnapshot, PushTargetSnapshot, RepoSkillCandidate, SkillFileBrowserSnapshot,
-    SkillFileDocument, SkillFileEntry, SkillSummary, ToolConfig, ToolSkillEntry, ToolSyncStatus,
-    UpdatePreviewSnapshot, WorkspaceSnapshot,
+    SkillFileDocument, SkillFileEntry, SkillInstanceMetadata, SkillSummary, ToolConfig,
+    ToolSkillEntry, ToolSyncStatus, UpdatePreviewSnapshot, WorkspaceSnapshot,
 };
 use crate::state::{
     load_app_settings, load_installed_skills, normalize_skill_install_activation,
@@ -61,6 +61,13 @@ const SKILL_LIBRARY_REFRESHED_EVENT: &str = "skill-library-refreshed";
 const LOCAL_SKILL_TOOL_STATE_CONCURRENCY: usize = 2;
 const PACKAGE_ID_HASH_LEN: usize = 8;
 const LOCAL_IMPORT_SOURCE_BACKUP_SUFFIX: &str = ".skilldock-import-backup";
+const GENERIC_MARKETPLACE_SOURCE: &str = "marketplace";
+const MARKETPLACE_SOURCE_SITES: [&str; 4] = [
+    "skills.sh",
+    "skillsmp",
+    crate::skillhub_market::SOURCE,
+    crate::clawhub_market::SOURCE_SITE,
+];
 static SKILL_TAG_UPDATE_LOCK: Mutex<()> = Mutex::new(());
 
 pub(crate) fn default_installed_skills() -> Vec<SkillSummary> {
@@ -1979,6 +1986,52 @@ fn load_marketplace_cache(source: &str) -> Option<Vec<MarketplaceSkill>> {
     )
 }
 
+fn marketplace_install_identity(name: &str, source_url: &str) -> (String, String) {
+    (
+        name.trim().to_lowercase(),
+        source_url.trim().trim_end_matches('/').to_lowercase(),
+    )
+}
+
+fn cached_marketplace_install_sources() -> HashMap<(String, String), String> {
+    let mut sources = HashMap::new();
+    for source_site in MARKETPLACE_SOURCE_SITES {
+        for skill in load_marketplace_cache(source_site).unwrap_or_default() {
+            let identity = marketplace_install_identity(&skill.name, &skill.source_url);
+            sources
+                .entry(identity)
+                .or_insert_with(|| source_site.to_string());
+        }
+    }
+    sources
+}
+
+fn repair_marketplace_install_sources(skills: &mut [SkillSummary]) -> bool {
+    let cached_sources = cached_marketplace_install_sources();
+    let mut repaired = false;
+    for skill in skills {
+        if !skill.instance.marketplace_source.trim().is_empty() {
+            continue;
+        }
+
+        let inferred_source = if skill.source_type == "marketplace" {
+            Some(GENERIC_MARKETPLACE_SOURCE.to_string())
+        } else if skill.instance.update_driver == crate::clawhub_market::UPDATE_DRIVER {
+            Some(crate::clawhub_market::SOURCE_SITE.to_string())
+        } else {
+            let identity = marketplace_install_identity(&skill.name, &skill.source_url);
+            cached_sources.get(&identity).cloned()
+        };
+        let Some(inferred_source) = inferred_source else {
+            continue;
+        };
+
+        skill.instance.marketplace_source = inferred_source;
+        repaired = true;
+    }
+    repaired
+}
+
 fn load_marketplace_cache_source_entry(source: &str) -> Option<serde_json::Value> {
     let cache_path = marketplace_cache_file()?;
     let content = fs::read_to_string(cache_path).ok()?;
@@ -3678,18 +3731,20 @@ fn resolve_startup_installed_skills() -> Vec<SkillSummary> {
     let agent_cli_status = agent_cli_status_for_skills(&installed_skills);
     let installed_skills =
         recover_missing_managed_skills(installed_skills, &tool_configs, &agent_cli_status);
-    let normalized_skills = installed_skills
+    let mut normalized_skills = installed_skills
         .iter()
         .map(normalize_installed_skill_source_url)
         .collect::<Vec<_>>();
-    if normalized_skills
-        .iter()
-        .zip(installed_skills.iter())
-        .any(|(current, original)| {
-            current.source_url != original.source_url
-                || current.source_type != original.source_type
-                || current.source_label != original.source_label
-        })
+    let repaired_marketplace_sources = repair_marketplace_install_sources(&mut normalized_skills);
+    if repaired_marketplace_sources
+        || normalized_skills
+            .iter()
+            .zip(installed_skills.iter())
+            .any(|(current, original)| {
+                current.source_url != original.source_url
+                    || current.source_type != original.source_type
+                    || current.source_label != original.source_label
+            })
     {
         let _ = save_installed_skills(&normalized_skills);
     }
@@ -6749,7 +6804,10 @@ fn install_skill_from_market_blocking(skill: MarketplaceSkill) -> Result<SkillSu
         lifecycle_source: String::new(),
         owner_plugin_id: String::new(),
         owner_plugin_name: String::new(),
-        instance: Default::default(),
+        instance: SkillInstanceMetadata {
+            marketplace_source: skill.source_site.clone(),
+            ..Default::default()
+        },
         tools: vec![ToolSyncStatus {
             name: "Codex".into(),
             status_label: "待同步".into(),
@@ -8900,6 +8958,7 @@ mod tests {
             skill_install_activation: "apply-all-tools".into(),
             mcp_install_activation: "apply-all-tools".into(),
             skill_source_view_style: "select".into(),
+            skill_tag_filter_layout: "inline".into(),
             language: "zh-CN".into(),
             language_source: "manual".into(),
             theme: "system".into(),

@@ -160,6 +160,13 @@ const pluginEnabledOrder: Record<PluginSummary["enabledState"], number> = {
   disabled: 1,
   unknown: 2,
 };
+const pluginCollabStatusOrder: Record<PluginSummary["collabStatus"], number> = {
+  "pending-commit": 0,
+  "pending-push": 1,
+  "update-available": 2,
+  diverged: 3,
+  clean: 4,
+};
 let pluginScanSession: PluginScanSession = {
   isScanning: false,
   plugins: null,
@@ -600,6 +607,11 @@ function buildAllTabPlugins(plugins: PluginSummary[]): PluginSummary[] {
     );
     const updateAvailable = sortedGroup.some((plugin) => plugin.updateAvailable);
     const localChangeCount = Math.max(...sortedGroup.map((plugin) => plugin.localChangeCount ?? 0));
+    const latestLocalUpdatedAt = sortedGroup.reduce((latest, plugin) => (
+      parseSkillTimestamp(plugin.localUpdatedAt) > parseSkillTimestamp(latest)
+        ? plugin.localUpdatedAt
+        : latest
+    ), primaryPlugin.localUpdatedAt);
 
     let enabledState: PluginSummary["enabledState"] = "unknown";
     if (hasEnabledInstallation) {
@@ -662,6 +674,7 @@ function buildAllTabPlugins(plugins: PluginSummary[]): PluginSummary[] {
       collabStatus,
       updateAvailable,
       localChangeCount,
+      localUpdatedAt: latestLocalUpdatedAt,
       statusText,
     };
   });
@@ -927,15 +940,24 @@ function PluginHostCoverageIcon({
 }
 
 function comparePlugins(left: PluginSummary, right: PluginSummary) {
-  const localUpdatedDiff = parseSkillTimestamp(right.localUpdatedAt)
-    - parseSkillTimestamp(left.localUpdatedAt);
-  if (localUpdatedDiff !== 0) {
-    return localUpdatedDiff;
+  const enabledDiff = pluginEnabledOrder[left.enabledState] - pluginEnabledOrder[right.enabledState];
+  if (enabledDiff !== 0) {
+    return enabledDiff;
+  }
+
+  const leftLocalUpdatedAt = parseSkillTimestamp(left.localUpdatedAt);
+  const rightLocalUpdatedAt = parseSkillTimestamp(right.localUpdatedAt);
+  if (leftLocalUpdatedAt !== rightLocalUpdatedAt) {
+    return rightLocalUpdatedAt - leftLocalUpdatedAt;
+  }
+
+  const collabStatusDiff = pluginCollabStatusOrder[left.collabStatus]
+    - pluginCollabStatusOrder[right.collabStatus];
+  if (collabStatusDiff !== 0) {
+    return collabStatusDiff;
   }
 
   return (
-    pluginEnabledOrder[left.enabledState] -
-      pluginEnabledOrder[right.enabledState] ||
     getPluginDisplayName(left).localeCompare(getPluginDisplayName(right), "zh-CN", {
       sensitivity: "base",
       numeric: true,

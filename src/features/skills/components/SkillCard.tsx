@@ -25,6 +25,7 @@ import { useSkillWorkspace } from "@/features/skills/state/skill-workspace";
 import type { SkillSummary } from "@/features/skills/state/skill-store";
 import { formatSkillDescription } from "@/features/skills/utils/skill-description";
 import { resolveSkillTagTone } from "@/features/skills/utils/skill-tag-color";
+import { resolveSkillSourceMethod } from "@/features/skills/utils/skill-tag-filter";
 import { formatSkillLastEditor } from "@/features/skills/utils/skill-editor";
 import { setSkillAllToolsEnabled } from "@/features/skills/utils/skill-bulk-status";
 import { mergeSkillToolsWithInstalledTools } from "@/features/skills/utils/skill-tools";
@@ -327,13 +328,13 @@ export function SkillCard({
     : skill.managementOwner === "external"
       ? t("skill.card.owner.external")
       : t("skill.card.owner.skilldock");
-  const sourceMethodLabel = skill.sourceType === "well-known"
-    ? t("skill.card.sourceMethod.remote")
-    : skill.sourceType === "marketplace"
-      ? t("skill.card.sourceMethod.remote")
-    : skill.gitLinked || skill.sourceType !== "local"
-      ? t("skill.card.sourceMethod.git")
-      : t("skill.card.sourceMethod.local");
+  const sourceMethod = resolveSkillSourceMethod(skill);
+  const sourceMethodLabel = {
+    local: t("skill.card.sourceMethod.local"),
+    git: t("skill.card.sourceMethod.git"),
+    standard: t("skill.card.sourceMethod.standard"),
+    marketplace: t("skill.card.sourceMethod.marketplace"),
+  }[sourceMethod];
   const managedPath = skill.canonicalPath ?? skill.localPath;
   const managedPathLabel = formatPathForDisplay(managedPath);
   const gridSourceSummary = `${sourceMethodLabel} · ${managementOwnerLabel}`;

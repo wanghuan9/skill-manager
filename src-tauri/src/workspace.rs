@@ -236,9 +236,9 @@ pub fn ensure_workspace_initialized() -> Result<PathBuf, String> {
         "{\n  \"installedSkills\": []\n}\n",
     )?;
     let default_settings = if is_new_workspace {
-        "{\n  \"defaultOpenToolId\": \"\",\n  \"skillInstallActivation\": \"apply-all-tools\",\n  \"mcpInstallActivation\": \"apply-all-tools\",\n  \"skillSourceViewStyle\": \"select\",\n  \"skillLibraryProvider\": \"skilldock\",\n  \"agentSkillsCompatibilityEnabled\": true\n}\n"
+        "{\n  \"defaultOpenToolId\": \"\",\n  \"skillInstallActivation\": \"apply-all-tools\",\n  \"mcpInstallActivation\": \"apply-all-tools\",\n  \"skillSourceViewStyle\": \"select\",\n  \"skillTagFilterLayout\": \"popover\",\n  \"skillLibraryProvider\": \"skilldock\",\n  \"agentSkillsCompatibilityEnabled\": true\n}\n"
     } else {
-        "{\n  \"defaultOpenToolId\": \"\",\n  \"skillInstallActivation\": \"apply-all-tools\",\n  \"mcpInstallActivation\": \"apply-all-tools\",\n  \"skillSourceViewStyle\": \"select\",\n  \"skillLibraryProvider\": \"skilldock\"\n}\n"
+        "{\n  \"defaultOpenToolId\": \"\",\n  \"skillInstallActivation\": \"apply-all-tools\",\n  \"mcpInstallActivation\": \"apply-all-tools\",\n  \"skillSourceViewStyle\": \"select\",\n  \"skillTagFilterLayout\": \"popover\",\n  \"skillLibraryProvider\": \"skilldock\"\n}\n"
     };
     ensure_workspace_file_with_default_content(
         &workspace_root.join(workspace_relative_file_path("settings.json")),

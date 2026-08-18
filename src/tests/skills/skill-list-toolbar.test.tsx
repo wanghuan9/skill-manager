@@ -1,4 +1,4 @@
-import { fireEvent, screen } from "@testing-library/react";
+import { fireEvent, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { NotificationProvider } from "@/app/notifications";
@@ -344,10 +344,9 @@ test("notifies status filter changes", async () => {
   expect(onStatusFilterChange).toHaveBeenCalledWith("pending-commit");
 });
 
-test("filters managed skills by management owner", async () => {
+test("moves management owner filtering into the tag popover", async () => {
   const user = userEvent.setup();
-  const onStatusFilterChange = vi.fn();
-  const onOwnerFilterChange = vi.fn();
+  const onTagFilterChange = vi.fn();
   const agentCliSkillFixture: SkillSummary = {
     ...installedSkillFixtures[0],
     name: "agent-cli-skill",
@@ -368,12 +367,12 @@ test("filters managed skills by management owner", async () => {
       <SkillListToolbar
         query=""
         statusFilter="all"
-        ownerFilter="all"
         onQueryChange={vi.fn()}
-        onStatusFilterChange={onStatusFilterChange}
-        onOwnerFilterChange={onOwnerFilterChange}
+        onStatusFilterChange={vi.fn()}
         viewMode="grouped"
         onViewModeChange={vi.fn()}
+        tagFilterLayout="popover"
+        onTagFilterChange={onTagFilterChange}
       />
     </NotificationProvider>,
   );
@@ -383,10 +382,56 @@ test("filters managed skills by management owner", async () => {
   expect(screen.queryByLabelText("按托管方筛选 Skill")).not.toBeInTheDocument();
 
   await user.click(screen.getByRole("combobox", { name: "筛选 Skill" }));
+  expect(screen.queryByRole("option", { name: "托管方" })).not.toBeInTheDocument();
 
-  expect(screen.getByRole("option", { name: "托管方" })).toBeDisabled();
-  expect(screen.getByRole("option", { name: "SkillDock (4)" })).toBeInTheDocument();
-  await user.click(screen.getByRole("option", { name: "Agent CLI (1)" }));
-  expect(onStatusFilterChange).toHaveBeenCalledWith("all");
-  expect(onOwnerFilterChange).toHaveBeenCalledWith("agent-skills-cli");
+  await user.click(screen.getByRole("button", { name: "打开标签筛选" }));
+  const tagMenu = screen.getByRole("menu", { name: "按标签快速筛选 Skill" });
+  await user.click(within(tagMenu).getByRole("menuitemradio", { name: /Agent CLI/ }));
+
+  expect(onTagFilterChange).toHaveBeenCalledWith({
+    kind: "owner",
+    value: "agent-skills-cli",
+  });
+});
+
+test("toggles the lightweight tag filter bar and clears the active tag", () => {
+  const onTagFilterVisibleChange = vi.fn();
+  const onTagFilterChange = vi.fn();
+  const taggedSkillFixture: SkillSummary = {
+    ...installedSkillFixtures[0],
+    tag: "workflow",
+  };
+
+  mockedUseSkillWorkspace.mockReturnValue({
+    language: "zh-CN",
+    installedSkills: [taggedSkillFixture],
+    isLoading: false,
+    refreshWorkspace: vi.fn(),
+    updateAllSkills: vi.fn(),
+  } as unknown as ReturnType<typeof useSkillWorkspace>);
+
+  renderWithI18n(
+    <NotificationProvider>
+      <SkillListToolbar
+        query=""
+        statusFilter="all"
+        onQueryChange={vi.fn()}
+        onStatusFilterChange={vi.fn()}
+        viewMode="list"
+        onViewModeChange={vi.fn()}
+        tagFilterLayout="inline"
+        tagFilter={{ kind: "custom", value: "workflow" }}
+        isTagFilterVisible={false}
+        onTagFilterVisibleChange={onTagFilterVisibleChange}
+        onTagFilterChange={onTagFilterChange}
+      />
+    </NotificationProvider>,
+  );
+
+  expect(screen.getByText("workflow")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "展开标签筛选" }));
+  fireEvent.click(screen.getByRole("button", { name: "清除标签筛选" }));
+
+  expect(onTagFilterVisibleChange).toHaveBeenCalledWith(true);
+  expect(onTagFilterChange).toHaveBeenCalledWith(undefined);
 });

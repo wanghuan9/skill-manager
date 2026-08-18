@@ -510,6 +510,13 @@ test("switches Skills, MCP, and Plugins between current and compact header layou
   expect(currentLayoutButton).toHaveAttribute("aria-pressed", "true");
   expect(compactLayoutButton).toHaveAttribute("aria-pressed", "false");
   await user.click(compactLayoutButton);
+
+  const tagFilterLayoutGroup = screen.getByRole("group", { name: "标签筛选布局" });
+  const inlineTagFilterButton = within(tagFilterLayoutGroup).getByRole("button", { name: "平铺标签栏" });
+  const popoverTagFilterButton = within(tagFilterLayoutGroup).getByRole("button", { name: "下拉筛选面板" });
+  expect(inlineTagFilterButton).toHaveAttribute("aria-pressed", "true");
+  expect(popoverTagFilterButton).toHaveAttribute("aria-pressed", "false");
+  await user.click(popoverTagFilterButton);
   await user.click(screen.getByRole("button", { name: /Skills/ }));
 
   const compactSkillsHeader = container.querySelector(".management-page-header--compact");
@@ -523,6 +530,12 @@ test("switches Skills, MCP, and Plugins between current and compact header layou
   expect(skillToolbarRow?.querySelector(".skills-header-bar__tools")).toBeInTheDocument();
   expect(compactSkillsHeader?.querySelector(".skills-source-divider")).toBeInTheDocument();
   expect(container.querySelector(".page-header-divider")).toHaveClass("page-header-divider--skills");
+  expect(screen.queryByRole("group", { name: "按标签快速筛选 Skill" })).not.toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "打开标签筛选" }));
+  const tagFilterMenu = screen.getByRole("menu", { name: "按标签快速筛选 Skill" });
+  expect(within(tagFilterMenu).getByText("来源方式")).toBeInTheDocument();
+  expect(within(tagFilterMenu).getByText("托管方")).toBeInTheDocument();
+  expect(within(tagFilterMenu).getByText("自定义标签")).toBeInTheDocument();
 
   await user.click(sourceTrigger);
   expect(screen.getByRole("menuitem", { name: /Codex 5/ })).toBeInTheDocument();

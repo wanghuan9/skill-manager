@@ -10,6 +10,7 @@ import {
   type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
+import { useTranslate, type TranslationKey } from "@/app/i18n";
 import { AppSelect } from "@/app/components/AppSelect";
 import {
   BatchActionBar,
@@ -55,6 +56,7 @@ type BatchConfirmState = {
 };
 
 type PublishSkillTab = "managed" | "unmanaged";
+type Translate = ReturnType<typeof useTranslate>["t"];
 
 type UnmanagedSkillGroup = {
   name: string;
@@ -62,20 +64,20 @@ type UnmanagedSkillGroup = {
   candidates: PublishingUnmanagedSkill[];
 };
 
-const STATUS_OPTIONS: Array<{ value: PublishStatusFilter; label: string }> = [
-  { value: "all", label: "全部" },
-  { value: "update-available", label: "可更新" },
-  { value: "unpublished", label: "未发布" },
-  { value: "published", label: "已发布" },
+const STATUS_OPTIONS: Array<{ value: PublishStatusFilter; labelKey: TranslationKey }> = [
+  { value: "all", labelKey: "publishing.status.all" },
+  { value: "update-available", labelKey: "publishing.status.updateAvailable" },
+  { value: "unpublished", labelKey: "publishing.status.unpublished" },
+  { value: "published", labelKey: "publishing.status.published" },
 ];
 
-const STATUS_LABELS: Record<PublishStatus, string> = {
-  unpublished: "未发布",
-  "update-available": "可更新",
-  published: "已发布",
-  publishing: "发布中",
-  reviewing: "审核中",
-  failed: "发布失败",
+const STATUS_LABEL_KEYS: Record<PublishStatus, TranslationKey> = {
+  unpublished: "publishing.status.unpublished",
+  "update-available": "publishing.status.updateAvailable",
+  published: "publishing.status.published",
+  publishing: "publishing.status.publishing",
+  reviewing: "publishing.status.reviewing",
+  failed: "publishing.status.failed",
 };
 
 const STATUS_PRIORITY: Record<PublishStatus, number> = {
@@ -171,24 +173,26 @@ function matchesStatusFilter(status: PublishStatus, filter: PublishStatusFilter)
   return status === filter;
 }
 
-function getPublishManagementOwnerLabel(managementOwner?: string) {
+function getPublishManagementOwnerLabel(managementOwner: string | undefined, t: Translate) {
   if (managementOwner === "agent-skills-cli") {
-    return "Agent CLI";
+    return t("skill.card.owner.agentSkillsCli");
   }
   if (managementOwner === "external") {
-    return "外部";
+    return t("skill.card.owner.external");
   }
-  return "SkillDock";
+  return t("skill.card.owner.skilldock");
 }
 
-function getPublishSourceMethodLabel(skill: PublishableSkill) {
+function getPublishSourceMethodLabel(skill: PublishableSkill, t: Translate) {
   if (skill.sourceType === "well-known" || skill.sourceType === "marketplace") {
-    return "远程";
+    return t(skill.sourceType === "marketplace"
+      ? "skill.card.sourceMethod.marketplace"
+      : "skill.card.sourceMethod.standard");
   }
   if (skill.gitLinked || (skill.sourceType && skill.sourceType !== "local")) {
-    return "Git";
+    return t("skill.card.sourceMethod.git");
   }
-  return "本地";
+  return t("skill.card.sourceMethod.local");
 }
 
 function getPublishSortTimestamp(skill: PublishableSkill) {
@@ -332,7 +336,7 @@ function buildUnmanagedSkillGroups(candidates: PublishingUnmanagedSkill[]): Unma
     .sort((left, right) => left.name.localeCompare(right.name));
 }
 
-function formatUnmanagedSource(candidate: PublishingUnmanagedSkill) {
+function formatUnmanagedSource(candidate: PublishingUnmanagedSkill, t: Translate) {
   const normalized = candidate.detectedFrom.replace(/\\\\/g, "/").toLowerCase();
   if (normalized.includes("/.cursor/")) return "Cursor";
   if (normalized.includes("/.claude/")) return "Claude Code";
@@ -340,13 +344,13 @@ function formatUnmanagedSource(candidate: PublishingUnmanagedSkill) {
   if (normalized.includes("/.codeium/windsurf/")) return "Windsurf";
   if (normalized.includes("/.gemini/")) return "Gemini";
   const parts = candidate.detectedFrom.replace(/\\\\/g, "/").split("/").filter(Boolean);
-  return parts.at(-2) ?? parts.at(-1) ?? "本地工具";
+  return parts.at(-2) ?? parts.at(-1) ?? t("publishing.unmanaged.localTool");
 }
 
-function formatUnmanagedFileType(candidate: PublishingUnmanagedSkill) {
+function formatUnmanagedFileType(candidate: PublishingUnmanagedSkill, t: Translate) {
   return candidate.sourceHint === "符号链接" || candidate.sourceHint === "Symlink"
-    ? "符号链接"
-    : "真实文件";
+    ? t("publishing.unmanaged.symlink")
+    : t("publishing.unmanaged.realFile");
 }
 
 function FilterIcon() {
@@ -464,11 +468,14 @@ function PublishFilePreviewButton(props: {
   onClick: () => void;
   showLabel?: boolean;
 }) {
+  const { t } = useTranslate();
   const updateFileCount = props.skill.publishStatus === "update-available"
     ? props.skill.updateFileCount ?? 0
     : 0;
   const hasUpdates = updateFileCount > 0;
-  const label = hasUpdates ? "预览变更" : "预览文件";
+  const label = hasUpdates
+    ? t("publishing.action.previewChanges")
+    : t("publishing.action.previewFiles");
   const className = props.showLabel
     ? "secondary-button secondary-button--compact skill-card-detail-modal__action publish-skill-row__preview-button"
     : "skill-card__icon-button skill-card__file-preview-button publish-skill-row__preview-button";
@@ -496,11 +503,12 @@ function PublishSkillSwitcher(props: {
   isCompact: boolean;
   onChange: (tab: PublishSkillTab) => void;
 }) {
+  const { t } = useTranslate();
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
   const options: Array<{ key: PublishSkillTab; label: string; count: number }> = [
-    { key: "managed", label: "已托管", count: props.managedCount },
-    { key: "unmanaged", label: "未托管", count: props.unmanagedCount },
+    { key: "managed", label: t("publishing.tabs.managed"), count: props.managedCount },
+    { key: "unmanaged", label: t("publishing.tabs.unmanaged"), count: props.unmanagedCount },
   ];
   const activeOption = options.find((option) => option.key === props.activeTab) ?? options[0];
 
@@ -578,7 +586,7 @@ function PublishSkillSwitcher(props: {
 
   return (
     <div className="skills-source-tabs-row publish-source-switcher">
-      <div className="skills-source-tabs" role="tablist" aria-label="发布 Skill 分类">
+      <div className="skills-source-tabs" role="tablist" aria-label={t("publishing.tabs.aria")}>
         {options.map((option) => {
           const isSelected = option.key === props.activeTab;
           return (
@@ -616,10 +624,11 @@ function PublishToolbar(props: {
   onBatchSelectingChange: (selecting: boolean) => void;
   onRefresh: () => void;
 }) {
+  const { t } = useTranslate();
   return (
     <div className="skills-header-bar__tools">
       <label className="search-field search-field--header skill-search-field">
-        <span className="sr-only">搜索 Skill</span>
+        <span className="sr-only">{t("publishing.search.aria")}</span>
         <SearchFieldIcon />
         <input
           type="search"
@@ -627,7 +636,9 @@ function PublishToolbar(props: {
           autoCorrect="off"
           autoCapitalize="none"
           spellCheck={false}
-          placeholder={props.activeTab === "managed" ? "搜索 Skill 名称或简介..." : "搜索未托管 Skill..."}
+          placeholder={props.activeTab === "managed"
+            ? t("publishing.search.managedPlaceholder")
+            : t("publishing.search.unmanagedPlaceholder")}
           value={props.query}
           onChange={(event) => props.onQueryChange(event.target.value)}
         />
@@ -637,11 +648,11 @@ function PublishToolbar(props: {
         <div className="skill-status-filter publish-toolbar__filter">
           <span className="skill-status-filter__icon" aria-hidden="true"><FilterIcon /></span>
           <AppSelect
-            ariaLabel="按发布状态筛选"
+            ariaLabel={t("publishing.filter.aria")}
             value={props.statusFilter}
             options={STATUS_OPTIONS.map((option) => ({
               value: option.value,
-              label: `${option.label} (${props.counts[option.value]})`,
+              label: `${t(option.labelKey)} (${props.counts[option.value]})`,
             }))}
             onChange={props.onStatusFilterChange}
             className="skill-status-filter__select"
@@ -653,7 +664,7 @@ function PublishToolbar(props: {
       {props.batchPublishing ? (
         <BatchModeButton
           isSelecting={props.isBatchSelecting}
-          label={props.isBatchSelecting ? "退出批量选择" : "进入批量选择"}
+          label={props.isBatchSelecting ? t("publishing.batch.exit") : t("publishing.batch.enter")}
           onClick={() => props.onBatchSelectingChange(!props.isBatchSelecting)}
         />
       ) : null}
@@ -666,7 +677,7 @@ function PublishToolbar(props: {
         <span aria-hidden="true" className="skills-toolbar-button__icon">
           <RefreshIcon isSpinning={props.isRefreshing} />
         </span>
-        <span>刷新</span>
+        <span>{t("publishing.action.refresh")}</span>
       </button>
     </div>
   );
@@ -678,6 +689,7 @@ function PublishConfirmDialog(props: {
   onClose: () => void;
   onConfirm: (changelog: string) => void;
 }) {
+  const { t } = useTranslate();
   const [changelog, setChangelog] = useState("");
   const isUpdate = Boolean(props.skill.remoteSkillId);
   const summaryClassName = `dialog-summary-grid publish-confirm-dialog__summary${isUpdate ? " is-update" : ""}`;
@@ -687,44 +699,50 @@ function PublishConfirmDialog(props: {
       <div className="dialog-card publish-confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="publish-dialog-title" onClick={(event) => event.stopPropagation()}>
         <header className="dialog-card__header">
           <div>
-            <h3 id="publish-dialog-title">{isUpdate ? "发布更新" : "发布 Skill"}</h3>
-            <p>发布信息将由当前发布平台处理</p>
+            <h3 id="publish-dialog-title">{isUpdate ? t("publishing.action.publishUpdate") : t("publishing.action.publishSkill")}</h3>
+            <p>{t("publishing.dialog.subtitle")}</p>
           </div>
-          <button className="skill-detail-modal__close" type="button" aria-label="关闭" onClick={props.onClose}>×</button>
+          <button className="skill-detail-modal__close" type="button" aria-label={t("app.window.close")} onClick={props.onClose}>×</button>
         </header>
         <div className="dialog-card__body">
           <div className="dialog-info-row publish-confirm-dialog__info-row">
-            <span className="dialog-info-label">名称</span><strong>{props.skill.name}</strong>
+            <span className="dialog-info-label">{t("publishing.dialog.name")}</span><strong>{props.skill.name}</strong>
           </div>
           <div className="dialog-info-row publish-confirm-dialog__info-row">
-            <span className="dialog-info-label">简介</span>
-            <span className="publish-confirm-dialog__description">{props.skill.description || "暂无简介"}</span>
+            <span className="dialog-info-label">{t("skill.card.description")}</span>
+            <span className="publish-confirm-dialog__description">{props.skill.description || t("publishing.empty.description")}</span>
           </div>
           <div className={summaryClassName}>
-            {isUpdate ? <div><span>当前版本</span><strong>{props.skill.remoteVersion || "未获取"}</strong></div> : null}
-            <div><span>目标版本</span><strong>{props.skill.targetVersion}</strong></div>
-            <div><span>文件</span><strong>{props.skill.fileCount} 个</strong></div>
-            <div><span>大小</span><strong>{formatBytes(props.skill.packageSize)}</strong></div>
+            {isUpdate ? <div><span>{t("publishing.dialog.currentVersion")}</span><strong>{props.skill.remoteVersion || t("skill.card.notFetched")}</strong></div> : null}
+            <div><span>{t("publishing.dialog.targetVersion")}</span><strong>{props.skill.targetVersion}</strong></div>
+            <div><span>{t("publishing.dialog.files")}</span><strong>{t("publishing.dialog.fileCount", { count: props.skill.fileCount })}</strong></div>
+            <div><span>{t("publishing.dialog.size")}</span><strong>{formatBytes(props.skill.packageSize)}</strong></div>
           </div>
           <label className="dialog-section publish-confirm-dialog__changelog">
-            <h4>更新说明（可选）</h4>
+            <h4>{t("publishing.dialog.changelog")}</h4>
             <textarea
               value={changelog}
-              placeholder={isUpdate ? "未填写时使用“内容更新”" : "未填写时使用“首次发布”"}
+              placeholder={isUpdate
+                ? t("publishing.dialog.changelogUpdatePlaceholder")
+                : t("publishing.dialog.changelogFirstPlaceholder")}
               onChange={(event) => setChangelog(event.target.value)}
             />
           </label>
           {props.skill.failureReason ? <p className="dialog-error">{props.skill.failureReason}</p> : null}
         </div>
         <footer className="dialog-card__footer">
-          <button className="secondary-button secondary-button--compact" type="button" disabled={props.isPublishing} onClick={props.onClose}>取消</button>
+          <button className="secondary-button secondary-button--compact" type="button" disabled={props.isPublishing} onClick={props.onClose}>{t("publishing.dialog.cancel")}</button>
           <button
             className="primary-button primary-button--compact publish-confirm-dialog__primary-button"
             type="button"
             disabled={props.isPublishing}
             onClick={() => props.onConfirm(changelog)}
           >
-            {props.isPublishing ? "正在发布..." : isUpdate ? "发布更新" : "发布"}
+            {props.isPublishing
+              ? t("publishing.action.publishing")
+              : isUpdate
+                ? t("publishing.action.publishUpdate")
+                : t("publishing.action.publish")}
           </button>
         </footer>
       </div>
@@ -738,26 +756,31 @@ function BatchPublishConfirmDialog(props: {
   onClose: () => void;
   onConfirm: () => void;
 }) {
+  const { language, t } = useTranslate();
   const updateCount = props.skills.filter((skill) => Boolean(skill.remoteSkillId)).length;
   return (
     <div className="dialog-backdrop" role="presentation" onClick={props.onClose}>
       <div className="dialog-card publish-confirm-dialog publish-batch-dialog" role="dialog" aria-modal="true" aria-labelledby="publish-batch-dialog-title" onClick={(event) => event.stopPropagation()}>
         <header className="dialog-card__header">
-          <div><h3 id="publish-batch-dialog-title">批量发布</h3><p>将按顺序发布已选择的 Skill</p></div>
-          <button className="skill-detail-modal__close" type="button" aria-label="关闭" onClick={props.onClose}>×</button>
+          <div><h3 id="publish-batch-dialog-title">{t("publishing.batch.title")}</h3><p>{t("publishing.batch.description")}</p></div>
+          <button className="skill-detail-modal__close" type="button" aria-label={t("app.window.close")} onClick={props.onClose}>×</button>
         </header>
         <div className="dialog-card__body">
           <div className="dialog-summary-grid publish-batch-dialog__summary">
-            <div><span>合计</span><strong>{props.skills.length}</strong></div>
-            <div><span>首次发布</span><strong>{props.skills.length - updateCount}</strong></div>
-            <div><span>发布更新</span><strong>{updateCount}</strong></div>
+            <div><span>{t("publishing.batch.total")}</span><strong>{props.skills.length}</strong></div>
+            <div><span>{t("publishing.batch.firstPublish")}</span><strong>{props.skills.length - updateCount}</strong></div>
+            <div><span>{t("publishing.batch.updates")}</span><strong>{updateCount}</strong></div>
           </div>
-          <p className="publish-batch-dialog__names">{props.skills.map((skill) => skill.name).join("、")}</p>
+          <p className="publish-batch-dialog__names">
+            {props.skills.map((skill) => skill.name).join(language === "en" ? ", " : "、")}
+          </p>
         </div>
         <footer className="dialog-card__footer">
-          <button className="secondary-button secondary-button--compact" type="button" disabled={props.isPublishing} onClick={props.onClose}>取消</button>
+          <button className="secondary-button secondary-button--compact" type="button" disabled={props.isPublishing} onClick={props.onClose}>{t("publishing.dialog.cancel")}</button>
           <button className="primary-button primary-button--compact publish-confirm-dialog__primary-button" type="button" disabled={props.isPublishing} onClick={props.onConfirm}>
-            {props.isPublishing ? "正在发布..." : `发布 ${props.skills.length} 个`}
+            {props.isPublishing
+              ? t("publishing.action.publishing")
+              : t("publishing.batch.publishCount", { count: props.skills.length })}
           </button>
         </footer>
       </div>
@@ -766,12 +789,13 @@ function BatchPublishConfirmDialog(props: {
 }
 
 function PublishMarketLink(props: { skillName: string; onOpen: () => void }) {
+  const { t } = useTranslate();
   function handleClick(event: MouseEvent<HTMLButtonElement>) {
     event.stopPropagation();
     props.onOpen();
   }
   return (
-    <button className="publish-skill-row__market-title-link" type="button" onClick={handleClick} aria-label={`查看市场 ${props.skillName}`} title="查看市场">
+    <button className="publish-skill-row__market-title-link" type="button" onClick={handleClick} aria-label={`${t("publishing.action.viewMarket")} ${props.skillName}`} title={t("publishing.action.viewMarket")}>
       <OpenMarketIcon />
     </button>
   );
@@ -790,6 +814,7 @@ function PublishSkillRow(props: {
   selected: boolean;
   onSelectionToggle: () => void;
 }) {
+  const { t } = useTranslate();
   const { skill } = props;
   const rowRef = useRef<HTMLElement | null>(null);
   const isGridLayout = props.layout === "grid";
@@ -805,9 +830,11 @@ function PublishSkillRow(props: {
       ? `v${skill.remoteVersion} → v${skill.targetVersion}`
       : `v${skill.remoteVersion}`
     : "";
-  const buttonLabel = getPublishButtonLabel(skill.publishStatus);
+  const buttonLabel = getPublishButtonLabel(skill.publishStatus, t);
   const tone = isPublishBlocked ? "danger" : getPublishStatusTone(skill.publishStatus);
-  const statusLabel = isPublishBlocked ? "已封禁" : STATUS_LABELS[skill.publishStatus];
+  const statusLabel = isPublishBlocked
+    ? t("publishing.status.blocked")
+    : t(STATUS_LABEL_KEYS[skill.publishStatus]);
   const actionClassName = [
     "skill-card__icon-button",
     "publish-skill-row__action",
@@ -868,18 +895,18 @@ function PublishSkillRow(props: {
                   {hasMarketLink ? <PublishMarketLink skillName={skill.name} onOpen={props.onOpenMarket} /> : null}
                   {!isGridLayout ? (
                     <span className="status-badge tone-neutral skill-card__owner-badge">
-                      {getPublishManagementOwnerLabel(skill.managementOwner)}
+                      {getPublishManagementOwnerLabel(skill.managementOwner, t)}
                     </span>
                   ) : null}
                   <span className={`status-badge tone-${tone}${isGridLayout ? " skill-card__grid-status" : ""}`}>
                     {statusLabel}
                   </span>
                 </div>
-                <p className="skill-card__summary-description">{skill.description || "暂无简介"}</p>
+                <p className="skill-card__summary-description">{skill.description || t("publishing.empty.description")}</p>
                 {isGridLayout ? (
                   <span className="skill-card__grid-source-label publish-skill-row__grid-source-label">
                     <span className="skill-card__grid-source-text">
-                      {getPublishSourceMethodLabel(skill)} · {getPublishManagementOwnerLabel(skill.managementOwner)}
+                      {getPublishSourceMethodLabel(skill, t)} · {getPublishManagementOwnerLabel(skill.managementOwner, t)}
                     </span>
                   </span>
                 ) : null}
@@ -894,10 +921,10 @@ function PublishSkillRow(props: {
               </button>
             ) : null}
             <PublishFilePreviewButton skill={skill} onClick={props.onPreview} />
-            <button className="skill-card__icon-button" type="button" onClick={props.onOpenDirectory} aria-label={`打开目录 ${skill.name}`} data-tooltip="打开目录">
+            <button className="skill-card__icon-button" type="button" onClick={props.onOpenDirectory} aria-label={`${t("publishing.action.openDirectory")} ${skill.name}`} data-tooltip={t("publishing.action.openDirectory")}>
               <OpenFolderIcon />
             </button>
-            <button className="skill-card__chevron-button" type="button" onClick={() => void handleExpandedChange(!props.expanded)} aria-expanded={props.expanded} aria-label={`${props.expanded ? "收起" : "展开"} ${skill.name}`}>
+            <button className="skill-card__chevron-button" type="button" onClick={() => void handleExpandedChange(!props.expanded)} aria-expanded={props.expanded} aria-label={`${props.expanded ? t("publishing.action.collapse") : t("publishing.action.expand")} ${skill.name}`}>
               <span className="skill-card__chevron" aria-hidden="true">{props.expanded ? "⌄" : "›"}</span>
             </button>
           </div>
@@ -945,6 +972,7 @@ function PublishSkillDetailModal(props: {
   onOpenDirectory: () => void;
   onClose: () => void;
 }) {
+  const { t } = useTranslate();
   const hasPrimaryAction = props.canPublish || props.canOpenMarket;
 
   function handlePrimaryAction() {
@@ -963,7 +991,7 @@ function PublishSkillDetailModal(props: {
 
   return (
     <div className="skill-card-detail-modal__backdrop" role="presentation" onClick={props.onClose}>
-      <section className="skill-card-detail-modal publish-skill-detail-modal" role="dialog" aria-modal="true" aria-label={`${props.skill.name} 发布详情`} onClick={(event) => event.stopPropagation()}>
+      <section className="skill-card-detail-modal publish-skill-detail-modal" role="dialog" aria-modal="true" aria-label={t("publishing.details.aria", { name: props.skill.name })} onClick={(event) => event.stopPropagation()}>
         <header className="skill-card-detail-modal__header">
           <div className="skill-card-detail-modal__identity">
             <PublishSkillMonogram name={props.skill.name} />
@@ -982,10 +1010,10 @@ function PublishSkillDetailModal(props: {
               </button>
             ) : null}
             <PublishFilePreviewButton skill={props.skill} onClick={handlePreview} showLabel />
-            <button className="skill-card__icon-button skill-card-detail-modal__icon-action" type="button" onClick={props.onOpenDirectory} aria-label={`打开目录 ${props.skill.name}`} data-tooltip="打开目录">
+            <button className="skill-card__icon-button skill-card-detail-modal__icon-action" type="button" onClick={props.onOpenDirectory} aria-label={`${t("publishing.action.openDirectory")} ${props.skill.name}`} data-tooltip={t("publishing.action.openDirectory")}>
               <OpenFolderIcon />
             </button>
-            <button className="skill-card-detail-modal__close" type="button" onClick={props.onClose} aria-label={`关闭 ${props.skill.name} 发布详情`}>
+            <button className="skill-card-detail-modal__close" type="button" onClick={props.onClose} aria-label={t("publishing.details.closeAria", { name: props.skill.name })}>
               <span aria-hidden="true">×</span>
             </button>
           </div>
@@ -1011,33 +1039,34 @@ function PublishSkillDetails({
   onPreview?: () => void;
   onOpenDirectory?: () => void;
 }) {
+  const { t } = useTranslate();
   const sourceValue = skill.sourceUrl;
-  const sourceLabel = getPublishSourceMethodLabel(skill);
-  const description = formatSkillDescription(skill.description) || "暂无简介";
-  const localUpdatedAt = formatSkillUpdatedAt(skill.localUpdatedAt) || "未获取";
+  const sourceLabel = getPublishSourceMethodLabel(skill, t);
+  const description = formatSkillDescription(skill.description) || t("publishing.empty.description");
+  const localUpdatedAt = formatSkillUpdatedAt(skill.localUpdatedAt) || t("skill.card.notFetched");
   const hasStoreRecord = Boolean(skill.remoteSkillId);
-  const lastPublishedAt = formatPublishedAt(skill.lastPublishedAt) || "未获取";
-  const storeVersion = skill.remoteVersion ? `v${skill.remoteVersion}` : "未获取";
+  const lastPublishedAt = formatPublishedAt(skill.lastPublishedAt) || t("skill.card.notFetched");
+  const storeVersion = skill.remoteVersion ? `v${skill.remoteVersion}` : t("skill.card.notFetched");
   const hasPublishUpdates = Boolean(skill.remoteSkillId) && (skill.updateFileCount ?? 0) > 0;
 
   return (
     <div className={`skill-card__details publish-skill-row__details${isModal ? " skill-card-detail-modal__body" : ""}`}>
       <section>
         <div className="skill-card__section-header">
-          <h4>基本信息</h4>
+          <h4>{t("skill.card.basicInfo")}</h4>
           {!isModal && hasPublishUpdates && onPreview ? (
             <PublishFilePreviewButton skill={skill} onClick={onPreview} showLabel />
           ) : null}
         </div>
-        <dl className="detail-grid detail-grid--single"><div><dt>简介</dt><dd>{description}</dd></div></dl>
+        <dl className="detail-grid detail-grid--single"><div><dt>{t("skill.card.description")}</dt><dd>{description}</dd></div></dl>
         {skill.publishBlocked && skill.failureReason ? (
-          <dl className="detail-grid detail-grid--single"><div><dt>发布限制</dt><dd>{skill.failureReason}</dd></div></dl>
+          <dl className="detail-grid detail-grid--single"><div><dt>{t("publishing.details.publishRestriction")}</dt><dd>{skill.failureReason}</dd></div></dl>
         ) : null}
         <dl className="detail-grid detail-grid--source">
-          <div><dt>来源方式</dt><dd>{sourceLabel}</dd></div>
+          <div><dt>{t("skill.card.sourceType")}</dt><dd>{sourceLabel}</dd></div>
           {sourceValue ? (
             <div>
-              <dt>来源地址</dt>
+              <dt>{t("skill.card.sourceAddress")}</dt>
               <dd className="detail-grid__source-value">
                 {isHttpUrl(sourceValue) ? (
                   <a className="detail-grid__source-link detail-grid__single-line" data-tooltip={sourceValue} href={sourceValue} onClick={(event) => {
@@ -1051,15 +1080,15 @@ function PublishSkillDetails({
             </div>
           ) : null}
           <div className={sourceValue ? undefined : "detail-grid__new-row"}>
-            <dt>托管方</dt>
-            <dd>{getPublishManagementOwnerLabel(skill.managementOwner)}</dd>
+            <dt>{t("skill.card.owner")}</dt>
+            <dd>{getPublishManagementOwnerLabel(skill.managementOwner, t)}</dd>
           </div>
           <div>
-            <dt>托管目录</dt>
+            <dt>{t("skill.card.managedPath")}</dt>
             <dd className="skill-source-card__directory-value">
               <span className="skill-source-card__directory-path detail-grid__single-line" data-tooltip={skill.localPath}>{skill.localPath}</span>
               {onOpenDirectory ? (
-                <button className="skill-card__icon-button skill-source-card__directory-open-button" type="button" onClick={onOpenDirectory} aria-label={`打开目录 ${skill.name}`} data-tooltip="打开目录">
+                <button className="skill-card__icon-button skill-source-card__directory-open-button" type="button" onClick={onOpenDirectory} aria-label={`${t("publishing.action.openDirectory")} ${skill.name}`} data-tooltip={t("publishing.action.openDirectory")}>
                   <OpenFolderIcon />
                 </button>
               ) : null}
@@ -1069,24 +1098,24 @@ function PublishSkillDetails({
         <dl className="tool-list-row__detail-grid">
           {hasStoreRecord ? (
             <>
-              <div><dt>商店版本</dt><dd>{storeVersion}</dd></div>
-              <div><dt>最后发布时间</dt><dd>{lastPublishedAt}</dd></div>
+              <div><dt>{t("publishing.details.storeVersion")}</dt><dd>{storeVersion}</dd></div>
+              <div><dt>{t("publishing.details.lastPublishedAt")}</dt><dd>{lastPublishedAt}</dd></div>
               {skill.marketUrl ? (
                 <div>
-                  <dt>商店地址</dt>
+                  <dt>{t("publishing.details.storeAddress")}</dt>
                   <dd>
                     <a className="detail-grid__source-link publish-skill-row__market-link" href={skill.marketUrl} onClick={(event) => {
                       event.preventDefault();
                       void openExternalLink(skill.marketUrl);
                     }}>
-                      查看商店详情<OpenMarketIcon />
+                      {t("publishing.details.viewStore")}<OpenMarketIcon />
                     </a>
                   </dd>
                 </div>
               ) : null}
             </>
           ) : null}
-          <div><dt>本地更新时间</dt><dd>{localUpdatedAt}</dd></div>
+          <div><dt>{t("skill.card.localUpdatedAt")}</dt><dd>{localUpdatedAt}</dd></div>
         </dl>
       </section>
     </div>
@@ -1102,10 +1131,11 @@ function UnmanagedSkillRow(props: {
   expanded: boolean;
   onExpandedChange: (expanded: boolean) => void;
 }) {
+  const { t } = useTranslate();
   const rowRef = useRef<HTMLElement | null>(null);
   const isGridLayout = props.layout === "grid";
-  const sources = Array.from(new Set(props.group.candidates.map(formatUnmanagedSource)));
-  const fileTypes = Array.from(new Set(props.group.candidates.map(formatUnmanagedFileType)));
+  const sources = Array.from(new Set(props.group.candidates.map((candidate) => formatUnmanagedSource(candidate, t))));
+  const fileTypes = Array.from(new Set(props.group.candidates.map((candidate) => formatUnmanagedFileType(candidate, t))));
   const canPreview = Boolean(props.group.candidates[0]?.toolId);
   const defaultPath = props.group.candidates[0]?.resolvedPath || props.group.candidates[0]?.localPath || "";
 
@@ -1152,8 +1182,8 @@ function UnmanagedSkillRow(props: {
                     {fileTypes.map((fileType) => <span key={fileType} className="status-badge tone-info">{fileType}</span>)}
                   </span>
                 </div>
-                <p className="skill-card__summary-description">{props.group.description || "暂无简介"}</p>
-                <div className="unmanaged-skill-row__sources" title={sources.join("、")}>
+                <p className="skill-card__summary-description">{props.group.description || t("publishing.empty.description")}</p>
+                <div className="unmanaged-skill-row__sources" title={sources.join(", ")}>
                   {sources.slice(0, 3).map((source) => <span key={source}>{source}</span>)}
                   {sources.length > 3 ? <span>+{sources.length - 3}</span> : null}
                 </div>
@@ -1165,8 +1195,8 @@ function UnmanagedSkillRow(props: {
               className="skill-card__icon-button skill-card__icon-button--update unmanaged-skill-row__publish-button"
               type="button"
               onClick={props.onImportAndPublish}
-              aria-label={`导入并发布 ${props.group.name}`}
-              data-tooltip="导入并发布"
+              aria-label={`${t("publishing.unmanaged.importAndPublish")} ${props.group.name}`}
+              data-tooltip={t("publishing.unmanaged.importAndPublish")}
             >
               <PublishActionIcon />
             </button>
@@ -1175,15 +1205,15 @@ function UnmanagedSkillRow(props: {
               type="button"
               onClick={props.onPreview}
               disabled={!canPreview}
-              aria-label={`预览 ${props.group.name}`}
-              data-tooltip={canPreview ? "预览文件" : "暂不支持预览"}
+              aria-label={`${t("publishing.action.previewFiles")} ${props.group.name}`}
+              data-tooltip={canPreview ? t("publishing.action.previewFiles") : t("publishing.action.previewUnavailable")}
             >
               <ViewFileIcon />
             </button>
-            <button className="skill-card__icon-button" type="button" onClick={() => props.onOpenPath(defaultPath)} aria-label={`打开目录 ${props.group.name}`} data-tooltip="打开目录">
+            <button className="skill-card__icon-button" type="button" onClick={() => props.onOpenPath(defaultPath)} aria-label={`${t("publishing.action.openDirectory")} ${props.group.name}`} data-tooltip={t("publishing.action.openDirectory")}>
               <OpenFolderIcon />
             </button>
-            <button className="skill-card__chevron-button" type="button" onClick={() => void handleExpandedChange(!props.expanded)} aria-expanded={props.expanded} aria-label={`${props.expanded ? "收起" : "展开"} ${props.group.name}`}>
+            <button className="skill-card__chevron-button" type="button" onClick={() => void handleExpandedChange(!props.expanded)} aria-expanded={props.expanded} aria-label={`${props.expanded ? t("publishing.action.collapse") : t("publishing.action.expand")} ${props.group.name}`}>
               <span className="skill-card__chevron" aria-hidden="true">{props.expanded && !isGridLayout ? "⌄" : "›"}</span>
             </button>
           </div>
@@ -1211,8 +1241,9 @@ function UnmanagedSkillDetails(props: {
   onOpenPath: (path: string) => void;
   isModal?: boolean;
 }) {
-  const fileTypes = Array.from(new Set(props.group.candidates.map(formatUnmanagedFileType)));
-  const sources = Array.from(new Set(props.group.candidates.map(formatUnmanagedSource)));
+  const { t } = useTranslate();
+  const fileTypes = Array.from(new Set(props.group.candidates.map((candidate) => formatUnmanagedFileType(candidate, t))));
+  const sources = Array.from(new Set(props.group.candidates.map((candidate) => formatUnmanagedSource(candidate, t))));
   const resolvedPaths = Array.from(new Set(props.group.candidates.map((candidate) => (
     candidate.resolvedPath || candidate.localPath
   ))));
@@ -1220,24 +1251,24 @@ function UnmanagedSkillDetails(props: {
   return (
     <div className={`skill-card__details unmanaged-skill-details${props.isModal ? " skill-card-detail-modal__body" : ""}`}>
       <section>
-        <div className="skill-card__section-header"><h4>基本信息</h4></div>
+        <div className="skill-card__section-header"><h4>{t("skill.card.basicInfo")}</h4></div>
         <dl className="detail-grid detail-grid--single">
-          <div><dt>简介</dt><dd>{props.group.description || "暂无简介"}</dd></div>
+          <div><dt>{t("skill.card.description")}</dt><dd>{props.group.description || t("publishing.empty.description")}</dd></div>
         </dl>
         <dl className="detail-grid unmanaged-skill-details__metadata unmanaged-skill-details__metadata-grid unmanaged-skill-details__paths">
           <div>
-            <dt>文件类型</dt>
+            <dt>{t("publishing.unmanaged.fileType")}</dt>
             <dd className="unmanaged-skill-details__tags">
               {fileTypes.map((fileType) => <span key={fileType} className="status-badge tone-info">{fileType}</span>)}
             </dd>
           </div>
           <div>
-            <dt>真实目录</dt>
+            <dt>{t("publishing.unmanaged.realDirectory")}</dt>
             <dd className="unmanaged-skill-details__path-list">
               {resolvedPaths.map((path) => (
                 <div key={path} className="detail-grid__source-value">
                   <span className="detail-grid__single-line" title={path}>{path}</span>
-                  <button className="skill-card__icon-button" type="button" onClick={() => props.onOpenPath(path)} aria-label={`打开真实目录 ${props.group.name}`} data-tooltip="打开真实目录">
+                  <button className="skill-card__icon-button" type="button" onClick={() => props.onOpenPath(path)} aria-label={`${t("publishing.unmanaged.realDirectory")} ${props.group.name}`} data-tooltip={t("publishing.unmanaged.realDirectory")}>
                     <OpenFolderIcon />
                   </button>
                 </div>
@@ -1245,7 +1276,7 @@ function UnmanagedSkillDetails(props: {
             </dd>
           </div>
           <div className="unmanaged-skill-details__source">
-            <dt>发现来源</dt>
+            <dt>{t("publishing.unmanaged.detectedFrom")}</dt>
             <dd className="unmanaged-skill-details__tags">
               {sources.map((source) => <span key={source} className="status-badge tone-neutral">{source}</span>)}
             </dd>
@@ -1263,7 +1294,8 @@ function UnmanagedSkillDetailModal(props: {
   onOpenPath: (path: string) => void;
   onClose: () => void;
 }) {
-  const fileTypes = Array.from(new Set(props.group.candidates.map(formatUnmanagedFileType)));
+  const { t } = useTranslate();
+  const fileTypes = Array.from(new Set(props.group.candidates.map((candidate) => formatUnmanagedFileType(candidate, t))));
   const canPreview = Boolean(props.group.candidates[0]?.toolId);
   const defaultPath = props.group.candidates[0]?.resolvedPath || props.group.candidates[0]?.localPath || "";
 
@@ -1279,7 +1311,7 @@ function UnmanagedSkillDetailModal(props: {
 
   return (
     <div className="skill-card-detail-modal__backdrop" role="presentation" onClick={props.onClose}>
-      <section className="skill-card-detail-modal publish-skill-detail-modal unmanaged-skill-detail-modal" role="dialog" aria-modal="true" aria-label={`${props.group.name} 未托管详情`} onClick={(event) => event.stopPropagation()}>
+      <section className="skill-card-detail-modal publish-skill-detail-modal unmanaged-skill-detail-modal" role="dialog" aria-modal="true" aria-label={t("publishing.unmanaged.detailsAria", { name: props.group.name })} onClick={(event) => event.stopPropagation()}>
         <header className="skill-card-detail-modal__header">
           <div className="skill-card-detail-modal__identity">
             <PublishSkillMonogram name={props.group.name} />
@@ -1293,17 +1325,17 @@ function UnmanagedSkillDetailModal(props: {
           <div className="skill-card-detail-modal__actions">
             <button className="secondary-button secondary-button--compact skill-card-detail-modal__action is-primary" type="button" onClick={handleImportAndPublish}>
               <PublishActionIcon />
-              <span>导入并发布</span>
+              <span>{t("publishing.unmanaged.importAndPublish")}</span>
             </button>
             <button className="secondary-button secondary-button--compact skill-card-detail-modal__action" type="button" onClick={handlePreview} disabled={!canPreview}>
               <ViewFileIcon />
-              <span>预览文件</span>
+              <span>{t("publishing.action.previewFiles")}</span>
             </button>
             <button className="secondary-button secondary-button--compact skill-card-detail-modal__action" type="button" onClick={() => props.onOpenPath(defaultPath)}>
               <OpenFolderIcon />
-              <span>打开目录</span>
+              <span>{t("publishing.action.openDirectory")}</span>
             </button>
-            <button className="skill-card-detail-modal__close" type="button" onClick={props.onClose} aria-label={`关闭 ${props.group.name} 未托管详情`}>
+            <button className="skill-card-detail-modal__close" type="button" onClick={props.onClose} aria-label={t("publishing.unmanaged.closeDetailsAria", { name: props.group.name })}>
               <span aria-hidden="true">×</span>
             </button>
           </div>
@@ -1320,24 +1352,28 @@ function UnmanagedImportDialog(props: {
   onClose: () => void;
   onConfirm: () => void;
 }) {
+  const { t } = useTranslate();
+  const sources = Array.from(new Set(props.group.candidates.map((candidate) => (
+    formatUnmanagedSource(candidate, t)
+  )))).join(", ");
   return (
     <div className="dialog-backdrop" role="presentation" onClick={props.onClose}>
       <div className="dialog-card publish-confirm-dialog unmanaged-import-dialog" role="dialog" aria-modal="true" aria-labelledby="unmanaged-import-dialog-title" onClick={(event) => event.stopPropagation()}>
         <header className="dialog-card__header">
           <div>
-            <h3 id="unmanaged-import-dialog-title">导入托管并发布 · {props.group.name}</h3>
-            <p>导入后会纳入 SkillDock 管理，并发布到当前平台。</p>
+            <h3 id="unmanaged-import-dialog-title">{t("publishing.unmanaged.importTitle", { name: props.group.name })}</h3>
+            <p>{t("publishing.unmanaged.importDescription")}</p>
           </div>
-          <button className="skill-detail-modal__close" type="button" aria-label="关闭" onClick={props.onClose} disabled={props.isImporting}>×</button>
+          <button className="skill-detail-modal__close" type="button" aria-label={t("app.window.close")} onClick={props.onClose} disabled={props.isImporting}>×</button>
         </header>
         <div className="dialog-card__body">
-          <div className="dialog-info-row publish-confirm-dialog__info-row"><span className="dialog-info-label">简介</span><span>{props.group.description || "暂无简介"}</span></div>
-          <div className="dialog-info-row publish-confirm-dialog__info-row"><span className="dialog-info-label">发现来源</span><span>{Array.from(new Set(props.group.candidates.map(formatUnmanagedSource))).join("、")}</span></div>
+          <div className="dialog-info-row publish-confirm-dialog__info-row"><span className="dialog-info-label">{t("skill.card.description")}</span><span>{props.group.description || t("publishing.empty.description")}</span></div>
+          <div className="dialog-info-row publish-confirm-dialog__info-row"><span className="dialog-info-label">{t("publishing.unmanaged.detectedFrom")}</span><span>{sources}</span></div>
         </div>
         <footer className="dialog-card__footer">
-          <button className="secondary-button secondary-button--compact" type="button" onClick={props.onClose} disabled={props.isImporting}>取消</button>
+          <button className="secondary-button secondary-button--compact" type="button" onClick={props.onClose} disabled={props.isImporting}>{t("publishing.dialog.cancel")}</button>
           <button className="primary-button primary-button--compact publish-confirm-dialog__primary-button" type="button" onClick={props.onConfirm} disabled={props.isImporting}>
-            {props.isImporting ? "正在导入并发布..." : "确认导入并发布"}
+            {props.isImporting ? t("publishing.unmanaged.importing") : t("publishing.unmanaged.confirmImport")}
           </button>
         </footer>
       </div>
@@ -1352,6 +1388,7 @@ export function PublishingWorkbench({
   renderAuthentication,
   onAuthStateChange,
 }: PublishingWorkbenchProps) {
+  const { t } = useTranslate();
   const capabilities = useMemo(() => getPublishingAdapterCapabilities(adapter), [adapter]);
   const startupSnapshot = useMemo(() => adapter.readCachedSnapshot?.() ?? null, [adapter]);
   const [authState, setAuthState] = useState<PublishingAuthState | null>(null);
@@ -1423,8 +1460,8 @@ export function PublishingWorkbench({
     !deferredQuery
       || group.name.toLowerCase().includes(deferredQuery)
       || group.description.toLowerCase().includes(deferredQuery)
-      || group.candidates.some((candidate) => formatUnmanagedSource(candidate).toLowerCase().includes(deferredQuery))
-  )), [deferredQuery, unmanagedGroups]);
+      || group.candidates.some((candidate) => formatUnmanagedSource(candidate, t).toLowerCase().includes(deferredQuery))
+  )), [deferredQuery, unmanagedGroups, t]);
   const visibleBatchIds = useMemo(() => filteredSkills
     .filter((skill) => !skill.publishBlocked && BATCH_PUBLISHABLE_STATUSES.has(skill.publishStatus))
     .map((skill) => skill.localPath), [filteredSkills]);
@@ -1433,8 +1470,17 @@ export function PublishingWorkbench({
     batchSelection.selectedIds.has(skill.localPath)
   )), [batchSelection.selectedIds, filteredSkills]);
   const summary = activeTab === "managed"
-    ? `${adapter.platform.label} · 可发布 ${counts.unpublished} · 已发布 ${counts.published} · 可更新 ${counts["update-available"]} · 发布中 ${counts.publishing}`
-    : `${adapter.platform.label} · 待导入 ${unmanagedGroups.length}`;
+    ? t("publishing.summary.managed", {
+      platform: adapter.platform.label,
+      unpublished: counts.unpublished,
+      published: counts.published,
+      updatable: counts["update-available"],
+      publishing: counts.publishing,
+    })
+    : t("publishing.summary.unmanaged", {
+      platform: adapter.platform.label,
+      count: unmanagedGroups.length,
+    });
 
   useLayoutEffect(() => {
     const previousSkillCardRects = previousSkillCardRectsRef.current;
@@ -1913,8 +1959,8 @@ export function PublishingWorkbench({
       <>{renderAuthentication(refreshAuth)}</>
     ) : (
       <div className="panel-card empty-state">
-        <h3>连接 {adapter.platform.label}</h3>
-        <p>连接发布平台后即可查看和发布 Skill。</p>
+        <h3>{t("publishing.auth.connect", { platform: adapter.platform.label })}</h3>
+        <p>{t("publishing.auth.connectDescription")}</p>
       </div>
     );
   }
@@ -1940,45 +1986,47 @@ export function PublishingWorkbench({
         <BatchActionBar
           actions={selectedBatchSkills.length > 0 ? [{
             key: "publish",
-            label: `发布 ${selectedBatchSkills.length} 个`,
+            label: t("publishing.batch.publishCount", { count: selectedBatchSkills.length }),
             tone: "accent",
             onClick: () => setBatchConfirm({ skills: selectedBatchSkills }),
           }] : []}
-          ariaLabel="批量操作"
-          cancelLabel="取消"
-          deselectAllLabel="取消全选"
-          hint="选择要发布的 Skill"
+          ariaLabel={t("publishing.batch.actionsAria")}
+          cancelLabel={t("publishing.batch.cancel")}
+          deselectAllLabel={t("publishing.batch.deselectAll")}
+          hint={t("publishing.batch.hint")}
           isAllVisibleSelected={batchSelection.isAllVisibleSelected}
           isBusy={isPublishing}
-          selectedLabel={selectedBatchSkills.length > 0 ? `已选择 ${selectedBatchSkills.length} 个` : ""}
+          selectedLabel={selectedBatchSkills.length > 0
+            ? t("publishing.batch.selected", { count: selectedBatchSkills.length })
+            : ""}
           selectAllDisabled={visibleBatchIds.length === 0}
-          selectAllLabel="全选"
+          selectAllLabel={t("publishing.batch.selectAll")}
           onCancel={batchSelection.exitSelection}
           onToggleSelectAll={batchSelection.toggleSelectAll}
         />
       ) : null}
       {loadError ? (
         <div className="panel-card publish-page__error">
-          <strong>发布状态加载失败</strong><p>{loadError}</p>
-          <button className="secondary-button" type="button" onClick={() => void refresh({ forceRefresh: true })}>重试</button>
+          <strong>{t("publishing.error.loadTitle")}</strong><p>{loadError}</p>
+          <button className="secondary-button" type="button" onClick={() => void refresh({ forceRefresh: true })}>{t("publishing.action.retry")}</button>
         </div>
       ) : null}
       {!loadError && statusSyncError ? (
         <div className="panel-card publish-page__error">
-          <strong>远端发布状态暂未同步</strong><p>{statusSyncError}</p>
-          <button className="secondary-button" type="button" onClick={() => void refresh({ forceRefresh: true })}>重试</button>
+          <strong>{t("publishing.error.syncTitle")}</strong><p>{statusSyncError}</p>
+          <button className="secondary-button" type="button" onClick={() => void refresh({ forceRefresh: true })}>{t("publishing.action.retry")}</button>
         </div>
       ) : null}
       {!loadError && !isRefreshing && activeTab === "managed" && filteredSkills.length === 0 ? (
         <div className="panel-card empty-state">
-          <h3>{skills.length === 0 ? "还没有可发布的 Skill" : "没有符合条件的 Skill"}</h3>
-          <p>{skills.length === 0 ? "请先在 Skills 页面创建或托管本地 Skill。" : "试试调整搜索内容或状态筛选。"}</p>
+          <h3>{skills.length === 0 ? t("publishing.empty.noPublishableTitle") : t("publishing.empty.noMatchTitle")}</h3>
+          <p>{skills.length === 0 ? t("publishing.empty.noPublishableDescription") : t("publishing.empty.noMatchDescription")}</p>
         </div>
       ) : null}
       {!loadError && !isRefreshingUnmanagedSkills && activeTab === "unmanaged" && filteredUnmanagedGroups.length === 0 ? (
         <div className="panel-card empty-state">
-          <h3>{unmanagedGroups.length === 0 ? "没有未托管的 Skill" : "没有符合条件的 Skill"}</h3>
-          <p>{unmanagedGroups.length === 0 ? "当前支持的工具目录中没有发现新的本地 Skill。" : "试试调整搜索内容。"}</p>
+          <h3>{unmanagedGroups.length === 0 ? t("publishing.empty.noUnmanagedTitle") : t("publishing.empty.noMatchTitle")}</h3>
+          <p>{unmanagedGroups.length === 0 ? t("publishing.empty.noUnmanagedDescription") : t("publishing.empty.noUnmanagedMatchDescription")}</p>
         </div>
       ) : null}
       {activeTab === "managed" ? (
@@ -2102,23 +2150,23 @@ export function PublishingWorkbench({
   );
 }
 
-function getPublishButtonLabel(status: PublishStatus) {
+function getPublishButtonLabel(status: PublishStatus, t: Translate) {
   if (status === "unpublished") {
-    return "发布";
+    return t("publishing.action.publish");
   }
   if (status === "update-available") {
-    return "发布更新";
+    return t("publishing.action.publishUpdate");
   }
   if (status === "failed") {
-    return "重试";
+    return t("publishing.action.retry");
   }
   if (status === "reviewing") {
-    return "查看审核";
+    return t("publishing.action.viewReview");
   }
   if (status === "published") {
-    return "查看市场";
+    return t("publishing.action.viewMarket");
   }
-  return "发布中";
+  return t("publishing.status.publishing");
 }
 
 function getPublishStatusTone(status: PublishStatus) {

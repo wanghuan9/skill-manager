@@ -839,6 +839,7 @@ export const appSettingsFixture: AppSettings = {
   skillInstallActivation: "apply-all-tools",
   mcpInstallActivation: "apply-all-tools",
   skillSourceViewStyle: "flat",
+  skillTagFilterLayout: "inline",
   language: "zh-CN",
   languageSource: "user",
   theme: "system",

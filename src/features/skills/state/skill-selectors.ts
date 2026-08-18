@@ -6,11 +6,16 @@ import type {
 } from "@/features/skills/state/skill-store";
 import { parseSkillTimestamp } from "@/features/skills/utils/skill-time";
 import { isToolEnabledStatus } from "@/features/skills/utils/tool-status";
+import {
+  matchesSkillTagFilter,
+  type SkillTagFilter,
+} from "@/features/skills/utils/skill-tag-filter";
 
 type FilterOptions = {
   query: string;
   status: SkillStatusFilter;
   owner?: ManagedSkillOwnerFilter;
+  tagFilter?: SkillTagFilter;
 };
 
 const statusPriority: Record<SkillSummary["collabStatus"], number> = {
@@ -22,9 +27,8 @@ const statusPriority: Record<SkillSummary["collabStatus"], number> = {
 };
 
 const enablementPriority = {
-  fullyEnabled: 0,
-  partiallyEnabled: 1,
-  disabled: 2,
+  enabled: 0,
+  disabled: 1,
 } as const;
 
 export function hasEnabledTool(skill: SkillSummary) {
@@ -32,14 +36,9 @@ export function hasEnabledTool(skill: SkillSummary) {
 }
 
 function resolveSkillEnablementPriority(skill: SkillSummary) {
-  const enabledToolCount = skill.tools.filter((tool) => isToolEnabledStatus(tool.statusLabel)).length;
-  if (skill.tools.length > 0 && enabledToolCount === skill.tools.length) {
-    return enablementPriority.fullyEnabled;
-  }
-  if (enabledToolCount > 0) {
-    return enablementPriority.partiallyEnabled;
-  }
-  return enablementPriority.disabled;
+  return hasEnabledTool(skill)
+    ? enablementPriority.enabled
+    : enablementPriority.disabled;
 }
 
 export function compareSkillsByEnablement(left: SkillSummary, right: SkillSummary) {
@@ -64,6 +63,10 @@ function matchesStatusFilter(skill: SkillSummary, status: SkillStatusFilter) {
     return !hasEnabledTool(skill);
   }
 
+  if (status === "enabled") {
+    return hasEnabledTool(skill);
+  }
+
   return skill.collabStatus === status;
 }
 
@@ -81,19 +84,21 @@ export function filterSkills(skills: SkillSummary[], options: FilterOptions) {
       skill.tag?.toLowerCase().includes(normalizedQuery);
     const matchesStatus = matchesStatusFilter(skill, options.status);
     const matchesOwner = ownerFilter === "all" || resolveSkillManagementOwner(skill) === ownerFilter;
+    const matchesTag = matchesSkillTagFilter(skill, options.tagFilter);
 
-    return matchesQuery && matchesStatus && matchesOwner;
+    return matchesQuery && matchesStatus && matchesOwner && matchesTag;
   });
 
   return [...filteredSkills].sort((left, right) => {
-    const localUpdatedDiff = parseSkillTimestamp(right.localUpdatedAt) - parseSkillTimestamp(left.localUpdatedAt);
-    if (localUpdatedDiff !== 0) {
-      return localUpdatedDiff;
-    }
-
     const enablementDiff = compareSkillsByEnablement(left, right);
     if (enablementDiff !== 0) {
       return enablementDiff;
+    }
+
+    const leftLocalUpdatedAt = parseSkillTimestamp(left.localUpdatedAt);
+    const rightLocalUpdatedAt = parseSkillTimestamp(right.localUpdatedAt);
+    if (leftLocalUpdatedAt !== rightLocalUpdatedAt) {
+      return rightLocalUpdatedAt - leftLocalUpdatedAt;
     }
 
     const priorityDiff = statusPriority[left.collabStatus] - statusPriority[right.collabStatus];

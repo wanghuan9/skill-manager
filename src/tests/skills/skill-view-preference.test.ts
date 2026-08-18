@@ -2,10 +2,12 @@ import { expect, test } from "vitest";
 import {
   readSkillGroupModePreference,
   readSkillGroupCollapsedState,
+  readSkillTagFilterVisiblePreference,
   resolveSkillViewModePreference,
   SKILL_GROUPED_DEFAULT_THRESHOLD,
   writeSkillGroupCollapsedState,
   writeSkillGroupModePreference,
+  writeSkillTagFilterVisiblePreference,
 } from "@/features/skills/utils/skill-view-preference";
 
 test("defaults to list view when installed skill count is at or below threshold", () => {
@@ -42,4 +44,15 @@ test("reads and writes the group mode preference", () => {
 
   writeSkillGroupModePreference("source");
   expect(readSkillGroupModePreference()).toBe("source");
+});
+
+test("reads and writes the tag filter visibility preference", () => {
+  window.localStorage.removeItem("skills:tag-filter-visible");
+  expect(readSkillTagFilterVisiblePreference()).toBe(true);
+
+  writeSkillTagFilterVisiblePreference(false);
+  expect(readSkillTagFilterVisiblePreference()).toBe(false);
+
+  writeSkillTagFilterVisiblePreference(true);
+  expect(readSkillTagFilterVisiblePreference()).toBe(true);
 });

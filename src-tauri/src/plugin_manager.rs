@@ -10396,7 +10396,7 @@ fn plugin_modified_timestamp(
     manifest_path: &Path,
     scan_mode: PluginScanMode,
 ) -> String {
-    let modified = if scan_mode == PluginScanMode::Refresh {
+    let modified = if matches!(scan_mode, PluginScanMode::Local | PluginScanMode::Refresh) {
         latest_modified_in_directory(root)
     } else {
         None

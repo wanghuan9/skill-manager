@@ -42,6 +42,8 @@ const MCP_INSTALL_ACTIVATION_APPLY_ALL: &str = "apply-all-tools";
 const MCP_INSTALL_ACTIVATION_DISABLE_ALL: &str = "disable-all-tools";
 const SKILL_SOURCE_VIEW_STYLE_SELECT: &str = "select";
 const SKILL_SOURCE_VIEW_STYLE_FLAT: &str = "flat";
+const SKILL_TAG_FILTER_LAYOUT_INLINE: &str = "inline";
+const SKILL_TAG_FILTER_LAYOUT_POPOVER: &str = "popover";
 const APP_LANGUAGE_ZH_CN: &str = "zh-CN";
 const APP_LANGUAGE_EN: &str = "en";
 const APP_LANGUAGE_SOURCE_AUTO: &str = "auto";
@@ -67,6 +69,8 @@ struct SettingsPersistence {
     mcp_install_activation: String,
     #[serde(default)]
     skill_source_view_style: String,
+    #[serde(default)]
+    skill_tag_filter_layout: String,
     #[serde(default)]
     language: String,
     #[serde(default)]
@@ -97,6 +101,8 @@ pub struct PortablePreferences {
     pub skill_install_activation: String,
     pub mcp_install_activation: String,
     pub skill_source_view_style: String,
+    #[serde(default)]
+    pub skill_tag_filter_layout: String,
     pub language: String,
     pub language_source: String,
     pub theme: String,
@@ -122,6 +128,10 @@ fn portable_preferences_from_persistence(persistence: &SettingsPersistence) -> P
         .to_string(),
         skill_source_view_style: normalize_skill_source_view_style(
             &persistence.skill_source_view_style,
+        )
+        .to_string(),
+        skill_tag_filter_layout: normalize_skill_tag_filter_layout(
+            &persistence.skill_tag_filter_layout,
         )
         .to_string(),
         language: normalize_app_language(&persistence.language).to_string(),
@@ -420,6 +430,7 @@ fn build_agent_skill_summary(
             path_error: path_error.to_string(),
             content_hash: String::new(),
             tag: String::new(),
+            marketplace_source: String::new(),
             marketplace_owner: String::new(),
             marketplace_slug: String::new(),
             marketplace_version: String::new(),
@@ -593,8 +604,8 @@ fn load_skill_tag_persistence() -> Option<BTreeMap<String, String>> {
 }
 
 fn save_skill_tag_persistence(skill_tags: &BTreeMap<String, String>) -> Result<(), String> {
-    let tag_file = skill_tag_file_path()
-        .ok_or_else(|| "无法定位用户目录，不能保存 Skill 标签".to_string())?;
+    let tag_file =
+        skill_tag_file_path().ok_or_else(|| "无法定位用户目录，不能保存 Skill 标签".to_string())?;
     let parent_dir = tag_file
         .parent()
         .ok_or_else(|| "Skill 标签目录无效".to_string())?;
@@ -715,6 +726,10 @@ pub fn load_app_settings() -> AppSettings {
             &persisted.skill_source_view_style,
         )
         .to_string(),
+        skill_tag_filter_layout: normalize_skill_tag_filter_layout(
+            &persisted.skill_tag_filter_layout,
+        )
+        .to_string(),
         language: normalize_app_language(&persisted.language).to_string(),
         language_source: normalize_app_language_source(&persisted.language_source).to_string(),
         theme: normalize_app_theme(&persisted.theme).to_string(),
@@ -757,6 +772,8 @@ pub fn apply_portable_preferences(
         normalize_mcp_install_activation(&input.mcp_install_activation).to_string();
     persistence.skill_source_view_style =
         normalize_skill_source_view_style(&input.skill_source_view_style).to_string();
+    persistence.skill_tag_filter_layout =
+        normalize_skill_tag_filter_layout(&input.skill_tag_filter_layout).to_string();
     persistence.language = normalize_app_language(&input.language).to_string();
     persistence.language_source = normalize_app_language_source(&input.language_source).to_string();
     persistence.theme = normalize_app_theme(&input.theme).to_string();
@@ -829,6 +846,8 @@ pub fn save_app_settings(input: AppSettings) -> Result<AppSettings, String> {
             .to_string(),
         skill_source_view_style: normalize_skill_source_view_style(&input.skill_source_view_style)
             .to_string(),
+        skill_tag_filter_layout: normalize_skill_tag_filter_layout(&input.skill_tag_filter_layout)
+            .to_string(),
         language: normalize_app_language(&input.language).to_string(),
         language_source: normalize_app_language_source(&input.language_source).to_string(),
         theme: normalize_app_theme(&input.theme).to_string(),
@@ -843,6 +862,7 @@ pub fn save_app_settings(input: AppSettings) -> Result<AppSettings, String> {
         skill_install_activation: normalized.skill_install_activation.clone(),
         mcp_install_activation: normalized.mcp_install_activation.clone(),
         skill_source_view_style: normalized.skill_source_view_style.clone(),
+        skill_tag_filter_layout: normalized.skill_tag_filter_layout.clone(),
         language: normalized.language.clone(),
         language_source: normalized.language_source.clone(),
         theme: normalized.theme.clone(),
@@ -1122,6 +1142,14 @@ pub fn normalize_skill_source_view_style(value: &str) -> &'static str {
     }
 }
 
+pub fn normalize_skill_tag_filter_layout(value: &str) -> &'static str {
+    match value.trim() {
+        SKILL_TAG_FILTER_LAYOUT_INLINE => SKILL_TAG_FILTER_LAYOUT_INLINE,
+        SKILL_TAG_FILTER_LAYOUT_POPOVER => SKILL_TAG_FILTER_LAYOUT_POPOVER,
+        _ => SKILL_TAG_FILTER_LAYOUT_POPOVER,
+    }
+}
+
 fn hydrate_skill_description(mut skill: SkillSummary) -> SkillSummary {
     if skill.local_updated_at.trim().is_empty() {
         skill.local_updated_at = skill.last_synced_at.clone();
@@ -1294,8 +1322,8 @@ mod tests {
         apply_portable_preferences, export_portable_preferences, hydrate_skill_description,
         load_app_settings, load_github_connection_metadata, load_installed_skills,
         load_legacy_github_token, normalize_app_theme, normalize_skill_source_view_style,
-        save_app_settings, save_github_connection_metadata, save_installed_skills,
-        scan_local_skill_candidates,
+        normalize_skill_tag_filter_layout, save_app_settings, save_github_connection_metadata,
+        save_installed_skills, scan_local_skill_candidates,
     };
 
     fn with_temp_home<F>(run: F)
@@ -1443,6 +1471,14 @@ mod tests {
         assert_eq!(normalize_skill_source_view_style("inline"), "select");
         assert_eq!(normalize_skill_source_view_style("legacy"), "select");
         assert_eq!(normalize_skill_source_view_style(""), "select");
+    }
+
+    #[test]
+    fn normalizes_skill_tag_filter_layout_with_popover_fallback() {
+        assert_eq!(normalize_skill_tag_filter_layout("inline"), "inline");
+        assert_eq!(normalize_skill_tag_filter_layout("popover"), "popover");
+        assert_eq!(normalize_skill_tag_filter_layout("legacy"), "popover");
+        assert_eq!(normalize_skill_tag_filter_layout(""), "popover");
     }
 
     #[test]

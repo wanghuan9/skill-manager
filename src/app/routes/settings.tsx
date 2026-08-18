@@ -43,12 +43,13 @@ import {
   subscribeBackupStatusChanges,
   syncBackupToLocal,
 } from "@/features/skills/api/skill-client";
-import type {
-  AppTheme,
-  BackupConflict,
-  BackupStatus,
-  CloudBackupNode,
-  WorkspaceRestorePreview,
+import {
+  DEFAULT_SKILL_TAG_FILTER_LAYOUT,
+  type AppTheme,
+  type BackupConflict,
+  type BackupStatus,
+  type CloudBackupNode,
+  type WorkspaceRestorePreview,
 } from "@/features/skills/state/skill-store";
 import {
   applyGlobalListGridViewPreference,
@@ -58,6 +59,20 @@ import {
 const GITHUB_TOKEN_CREATION_URL = "https://github.com/settings/tokens/new?description=SkillDock&scopes=repo";
 const GITHUB_COPY_FEEDBACK_DURATION_MS = 1_500;
 const SHOW_GITHUB_PAT_LOGIN = false;
+
+function releaseSettingsEventListener(unlisten: (() => void) | undefined) {
+  if (!unlisten) {
+    return;
+  }
+
+  try {
+    void Promise.resolve(unlisten()).catch((error) => {
+      console.warn("Failed to release settings event listener:", error);
+    });
+  } catch (error) {
+    console.warn("Failed to release settings event listener:", error);
+  }
+}
 
 function formatBackupTimestamp(value: string, language: string) {
   if (!value) {
@@ -223,6 +238,7 @@ export function SettingsRoute() {
     setDefaultOpenToolId,
     setSkillInstallActivation,
     setSkillSourceViewStyle,
+    setSkillTagFilterLayout,
     startGithubDeviceFlow,
     toolConfigs,
   } = useSkillWorkspace();
@@ -391,13 +407,15 @@ export function SettingsRoute() {
       if (active) {
         unsubscribe = unlisten;
       } else {
-        unlisten();
+        releaseSettingsEventListener(unlisten);
       }
     });
 
     return () => {
       active = false;
-      unsubscribe?.();
+      const listenerToRelease = unsubscribe;
+      unsubscribe = undefined;
+      releaseSettingsEventListener(listenerToRelease);
     };
   }, [githubConnection.connected, reportFailure, t]);
 
@@ -985,6 +1003,38 @@ export function SettingsRoute() {
             >
               <LayoutIcon compact />
               <span>{t("settings.skillSourceView.option.select")}</span>
+            </button>
+          </div>
+        </div>
+      ),
+    },
+    {
+      label: t("settings.skillTagFilterLayout.label"),
+      description: t("settings.skillTagFilterLayout.description"),
+      value: (
+        <div className="settings-form-item__control settings-form-item__control--layout">
+          <div
+            className="settings-layout-picker"
+            role="group"
+            aria-label={t("settings.skillTagFilterLayout.label")}
+          >
+            <button
+              className={`settings-layout-option${(appSettings.skillTagFilterLayout ?? DEFAULT_SKILL_TAG_FILTER_LAYOUT) === "inline" ? " is-selected" : ""}`}
+              type="button"
+              aria-pressed={(appSettings.skillTagFilterLayout ?? DEFAULT_SKILL_TAG_FILTER_LAYOUT) === "inline"}
+              onClick={() => void setSkillTagFilterLayout("inline")}
+            >
+              <LayoutIcon compact={false} />
+              <span>{t("settings.skillTagFilterLayout.option.inline")}</span>
+            </button>
+            <button
+              className={`settings-layout-option${(appSettings.skillTagFilterLayout ?? DEFAULT_SKILL_TAG_FILTER_LAYOUT) === "popover" ? " is-selected" : ""}`}
+              type="button"
+              aria-pressed={(appSettings.skillTagFilterLayout ?? DEFAULT_SKILL_TAG_FILTER_LAYOUT) === "popover"}
+              onClick={() => void setSkillTagFilterLayout("popover")}
+            >
+              <LayoutIcon compact />
+              <span>{t("settings.skillTagFilterLayout.option.popover")}</span>
             </button>
           </div>
         </div>

@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import type { TranslationKey } from "@/app/i18n";
 import type { PublishingPlatformAdapter } from "./publishing-adapter";
 
 export type PublishingAuthenticationProps = {
@@ -9,8 +10,8 @@ export type PublishingPlatformRegistration = {
   adapter: PublishingPlatformAdapter;
   order: number;
   isDefault?: boolean;
-  badgeLabel: string;
-  authorizationActionLabel: string;
+  badgeLabelKey: TranslationKey;
+  authorizationActionLabelKey: TranslationKey;
   renderAuthentication: (props: PublishingAuthenticationProps) => ReactNode;
   manageAuthorization: () => void | Promise<void>;
 };

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useTranslate } from "@/app/i18n";
 import type { PublishingAuthState } from "./types";
 import type { PublishingPlatformRegistration } from "./publishing-platform-registration";
 
@@ -27,11 +28,16 @@ export function PublishingPlatformBar({
   onPlatformChange,
   onManageAuthorization,
 }: PublishingPlatformBarProps) {
+  const { t } = useTranslate();
   const [isActionsOpen, setIsActionsOpen] = useState(false);
   const actionsRef = useRef<HTMLDivElement | null>(null);
   const activePlatform = activeRegistration.adapter.platform;
   const isConnected = Boolean(authState?.connected);
-  const connectionLabel = authState === null ? "● 检查中" : isConnected ? "● 已连接" : "● 未连接";
+  const connectionLabel = authState === null
+    ? t("publishing.platform.checking")
+    : isConnected
+      ? t("publishing.platform.connected")
+      : t("publishing.platform.disconnected");
   const accountLabel = isConnected ? authState?.accountLabel.trim() : "";
 
   useEffect(() => {
@@ -53,8 +59,8 @@ export function PublishingPlatformBar({
   }
 
   return (
-    <section className="publishing-platform-bar" aria-label="发布平台">
-      <div className="publishing-platform-bar__tabs" role="tablist" aria-label="选择发布平台">
+    <section className="publishing-platform-bar" aria-label={t("publishing.platform.aria")}>
+      <div className="publishing-platform-bar__tabs" role="tablist" aria-label={t("publishing.platform.selectAria")}>
         {registrations.map((registration) => {
           const platform = registration.adapter.platform;
           const isActive = platform.id === activePlatform.id;
@@ -77,8 +83,8 @@ export function PublishingPlatformBar({
         })}
       </div>
       <div className="publishing-platform-bar__context">
-        <strong>{activePlatform.label} 发布工作台</strong>
-        <span className="publishing-platform-bar__chip">{activeRegistration.badgeLabel}</span>
+        <strong>{t("publishing.platform.workbench", { platform: activePlatform.label })}</strong>
+        <span className="publishing-platform-bar__chip">{t(activeRegistration.badgeLabelKey)}</span>
         <span className={isConnected ? "is-connected" : ""}>{connectionLabel}</span>
         {accountLabel ? <span className="publishing-platform-bar__account">{accountLabel}</span> : null}
       </div>
@@ -86,7 +92,7 @@ export function PublishingPlatformBar({
         <button
           className="publishing-platform-bar__more-button"
           type="button"
-          aria-label="更多发布操作"
+          aria-label={t("publishing.platform.moreActions")}
           aria-expanded={isActionsOpen}
           aria-haspopup="menu"
           onClick={() => setIsActionsOpen((current) => !current)}
@@ -96,7 +102,7 @@ export function PublishingPlatformBar({
         {isActionsOpen ? (
           <div className="publishing-platform-bar__actions-menu" role="menu">
             <button type="button" role="menuitem" onClick={manageAuthorization}>
-              {activeRegistration.authorizationActionLabel}
+              {t(activeRegistration.authorizationActionLabelKey)}
             </button>
           </div>
         ) : null}

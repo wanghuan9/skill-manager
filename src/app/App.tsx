@@ -36,14 +36,21 @@ import {
   useSkillWorkspace,
 } from "@/features/skills/state/skill-workspace";
 import { SkillListToolbar } from "@/features/skills/components/SkillListPage";
-import type { ManagedSkillOwnerFilter, SkillStatusFilter } from "@/features/skills/state/skill-store";
+import {
+  DEFAULT_SKILL_TAG_FILTER_LAYOUT,
+  type ManagedSkillOwnerFilter,
+  type SkillStatusFilter,
+  type SkillTagFilterLayout,
+} from "@/features/skills/state/skill-store";
 import {
   readSkillGroupModePreference,
+  readSkillTagFilterVisiblePreference,
   readSkillViewModePreference,
   resolveSkillViewModePreference,
   type SkillGroupMode,
   type SkillViewMode,
   writeSkillGroupModePreference,
+  writeSkillTagFilterVisiblePreference,
   writeSkillViewModePreference,
 } from "@/features/skills/utils/skill-view-preference";
 import {
@@ -52,6 +59,7 @@ import {
 } from "@/features/skills/utils/mcp-workspace-cache";
 import { isToolInstalledStatus } from "@/features/skills/utils/tool-status";
 import { hasEnabledTool } from "@/features/skills/state/skill-selectors";
+import type { SkillTagFilter } from "@/features/skills/utils/skill-tag-filter";
 import {
   buildToolSkillViewItems,
   countToolSkillStatuses,
@@ -318,6 +326,10 @@ function renderRoute(
   skillStatusFilter: SkillStatusFilter,
   skillOwnerFilter: ManagedSkillOwnerFilter,
   skillManagementFilter: ToolSkillManagementFilter,
+  skillTagFilter: SkillTagFilter | undefined,
+  onSkillTagFilterChange: (filter: SkillTagFilter | undefined) => void,
+  isSkillTagFilterVisible: boolean,
+  skillTagFilterLayout: SkillTagFilterLayout,
   skillViewMode: SkillViewMode,
   skillGroupMode: SkillGroupMode,
   isSkillBatchSelecting: boolean,
@@ -382,6 +394,10 @@ function renderRoute(
       statusFilter={skillStatusFilter}
       ownerFilter={skillOwnerFilter}
       managementFilter={skillManagementFilter}
+      tagFilter={skillTagFilter}
+      onTagFilterChange={onSkillTagFilterChange}
+      isTagFilterVisible={isSkillTagFilterVisible}
+      tagFilterLayout={skillTagFilterLayout}
       viewMode={skillViewMode}
       groupMode={skillGroupMode}
       isBatchSelecting={isSkillBatchSelecting}
@@ -622,6 +638,10 @@ function AppContent() {
     useState<ManagedSkillOwnerFilter>("all");
   const [skillManagementFilter, setSkillManagementFilter] =
     useState<ToolSkillManagementFilter>("all");
+  const [skillTagFilter, setSkillTagFilter] = useState<SkillTagFilter>();
+  const [isSkillTagFilterVisible, setIsSkillTagFilterVisible] = useState(
+    readSkillTagFilterVisiblePreference,
+  );
   const [skillViewMode, setSkillViewMode] = useState<SkillViewMode>(
     () => resolveSkillViewModePreference(initialSkillViewMode, installedSkills.length),
   );
@@ -990,6 +1010,11 @@ function AppContent() {
     writeSkillGroupModePreference(nextGroupMode);
   }
 
+  function handleSkillTagFilterVisibleChange(isVisible: boolean) {
+    setIsSkillTagFilterVisible(isVisible);
+    writeSkillTagFilterVisiblePreference(isVisible);
+  }
+
   function handleOpenSkillInstall(tab: InstallTab) {
     setActiveRoute("install");
     setActiveInstallCategory("skill");
@@ -1020,6 +1045,11 @@ function AppContent() {
       onStatusFilterChange={setSkillStatusFilter}
       onOwnerFilterChange={setSkillOwnerFilter}
       onManagementFilterChange={setSkillManagementFilter}
+      tagFilter={skillTagFilter}
+      isTagFilterVisible={isSkillTagFilterVisible}
+      tagFilterLayout={appSettings.skillTagFilterLayout ?? DEFAULT_SKILL_TAG_FILTER_LAYOUT}
+      onTagFilterVisibleChange={handleSkillTagFilterVisibleChange}
+      onTagFilterChange={setSkillTagFilter}
       viewMode={skillViewMode}
       onViewModeChange={handleSkillViewModeChange}
       groupMode={skillGroupMode}
@@ -1443,6 +1473,10 @@ function AppContent() {
               skillStatusFilter,
               skillOwnerFilter,
               skillManagementFilter,
+              skillTagFilter,
+              setSkillTagFilter,
+              isSkillTagFilterVisible,
+              appSettings.skillTagFilterLayout ?? DEFAULT_SKILL_TAG_FILTER_LAYOUT,
               skillViewMode,
               skillGroupMode,
               isSkillBatchSelecting,

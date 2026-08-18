@@ -17,7 +17,7 @@ function resolveSourceLabelFromType(sourceType?: string) {
   }
 
   if (sourceType === "well-known") {
-    return "远程";
+    return "在线";
   }
 
   if (sourceType === "marketplace") {

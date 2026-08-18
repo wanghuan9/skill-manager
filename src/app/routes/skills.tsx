@@ -1,7 +1,12 @@
 import { SkillListPage } from "@/features/skills/components/SkillListPage";
-import type { ManagedSkillOwnerFilter, SkillStatusFilter } from "@/features/skills/state/skill-store";
+import type {
+  ManagedSkillOwnerFilter,
+  SkillStatusFilter,
+  SkillTagFilterLayout,
+} from "@/features/skills/state/skill-store";
 import type { SkillSourceId, ToolSkillManagementFilter } from "@/features/skills/utils/skill-source-view";
 import type { SkillGroupMode, SkillViewMode } from "@/features/skills/utils/skill-view-preference";
+import type { SkillTagFilter } from "@/features/skills/utils/skill-tag-filter";
 
 type SkillsRouteProps = {
   activeSourceId: SkillSourceId;
@@ -17,6 +22,10 @@ type SkillsRouteProps = {
   managementFilter: ToolSkillManagementFilter;
   viewMode: SkillViewMode;
   groupMode: SkillGroupMode;
+  tagFilter?: SkillTagFilter;
+  onTagFilterChange: (filter: SkillTagFilter | undefined) => void;
+  isTagFilterVisible: boolean;
+  tagFilterLayout: SkillTagFilterLayout;
   isBatchSelecting: boolean;
   onBatchSelectingChange: (isSelecting: boolean) => void;
 };
@@ -37,6 +46,10 @@ export function SkillsRoute(props: SkillsRouteProps) {
       managementFilter={props.managementFilter}
       viewMode={props.viewMode}
       groupMode={props.groupMode}
+      tagFilter={props.tagFilter}
+      onTagFilterChange={props.onTagFilterChange}
+      isTagFilterVisible={props.isTagFilterVisible}
+      tagFilterLayout={props.tagFilterLayout}
       isBatchSelecting={props.isBatchSelecting}
       onBatchSelectingChange={props.onBatchSelectingChange}
     />

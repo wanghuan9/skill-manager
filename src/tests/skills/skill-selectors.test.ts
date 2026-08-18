@@ -44,6 +44,26 @@ describe("filterSkills", () => {
     expect(skills.map((skill) => skill.name)).toEqual(["newer-skill", "older-skill"]);
   });
 
+  it("places enabled skills before newer disabled skills", () => {
+    const skills = filterSkills(
+      [
+        createSkill({
+          name: "newer-disabled-skill",
+          localUpdatedAt: "2026/5/9 10:00:00",
+          tools: [{ name: "Codex", statusLabel: "未启用" }],
+        }),
+        createSkill({
+          name: "older-enabled-skill",
+          localUpdatedAt: "2026/5/9 09:00:00",
+          tools: [{ name: "Codex", statusLabel: "已同步" }],
+        }),
+      ],
+      { query: "", status: "all" },
+    );
+
+    expect(skills.map((skill) => skill.name)).toEqual(["older-enabled-skill", "newer-disabled-skill"]);
+  });
+
   it("keeps enablement and status priority when local updated time is the same", () => {
     const skills = filterSkills(
       [
@@ -117,6 +137,65 @@ describe("filterSkills", () => {
     expect(skills.map((skill) => skill.name)).toEqual(["diagram-helper"]);
   });
 
+  it("filters by an exact tag and supports untagged skills", () => {
+    const skillFixtures = [
+      createSkill({ name: "workflow-a", tag: "Workflow" }),
+      createSkill({ name: "workflow-b", tag: "workflow" }),
+      createSkill({ name: "release", tag: "发布" }),
+      createSkill({ name: "untagged", tag: "" }),
+    ];
+
+    expect(filterSkills(skillFixtures, {
+      query: "",
+      status: "all",
+      tagFilter: { kind: "custom", value: "workflow" },
+    }).map((skill) => skill.name)).toEqual(["workflow-a", "workflow-b"]);
+    expect(filterSkills(skillFixtures, {
+      query: "",
+      status: "all",
+      tagFilter: { kind: "untagged", value: "" },
+    }).map((skill) => skill.name)).toEqual(["untagged"]);
+  });
+
+  it("filters by fixed source and management owner tags", () => {
+    const skillFixtures = [
+      createSkill({ name: "local", sourceType: "local", sourceLabel: "本地安装" }),
+      createSkill({ name: "import", sourceType: "local", sourceLabel: "本地导入" }),
+      createSkill({
+        name: "market",
+        sourceType: "github",
+        sourceLabel: "GitHub",
+        marketplaceSource: "skills.sh",
+      }),
+      createSkill({
+        name: "agent",
+        managementOwner: "agent-skills-cli",
+        sourceType: "well-known",
+      }),
+    ];
+
+    expect(filterSkills(skillFixtures, {
+      query: "",
+      status: "all",
+      tagFilter: { kind: "source", value: "local" },
+    }).map((skill) => skill.name)).toEqual(["local", "import"]);
+    expect(filterSkills(skillFixtures, {
+      query: "",
+      status: "all",
+      tagFilter: { kind: "source", value: "marketplace" },
+    }).map((skill) => skill.name)).toEqual(["market"]);
+    expect(filterSkills(skillFixtures, {
+      query: "",
+      status: "all",
+      tagFilter: { kind: "source", value: "standard" },
+    }).map((skill) => skill.name)).toEqual(["agent"]);
+    expect(filterSkills(skillFixtures, {
+      query: "",
+      status: "all",
+      tagFilter: { kind: "owner", value: "agent-skills-cli" },
+    }).map((skill) => skill.name)).toEqual(["agent"]);
+  });
+
   it("combines management owner, query, and status filters", () => {
     const skills = filterSkills(
       [
@@ -174,7 +253,7 @@ describe("filterSkills", () => {
 });
 
 describe("compareSkillsByEnablement", () => {
-  it("orders fully enabled, partially enabled, then disabled skills", () => {
+  it("treats fully and partially enabled skills as the same enabled state", () => {
     const fullyEnabled = createSkill({
       name: "fully-enabled",
       tools: [
@@ -199,6 +278,6 @@ describe("compareSkillsByEnablement", () => {
 
     const sorted = [partiallyEnabled, disabled, fullyEnabled].sort(compareSkillsByEnablement);
 
-    expect(sorted.map((skill) => skill.name)).toEqual(["fully-enabled", "partially-enabled", "disabled"]);
+    expect(sorted.map((skill) => skill.name)).toEqual(["partially-enabled", "fully-enabled", "disabled"]);
   });
 });

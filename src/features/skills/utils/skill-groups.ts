@@ -24,6 +24,15 @@ const GENERIC_REPOSITORY_NAMES = new Set([
   "tools",
 ]);
 
+const LOCAL_SOURCE_LABELS = new Set([
+  "local",
+  "本地",
+  "本地安装",
+  "本地导入",
+  "local install",
+  "local import",
+]);
+
 type ParsedRepository = {
   owner: string;
   repo: string;
@@ -39,6 +48,10 @@ function isLocalSourceUrl(sourceUrl: string) {
   );
 }
 
+function isLocalSourceLabel(sourceLabel: string) {
+  return LOCAL_SOURCE_LABELS.has(sourceLabel.trim().toLocaleLowerCase());
+}
+
 function formatOwnerRepoLabel(owner: string, repo: string) {
   return `${owner}-${repo}`.replace(/\//g, "-");
 }
@@ -48,6 +61,10 @@ function isGenericRepositoryName(repo: string) {
 }
 
 function parseRepository(sourceUrl: string): ParsedRepository | null {
+  if (isLocalSourceUrl(sourceUrl)) {
+    return null;
+  }
+
   try {
     const parsedUrl = new URL(sourceUrl);
     const segments = parsedUrl.pathname.split("/").filter(Boolean);
@@ -84,7 +101,7 @@ function resolveWellKnownSourceHost(skill: SkillSummary) {
 }
 
 function resolveFallbackGroupLabel(skill: SkillSummary, options: GroupLabelOptions) {
-  if (isLocalSourceUrl(skill.sourceUrl)) {
+  if (isLocalSourceUrl(skill.sourceUrl) || isLocalSourceLabel(skill.sourceLabel)) {
     return options.localLabel ?? "本地";
   }
 

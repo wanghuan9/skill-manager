@@ -8,7 +8,6 @@ import {
   filterSkills,
   getSkillIdentity,
   hasEnabledTool,
-  resolveSkillManagementOwner,
 } from "@/features/skills/state/skill-selectors";
 import { SkillCard } from "@/features/skills/components/SkillCard";
 import { SkillSourceView } from "@/features/skills/components/SkillSourceView";
@@ -31,10 +30,13 @@ import {
   BatchSelectionMark,
 } from "@/app/components/BatchActions";
 import { useBatchSelection } from "@/app/hooks/useBatchSelection";
-import type {
-  ManagedSkillOwnerFilter,
-  SkillStatusFilter,
-  SkillSummary,
+import {
+  DEFAULT_SKILL_TAG_FILTER_LAYOUT,
+  type ManagedSkillOwnerFilter,
+  type SkillManagementOwner,
+  type SkillTagFilterLayout,
+  type SkillStatusFilter,
+  type SkillSummary,
 } from "@/features/skills/state/skill-store";
 import {
   MANAGED_SKILL_SOURCE_ID,
@@ -44,6 +46,15 @@ import {
 import { setSkillAllToolsEnabled } from "@/features/skills/utils/skill-bulk-status";
 import { mergeSkillToolsWithInstalledTools } from "@/features/skills/utils/skill-tools";
 import { isToolEnabledStatus } from "@/features/skills/utils/tool-status";
+import { resolveSkillTagTone } from "@/features/skills/utils/skill-tag-color";
+import {
+  collectSkillTagFilterGroups,
+  isSameSkillTagFilter,
+  isSkillTagFilterAvailable,
+  type SkillSourceMethod,
+  type SkillTagFilter,
+  type SkillTagFilterGroups,
+} from "@/features/skills/utils/skill-tag-filter";
 
 type SkillToolbarProps = {
   activeSourceId?: SkillSourceId;
@@ -60,6 +71,11 @@ type SkillToolbarProps = {
   onViewModeChange: (value: SkillViewMode) => void;
   groupMode?: SkillGroupMode;
   onGroupModeChange?: (value: SkillGroupMode) => void;
+  tagFilter?: SkillTagFilter;
+  tagFilterLayout?: SkillTagFilterLayout;
+  isTagFilterVisible?: boolean;
+  onTagFilterVisibleChange?: (isVisible: boolean) => void;
+  onTagFilterChange?: (filter: SkillTagFilter | undefined) => void;
   onGoInstall?: () => void;
   isBatchSelecting?: boolean;
   onBatchSelectingChange?: (isSelecting: boolean) => void;
@@ -119,14 +135,119 @@ function FilterIcon() {
   );
 }
 
+function TagFilterIcon() {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+      <path d="M3.2 3.6h6l7.6 7.6-5.6 5.6-7.6-7.6V3.6Z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+      <circle cx="6.8" cy="6.8" r="1.1" fill="currentColor" />
+    </svg>
+  );
+}
+
+function TagFilterChevronIcon({ isExpanded }: { isExpanded: boolean }) {
+  return (
+    <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path d={isExpanded ? "m4.5 9.5 3.5-3 3.5 3" : "m4.5 6.5 3.5 3 3.5-3"} stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function TagFilterClearIcon() {
+  return (
+    <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path d="m5 5 6 6m0-6-6 6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 const MANAGED_FILTER_STATUS_SECTION = "status-section";
-const MANAGED_FILTER_OWNER_SECTION = "owner-section";
 
 type ManagedSkillCombinedFilter =
   | SkillStatusFilter
-  | Exclude<ManagedSkillOwnerFilter, "all">
-  | typeof MANAGED_FILTER_STATUS_SECTION
-  | typeof MANAGED_FILTER_OWNER_SECTION;
+  | typeof MANAGED_FILTER_STATUS_SECTION;
+
+type TagFilterOption = {
+  filter: SkillTagFilter;
+  label: string;
+  count: number;
+};
+
+type TagFilterSection = {
+  key: "source" | "owner" | "custom";
+  label: string;
+  options: TagFilterOption[];
+};
+
+type Translate = ReturnType<typeof useTranslate>["t"];
+
+const SOURCE_TAG_TONE_CLASS: Record<SkillSourceMethod, string> = {
+  local: "tag-tone-neutral",
+  git: "tag-tone-source-git",
+  marketplace: "tag-tone-source-marketplace",
+  standard: "tag-tone-source-online",
+};
+
+function createTagFilterSections(groups: SkillTagFilterGroups, t: Translate): TagFilterSection[] {
+  const sourceLabels: Record<SkillSourceMethod, string> = {
+    local: t("skill.card.sourceMethod.local"),
+    git: t("skill.card.sourceMethod.git"),
+    standard: t("skill.card.sourceMethod.standard"),
+    marketplace: t("skill.card.sourceMethod.marketplace"),
+  };
+  const ownerLabels: Record<SkillManagementOwner, string> = {
+    skilldock: t("skill.card.owner.skilldock"),
+    "agent-skills-cli": t("skill.card.owner.agentSkillsCli"),
+    external: t("skill.card.owner.external"),
+  };
+  const customOptions: TagFilterOption[] = [
+    ...(groups.untaggedCount > 0 ? [{
+      filter: { kind: "untagged", value: "" } as const,
+      label: t("skills.tagFilter.untagged"),
+      count: groups.untaggedCount,
+    }] : []),
+    ...groups.customTags.map((item) => ({
+      filter: { kind: "custom", value: item.value } as const,
+      label: item.value,
+      count: item.count,
+    })),
+  ];
+
+  return [
+    {
+      key: "source",
+      label: t("skills.tagFilter.sourceGroup"),
+      options: groups.sources.map((item) => ({
+        filter: { kind: "source", value: item.value },
+        label: sourceLabels[item.value],
+        count: item.count,
+      })),
+    },
+    {
+      key: "owner",
+      label: t("skills.tagFilter.ownerGroup"),
+      options: groups.owners.map((item) => ({
+        filter: { kind: "owner", value: item.value },
+        label: ownerLabels[item.value],
+        count: item.count,
+      })),
+    },
+    {
+      key: "custom",
+      label: t("skills.tagFilter.customGroup"),
+      options: customOptions,
+    },
+  ].filter((section) => section.options.length > 0) as TagFilterSection[];
+}
+
+function getTagFilterToneClass(filter: SkillTagFilter) {
+  if (filter.kind === "custom") {
+    return `tag-tone-${resolveSkillTagTone(filter.value)}`;
+  }
+  if (filter.kind === "source") {
+    return SOURCE_TAG_TONE_CLASS[filter.value];
+  }
+  return "tag-tone-neutral";
+}
 
 function resolveSkillGroupTone(sourceType?: SkillSummary["sourceType"]) {
   if (sourceType === "local") {
@@ -189,7 +310,6 @@ export function SkillListToolbar(props: SkillToolbarProps) {
     query,
     activeSourceId = MANAGED_SKILL_SOURCE_ID,
     statusFilter,
-    ownerFilter = "all",
     managementFilter = "all",
     managementFilterCounts = { all: 0, managed: 0, unmanaged: 0, mismatch: 0 },
     onQueryChange,
@@ -200,6 +320,11 @@ export function SkillListToolbar(props: SkillToolbarProps) {
     onViewModeChange,
     groupMode = "source",
     onGroupModeChange = () => undefined,
+    tagFilter,
+    tagFilterLayout = DEFAULT_SKILL_TAG_FILTER_LAYOUT,
+    isTagFilterVisible = true,
+    onTagFilterVisibleChange = () => undefined,
+    onTagFilterChange = () => undefined,
     onGoInstall,
     isBatchSelecting = false,
     onBatchSelectingChange = () => undefined,
@@ -214,6 +339,8 @@ export function SkillListToolbar(props: SkillToolbarProps) {
     updateAllSkills,
   } = useSkillWorkspace();
   const [isToolSourceRefreshing, setIsToolSourceRefreshing] = useState(false);
+  const [isTagFilterMenuOpen, setIsTagFilterMenuOpen] = useState(false);
+  const tagFilterControlRef = useRef<HTMLDivElement | null>(null);
   const reportFailure = useFailureReporter();
   const statusFilterCounts = useMemo(
     () => ({
@@ -223,16 +350,8 @@ export function SkillListToolbar(props: SkillToolbarProps) {
       "pending-commit": installedSkills.filter((skill) => skill.collabStatus === "pending-commit").length,
       "pending-push": installedSkills.filter((skill) => skill.collabStatus === "pending-push").length,
       diverged: installedSkills.filter((skill) => skill.collabStatus === "diverged").length,
+      enabled: installedSkills.filter(hasEnabledTool).length,
       disabled: installedSkills.filter((skill) => !hasEnabledTool(skill)).length,
-    }),
-    [installedSkills],
-  );
-  const ownerFilterCounts = useMemo(
-    () => ({
-      skilldock: installedSkills.filter((skill) => resolveSkillManagementOwner(skill) === "skilldock").length,
-      "agent-skills-cli": installedSkills.filter((skill) => (
-        resolveSkillManagementOwner(skill) === "agent-skills-cli"
-      )).length,
     }),
     [installedSkills],
   );
@@ -240,20 +359,32 @@ export function SkillListToolbar(props: SkillToolbarProps) {
     () => installedSkills.filter((skill) => skill.collabStatus === "update-available").length,
     [installedSkills],
   );
+  const tagFilterGroups = useMemo(
+    () => collectSkillTagFilterGroups(installedSkills),
+    [installedSkills],
+  );
+  const tagFilterSections = useMemo(
+    () => createTagFilterSections(tagFilterGroups, t),
+    [t, tagFilterGroups],
+  );
+  const selectedTagFilterOption = tagFilterSections
+    .flatMap((section) => section.options)
+    .find((option) => isSameSkillTagFilter(option.filter, tagFilter));
+  const hasTagFilters = installedSkills.length > 0;
+  const tagFilterLabel = selectedTagFilterOption?.label ?? t("skills.tagFilter.toggle");
+  const isTagFilterControlExpanded = tagFilterLayout === "popover"
+    ? isTagFilterMenuOpen
+    : isTagFilterVisible;
+  const tagFilterToggleLabel = tagFilterLayout === "popover"
+    ? t(isTagFilterMenuOpen ? "skills.tagFilter.close" : "skills.tagFilter.open")
+    : t(isTagFilterVisible ? "skills.tagFilter.collapse" : "skills.tagFilter.expand");
   const skillStatusFilterOptions: Array<{ value: SkillStatusFilter; label: string }> = [
     { value: "all", label: t("skills.filter.all") },
     { value: "update-available", label: t("skills.filter.updateAvailable") },
     { value: "pending-commit", label: t("skills.filter.pendingCommit") },
     { value: "pending-push", label: t("skills.filter.pendingPush") },
+    { value: "enabled", label: t("tools.status.enabled") },
     { value: "disabled", label: t("skills.filter.disabled") },
-  ];
-  const ownerFilterOptions: Array<{ value: ManagedSkillOwnerFilter; label: string }> = [
-    { value: "all", label: t("skills.ownerFilter.all") },
-    { value: "skilldock", label: `${t("skill.card.owner.skilldock")} (${ownerFilterCounts.skilldock})` },
-    {
-      value: "agent-skills-cli",
-      label: `${t("skill.card.owner.agentSkillsCli")} (${ownerFilterCounts["agent-skills-cli"]})`,
-    },
   ];
   const managedFilterOptions: Array<{
     value: ManagedSkillCombinedFilter;
@@ -265,8 +396,6 @@ export function SkillListToolbar(props: SkillToolbarProps) {
       value: option.value,
       label: `${option.label} (${statusFilterCounts[option.value]})`,
     })),
-    { value: MANAGED_FILTER_OWNER_SECTION, label: t("skills.filter.ownerGroup"), disabled: true },
-    ...ownerFilterOptions.filter((option) => option.value !== "all"),
   ];
   const managementFilterOptions: Array<{ value: ToolSkillManagementFilter; label: string }> = [
     { value: "all", label: t("skills.source.filter.all") },
@@ -279,11 +408,42 @@ export function SkillListToolbar(props: SkillToolbarProps) {
     { value: "tag", label: t("skills.group.mode.tag") },
   ];
   const isManagedSource = activeSourceId === MANAGED_SKILL_SOURCE_ID;
-  const managedFilterValue = ownerFilter === "all" ? statusFilter : ownerFilter;
+  const managedFilterValue = statusFilter;
   const isRefreshLoading = isManagedSource ? isWorkspaceRefreshing : isToolSourceRefreshing;
   const updateAllButtonLabel = updatableSkillCount > 0
     ? t("skills.updateAllWithCount", { count: updatableSkillCount })
     : t("skills.updateAll");
+
+  useEffect(() => {
+    if (tagFilterLayout !== "popover" || !isTagFilterMenuOpen) {
+      return;
+    }
+
+    function handlePointerDown(event: PointerEvent) {
+      if (!tagFilterControlRef.current?.contains(event.target as Node)) {
+        setIsTagFilterMenuOpen(false);
+      }
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setIsTagFilterMenuOpen(false);
+      }
+    }
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isTagFilterMenuOpen, tagFilterLayout]);
+
+  useEffect(() => {
+    if (tagFilterLayout !== "popover" || !isManagedSource) {
+      setIsTagFilterMenuOpen(false);
+    }
+  }, [isManagedSource, tagFilterLayout]);
 
   async function handleRefreshWorkspace() {
     if (isRefreshLoading) {
@@ -324,16 +484,26 @@ export function SkillListToolbar(props: SkillToolbarProps) {
   }
 
   function handleManagedFilterChange(value: ManagedSkillCombinedFilter) {
-    if (value === MANAGED_FILTER_STATUS_SECTION || value === MANAGED_FILTER_OWNER_SECTION) {
-      return;
-    }
-    if (value === "skilldock" || value === "agent-skills-cli") {
-      onStatusFilterChange("all");
-      onOwnerFilterChange(value);
+    if (value === MANAGED_FILTER_STATUS_SECTION) {
       return;
     }
     onOwnerFilterChange("all");
     onStatusFilterChange(value);
+  }
+
+  function handleTagFilterControlToggle() {
+    if (tagFilterLayout === "popover") {
+      setIsTagFilterMenuOpen((current) => !current);
+      return;
+    }
+    onTagFilterVisibleChange(!isTagFilterVisible);
+  }
+
+  function handleTagFilterOptionChange(option: TagFilterOption) {
+    onTagFilterChange(isSameSkillTagFilter(option.filter, tagFilter) ? undefined : option.filter);
+    if (tagFilterLayout === "popover") {
+      setIsTagFilterMenuOpen(false);
+    }
   }
 
   return (
@@ -436,6 +606,77 @@ export function SkillListToolbar(props: SkillToolbarProps) {
           />
         )}
       </div>
+      {isManagedSource && hasTagFilters ? (
+        <div
+          ref={tagFilterControlRef}
+          className={`skill-tag-filter-control${tagFilter ? " has-filter" : ""}${tagFilter ? ` ${getTagFilterToneClass(tagFilter)}` : ""}`}
+        >
+          <button
+            className={`skill-tag-filter-toggle${isTagFilterControlExpanded ? " is-expanded" : ""}`}
+            type="button"
+            aria-expanded={isTagFilterControlExpanded}
+            aria-haspopup={tagFilterLayout === "popover" ? "menu" : undefined}
+            aria-label={tagFilterToggleLabel}
+            data-tooltip={tagFilterToggleLabel}
+            onClick={handleTagFilterControlToggle}
+          >
+            <span className="skill-tag-filter-toggle__icon" aria-hidden="true">
+              <TagFilterIcon />
+            </span>
+            <span className="skill-tag-filter-toggle__label">{tagFilterLabel}</span>
+            <span className="skill-tag-filter-toggle__chevron" aria-hidden="true">
+              <TagFilterChevronIcon isExpanded={isTagFilterControlExpanded} />
+            </span>
+          </button>
+          {tagFilter ? (
+            <button
+              className="skill-tag-filter-clear"
+              type="button"
+              aria-label={t("skills.tagFilter.clear")}
+              data-tooltip={t("skills.tagFilter.clear")}
+              onClick={() => onTagFilterChange(undefined)}
+            >
+              <TagFilterClearIcon />
+            </button>
+          ) : null}
+          {tagFilterLayout === "popover" && isTagFilterMenuOpen ? (
+            <div
+              className="skill-tag-filter-menu"
+              role="menu"
+              aria-label={t("skills.tagFilter.aria")}
+            >
+              {tagFilterSections.map((section) => (
+                <section
+                  key={section.key}
+                  className="skill-tag-filter-menu__section"
+                  role="group"
+                  aria-label={section.label}
+                >
+                  <div className="skill-tag-filter-menu__heading">{section.label}</div>
+                  <div className="skill-tag-filter-menu__options">
+                    {section.options.map((option) => {
+                      const isActive = isSameSkillTagFilter(option.filter, tagFilter);
+                      return (
+                        <button
+                          key={`${option.filter.kind}:${option.filter.value}`}
+                          className={`skill-tag-filter-menu__option ${getTagFilterToneClass(option.filter)}${isActive ? " is-active" : ""}`}
+                          type="button"
+                          role="menuitemradio"
+                          aria-checked={isActive}
+                          onClick={() => handleTagFilterOptionChange(option)}
+                        >
+                          <span>{option.label}</span>
+                          <span className="skill-tag-filter-menu__count">{option.count}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </section>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
       <BatchModeButton
         isSelecting={isBatchSelecting}
         label={t(isBatchSelecting ? "batch.mode.exit" : "batch.mode.enter")}
@@ -486,6 +727,10 @@ type SkillListPageProps = {
   managementFilter?: ToolSkillManagementFilter;
   viewMode: SkillViewMode;
   groupMode?: SkillGroupMode;
+  tagFilter?: SkillTagFilter;
+  onTagFilterChange?: (filter: SkillTagFilter | undefined) => void;
+  isTagFilterVisible?: boolean;
+  tagFilterLayout?: SkillTagFilterLayout;
   isBatchSelecting?: boolean;
   onBatchSelectingChange?: (isSelecting: boolean) => void;
 };
@@ -509,6 +754,10 @@ export function SkillListPage(props: SkillListPageProps) {
     managementFilter = "all",
     viewMode,
     groupMode = "source",
+    tagFilter,
+    onTagFilterChange = () => undefined,
+    isTagFilterVisible = true,
+    tagFilterLayout = DEFAULT_SKILL_TAG_FILTER_LAYOUT,
     isBatchSelecting = false,
     onBatchSelectingChange = () => undefined,
     activeSourceId = MANAGED_SKILL_SOURCE_ID,
@@ -543,13 +792,26 @@ export function SkillListPage(props: SkillListPageProps) {
     getSkillOrderKey,
     skillOrderRevision,
   );
+  const tagFilterGroups = useMemo(
+    () => collectSkillTagFilterGroups(installedSkills),
+    [installedSkills],
+  );
+  const tagFilterSections = useMemo(
+    () => createTagFilterSections(tagFilterGroups, t),
+    [t, tagFilterGroups],
+  );
   const skills = useMemo(() => {
     const visibleSkillIdentities = new Set(
-      filterSkills(installedSkills, { query: deferredQuery, status: statusFilter, owner: ownerFilter })
+      filterSkills(installedSkills, {
+        query: deferredQuery,
+        status: statusFilter,
+        owner: ownerFilter,
+        tagFilter,
+      })
         .map(getSkillIdentity),
     );
     return orderedInstalledSkills.filter((skill) => visibleSkillIdentities.has(getSkillIdentity(skill)));
-  }, [deferredQuery, installedSkills, orderedInstalledSkills, ownerFilter, statusFilter]);
+  }, [deferredQuery, installedSkills, orderedInstalledSkills, ownerFilter, statusFilter, tagFilter]);
   const visibleSkillIds = useMemo(() => skills.map(getSkillIdentity), [skills]);
   const batchSelection = useBatchSelection(visibleSkillIds);
   const selectedSkills = useMemo(
@@ -593,6 +855,20 @@ export function SkillListPage(props: SkillListPageProps) {
     }
     wasWorkspaceRefreshingRef.current = isWorkspaceRefreshing;
   }, [isWorkspaceRefreshing]);
+
+  useEffect(() => {
+    if (activeSourceId !== MANAGED_SKILL_SOURCE_ID) {
+      onTagFilterChange(undefined);
+      return;
+    }
+    if (tagFilter === undefined) {
+      return;
+    }
+
+    if (!isSkillTagFilterAvailable(tagFilterGroups, tagFilter)) {
+      onTagFilterChange(undefined);
+    }
+  }, [activeSourceId, onTagFilterChange, tagFilter, tagFilterGroups]);
 
   useEffect(() => {
     if (isBatchSelecting && activeSourceId === MANAGED_SKILL_SOURCE_ID) {
@@ -790,6 +1066,37 @@ export function SkillListPage(props: SkillListPageProps) {
         query={deferredQuery}
         viewMode={viewMode}
       />
+      {activeSourceId === MANAGED_SKILL_SOURCE_ID
+        && tagFilterLayout === "inline"
+        && isTagFilterVisible
+        && tagFilterSections.length > 0 ? (
+        <div className="skill-tag-filter-bar" role="group" aria-label={t("skills.tagFilter.aria")}>
+          {tagFilterSections.map((section) => (
+            <div
+              key={section.key}
+              className={`skill-tag-filter-bar__section is-${section.key}`}
+              role="group"
+              aria-label={section.label}
+            >
+              {section.options.map((option) => {
+                const isActive = isSameSkillTagFilter(option.filter, tagFilter);
+                return (
+                  <button
+                    key={`${option.filter.kind}:${option.filter.value}`}
+                    className={`skill-tag-filter-bar__item has-tag ${getTagFilterToneClass(option.filter)}${option.filter.kind === "untagged" ? " is-untagged" : ""}${isActive ? " is-active" : ""}`}
+                    type="button"
+                    data-tooltip={`${section.label} · ${option.label} (${option.count})`}
+                    aria-pressed={isActive}
+                    onClick={() => onTagFilterChange(isActive ? undefined : option.filter)}
+                  >
+                    {option.label}
+                  </button>
+                );
+              })}
+            </div>
+          ))}
+        </div>
+      ) : null}
       {activeSourceId === MANAGED_SKILL_SOURCE_ID ? (
         <>
         {batchSelection.isSelecting ? (

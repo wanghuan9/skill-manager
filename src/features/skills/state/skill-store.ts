@@ -4,7 +4,7 @@ export type SkillCollabStatus =
   | "pending-commit"
   | "pending-push"
   | "diverged";
-export type SkillStatusFilter = "all" | SkillCollabStatus | "disabled";
+export type SkillStatusFilter = "all" | SkillCollabStatus | "enabled" | "disabled";
 export type SkillManagementOwner = "skilldock" | "agent-skills-cli" | "external";
 export type ManagedSkillOwnerFilter = "all" | Exclude<SkillManagementOwner, "external">;
 
@@ -182,6 +182,7 @@ export type SkillSummary = {
   pathError?: string;
   contentHash?: string;
   tag?: string;
+  marketplaceSource?: string;
   marketplaceOwner?: string;
   marketplaceSlug?: string;
   marketplaceVersion?: string;
@@ -359,6 +360,8 @@ export type GitAccountSummary = {
 
 export type InstallActivationMode = "apply-all-tools" | "disable-all-tools";
 export type SkillSourceViewStyle = "flat" | "select";
+export type SkillTagFilterLayout = "inline" | "popover";
+export const DEFAULT_SKILL_TAG_FILTER_LAYOUT: SkillTagFilterLayout = "popover";
 export type AppLanguage = "zh-CN" | "en";
 export type AppLanguageSource = "auto" | "user";
 export type AppTheme = "light" | "dark" | "system";
@@ -374,6 +377,7 @@ export type AppSettings = {
   skillInstallActivation: InstallActivationMode;
   mcpInstallActivation: InstallActivationMode;
   skillSourceViewStyle?: SkillSourceViewStyle;
+  skillTagFilterLayout?: SkillTagFilterLayout;
   language: AppLanguage;
   languageSource: AppLanguageSource;
   theme: AppTheme;

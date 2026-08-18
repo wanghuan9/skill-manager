@@ -496,6 +496,46 @@ test("uses list view by default when installed skill count is at or below thresh
   expect(screen.queryByRole("button", { name: /^(展开|收起)来源分组/ })).not.toBeInTheDocument();
 });
 
+test("quickly filters managed Skills by one tag or by missing tags", async () => {
+  const user = userEvent.setup();
+  const originalSkills = workspaceSnapshotFixture.installedSkills;
+  const taggedWorkflowSkill = { ...installedSkillFixtures[0], tag: "workflow" };
+  const taggedReleaseSkill = { ...installedSkillFixtures[1], tag: "发布" };
+  const untaggedSkill = { ...installedSkillFixtures[2], tag: "" };
+  const skills = [taggedWorkflowSkill, taggedReleaseSkill, untaggedSkill];
+  workspaceSnapshotFixture.installedSkills = skills;
+  const startupSkillsSpy = vi.spyOn(skillClient, "fetchStartupInstalledSkills").mockResolvedValue(skills);
+
+  render(<App />);
+
+  const quickFilter = screen.getByRole("group", { name: "按标签快速筛选 Skill" });
+  expect(within(quickFilter).getByRole("button", { name: "workflow" })).toHaveAttribute("aria-pressed", "false");
+
+  await user.click(within(quickFilter).getByRole("button", { name: "workflow" }));
+  expect(screen.getByRole("article", { name: "skill-publisher" })).toBeInTheDocument();
+  expect(screen.queryByRole("article", { name: "excalidraw-diagram" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("article", { name: "drawio-diagram" })).not.toBeInTheDocument();
+
+  await user.click(screen.getByRole("button", { name: "收起标签筛选" }));
+  expect(screen.queryByRole("group", { name: "按标签快速筛选 Skill" })).not.toBeInTheDocument();
+  expect(screen.getByText("workflow")).toBeInTheDocument();
+  expect(screen.getByRole("article", { name: "skill-publisher" })).toBeInTheDocument();
+  expect(window.localStorage.getItem("skills:tag-filter-visible")).toBe("false");
+
+  await user.click(screen.getByRole("button", { name: "展开标签筛选" }));
+  const reopenedQuickFilter = screen.getByRole("group", { name: "按标签快速筛选 Skill" });
+
+  await user.click(within(reopenedQuickFilter).getByRole("button", { name: "workflow" }));
+  expect(screen.getAllByRole("article")).toHaveLength(3);
+
+  await user.click(within(reopenedQuickFilter).getByRole("button", { name: "无标签" }));
+  expect(screen.getByRole("article", { name: "drawio-diagram" })).toBeInTheDocument();
+  expect(screen.queryByRole("article", { name: "skill-publisher" })).not.toBeInTheDocument();
+
+  startupSkillsSpy.mockRestore();
+  workspaceSnapshotFixture.installedSkills = originalSkills;
+});
+
 test("keeps same-named skills separate when filtering for updates", async () => {
   const user = userEvent.setup();
   const gitSkill = {

@@ -197,11 +197,11 @@ test("shows the official source link for a well-known Agent CLI skill", async ()
 
   renderSkillCardWithProviders(agentSkill, "grid");
 
-  expect(screen.getByText("远程 · Agent CLI")).toBeInTheDocument();
+  expect(screen.getByText("在线 · Agent CLI")).toBeInTheDocument();
   fireEvent.click(document.querySelector(".skill-card__summary-button") as HTMLElement);
 
   const detailDialog = screen.getByRole("dialog", { name: "lark-okr 详情" });
-  expect(within(detailDialog).getByText("来源方式").parentElement).toHaveTextContent("远程");
+  expect(within(detailDialog).getByText("来源方式").parentElement).toHaveTextContent("在线");
   expect(within(detailDialog).getByText("来源地址")).toBeInTheDocument();
   expect(within(detailDialog).getByRole("link", {
     name: "https://open.feishu.cn/.well-known/skills/lark-okr/SKILL.md",

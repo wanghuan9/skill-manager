@@ -227,6 +227,9 @@ pub struct SkillInstanceMetadata {
     pub content_hash: String,
     #[serde(default)]
     pub tag: String,
+    #[serde(default)]
+    pub marketplace_source: String,
+    #[serde(default)]
     pub marketplace_owner: String,
     #[serde(default)]
     pub marketplace_slug: String,
@@ -388,6 +391,8 @@ pub struct AppSettings {
     pub mcp_install_activation: String,
     #[serde(default)]
     pub skill_source_view_style: String,
+    #[serde(default)]
+    pub skill_tag_filter_layout: String,
     pub language: String,
     pub language_source: String,
     pub theme: String,

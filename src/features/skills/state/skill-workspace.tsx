@@ -74,32 +74,34 @@ import {
   createMarketplaceSourceRecord,
   VISIBLE_MARKETPLACE_SOURCE_SITES,
 } from "@/features/skills/utils/marketplace-sources";
-import type {
-  AppLanguage,
-  AppLanguageSource,
-  AppSettings,
-  AppTheme,
-  SkillLibraryProvider,
-  GitAccountSummary,
-  GitChangeFile,
-  GithubConnection,
-  GithubDeviceFlowStart,
-  GithubDevicePollResult,
-  InstallActivationMode,
-  LocalSkillCandidate,
-  LocalInstallSkillCandidate,
-  MarketplaceSkill,
-  MarketplaceSourceSite,
-  PushPreviewSnapshot,
-  PushTargetSnapshot,
-  RepoSkillCandidate,
-  SkillFileBrowserSnapshot,
-  SkillFileDocument,
-  SkillSummary,
-  SkillSourceViewStyle,
-  ToolConfig,
-  ToolSkillEntry,
-  UpdatePreviewSnapshot,
+import {
+  DEFAULT_SKILL_TAG_FILTER_LAYOUT,
+  type AppLanguage,
+  type AppLanguageSource,
+  type AppSettings,
+  type AppTheme,
+  type SkillLibraryProvider,
+  type GitAccountSummary,
+  type GitChangeFile,
+  type GithubConnection,
+  type GithubDeviceFlowStart,
+  type GithubDevicePollResult,
+  type InstallActivationMode,
+  type LocalSkillCandidate,
+  type LocalInstallSkillCandidate,
+  type MarketplaceSkill,
+  type MarketplaceSourceSite,
+  type PushPreviewSnapshot,
+  type PushTargetSnapshot,
+  type RepoSkillCandidate,
+  type SkillFileBrowserSnapshot,
+  type SkillFileDocument,
+  type SkillSummary,
+  type SkillSourceViewStyle,
+  type SkillTagFilterLayout,
+  type ToolConfig,
+  type ToolSkillEntry,
+  type UpdatePreviewSnapshot,
 } from "@/features/skills/state/skill-store";
 import { getSkillIdentity } from "@/features/skills/state/skill-selectors";
 import { buildOpenToolOptions, resolveDefaultOpenToolId } from "@/features/skills/utils/open-tools";
@@ -244,6 +246,7 @@ type SkillWorkspaceContextValue = {
   setSkillInstallActivation: (mode: InstallActivationMode) => Promise<void>;
   setMcpInstallActivation: (mode: InstallActivationMode) => Promise<void>;
   setSkillSourceViewStyle: (style: SkillSourceViewStyle) => Promise<void>;
+  setSkillTagFilterLayout: (layout: SkillTagFilterLayout) => Promise<void>;
   openSkillWithDefaultTool: (skillName: string, skillPath?: string) => Promise<void>;
   openPathInFinder: (path: string) => Promise<void>;
 };
@@ -635,6 +638,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
           skillInstallActivation: "apply-all-tools",
           mcpInstallActivation: "apply-all-tools",
           skillSourceViewStyle: readStoredSkillSourceViewStyle(),
+          skillTagFilterLayout: DEFAULT_SKILL_TAG_FILTER_LAYOUT,
           language: "zh-CN",
           languageSource: "auto",
           theme: readStoredAppTheme(),
@@ -1832,6 +1836,13 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
     });
   }
 
+  async function handleSetSkillTagFilterLayout(layout: SkillTagFilterLayout) {
+    await persistAppSettings({
+      ...appSettings,
+      skillTagFilterLayout: layout,
+    });
+  }
+
   async function handleOpenPathInFinder(path: string) {
     const normalizedPath = path.trim();
     if (!normalizedPath) {
@@ -1918,6 +1929,7 @@ export function SkillWorkspaceProvider({ children }: SkillWorkspaceProviderProps
       setSkillInstallActivation: handleSetSkillInstallActivation,
       setMcpInstallActivation: handleSetMcpInstallActivation,
       setSkillSourceViewStyle: handleSetSkillSourceViewStyle,
+      setSkillTagFilterLayout: handleSetSkillTagFilterLayout,
       openSkillWithDefaultTool: handleOpenSkillWithDefaultTool,
       openPathInFinder: handleOpenPathInFinder,
     }),

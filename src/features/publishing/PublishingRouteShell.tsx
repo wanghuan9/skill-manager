@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useTranslate } from "@/app/i18n";
 import { PublishingWorkbench } from "./PublishingWorkbench";
 import { PublishingPlatformBar } from "./PublishingPlatformBar";
 import {
@@ -19,6 +20,7 @@ function readInitialAuthState(registration: PublishingPlatformRegistration): Pub
 }
 
 export function PublishingRouteShell() {
+  const { t } = useTranslate();
   const [activeRegistration, setActiveRegistration] = useState(getDefaultPublishingPlatformRegistration);
   const [authState, setAuthState] = useState<PublishingAuthState | null>(() => (
     readInitialAuthState(getDefaultPublishingPlatformRegistration())
@@ -115,7 +117,7 @@ export function PublishingRouteShell() {
       />
       {authState === null ? (
         <section className="panel-card skillhub-publish-card" aria-busy="true">
-          <h2>正在检查 {adapter.platform.label} 授权状态…</h2>
+          <h2>{t("publishing.auth.checking", { platform: adapter.platform.label })}</h2>
         </section>
       ) : authState.connected ? null : authentication}
     </div>

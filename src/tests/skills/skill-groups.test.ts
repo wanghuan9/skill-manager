@@ -38,6 +38,19 @@ describe("groupSkillsBySource", () => {
     expect(groups[0]?.label).toBe("superpowers");
   });
 
+  it("keeps source grouping unchanged for marketplace-installed Git skills", () => {
+    const groups = groupSkillsBySource([
+      createSkill({
+        name: "tdd",
+        sourceUrl: "https://github.com/mattpocock/skills/tree/HEAD/tdd",
+        marketplaceSource: "skills.sh",
+      }),
+    ]);
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0]?.label).toBe("mattpocock");
+  });
+
   it("falls back to owner when repo name is generic", () => {
     const groups = groupSkillsBySource([
       createSkill({
@@ -95,6 +108,35 @@ describe("groupSkillsBySource", () => {
 
     expect(groups).toHaveLength(1);
     expect(groups[0]?.label).toBe("本地");
+  });
+
+  it("merges legacy local labels into the localized local group", () => {
+    const groups = groupSkillsBySource([
+      createSkill({
+        name: "localized-local-skill",
+        sourceType: "local",
+        sourceUrl: "",
+        sourceLabel: "本地",
+      }),
+      createSkill({
+        name: "legacy-local-skill",
+        sourceUrl: "",
+        sourceLabel: "local",
+      }),
+      createSkill({
+        name: "imported-local-skill",
+        sourceUrl: "",
+        sourceLabel: "Local Import",
+      }),
+    ]);
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0]?.label).toBe("本地");
+    expect(groups[0]?.skills.map((skill) => skill.name)).toEqual([
+      "localized-local-skill",
+      "legacy-local-skill",
+      "imported-local-skill",
+    ]);
   });
 
   it("groups well-known Agent CLI sources by host", () => {

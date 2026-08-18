@@ -838,6 +838,7 @@ fn build_installed_skill(
             path_error: String::new(),
             content_hash: String::new(),
             tag: String::new(),
+            marketplace_source: SOURCE_SITE.to_string(),
             marketplace_owner: skill.owner.clone(),
             marketplace_slug: skill.slug.clone(),
             marketplace_version: skill.version.clone(),

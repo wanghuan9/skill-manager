@@ -1,4 +1,5 @@
 import { useState, type FormEvent } from "react";
+import { useTranslate } from "@/app/i18n";
 import { openExternalLink } from "@/features/skills/api/skill-client";
 import { saveSkillHubAuthToken } from "@/features/skillhub-publishing/publishing-client";
 import { skillHubPublishingAdapter } from "../adapters/skillhub";
@@ -14,6 +15,7 @@ function formatError(error: unknown) {
 }
 
 function SkillHubAuthentication({ refreshAuth }: PublishingAuthenticationProps) {
+  const { t } = useTranslate();
   const [token, setToken] = useState("");
   const [error, setError] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -35,15 +37,15 @@ function SkillHubAuthentication({ refreshAuth }: PublishingAuthenticationProps) 
 
   return (
     <section className="panel-card skillhub-publish-card">
-      <h2>连接 SkillHub</h2>
-      <p>生成一次 Token 并粘贴到这里；验证成功后会保存到 `~/.skilldock/skillhub-auth.json`，下次启动自动复用。</p>
-      <div className="skillhub-auth-flow" aria-label="连接步骤">
+      <h2>{t("publishing.auth.connect", { platform: "SkillHub" })}</h2>
+      <p>{t("publishing.auth.tokenDescription")}</p>
+      <div className="skillhub-auth-flow" aria-label={t("publishing.auth.stepsAria")}>
         <section className="skillhub-auth-step skillhub-auth-step--generate">
           <div className="skillhub-auth-step__copy">
             <span className="skillhub-auth-step__number">1</span>
             <div>
-              <h3>先生成 Token</h3>
-              <p>将在浏览器打开 SkillHub 的密钥管理页。</p>
+              <h3>{t("publishing.auth.generateTitle")}</h3>
+              <p>{t("publishing.auth.generateDescription")}</p>
             </div>
           </div>
           <button
@@ -51,15 +53,15 @@ function SkillHubAuthentication({ refreshAuth }: PublishingAuthenticationProps) 
             type="button"
             onClick={() => void openExternalLink(SKILLHUB_TOKEN_URL)}
           >
-            去 SkillHub 生成 Token ↗
+            {t("publishing.auth.generateAction")}
           </button>
         </section>
         <form className="skillhub-publish-form skillhub-auth-step" onSubmit={(event) => void handleSubmit(event)}>
           <div className="skillhub-auth-step__copy">
             <span className="skillhub-auth-step__number">2</span>
             <div>
-              <h3>粘贴并验证</h3>
-              <p>粘贴以 <code>skh_</code> 开头的 Token。</p>
+              <h3>{t("publishing.auth.pasteTitle")}</h3>
+              <p>{t("publishing.auth.pasteDescription")}</p>
             </div>
           </div>
           <label>
@@ -78,7 +80,7 @@ function SkillHubAuthentication({ refreshAuth }: PublishingAuthenticationProps) 
               type="submit"
               disabled={isSubmitting || !token.trim()}
             >
-              {isSubmitting ? "验证中…" : "验证并登录"}
+              {isSubmitting ? t("publishing.auth.verifying") : t("publishing.auth.verify")}
             </button>
           </div>
         </form>
@@ -91,8 +93,8 @@ function SkillHubAuthentication({ refreshAuth }: PublishingAuthenticationProps) 
 const skillHubPublishingRegistration: PublishingPlatformRegistration = {
   adapter: skillHubPublishingAdapter,
   order: 100,
-  badgeLabel: "公开",
-  authorizationActionLabel: "更换 Token",
+  badgeLabelKey: "publishing.platform.public",
+  authorizationActionLabelKey: "publishing.platform.changeToken",
   renderAuthentication: (props) => <SkillHubAuthentication {...props} />,
   manageAuthorization: () => openExternalLink(SKILLHUB_TOKEN_URL),
 };

@@ -27,6 +27,6 @@ describe("formatSkillSourceLabel", () => {
     expect(formatSkillSourceLabel("Agent Skills CLI", {
       sourceType: "well-known",
       sourceUrl: "https://open.feishu.cn/.well-known/skills/lark-okr/SKILL.md",
-    })).toBe("远程");
+    })).toBe("在线");
   });
 });

@@ -1429,8 +1429,8 @@ code {
 }
 
 .nav-icon svg {
-  width: 15px;
-  height: 15px;
+  width: 16px;
+  height: 16px;
   display: block;
 }
 
@@ -2227,16 +2227,16 @@ code {
   left: 7px;
   top: 50%;
   display: inline-flex;
-  width: 14px;
-  height: 14px;
+  width: 16px;
+  height: 16px;
   color: inherit;
   pointer-events: none;
   transform: translateY(-50%);
 }
 
 .skill-status-filter__icon svg {
-  width: 14px;
-  height: 14px;
+  width: 16px;
+  height: 16px;
 }
 
 .skill-status-filter .app-select {
@@ -2294,6 +2294,192 @@ code {
 .skill-status-filter:hover {
   border-color: #c6d6f5;
   background: #f8fafe;
+}
+
+.skill-tag-filter-control {
+  --skill-tag-color: var(--accent);
+  position: relative;
+  display: inline-flex;
+  align-items: stretch;
+  flex: 0 1 auto;
+  min-width: 70px;
+  max-width: 150px;
+  height: 33px;
+  min-height: 33px;
+  overflow: visible;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-strong);
+  color: #4b5563;
+}
+
+.skill-tag-filter-toggle,
+.skill-tag-filter-clear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.skill-tag-filter-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 80;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  width: 248px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--heading);
+  box-shadow: 0 12px 28px rgba(23, 35, 63, 0.16);
+}
+
+.skill-tag-filter-menu__section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.skill-tag-filter-menu__section + .skill-tag-filter-menu__section {
+  padding-top: 8px;
+  border-top: 1px solid color-mix(in srgb, var(--line) 72%, transparent);
+}
+
+.skill-tag-filter-menu__heading {
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.skill-tag-filter-menu__options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.skill-tag-filter-menu__option {
+  --skill-tag-color: var(--accent);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 25px;
+  max-width: 100%;
+  padding: 0 8px;
+  overflow: hidden;
+  border: 0;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--skill-tag-color) 11%, var(--surface) 89%);
+  color: color-mix(in srgb, var(--skill-tag-color) 76%, var(--heading) 24%);
+  font-size: 0.71rem;
+  font-weight: 400;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.skill-tag-filter-menu__option > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.skill-tag-filter-menu__option:hover,
+.skill-tag-filter-menu__option:focus-visible,
+.skill-tag-filter-menu__option.is-active {
+  background: color-mix(in srgb, var(--skill-tag-color) 21%, var(--surface) 79%);
+  color: color-mix(in srgb, var(--skill-tag-color) 92%, var(--heading) 8%);
+  outline: 0;
+}
+
+.skill-tag-filter-menu__option.is-active {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--skill-tag-color) 34%, transparent);
+}
+
+.skill-tag-filter-menu__count {
+  flex: 0 0 auto;
+  color: currentColor;
+  font-size: 0.64rem;
+  opacity: 0.72;
+}
+
+.skill-tag-filter-toggle {
+  min-width: 0;
+  gap: 4px;
+  padding: 0 6px;
+  font-size: 0.76rem;
+}
+
+.skill-tag-filter-toggle__icon,
+.skill-tag-filter-toggle__chevron {
+  display: inline-flex;
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+}
+
+.skill-tag-filter-toggle__chevron {
+  width: 12px;
+  height: 12px;
+  color: color-mix(in srgb, currentColor 70%, transparent);
+}
+
+.skill-tag-filter-toggle__icon svg,
+.skill-tag-filter-toggle__chevron svg,
+.skill-tag-filter-clear svg {
+  width: 100%;
+  height: 100%;
+}
+
+.skill-tag-filter-toggle__icon svg {
+  transform: scaleX(1) scaleY(0.9);
+  transform-origin: center;
+}
+
+.skill-tag-filter-toggle__label {
+  min-width: 0;
+  max-width: 76px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.skill-tag-filter-clear {
+  flex: 0 0 25px;
+  width: 25px;
+  padding: 0 6px;
+  border-left: 1px solid color-mix(in srgb, currentColor 14%, transparent);
+}
+
+.skill-tag-filter-control:hover,
+.skill-tag-filter-control:focus-within {
+  border-color: #c6d6f5;
+  background: #f8fafe;
+}
+
+.skill-tag-filter-control.has-filter {
+  border-color: color-mix(in srgb, var(--skill-tag-color) 28%, var(--line) 72%);
+  background: color-mix(in srgb, var(--skill-tag-color) 8%, var(--surface) 92%);
+  color: color-mix(in srgb, var(--skill-tag-color) 76%, var(--heading) 24%);
+}
+
+.skill-tag-filter-toggle.is-expanded {
+  background: color-mix(in srgb, var(--skill-tag-color) 8%, transparent);
+}
+
+.skill-tag-filter-toggle:hover,
+.skill-tag-filter-toggle:focus-visible,
+.skill-tag-filter-clear:hover,
+.skill-tag-filter-clear:focus-visible {
+  background: color-mix(in srgb, var(--skill-tag-color) 13%, transparent);
+  outline: 0;
 }
 
 .skill-status-filter__popover--grouped .app-select__option:disabled {
@@ -3013,6 +3199,78 @@ code {
   min-height: 20px;
 }
 
+.skill-tag-filter-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-height: 26px;
+  margin: 0 0 -6px;
+  padding: 2px 4px 0;
+}
+
+.skill-tag-filter-bar__section {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.skill-tag-filter-bar__section + .skill-tag-filter-bar__section {
+  margin-left: 2px;
+  padding-left: 8px;
+  border-left: 1px solid color-mix(in srgb, var(--line) 78%, transparent);
+}
+
+.skill-tag-filter-bar__item {
+  --skill-tag-color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 1 auto;
+  min-height: 24px;
+  max-width: 160px;
+  padding: 0 10px;
+  overflow: hidden;
+  border: 0;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--muted) 8%, transparent);
+  color: color-mix(in srgb, var(--muted) 88%, var(--heading) 12%);
+  font-size: 0.72rem;
+  font-weight: 400;
+  line-height: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background-color var(--motion-fast) var(--ease-standard),
+    color var(--motion-fast) var(--ease-standard);
+}
+
+.skill-tag-filter-bar__item.has-tag {
+  background: color-mix(in srgb, var(--skill-tag-color) 13%, var(--surface) 87%);
+  color: color-mix(in srgb, var(--skill-tag-color) 78%, var(--heading) 22%);
+}
+
+.skill-tag-filter-bar__item:hover,
+.skill-tag-filter-bar__item:focus-visible {
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface) 88%);
+  color: var(--accent);
+}
+
+.skill-tag-filter-bar__item.has-tag:hover,
+.skill-tag-filter-bar__item.has-tag:focus-visible,
+.skill-tag-filter-bar__item.has-tag.is-active {
+  background: color-mix(in srgb, var(--skill-tag-color) 22%, var(--surface) 78%);
+  color: color-mix(in srgb, var(--skill-tag-color) 92%, var(--heading) 8%);
+}
+
+.skill-tag-filter-bar__item.is-active {
+  background: color-mix(in srgb, var(--accent) 18%, var(--surface) 82%);
+  color: var(--accent);
+  font-weight: 500;
+}
+
 .skill-card__tag {
   display: inline-flex;
   align-items: center;
@@ -3040,43 +3298,91 @@ code {
   font-weight: 400;
 }
 
+.skill-tag-filter-control.tag-tone-neutral,
+.skill-tag-filter-menu__option.tag-tone-neutral,
+.skill-tag-filter-bar__item.tag-tone-neutral {
+  --skill-tag-color: var(--muted);
+}
+
+.skill-tag-filter-control.tag-tone-source-git,
+.skill-tag-filter-menu__option.tag-tone-source-git,
+.skill-tag-filter-bar__item.tag-tone-source-git {
+  --skill-tag-color: #3b82f6;
+}
+
+.skill-tag-filter-control.tag-tone-source-marketplace,
+.skill-tag-filter-menu__option.tag-tone-source-marketplace,
+.skill-tag-filter-bar__item.tag-tone-source-marketplace {
+  --skill-tag-color: #d97706;
+}
+
+.skill-tag-filter-control.tag-tone-source-online,
+.skill-tag-filter-menu__option.tag-tone-source-online,
+.skill-tag-filter-bar__item.tag-tone-source-online {
+  --skill-tag-color: #0d9488;
+}
+
 .skill-card__tag.tag-tone-0,
-.skill-tag-editor__options button.tag-tone-0 {
+.skill-tag-editor__options button.tag-tone-0,
+.skill-tag-filter-control.tag-tone-0,
+.skill-tag-filter-menu__option.tag-tone-0,
+.skill-tag-filter-bar__item.tag-tone-0 {
   --skill-tag-color: #3b82f6;
 }
 
 .skill-card__tag.tag-tone-1,
-.skill-tag-editor__options button.tag-tone-1 {
+.skill-tag-editor__options button.tag-tone-1,
+.skill-tag-filter-control.tag-tone-1,
+.skill-tag-filter-menu__option.tag-tone-1,
+.skill-tag-filter-bar__item.tag-tone-1 {
   --skill-tag-color: #10b981;
 }
 
 .skill-card__tag.tag-tone-2,
-.skill-tag-editor__options button.tag-tone-2 {
+.skill-tag-editor__options button.tag-tone-2,
+.skill-tag-filter-control.tag-tone-2,
+.skill-tag-filter-menu__option.tag-tone-2,
+.skill-tag-filter-bar__item.tag-tone-2 {
   --skill-tag-color: #8b5cf6;
 }
 
 .skill-card__tag.tag-tone-3,
-.skill-tag-editor__options button.tag-tone-3 {
+.skill-tag-editor__options button.tag-tone-3,
+.skill-tag-filter-control.tag-tone-3,
+.skill-tag-filter-menu__option.tag-tone-3,
+.skill-tag-filter-bar__item.tag-tone-3 {
   --skill-tag-color: #f59e0b;
 }
 
 .skill-card__tag.tag-tone-4,
-.skill-tag-editor__options button.tag-tone-4 {
+.skill-tag-editor__options button.tag-tone-4,
+.skill-tag-filter-control.tag-tone-4,
+.skill-tag-filter-menu__option.tag-tone-4,
+.skill-tag-filter-bar__item.tag-tone-4 {
   --skill-tag-color: #e85d75;
 }
 
 .skill-card__tag.tag-tone-5,
-.skill-tag-editor__options button.tag-tone-5 {
+.skill-tag-editor__options button.tag-tone-5,
+.skill-tag-filter-control.tag-tone-5,
+.skill-tag-filter-menu__option.tag-tone-5,
+.skill-tag-filter-bar__item.tag-tone-5 {
   --skill-tag-color: #06b6d4;
 }
 
 .skill-card__tag.tag-tone-6,
-.skill-tag-editor__options button.tag-tone-6 {
+.skill-tag-editor__options button.tag-tone-6,
+.skill-tag-filter-control.tag-tone-6,
+.skill-tag-filter-menu__option.tag-tone-6,
+.skill-tag-filter-bar__item.tag-tone-6 {
   --skill-tag-color: #f97316;
 }
 
 .skill-card__tag.tag-tone-7,
-.skill-tag-editor__options button.tag-tone-7 {
+.skill-tag-editor__options button.tag-tone-7,
+.skill-tag-filter-control.tag-tone-7,
+.skill-tag-filter-menu__option.tag-tone-7,
+.skill-tag-filter-bar__item.tag-tone-7 {
   --skill-tag-color: #ec4899;
 }
 
@@ -10442,11 +10748,13 @@ button.settings-form-item:disabled {
 }
 
 .settings-form-item__control--theme {
-  width: 320px;
+  width: max-content;
+  min-width: 320px;
 }
 
 .settings-form-item__control--layout {
-  width: 280px;
+  width: max-content;
+  min-width: 280px;
 }
 
 .settings-form-item__control--view {
@@ -10456,7 +10764,8 @@ button.settings-form-item:disabled {
 
 .settings-theme-picker {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(3, max-content);
+  justify-content: space-between;
   gap: 4px;
   padding: 4px;
   border: 1px solid var(--line);
@@ -10515,7 +10824,8 @@ button.settings-form-item:disabled {
 
 .settings-layout-picker {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(2, max-content);
+  justify-content: space-between;
   gap: 3px;
   padding: 3px;
   border: 1px solid var(--line);
@@ -13593,6 +13903,26 @@ button.settings-form-item:disabled {
     width: 100%;
   }
 
+  .settings-form-item__control--theme,
+  .settings-form-item__control--layout {
+    min-width: 0;
+  }
+
+  .settings-theme-picker {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .settings-layout-picker {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .settings-theme-option,
+  .settings-layout-option {
+    min-width: 0;
+    line-height: 1.15;
+    white-space: normal;
+  }
+
   .settings-github-token-control {
     width: 100%;
   }
@@ -15760,6 +16090,7 @@ button.settings-form-item:disabled {
 
 :root[data-theme="dark"] .search-field--header,
 :root[data-theme="dark"] .skill-status-filter,
+:root[data-theme="dark"] .skill-tag-filter-control,
 :root[data-theme="dark"] .market-search-input,
 :root[data-theme="dark"] .skills-source-select-trigger,
 :root[data-theme="dark"] .plugins-page__status-filter {
@@ -15771,6 +16102,7 @@ button.settings-form-item:disabled {
 
 :root[data-theme="dark"] .search-field--header:hover,
 :root[data-theme="dark"] .skill-status-filter:hover,
+:root[data-theme="dark"] .skill-tag-filter-control:hover,
 :root[data-theme="dark"] .skills-source-select-trigger:hover,
 :root[data-theme="dark"] .plugins-page__status-filter:hover {
   border-color: #515151;
@@ -15779,6 +16111,7 @@ button.settings-form-item:disabled {
 
 :root[data-theme="dark"] .search-field--header:focus-within,
 :root[data-theme="dark"] .skill-status-filter:focus-within,
+:root[data-theme="dark"] .skill-tag-filter-control:focus-within,
 :root[data-theme="dark"] .skills-source-select-trigger:focus-visible,
 :root[data-theme="dark"] .plugins-page__status-filter:focus-within {
   border-color: rgba(255, 194, 26, 0.48);

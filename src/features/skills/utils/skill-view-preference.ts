@@ -7,6 +7,7 @@ export const SKILL_GROUPED_DEFAULT_THRESHOLD = 12;
 const SKILL_VIEW_MODE_STORAGE_KEY = "skills:view-mode";
 const SKILL_GROUP_MODE_STORAGE_KEY = "skills:group-mode";
 const SKILL_GROUP_COLLAPSED_STATE_STORAGE_KEY = "skills:group-collapsed-state";
+const SKILL_TAG_FILTER_VISIBLE_STORAGE_KEY = "skills:tag-filter-visible";
 
 function normalizeSkillViewMode(value: string | null): SkillViewMode | null {
   if (value === "flat") {
@@ -79,6 +80,28 @@ export function writeSkillGroupModePreference(mode: SkillGroupMode) {
   }
 
   window.localStorage.setItem(SKILL_GROUP_MODE_STORAGE_KEY, mode);
+}
+
+export function readSkillTagFilterVisiblePreference() {
+  if (
+    typeof window === "undefined" ||
+    typeof window.localStorage?.getItem !== "function"
+  ) {
+    return true;
+  }
+
+  return window.localStorage.getItem(SKILL_TAG_FILTER_VISIBLE_STORAGE_KEY) !== "false";
+}
+
+export function writeSkillTagFilterVisiblePreference(isVisible: boolean) {
+  if (
+    typeof window === "undefined" ||
+    typeof window.localStorage?.setItem !== "function"
+  ) {
+    return;
+  }
+
+  window.localStorage.setItem(SKILL_TAG_FILTER_VISIBLE_STORAGE_KEY, String(isVisible));
 }
 
 export function readSkillGroupCollapsedState(): SkillGroupCollapsedState {
