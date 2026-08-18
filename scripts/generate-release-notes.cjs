@@ -104,6 +104,7 @@ const RELEASE_NOTE_COVERAGE_RULES = [
     ],
     addedPathPatterns: [
       /^src\/features\/skills\/utils\/skill-tag-color\.ts$/,
+      /^src\/features\/skills\/utils\/skill-tag-filter\.ts$/,
     ],
     notePattern: /\bSkill\b|技能/i,
   },
