@@ -144,8 +144,13 @@ export function ToolSyncPanel({
     try {
       await waitForNextPaint();
       await syncAllToolsInBackground(enabled);
-    } catch {
+    } catch (error) {
       setDisplayTools(previousTools);
+      reportFailure(error, {
+        operation: "sync_all_skill_tools",
+        fallbackMessage: t("skill.tools.error.toggle"),
+        context: { skillName, enabled },
+      });
     } finally {
       setIsBulkUpdating(false);
       onBulkUpdatingChange?.(false);
