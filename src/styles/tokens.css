@@ -1731,7 +1731,7 @@ code {
 }
 
 .main-panel[data-active-route="install"] .page-content {
-  overflow: hidden;
+  overflow: auto;
 }
 
 .page-content {
@@ -5214,7 +5214,7 @@ code {
 }
 
 .market-shell:has(.market-panel) {
-  overflow: hidden;
+  overflow: visible;
 }
 
 .market-topbar {
@@ -5468,18 +5468,18 @@ code {
 }
 
 .market-route {
-  flex: 1;
+  flex: 0 0 auto;
   min-height: 0;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .market-panel {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  flex: 1;
+  flex: 0 0 auto;
   min-height: 0;
-  overflow: hidden;
+  overflow: visible;
   padding-top: 10px;
 }
 
@@ -5596,12 +5596,10 @@ code {
 }
 
 .market-install-scroll {
-  flex: 1;
+  flex: 0 0 auto;
   min-height: 0;
   padding-top: 2px;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  scrollbar-gutter: stable;
+  overflow: visible;
 }
 
 .mcp-market-config-preview {

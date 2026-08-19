@@ -30,6 +30,7 @@ const MCP_SOURCE_URL_PREFETCH_COUNT = 8;
 const MCP_MARKETPLACE_RUNTIME_CACHE_KEY = "__SKILLM_MCP_MARKETPLACE_CACHE__";
 const MCP_MARKETPLACE_PERSISTED_CACHE_KEY = "skilldock.mcpMarketplaceCache";
 const MCP_MARKETPLACE_PERSISTED_CACHE_VERSION = 2;
+const INSTALL_PAGE_SCROLL_SELECTOR = ".main-panel[data-active-route=\"install\"] .page-content";
 
 type McpMarketplacePanelProps = {
   searchQuery: string;
@@ -578,7 +579,7 @@ export function McpMarketplacePanel(props: McpMarketplacePanelProps) {
       return;
     }
 
-    const scrollContainer = document.querySelector(".market-install-scroll");
+    const scrollContainer = document.querySelector(INSTALL_PAGE_SCROLL_SELECTOR);
     if (!(scrollContainer instanceof HTMLElement)) {
       return;
     }
@@ -595,7 +596,7 @@ export function McpMarketplacePanel(props: McpMarketplacePanelProps) {
   }, []);
 
   useEffect(() => {
-    const scrollContainer = document.querySelector(".market-install-scroll");
+    const scrollContainer = document.querySelector(INSTALL_PAGE_SCROLL_SELECTOR);
     if (!(scrollContainer instanceof HTMLElement)) {
       return;
     }

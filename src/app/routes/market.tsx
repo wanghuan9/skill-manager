@@ -34,7 +34,7 @@ const installCategories: { key: InstallCategory; labelKey: "install.category.ski
   { key: "plugin", labelKey: "install.category.plugin" },
 ];
 
-const MARKET_INSTALL_SCROLL_SELECTOR = ".market-install-scroll";
+const MARKET_INSTALL_SCROLL_SELECTOR = ".main-panel[data-active-route=\"install\"] .page-content";
 
 function getMarketInstallScrollContainer() {
   const scrollContainer = document.querySelector(MARKET_INSTALL_SCROLL_SELECTOR);

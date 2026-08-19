@@ -37,9 +37,9 @@ function resetMcpMarketplaceRuntimeCache() {
 }
 
 function scrollMarketInstallToBottom() {
-  const scrollContainer = document.querySelector(".market-install-scroll");
+  const scrollContainer = document.querySelector('.main-panel[data-active-route="install"] .page-content');
   if (!(scrollContainer instanceof HTMLElement)) {
-    throw new Error("missing market install scroll container");
+    throw new Error("missing install page scroll container");
   }
 
   Object.defineProperty(scrollContainer, "scrollHeight", { configurable: true, value: 1000 });
