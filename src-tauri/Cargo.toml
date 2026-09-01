@@ -1,6 +1,6 @@
 [package]
 name = "skilldock"
-version = "1.0.15"
+version = "1.0.16"
 description = "SkillDock desktop app"
 authors = ["SkillDock"]
 license = "MIT"
