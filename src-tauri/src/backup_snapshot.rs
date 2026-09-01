@@ -274,7 +274,9 @@ struct GitSnapshotMetadata {
 }
 
 fn run_git(path: &Path, args: &[&str]) -> Result<String, String> {
-    let output = Command::new("git")
+    let mut command = Command::new("git");
+    crate::library::configure_hidden_subprocess(&mut command);
+    let output = command
         .current_dir(path)
         .args(args)
         .env("GIT_TERMINAL_PROMPT", "0")
