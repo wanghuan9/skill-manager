@@ -439,6 +439,7 @@ export type CloudBackupNode = {
   skillCount: number;
   mcpCount: number;
   pluginCount: number;
+  note?: string;
 };
 
 export type WorkspaceRestorePreview = {

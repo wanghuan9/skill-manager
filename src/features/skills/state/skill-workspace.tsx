@@ -370,7 +370,7 @@ function mergeUpdatedSkillsPreservingOrder(
   const currentSkillIdentities = new Set(currentSkills.map(getSkillIdentity));
   const newSkills = updatedSkills.filter((skill) => !currentSkillIdentities.has(getSkillIdentity(skill)));
 
-  return [...newSkills, ...mergedSkills];
+  return [...mergedSkills, ...newSkills];
 }
 
 function mergeRefreshedSkillsPreservingTags(

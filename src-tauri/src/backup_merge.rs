@@ -6,7 +6,7 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::backup_repository::{git, git_success};
+use crate::backup_repository::{git, git_success, NODE_NOTES_PATH};
 use crate::backup_snapshot::{read_library_snapshot, BackupLibrary, BackupSkillMetadata};
 
 const PORTABLE_MERGE_PATHS: [&str; 6] = [
@@ -414,6 +414,13 @@ fn apply_merge_plan(
                 repository_skill_filesystem.display()
             )
         })?;
+    }
+    // Notes are edited directly in the cloud; a stale local snapshot must not overwrite them.
+    let remote_notes = remote_path.join(NODE_NOTES_PATH);
+    if remote_notes.is_file() {
+        fs::create_dir_all(repository.join(".skilldock-control"))
+            .map_err(|error| format!("创建备份备注目录失败: {error}"))?;
+        copy_tree(&remote_notes, &repository.join(NODE_NOTES_PATH))?;
     }
     let _ = fs::remove_dir_all(staging);
     Ok(())

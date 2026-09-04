@@ -4,11 +4,15 @@ export function useStableListOrder<T>(
   items: T[],
   getItemKey: (item: T) => string,
   resetKey: string | number,
+  resetWhenItemsAreAdded = false,
 ) {
   const orderRef = useRef<string[]>([]);
   const resetKeyRef = useRef(resetKey);
   const itemByKey = new Map(items.map((item) => [getItemKey(item), item]));
-  const shouldResetOrder = resetKeyRef.current !== resetKey;
+  const previousItemKeys = new Set(orderRef.current);
+  const hasNewItems = items.some((item) => !previousItemKeys.has(getItemKey(item)));
+  const shouldResetOrder = resetKeyRef.current !== resetKey
+    || (resetWhenItemsAreAdded && hasNewItems);
   const previousOrder = shouldResetOrder ? [] : orderRef.current;
   const nextOrder = previousOrder.filter((itemKey) => itemByKey.has(itemKey));
   const orderedItemKeys = new Set(nextOrder);

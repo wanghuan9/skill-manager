@@ -10491,6 +10491,7 @@ button.settings-form-item:disabled {
 
 .settings-backup-node-dialog {
   width: min(680px, calc(100vw - 40px));
+  grid-template-rows: auto minmax(0, 1fr) auto;
 }
 
 .settings-backup-node-dialog .skill-card-detail-modal__title h3 {
@@ -10504,8 +10505,20 @@ button.settings-form-item:disabled {
 }
 
 .settings-backup-node-dialog__body {
-  min-height: 180px;
+  min-height: 0;
   max-height: min(520px, 64vh);
+}
+
+.settings-backup-node-dialog__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 54px;
+  padding: 10px 18px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 0.78rem;
 }
 
 .settings-backup-node-dialog__empty {
@@ -10540,6 +10553,127 @@ button.settings-form-item:disabled {
   color: var(--heading);
   font-size: 0.9rem;
   font-weight: 500;
+}
+
+.settings-backup-node-dialog__node-copy {
+  flex: 1;
+  min-width: 0;
+}
+
+.settings-backup-node-dialog__node-heading {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+
+.settings-backup-node-dialog__note {
+  --backup-note-color: #b86513;
+  border: 0;
+  background: transparent;
+  color: var(--backup-note-color);
+  cursor: pointer;
+  padding: 2px 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.78rem;
+}
+
+.settings-backup-node-dialog__note:hover {
+  color: color-mix(in srgb, var(--backup-note-color) 85%, var(--heading));
+}
+
+:root[data-theme="dark"] .settings-backup-node-dialog__note {
+  --backup-note-color: #fb923c;
+}
+
+.settings-backup-node-dialog__note.is-empty {
+  color: var(--muted);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+
+.settings-backup-node-dialog__item:hover .settings-backup-node-dialog__note.is-empty,
+.settings-backup-node-dialog__item:focus-within .settings-backup-node-dialog__note.is-empty {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+@media (hover: none) {
+  .settings-backup-node-dialog__note.is-empty {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
+.settings-backup-node-dialog__note-editor {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  width: 194px;
+  max-width: 100%;
+  height: 28px;
+  padding: 2px 3px 2px 8px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface-strong);
+}
+
+.settings-backup-node-dialog__note-editor:focus-within {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.settings-backup-node-dialog__note-editor input {
+  flex: 1;
+  min-width: 0;
+  width: 0;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  outline: none;
+  box-shadow: none;
+  background: transparent;
+  color: var(--heading);
+  font: inherit;
+  font-size: 0.78rem;
+  line-height: 22px;
+}
+
+.settings-backup-node-dialog__note-action {
+  display: grid;
+  place-items: center;
+  flex: 0 0 22px;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.settings-backup-node-dialog__note-action.is-save {
+  color: var(--accent);
+}
+
+.settings-backup-node-dialog__note-action:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
+}
+
+.settings-backup-node-dialog__note-action:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.settings-backup-node-dialog__note-action svg {
+  width: 14px;
+  height: 14px;
 }
 
 .settings-backup-node-dialog__node-copy span,

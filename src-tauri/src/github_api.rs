@@ -230,6 +230,7 @@ pub async fn list_repository_commits(
     owner: &str,
     repository: &str,
     limit: usize,
+    page: usize,
 ) -> Result<Vec<GithubRepositoryCommit>, String> {
     if limit == 0 {
         return Ok(Vec::new());
@@ -238,7 +239,8 @@ pub async fn list_repository_commits(
     let per_page = limit.min(100).to_string();
     url.query_pairs_mut()
         .append_pair("sha", "main")
-        .append_pair("per_page", &per_page);
+        .append_pair("per_page", &per_page)
+        .append_pair("page", &page.to_string());
     let response = send_read_request(
         request(client, Method::GET, url.as_str(), token).timeout(GITHUB_READ_TIMEOUT),
         "读取云端备份历史",

@@ -2,9 +2,11 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { save } from "@tauri-apps/plugin-dialog";
 import { getWorkspaceDirectoryPath } from "@/app/path-utils";
 import { useTranslate } from "@/app/i18n";
 import { useFailureReporter } from "@/app/failure-feedback";
+import { useNotifications } from "@/app/notifications";
 import { AppSelect } from "@/app/components/AppSelect";
 import { alignExpandedRowIntoView } from "@/app/utils/align-expanded-row";
 import {
@@ -29,12 +31,14 @@ import { getToolLogoUrl } from "@/features/skills/utils/tool-logo";
 import {
   clearRepoCache,
   deleteCloudBackupNode,
+  downloadCloudBackupNode,
   disconnectGithubBackup,
   enableGithubBackup,
   fetchBackupConflicts,
   fetchBackupStatus,
   getRepoCacheSize,
   listCloudBackupNodes,
+  saveCloudBackupNodeNote,
   openExternalLink,
   previewCloudBackupNode,
   resolveBackupConflict,
@@ -223,6 +227,7 @@ type SettingsFormItem = {
 
 export function SettingsRoute() {
   const { language, t } = useTranslate();
+  const { notify } = useNotifications();
   const {
     appSettings,
     connectGithubToken,
@@ -275,6 +280,9 @@ export function SettingsRoute() {
   const [backupStatus, setBackupStatus] = useState<BackupStatus | null>(null);
   const [backupConflicts, setBackupConflicts] = useState<BackupConflict[]>([]);
   const [cloudBackupNodes, setCloudBackupNodes] = useState<CloudBackupNode[]>([]);
+  const [visibleBackupNodeCount, setVisibleBackupNodeCount] = useState(5);
+  const [editingBackupNodeId, setEditingBackupNodeId] = useState("");
+  const [backupNodeNoteDraft, setBackupNodeNoteDraft] = useState("");
   const [isBackupNodeDialogOpen, setIsBackupNodeDialogOpen] = useState(false);
   const [isLoadingBackupNodes, setIsLoadingBackupNodes] = useState(false);
   const [pendingRestoreBackupNode, setPendingRestoreBackupNode] = useState<{
@@ -473,10 +481,12 @@ export function SettingsRoute() {
     }
   }
 
-  async function refreshCloudBackupNodes() {
+  async function refreshCloudBackupNodes(limit = visibleBackupNodeCount) {
     setIsLoadingBackupNodes(true);
     try {
-      setCloudBackupNodes(await listCloudBackupNodes());
+      const nodes = await listCloudBackupNodes(limit + 1);
+      setCloudBackupNodes(nodes);
+      setVisibleBackupNodeCount(limit);
     } catch (error) {
       reportFailure(error, {
         operation: "list_cloud_backup_nodes",
@@ -488,8 +498,59 @@ export function SettingsRoute() {
   }
 
   async function handleOpenBackupNodes() {
+    setCloudBackupNodes([]);
+    setEditingBackupNodeId("");
     setIsBackupNodeDialogOpen(true);
-    await refreshCloudBackupNodes();
+    await refreshCloudBackupNodes(5);
+  }
+
+  async function handleSaveBackupNodeNote() {
+    if (!editingBackupNodeId || activeBackupAction) {
+      return;
+    }
+    const commitId = editingBackupNodeId;
+    const note = backupNodeNoteDraft.trim();
+    setActiveBackupAction(`note:${commitId}`);
+    try {
+      await saveCloudBackupNodeNote(commitId, note);
+      setCloudBackupNodes((nodes) => nodes.map((node) => (
+        node.commitId === commitId ? { ...node, note } : node
+      )));
+      setEditingBackupNodeId("");
+    } catch (error) {
+      reportFailure(error, {
+        operation: "save_cloud_backup_node_note",
+        fallbackMessage: t("settings.backup.noteSaveFailed"),
+      });
+    } finally {
+      setActiveBackupAction("");
+    }
+  }
+
+  async function handleDownloadBackupNode(node: CloudBackupNode) {
+    if (activeBackupAction) {
+      return;
+    }
+    setActiveBackupAction(`download:${node.commitId}`);
+    try {
+      const outputPath = await save({
+        title: t("settings.backup.downloadNode"),
+        defaultPath: `skilldock-backup-${node.commitId.slice(0, 8)}.zip`,
+        filters: [{ name: "ZIP", extensions: ["zip"] }],
+      });
+      if (!outputPath) {
+        return;
+      }
+      await downloadCloudBackupNode(node.commitId, outputPath);
+      notify({ message: t("settings.backup.downloadedNode"), tone: "success" });
+    } catch (error) {
+      reportFailure(error, {
+        operation: "download_cloud_backup_node",
+        fallbackMessage: t("settings.backup.downloadFailed"),
+      });
+    } finally {
+      setActiveBackupAction("");
+    }
   }
 
   async function handleRestoreBackupNode(node: CloudBackupNode) {
@@ -1695,7 +1756,7 @@ export function SettingsRoute() {
               </button>
             </header>
             <div className="skill-card-detail-modal__body settings-backup-node-dialog__body">
-              {isLoadingBackupNodes ? (
+              {isLoadingBackupNodes && cloudBackupNodes.length === 0 ? (
                 <p className="settings-backup-node-dialog__empty">
                   {t("settings.backup.nodesLoading")}
                 </p>
@@ -1705,10 +1766,67 @@ export function SettingsRoute() {
                 </p>
               ) : (
                 <div className="settings-backup-node-dialog__list">
-                  {cloudBackupNodes.map((node) => (
+                  {cloudBackupNodes.slice(0, visibleBackupNodeCount).map((node) => (
                     <article className="settings-backup-node-dialog__item" key={node.commitId}>
                       <div className="settings-backup-node-dialog__node-copy">
-                        <strong>{formatBackupTimestamp(node.createdAt, language)}</strong>
+                        <div className="settings-backup-node-dialog__node-heading">
+                          <strong>{formatBackupTimestamp(node.createdAt, language)}</strong>
+                          {editingBackupNodeId === node.commitId ? (
+                            <form
+                              className="settings-backup-node-dialog__note-editor"
+                              onSubmit={(event) => {
+                                event.preventDefault();
+                                void handleSaveBackupNodeNote();
+                              }}
+                            >
+                              <input
+                                autoFocus
+                                aria-label={t("settings.backup.note")}
+                                placeholder={t("settings.backup.addNote")}
+                                value={backupNodeNoteDraft}
+                                disabled={Boolean(activeBackupAction)}
+                                onChange={(event) => setBackupNodeNoteDraft(event.target.value)}
+                              />
+                              <button
+                                type="submit"
+                                className="settings-backup-node-dialog__note-action is-save"
+                                aria-label={t("settings.backup.saveNote")}
+                                title={t("settings.backup.saveNote")}
+                                disabled={Boolean(activeBackupAction)}
+                              >
+                                <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                                  <path d="m3.5 8 3 3 6-6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                                </svg>
+                              </button>
+                              <button
+                                type="button"
+                                className="settings-backup-node-dialog__note-action"
+                                aria-label={t("settings.backup.confirmCancel")}
+                                title={t("settings.backup.confirmCancel")}
+                                disabled={Boolean(activeBackupAction)}
+                                onClick={() => setEditingBackupNodeId("")}
+                              >
+                                <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                                  <path d="m4.5 4.5 7 7m0-7-7 7" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                                </svg>
+                              </button>
+                            </form>
+                          ) : (
+                            <button
+                              type="button"
+                              className={`settings-backup-node-dialog__note${node.note ? "" : " is-empty"}`}
+                              title={node.note || t("settings.backup.addNote")}
+                              aria-label={node.note ? t("settings.backup.editNote") : t("settings.backup.addNote")}
+                              disabled={isLoadingBackupNodes || Boolean(activeBackupAction)}
+                              onClick={() => {
+                                setEditingBackupNodeId(node.commitId);
+                                setBackupNodeNoteDraft(node.note ?? "");
+                              }}
+                            >
+                              {node.note || t("settings.backup.addNote")}
+                            </button>
+                          )}
+                        </div>
                         <span>
                           {t("settings.backup.nodeCounts", {
                             skills: node.skillCount,
@@ -1721,7 +1839,8 @@ export function SettingsRoute() {
                         </span>
                       </div>
                       <div className="settings-backup-node-dialog__node-actions">
-                        <span>{t("settings.backup.cloudOnly")}</span>
+                        <span>{t(activeBackupAction === `download:${node.commitId}`
+                          ? "settings.backup.downloadingNode" : "settings.backup.cloudOnly")}</span>
                         <div className="settings-backup-node-dialog__node-buttons">
                           <button
                             type="button"
@@ -1730,6 +1849,18 @@ export function SettingsRoute() {
                             onClick={() => void handleRestoreBackupNode(node)}
                           >
                             {t("settings.backup.restoreNode")}
+                          </button>
+                          <button
+                            type="button"
+                            className="secondary-button secondary-button--compact"
+                            aria-label={t("settings.backup.downloadNode")}
+                            title={t("settings.backup.downloadNode")}
+                            disabled={Boolean(activeBackupAction)}
+                            onClick={() => void handleDownloadBackupNode(node)}
+                          >
+                            <svg width="16" height="16" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+                              <path d="M10 3v9m-3-3 3 3 3-3M4 13v3h12v-3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                            </svg>
                           </button>
                           <button
                             type="button"
@@ -1748,6 +1879,25 @@ export function SettingsRoute() {
                 </div>
               )}
             </div>
+            {cloudBackupNodes.length > 0 ? (
+              <footer className="settings-backup-node-dialog__footer">
+                <span>{t("settings.backup.nodesShown", {
+                  count: Math.min(visibleBackupNodeCount, cloudBackupNodes.length),
+                })}</span>
+                {cloudBackupNodes.length > visibleBackupNodeCount ? (
+                  <button
+                    type="button"
+                    className="secondary-button secondary-button--compact"
+                    disabled={isLoadingBackupNodes || Boolean(activeBackupAction) || Boolean(editingBackupNodeId)}
+                    onClick={() => void refreshCloudBackupNodes(visibleBackupNodeCount + 5)}
+                  >
+                    {t(isLoadingBackupNodes ? "settings.backup.nodesLoading" : "settings.backup.loadMore")}
+                  </button>
+                ) : (
+                  <span>{t("settings.backup.nodesAllLoaded")}</span>
+                )}
+              </footer>
+            ) : null}
           </section>
         </div>
       ) : null}

@@ -2,6 +2,7 @@ import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { save } from "@tauri-apps/plugin-dialog";
 import { vi } from "vitest";
 import { App } from "@/app/App";
 import { requestOpenGithubSettings } from "@/app/github-settings-navigation";
@@ -23,6 +24,11 @@ vi.mock("@tauri-apps/api/core", () => ({
 
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn(() => Promise.resolve(() => undefined)),
+}));
+
+vi.mock("@tauri-apps/plugin-dialog", () => ({
+  save: vi.fn().mockResolvedValue(null),
+  open: vi.fn().mockResolvedValue(null),
 }));
 
 vi.mock("@/app/utils/align-expanded-row", () => ({
@@ -198,13 +204,22 @@ test("runs manual GitHub sync and backup from settings", async () => {
   };
   let backupStatusListener: ((event: { payload: typeof backupStatus }) => void) | undefined;
   let cloudBackupNodeRequestCount = 0;
+  let historyNodes = [
+    { commitId: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", createdAt: "2026-07-31T02:44:00Z", skillCount: 0, mcpCount: 0, pluginCount: 0 },
+    { commitId: "0123456789abcdef0123456789abcdef01234567", createdAt: "2026-07-30T07:57:00Z", skillCount: 21, mcpCount: 3, pluginCount: 2 },
+    ...[1, 2, 3].map((count) => ({
+      commitId: String(count).repeat(40), createdAt: `2026-07-${29 - count}T07:57:00Z`,
+      skillCount: count, mcpCount: 0, pluginCount: 0,
+    })),
+    { commitId: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", createdAt: "2026-07-25T07:57:00Z", skillCount: 19, mcpCount: 2, pluginCount: 1 },
+  ].map((node) => ({ ...node, deviceLabel: "MacBook Pro", note: "" }));
   vi.mocked(listen).mockImplementation(async (event, handler) => {
     if (event === "backup-status-changed") {
       backupStatusListener = handler as typeof backupStatusListener;
     }
     return () => undefined;
   });
-  vi.mocked(invoke).mockImplementation(async (command) => {
+  vi.mocked(invoke).mockImplementation(async (command, args) => {
     switch (command) {
       case "list_startup_installed_skills":
         return installedSkillFixtures;
@@ -228,46 +243,18 @@ test("runs manual GitHub sync and backup from settings", async () => {
         return [];
       case "list_cloud_backup_nodes":
         cloudBackupNodeRequestCount += 1;
-        return cloudBackupNodeRequestCount === 1
-          ? [
-              {
-                commitId: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                createdAt: "2026-07-31T02:44:00Z",
-                deviceLabel: "MacBook Pro",
-                skillCount: 0,
-                mcpCount: 0,
-                pluginCount: 0,
-              },
-              {
-                commitId: "0123456789abcdef0123456789abcdef01234567",
-                createdAt: "2026-07-30T07:57:00Z",
-                deviceLabel: "MacBook Pro",
-                skillCount: 21,
-                mcpCount: 3,
-                pluginCount: 2,
-              },
-            ]
-          : [
-              {
-                commitId: "0123456789abcdef0123456789abcdef01234567",
-                createdAt: "2026-07-30T07:57:00Z",
-                deviceLabel: "MacBook Pro",
-                skillCount: 21,
-                mcpCount: 3,
-                pluginCount: 2,
-              },
-              {
-                commitId: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-                createdAt: "2026-07-29T07:57:00Z",
-                deviceLabel: "MacBook Pro",
-                skillCount: 19,
-                mcpCount: 2,
-                pluginCount: 1,
-              },
-            ];
+        return historyNodes.slice(0, (args as { limit: number }).limit);
+      case "save_cloud_backup_node_note": {
+        const { commitId, note } = args as { commitId: string; note: string };
+        historyNodes = historyNodes.map((node) => node.commitId === commitId ? { ...node, note } : node);
+        return undefined;
+      }
       case "preview_cloud_backup_node":
         return { added: 4, overwritten: 18, deleted: 1 };
+      case "download_cloud_backup_node":
+        return undefined;
       case "delete_cloud_backup_node":
+        historyNodes = historyNodes.filter((node) => node.commitId !== (args as { commitId: string }).commitId);
         return undefined;
       case "restore_cloud_backup_node":
         return {
@@ -357,7 +344,37 @@ test("runs manual GitHub sync and backup from settings", async () => {
   await userEvent.click(historyButton);
   expect(await screen.findByRole("dialog", { name: "云端历史备份节点" })).toBeInTheDocument();
   expect(await screen.findByText("21 Skills · 3 MCP · 2 插件")).toBeInTheDocument();
-  expect(await screen.findAllByText("设备：MacBook Pro")).toHaveLength(2);
+  expect(await screen.findAllByText("设备：MacBook Pro")).toHaveLength(5);
+  expect(screen.queryByText("19 Skills · 2 MCP · 1 插件")).not.toBeInTheDocument();
+  await userEvent.click(screen.getAllByRole("button", { name: "添加备注" })[1]);
+  await userEvent.type(screen.getByRole("textbox", { name: "节点备注" }), "升级前备份");
+  await userEvent.click(screen.getByRole("button", { name: "保存" }));
+  expect(await screen.findByText("升级前备份")).toBeInTheDocument();
+  expect(invoke).toHaveBeenCalledWith("save_cloud_backup_node_note", {
+    commitId: "0123456789abcdef0123456789abcdef01234567", note: "升级前备份",
+  });
+  await userEvent.click(screen.getByRole("button", { name: "加载更多" }));
+  expect(await screen.findByText("19 Skills · 2 MCP · 1 插件")).toBeInTheDocument();
+  expect(screen.getAllByText("设备：MacBook Pro")).toHaveLength(6);
+  expect(screen.queryByRole("button", { name: "加载更多" })).not.toBeInTheDocument();
+  expect(screen.getByText("升级前备份")).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "编辑备注" }));
+  await userEvent.clear(screen.getByRole("textbox", { name: "节点备注" }));
+  await userEvent.click(screen.getByRole("button", { name: "保存" }));
+  await waitFor(() => expect(screen.queryByText("升级前备份")).not.toBeInTheDocument());
+  expect(invoke).toHaveBeenCalledWith("save_cloud_backup_node_note", {
+    commitId: "0123456789abcdef0123456789abcdef01234567", note: "",
+  });
+
+  await userEvent.click(screen.getAllByRole("button", { name: "下载快照" })[1]);
+  expect(invoke).not.toHaveBeenCalledWith("download_cloud_backup_node", expect.anything());
+  vi.mocked(save).mockResolvedValueOnce("/tmp/skilldock-backup-01234567.zip");
+  await userEvent.click(screen.getAllByRole("button", { name: "下载快照" })[1]);
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("download_cloud_backup_node", {
+    commitId: "0123456789abcdef0123456789abcdef01234567",
+    outputPath: "/tmp/skilldock-backup-01234567.zip",
+  }));
+  expect(await screen.findByText("备份快照已保存")).toBeInTheDocument();
 
   await userEvent.click(screen.getAllByRole("button", { name: "从此节点恢复" })[1]);
   const restoreDialog = await screen.findByRole("dialog", { name: "确认恢复云端节点" });
@@ -376,7 +393,7 @@ test("runs manual GitHub sync and backup from settings", async () => {
   }));
   expect(screen.queryByText("0 Skills · 0 MCP · 0 插件")).not.toBeInTheDocument();
   expect(await screen.findByText("19 Skills · 2 MCP · 1 插件")).toBeInTheDocument();
-  expect(cloudBackupNodeRequestCount).toBe(2);
+  expect(cloudBackupNodeRequestCount).toBe(3);
 
   await userEvent.click(screen.getAllByRole("button", { name: "从此节点恢复" })[0]);
   const confirmedRestoreDialog = await screen.findByRole("dialog", { name: "确认恢复云端节点" });

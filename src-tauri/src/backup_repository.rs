@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
@@ -42,6 +42,8 @@ const SNAPSHOT_MANIFEST_PATH: &str = ".skilldock/snapshot.json";
 const LIBRARY_SNAPSHOT_PATH: &str = ".skilldock/library.json";
 const DELETED_NODES_PATH: &str = ".skilldock-control/deleted-nodes.json";
 const DELETE_NODE_COMMIT_PREFIX: &str = "SkillDock hide backup node";
+pub(crate) const NODE_NOTES_PATH: &str = ".skilldock-control/node-notes.json";
+const NOTE_NODE_COMMIT_PREFIX: &str = "SkillDock annotate backup node";
 const DELETE_NODE_UPDATE_ATTEMPTS: usize = 3;
 const LAST_OPERATION_BACKUP: &str = "backup";
 const LAST_OPERATION_RESTORE: &str = "restore";
@@ -91,6 +93,8 @@ pub struct CloudBackupNode {
     pub skill_count: usize,
     pub mcp_count: usize,
     pub plugin_count: usize,
+    #[serde(default)]
+    pub note: String,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -824,6 +828,7 @@ fn parse_cloud_node(
     .and_then(|payload| serde_json::from_str::<BackupSnapshotManifest>(&payload).ok());
     if let Some(manifest) = manifest {
         return Ok(CloudBackupNode {
+            note: String::new(),
             commit_id: commit_id.to_string(),
             created_at: manifest.created_at,
             device_label: manifest.device_label,
@@ -843,6 +848,7 @@ fn parse_cloud_node(
     })
     .unwrap_or_default();
     Ok(CloudBackupNode {
+        note: String::new(),
         commit_id: commit_id.to_string(),
         created_at: commit_created_at.to_string(),
         device_label: "未知设备".to_string(),
@@ -875,7 +881,7 @@ fn deleted_cloud_backup_node_ids(deleted: &DeletedCloudBackupNodes) -> HashSet<S
 }
 
 fn is_backup_control_commit(message: &str) -> bool {
-    message.starts_with(DELETE_NODE_COMMIT_PREFIX)
+    message.starts_with(DELETE_NODE_COMMIT_PREFIX) || message.starts_with(NOTE_NODE_COMMIT_PREFIX)
 }
 
 fn deleted_cloud_backup_nodes_from_remote(repo_path: &Path) -> DeletedCloudBackupNodes {
@@ -972,6 +978,7 @@ fn cloud_backup_node_from_payloads(
         .and_then(|payload| serde_json::from_slice::<BackupSnapshotManifest>(payload).ok())
     {
         return CloudBackupNode {
+            note: String::new(),
             commit_id: commit.commit_id,
             created_at: manifest.created_at,
             device_label: manifest.device_label,
@@ -987,6 +994,7 @@ fn cloud_backup_node_from_payloads(
         .map(|library| library.skills.len())
         .unwrap_or_default();
     CloudBackupNode {
+        note: String::new(),
         commit_id: commit.commit_id,
         created_at: commit.created_at,
         device_label: "未知设备".to_string(),
@@ -996,17 +1004,18 @@ fn cloud_backup_node_from_payloads(
     }
 }
 
-async fn list_cloud_backup_nodes_via_api() -> Result<Vec<CloudBackupNode>, String> {
+async fn list_cloud_backup_nodes_via_api(limit: usize) -> Result<Vec<CloudBackupNode>, String> {
     let settings = load_github_backup_settings();
     if !settings.enabled {
         return Err("尚未启用 GitHub 备份".to_string());
     }
     let credential = github_credentials::load_active_credential()
         .ok_or_else(|| "GitHub 凭据不可用，请重新连接".to_string())?;
-    if let Some(nodes) =
-        cached_cloud_backup_nodes(&settings.repository_owner, &settings.repository_name)
-    {
-        return Ok(nodes);
+    let cached = cached_cloud_backup_nodes(&settings.repository_owner, &settings.repository_name);
+    if let Some(nodes) = &cached {
+        if nodes.len() >= limit {
+            return Ok(nodes.iter().take(limit).cloned().collect());
+        }
     }
     let client = github_api::http_client()?;
     let deleted_file = github_api::fetch_repository_file(
@@ -1021,24 +1030,53 @@ async fn list_cloud_backup_nodes_via_api() -> Result<Vec<CloudBackupNode>, Strin
     let deleted =
         parse_deleted_cloud_backup_nodes(deleted_file.as_ref().map(|file| file.content.as_slice()));
     let deleted_ids = deleted_cloud_backup_node_ids(&deleted);
-    let commits = github_api::list_repository_commits(
+    let notes_file = github_api::fetch_repository_file(
         &client,
         &credential.token,
         &settings.repository_owner,
         &settings.repository_name,
-        CLOUD_BACKUP_NODE_SCAN_LIMIT,
+        "main",
+        NODE_NOTES_PATH,
     )
     .await?;
-    let visible_commits = commits
-        .into_iter()
-        .filter(|commit| {
-            !deleted_ids.contains(&commit.commit_id) && !is_backup_control_commit(&commit.message)
-        })
-        .take(CLOUD_BACKUP_NODE_LIMIT)
-        .collect::<Vec<_>>();
+    let notes = parse_cloud_node_notes(notes_file.as_ref().map(|file| file.content.as_slice()))?;
+    let mut visible_commits = Vec::new();
+    let mut page = 1;
+    while visible_commits.len() < limit {
+        let commits = github_api::list_repository_commits(
+            &client,
+            &credential.token,
+            &settings.repository_owner,
+            &settings.repository_name,
+            CLOUD_BACKUP_NODE_SCAN_LIMIT,
+            page,
+        )
+        .await?;
+        let exhausted = commits.len() < CLOUD_BACKUP_NODE_SCAN_LIMIT;
+        visible_commits.extend(
+            commits
+                .into_iter()
+                .filter(|commit| {
+                    !deleted_ids.contains(&commit.commit_id)
+                        && !is_backup_control_commit(&commit.message)
+                })
+                .take(limit - visible_commits.len()),
+        );
+        if exhausted {
+            break;
+        }
+        page += 1;
+    }
     let mut nodes = Vec::with_capacity(visible_commits.len());
+    let cached_by_id: BTreeMap<_, _> = cached
+        .unwrap_or_default()
+        .into_iter()
+        .map(|node| (node.commit_id.clone(), node))
+        .collect();
     for commit in visible_commits {
-        nodes.push(
+        let mut node = if let Some(node) = cached_by_id.get(&commit.commit_id) {
+            node.clone()
+        } else {
             cloud_backup_node_from_api(
                 &client,
                 &credential.token,
@@ -1046,8 +1084,10 @@ async fn list_cloud_backup_nodes_via_api() -> Result<Vec<CloudBackupNode>, Strin
                 &settings.repository_name,
                 commit,
             )
-            .await?,
-        );
+            .await?
+        };
+        node.note = notes.get(&node.commit_id).cloned().unwrap_or_default();
+        nodes.push(node);
     }
     cache_cloud_backup_nodes(
         &settings.repository_owner,
@@ -1055,6 +1095,65 @@ async fn list_cloud_backup_nodes_via_api() -> Result<Vec<CloudBackupNode>, Strin
         &nodes,
     );
     Ok(nodes)
+}
+
+fn parse_cloud_node_notes(payload: Option<&[u8]>) -> Result<BTreeMap<String, String>, String> {
+    match payload {
+        Some(payload) => serde_json::from_slice(payload)
+            .map_err(|error| format!("读取备份节点备注失败: {error}")),
+        None => Ok(BTreeMap::new()),
+    }
+}
+
+async fn save_cloud_backup_node_note_via_api(
+    commit_id: String,
+    note: String,
+) -> Result<(), String> {
+    validate_cloud_commit_id(&commit_id)?;
+    let settings = load_github_backup_settings();
+    if !settings.enabled {
+        return Err("尚未启用 GitHub 备份".to_string());
+    }
+    let credential = github_credentials::load_active_credential()
+        .ok_or_else(|| "GitHub 凭据不可用，请重新连接".to_string())?;
+    let client = github_api::http_client()?;
+    let message = format!("{NOTE_NODE_COMMIT_PREFIX} {}", &commit_id[..8]);
+    for _ in 0..DELETE_NODE_UPDATE_ATTEMPTS {
+        let file = github_api::fetch_repository_file(
+            &client,
+            &credential.token,
+            &settings.repository_owner,
+            &settings.repository_name,
+            "main",
+            NODE_NOTES_PATH,
+        )
+        .await?;
+        let mut notes = parse_cloud_node_notes(file.as_ref().map(|file| file.content.as_slice()))?;
+        let note = note.trim();
+        if note.is_empty() {
+            notes.remove(&commit_id);
+        } else {
+            notes.insert(commit_id.clone(), note.to_string());
+        }
+        let payload = serde_json::to_vec_pretty(&notes)
+            .map_err(|error| format!("序列化备份节点备注失败: {error}"))?;
+        if github_api::update_repository_file(
+            &client,
+            &credential.token,
+            &settings.repository_owner,
+            &settings.repository_name,
+            NODE_NOTES_PATH,
+            &message,
+            &payload,
+            file.as_ref().map(|file| file.sha.as_str()),
+        )
+        .await?
+        {
+            clear_cloud_backup_node_cache();
+            return Ok(());
+        }
+    }
+    Err("云端备份节点备注正在被其他设备修改，请重试".to_string())
 }
 
 fn validate_cloud_commit_id(commit_id: &str) -> Result<(), String> {
@@ -1077,18 +1176,29 @@ async fn delete_cloud_backup_node_via_api(commit_id: String) -> Result<(), Strin
     let credential = github_credentials::load_active_credential()
         .ok_or_else(|| "GitHub 凭据不可用，请重新连接".to_string())?;
     let client = github_api::http_client()?;
-    let commits = github_api::list_repository_commits(
-        &client,
-        &credential.token,
-        &settings.repository_owner,
-        &settings.repository_name,
-        CLOUD_BACKUP_NODE_SCAN_LIMIT,
-    )
-    .await?;
-    let target = commits
-        .iter()
-        .find(|commit| commit.commit_id == commit_id)
-        .ok_or_else(|| "云端备份节点不存在或已超出可管理范围".to_string())?;
+    let mut page = 1;
+    let target = loop {
+        let commits = github_api::list_repository_commits(
+            &client,
+            &credential.token,
+            &settings.repository_owner,
+            &settings.repository_name,
+            CLOUD_BACKUP_NODE_SCAN_LIMIT,
+            page,
+        )
+        .await?;
+        let exhausted = commits.len() < CLOUD_BACKUP_NODE_SCAN_LIMIT;
+        if let Some(target) = commits
+            .into_iter()
+            .find(|commit| commit.commit_id == commit_id)
+        {
+            break target;
+        }
+        if exhausted {
+            return Err("云端备份节点不存在".to_string());
+        }
+        page += 1;
+    };
     if is_backup_control_commit(&target.message) {
         return Err("该提交不是可删除的云端备份节点".to_string());
     }
@@ -1182,6 +1292,68 @@ fn preview_cloud_backup_node_blocking(
         "preview",
         preview_workspace_restore,
     )
+}
+
+fn write_cloud_backup_archive(
+    repo_path: &Path,
+    commit_id: &str,
+    output_path: &Path,
+) -> Result<(), String> {
+    validate_cloud_commit_id(commit_id)?;
+    if !output_path.is_absolute() || output_path.file_name().is_none() {
+        return Err("请选择有效的快照保存路径".to_string());
+    }
+    let temporary_path =
+        output_path.with_file_name(format!(".skilldock-backup-{}.zip", uuid::Uuid::new_v4()));
+    let temporary_name = temporary_path
+        .to_str()
+        .ok_or_else(|| "快照保存路径编码无效".to_string())?;
+    // Publish the archive only after export succeeds, preserving any existing destination on failure.
+    let result = git(
+        repo_path,
+        &[
+            "archive",
+            "--format=zip",
+            "--output",
+            temporary_name,
+            commit_id,
+        ],
+        None,
+    )
+    .and_then(|_| {
+        fs::rename(&temporary_path, output_path)
+            .map_err(|error| format!("保存备份快照失败: {error}"))
+    });
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary_path);
+    }
+    result
+}
+
+fn download_cloud_backup_node_blocking(
+    commit_id: String,
+    output_path: String,
+) -> Result<(), String> {
+    validate_cloud_commit_id(&commit_id)?;
+    let _guard = sync_lock()
+        .lock()
+        .map_err(|_| "备份同步锁不可用".to_string())?;
+    let settings = load_github_backup_settings();
+    if !settings.enabled {
+        return Err("尚未启用 GitHub 备份".to_string());
+    }
+    let credential = github_credentials::load_active_credential()
+        .ok_or_else(|| "GitHub 凭据不可用，请重新连接".to_string())?;
+    let repo_path = backup_repo_path()?;
+    ensure_local_repository(&repo_path, &settings.repository_url)?;
+    git_with_progress(
+        &repo_path,
+        &["fetch", "--progress", "origin", "main"],
+        Some(&credential.token),
+        &|_| {},
+    )?;
+    validate_cloud_commit(&repo_path, &commit_id)?;
+    write_cloud_backup_archive(&repo_path, &commit_id, Path::new(&output_path))
 }
 
 fn restore_cloud_node_blocking(
@@ -1337,8 +1509,25 @@ pub fn get_backup_status() -> BackupStatus {
 }
 
 #[tauri::command]
-pub async fn list_cloud_backup_nodes() -> Result<Vec<CloudBackupNode>, String> {
-    list_cloud_backup_nodes_via_api().await
+pub async fn list_cloud_backup_nodes(limit: Option<usize>) -> Result<Vec<CloudBackupNode>, String> {
+    list_cloud_backup_nodes_via_api(limit.unwrap_or(CLOUD_BACKUP_NODE_LIMIT).max(1)).await
+}
+
+#[tauri::command]
+pub async fn save_cloud_backup_node_note(commit_id: String, note: String) -> Result<(), String> {
+    save_cloud_backup_node_note_via_api(commit_id, note).await
+}
+
+#[tauri::command]
+pub async fn download_cloud_backup_node(
+    commit_id: String,
+    output_path: String,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        download_cloud_backup_node_blocking(commit_id, output_path)
+    })
+    .await
+    .map_err(|error| format!("下载备份快照失败: {error}"))?
 }
 
 #[tauri::command]
@@ -1684,7 +1873,24 @@ mod tests {
         assert!(is_backup_control_commit(
             "SkillDock hide backup node 01234567"
         ));
+        assert!(is_backup_control_commit(
+            "SkillDock annotate backup node 01234567"
+        ));
         assert!(!is_backup_control_commit("SkillDock backup"));
+    }
+
+    #[test]
+    fn reads_node_notes_without_overwriting_malformed_metadata() {
+        assert!(super::parse_cloud_node_notes(None).unwrap().is_empty());
+        let payload = serde_json::to_vec(&BTreeMap::from([
+            ("node-a", "升级前备份"),
+            ("node-b", "已验证"),
+        ]))
+        .unwrap();
+        let notes = super::parse_cloud_node_notes(Some(&payload)).unwrap();
+        assert_eq!(notes.get("node-a").unwrap(), "升级前备份");
+        assert_eq!(notes.get("node-b").unwrap(), "已验证");
+        assert!(super::parse_cloud_node_notes(Some(b"invalid json")).is_err());
     }
 
     fn write_library(repository: &Path, skills: &[BackupSkillMetadata]) {
@@ -2071,6 +2277,12 @@ mod tests {
 
         ensure_local_repository(&device_a, &remote_url).expect("initialize device A");
         write_library(&device_a, &[]);
+        fs::create_dir_all(device_a.join(".skilldock-control")).expect("create control directory");
+        fs::write(
+            device_a.join(super::NODE_NOTES_PATH),
+            r#"{"node-a":"old note"}"#,
+        )
+        .expect("write initial note");
         commit_snapshot(&device_a).expect("commit base snapshot");
         push_branch_with_retry(&device_a, "").expect("push base snapshot");
 
@@ -2099,6 +2311,9 @@ mod tests {
         .expect("configure device B email");
 
         write_library(&device_a, &[metadata("skill-a", "Skill A")]);
+        let updated_notes = r#"{"node-a":"updated note","node-b":"another note"}"#;
+        fs::write(device_a.join(super::NODE_NOTES_PATH), updated_notes)
+            .expect("update cloud notes");
         commit_snapshot(&device_a).expect("commit device A snapshot");
         push_branch_with_retry(&device_a, "").expect("push device A snapshot");
 
@@ -2117,6 +2332,64 @@ mod tests {
         assert_eq!(backup_ids, vec!["skill-a", "skill-b"]);
         assert!(device_b.join("skills/skill-a/SKILL.md").is_file());
         assert!(device_b.join("skills/skill-b/SKILL.md").is_file());
+        assert_eq!(
+            fs::read_to_string(device_b.join(super::NODE_NOTES_PATH)).expect("read merged notes"),
+            updated_notes,
+        );
+        let _ = fs::remove_dir_all(temp_root);
+    }
+
+    #[test]
+    fn exports_selected_snapshot_without_changing_head_or_replacing_file_on_failure() {
+        use std::io::Read;
+
+        let temp_root =
+            std::env::temp_dir().join(format!("skilldock-backup-export-{}", uuid::Uuid::new_v4()));
+        let repository = temp_root.join("repository");
+        ensure_local_repository(&repository, "https://example.com/backup.git")
+            .expect("initialize repository");
+        write_library(&repository, &[metadata("skill-a", "Skill A")]);
+        commit_snapshot(&repository).expect("commit original snapshot");
+        let original_commit = git(&repository, &["rev-parse", "HEAD"], None).unwrap();
+        let skill_path = "skills/skill-a/SKILL.md";
+        let original_content = fs::read_to_string(repository.join(skill_path)).unwrap();
+        fs::write(repository.join(skill_path), "newer content").unwrap();
+        commit_snapshot(&repository).expect("commit newer snapshot");
+        let head = git(&repository, &["rev-parse", "HEAD"], None).unwrap();
+        let archive_path = temp_root.join("snapshot.zip");
+        super::write_cloud_backup_archive(&repository, &original_commit, &archive_path)
+            .expect("export older snapshot");
+        {
+            let mut archive = zip::ZipArchive::new(fs::File::open(&archive_path).unwrap()).unwrap();
+            let mut content = String::new();
+            archive
+                .by_name(skill_path)
+                .unwrap()
+                .read_to_string(&mut content)
+                .unwrap();
+            assert_eq!(content, original_content);
+            assert!(archive.by_name(".skilldock/library.json").is_ok());
+        }
+        assert_eq!(
+            git(&repository, &["rev-parse", "HEAD"], None).unwrap(),
+            head
+        );
+        assert_eq!(
+            fs::read_to_string(repository.join(skill_path)).unwrap(),
+            "newer content"
+        );
+        let exported_bytes = fs::read(&archive_path).unwrap();
+        assert!(
+            super::write_cloud_backup_archive(&repository, &"0".repeat(40), &archive_path).is_err()
+        );
+        assert_eq!(fs::read(&archive_path).unwrap(), exported_bytes);
+        assert!(!fs::read_dir(&temp_root).unwrap().any(|entry| {
+            entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".skilldock-backup-")
+        }));
         let _ = fs::remove_dir_all(temp_root);
     }
 

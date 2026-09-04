@@ -769,7 +769,6 @@ export function SkillListPage(props: SkillListPageProps) {
     deleteSkill,
     installedSkills,
     isLoading,
-    isWorkspaceRefreshing,
     setSkillAllToolStatuses,
     setToolSkillStatuses,
     toolConfigs,
@@ -778,11 +777,9 @@ export function SkillListPage(props: SkillListPageProps) {
   const deferredQuery = useDeferredValue(query);
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>(readSkillGroupCollapsedState);
   const [expandedSkillIdentity, setExpandedSkillIdentity] = useState("");
-  const [skillOrderRevision, setSkillOrderRevision] = useState(0);
   const [batchAction, setBatchAction] = useState<"update" | "delete" | "enable" | "disable" | "">("");
   const [isBatchDeleteConfirming, setIsBatchDeleteConfirming] = useState(false);
   const handledFocusedSkillRef = useRef("");
-  const wasWorkspaceRefreshingRef = useRef(isWorkspaceRefreshing);
   const sortedSkills = useMemo(
     () => filterSkills(installedSkills, { query: "", status: "all" }),
     [installedSkills],
@@ -790,7 +787,8 @@ export function SkillListPage(props: SkillListPageProps) {
   const orderedInstalledSkills = useStableListOrder(
     sortedSkills,
     getSkillOrderKey,
-    skillOrderRevision,
+    "managed-skills",
+    true,
   );
   const tagFilterGroups = useMemo(
     () => collectSkillTagFilterGroups(installedSkills),
@@ -848,13 +846,6 @@ export function SkillListPage(props: SkillListPageProps) {
       : groupSkillsBySource(orderedInstalledSkills, { localLabel: t("skills.source.local") }),
     [groupMode, orderedInstalledSkills, t],
   );
-
-  useEffect(() => {
-    if (wasWorkspaceRefreshingRef.current && !isWorkspaceRefreshing) {
-      setSkillOrderRevision((current) => current + 1);
-    }
-    wasWorkspaceRefreshingRef.current = isWorkspaceRefreshing;
-  }, [isWorkspaceRefreshing]);
 
   useEffect(() => {
     if (activeSourceId !== MANAGED_SKILL_SOURCE_ID) {

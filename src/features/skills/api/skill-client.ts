@@ -1504,8 +1504,16 @@ export async function syncBackupToLocal(): Promise<BackupStatus> {
   return invoke("sync_backup_to_local", {});
 }
 
-export async function listCloudBackupNodes(): Promise<CloudBackupNode[]> {
-  return invokeOrFallback("list_cloud_backup_nodes", {}, []);
+export async function listCloudBackupNodes(limit = 5): Promise<CloudBackupNode[]> {
+  return invokeOrFallback("list_cloud_backup_nodes", { limit }, []);
+}
+
+export async function saveCloudBackupNodeNote(commitId: string, note: string): Promise<void> {
+  return invoke("save_cloud_backup_node_note", { commitId, note });
+}
+
+export async function downloadCloudBackupNode(commitId: string, outputPath: string): Promise<void> {
+  return invoke("download_cloud_backup_node", { commitId, outputPath });
 }
 
 export async function deleteCloudBackupNode(commitId: string): Promise<void> {
