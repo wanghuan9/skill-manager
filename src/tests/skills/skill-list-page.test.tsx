@@ -1,4 +1,4 @@
-import { beforeEach, test, vi } from "vitest";
+import { afterEach, beforeEach, test, vi } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { App } from "@/app/App";
@@ -10,6 +10,10 @@ import {
 
 beforeEach(() => {
   window.localStorage.clear();
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
 });
 
 async function switchToSourceGroupedView() {
@@ -518,7 +522,7 @@ test("quickly filters managed Skills by one tag or by missing tags", async () =>
 
   await user.click(screen.getByRole("button", { name: "收起标签筛选" }));
   expect(screen.queryByRole("group", { name: "按标签快速筛选 Skill" })).not.toBeInTheDocument();
-  expect(screen.getByText("workflow")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "展开标签筛选" })).toHaveTextContent("workflow");
   expect(screen.getByRole("article", { name: "skill-publisher" })).toBeInTheDocument();
   expect(window.localStorage.getItem("skills:tag-filter-visible")).toBe("false");
 
@@ -570,7 +574,7 @@ test("keeps same-named skills separate when filtering for updates", async () => 
   startupSkillsSpy.mockRestore();
 });
 
-test("places newer skills before older skills in list and card views", async () => {
+test("places enabled skills before newer disabled skills in list and card views", async () => {
   const user = userEvent.setup();
   const disabledSkill = {
     ...installedSkillFixtures[0],
@@ -593,15 +597,15 @@ test("places newer skills before older skills in list and card views", async () 
   render(<App />);
 
   expect(screen.getAllByRole("article").map((article) => article.getAttribute("aria-label"))).toEqual([
-    "disabled-newer-skill",
     "enabled-older-skill",
+    "disabled-newer-skill",
   ]);
 
   await user.click(screen.getByRole("button", { name: "卡片" }));
 
   expect(screen.getAllByRole("article").map((article) => article.getAttribute("aria-label"))).toEqual([
-    "disabled-newer-skill",
     "enabled-older-skill",
+    "disabled-newer-skill",
   ]);
   startupSkillsSpy.mockRestore();
 });
@@ -619,26 +623,27 @@ test("keeps the current skill order after toggling its enabled state", async () 
     localUpdatedAt: "2026/7/18 12:00:00",
     tools: [{ name: "Codex", statusLabel: "未启用" }],
   };
-  const toggledSkill = {
-    ...disabledSkill,
-    tools: [{ name: "Codex", statusLabel: "已同步" }],
-  };
   workspaceSnapshotFixture.installedSkills = [disabledSkill, enabledSkill];
   const startupSkillsSpy = vi.spyOn(skillClient, "fetchStartupInstalledSkills")
     .mockResolvedValue([disabledSkill, enabledSkill]);
-  const toggleSkillSpy = vi.spyOn(skillClient, "setSkillAllToolStatuses").mockResolvedValue(toggledSkill);
+  const toggleSkillSpy = vi.spyOn(skillClient, "setSkillAllToolStatuses")
+    .mockImplementation(async ({ toolNames }) => ({
+      ...disabledSkill,
+      tools: toolNames.map((name) => ({ name, statusLabel: "已同步" })),
+    }));
 
   render(<App />);
 
   const getSkillOrder = () => screen.getAllByRole("article")
     .map((article) => article.getAttribute("aria-label"));
-  expect(getSkillOrder()).toEqual(["disabled-newer-skill", "enabled-older-skill"]);
+  expect(getSkillOrder()).toEqual(["enabled-older-skill", "disabled-newer-skill"]);
 
   await userEvent.click(screen.getByRole("button", { name: "启用 disabled-newer-skill 到全部工具" }));
 
   await waitFor(() => {
-    expect(getSkillOrder()).toEqual(["disabled-newer-skill", "enabled-older-skill"]);
+    expect(screen.getByRole("button", { name: "关闭 disabled-newer-skill 的全部工具" })).toBeInTheDocument();
   });
+  expect(getSkillOrder()).toEqual(["enabled-older-skill", "disabled-newer-skill"]);
   startupSkillsSpy.mockRestore();
   toggleSkillSpy.mockRestore();
 });

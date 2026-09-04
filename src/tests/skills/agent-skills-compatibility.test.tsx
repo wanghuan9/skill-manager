@@ -94,11 +94,13 @@ test("shows same-name Skill instances with their directory owners", async () => 
 
   expect(screen.getAllByRole("article", { name: "duplicate-skill" })).toHaveLength(2);
   expect(screen.getAllByText("SkillDock").length).toBeGreaterThan(0);
-  expect(screen.getByText(/Agent CLI/)).toBeInTheDocument();
+  expect(screen.getAllByRole("article", { name: "duplicate-skill" })
+    .some((article) => article.textContent?.includes("Agent CLI"))).toBe(true);
   expect(screen.queryByText("外部目录")).not.toBeInTheDocument();
 
-  await user.click(screen.getByRole("combobox", { name: "筛选 Skill" }));
-  await user.click(screen.getByRole("option", { name: "Agent CLI (1)" }));
+  await user.click(screen.getByRole("button", { name: "Agent CLI" }));
+  expect(screen.getByRole("button", { name: "Agent CLI" }))
+    .toHaveAttribute("aria-pressed", "true");
 
   expect(screen.getAllByRole("article", { name: "duplicate-skill" })).toHaveLength(1);
 });

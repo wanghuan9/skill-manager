@@ -23,9 +23,17 @@ vi.mock("@/features/skills/api/skill-client", () => ({
   subscribeSkillLibraryChanges: vi.fn().mockResolvedValue(() => undefined),
 }));
 
-vi.mock("@/app/i18n", () => ({
-  useTranslate: () => ({ t: (key: string) => key }),
-}));
+vi.mock("@/app/i18n", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/app/i18n")>();
+  return {
+    ...actual,
+    useTranslate: () => ({
+      language: "zh-CN",
+      t: (key: Parameters<typeof actual.tx>[1], values?: Parameters<typeof actual.tx>[2]) =>
+        actual.tx("zh-CN", key, values),
+    }),
+  };
+});
 
 const invokeMock = vi.mocked(invoke);
 let connected = false;

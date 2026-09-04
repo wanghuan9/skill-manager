@@ -159,8 +159,8 @@ describe("filterSkills", () => {
 
   it("filters by fixed source and management owner tags", () => {
     const skillFixtures = [
-      createSkill({ name: "local", sourceType: "local", sourceLabel: "本地安装" }),
-      createSkill({ name: "import", sourceType: "local", sourceLabel: "本地导入" }),
+      createSkill({ name: "local", sourceType: "local", sourceLabel: "本地安装", gitLinked: false }),
+      createSkill({ name: "import", sourceType: "local", sourceLabel: "本地导入", gitLinked: false }),
       createSkill({
         name: "market",
         sourceType: "github",
@@ -178,7 +178,7 @@ describe("filterSkills", () => {
       query: "",
       status: "all",
       tagFilter: { kind: "source", value: "local" },
-    }).map((skill) => skill.name)).toEqual(["local", "import"]);
+    }).map((skill) => skill.name)).toEqual(["import", "local"]);
     expect(filterSkills(skillFixtures, {
       query: "",
       status: "all",

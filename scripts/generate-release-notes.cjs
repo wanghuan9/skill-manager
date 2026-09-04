@@ -113,6 +113,7 @@ const RELEASE_NOTE_COVERAGE_RULES = [
     pathPatterns: [
       /^src-tauri\/src\/lib\.rs$/,
       /^src\/app\/(?:App\.tsx|components\/AppSelect\.tsx)$/,
+      /^src\/app\/hooks\/useStableListOrder\.ts$/,
       /^src\/app\/routes\/market\.tsx$/,
       /^src\/app\/i18n\.tsx$/,
       /^src\/styles\//,

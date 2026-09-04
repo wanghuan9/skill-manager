@@ -7,9 +7,17 @@ import type { PublishingPlatformAdapter } from "@/features/publishing/publishing
 import type { PublishableSkill } from "@/features/publishing/types";
 import { subscribeSkillLibraryChanges } from "@/features/skills/api/skill-client";
 
-vi.mock("@/app/i18n", () => ({
-  useTranslate: () => ({ t: (key: string) => key }),
-}));
+vi.mock("@/app/i18n", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/app/i18n")>();
+  return {
+    ...actual,
+    useTranslate: () => ({
+      language: "zh-CN",
+      t: (key: Parameters<typeof actual.tx>[1], values?: Parameters<typeof actual.tx>[2]) =>
+        actual.tx("zh-CN", key, values),
+    }),
+  };
+});
 
 vi.mock("@/features/skills/api/skill-client", () => ({
   openExternalLink: vi.fn(),
@@ -294,7 +302,7 @@ test("shows the Skill source and management owner like the Skills page", async (
   render(<PublishingWorkbench adapter={adapter} />);
 
   expect(await screen.findByText("Agent CLI")).toBeInTheDocument();
-  await userEvent.click(screen.getByRole("button", { name: "skills.view.grid" }));
+  await userEvent.click(screen.getByRole("button", { name: "卡片" }));
   expect(await screen.findByText("Git · Agent CLI")).toBeInTheDocument();
 });
 
@@ -308,7 +316,7 @@ test("reuses the internal managed switcher and preview-file action", async () =>
   expect(screen.getByRole("button", { name: "预览文件 shared-workbench" })).toBeInTheDocument();
   await userEvent.click(screen.getByRole("tab", { name: /未托管 1/ }));
   expect(await screen.findByRole("heading", { name: "external-skill" })).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "预览 external-skill" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "预览文件 external-skill" })).toBeInTheDocument();
 });
 
 test("restores unmanaged Skill details in list and grid layouts", async () => {
@@ -334,7 +342,7 @@ test("restores unmanaged Skill details in list and grid layouts", async () => {
   expect(within(listDetails!).getByText("/tmp/external-skill")).toBeInTheDocument();
   expect(within(listDetails!).getByText("Codex")).toBeInTheDocument();
 
-  await userEvent.click(screen.getByRole("button", { name: "skills.view.grid" }));
+  await userEvent.click(screen.getByRole("button", { name: "卡片" }));
 
   const detailDialog = screen.getByRole("dialog", { name: "external-skill 未托管详情" });
   expect(within(detailDialog).getByRole("heading", { name: "基本信息" })).toBeInTheDocument();
