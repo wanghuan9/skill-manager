@@ -3863,7 +3863,7 @@ checksum = "b2aa850e253778c88a04c3d7323b043aeda9d3e30d5971937c1855769763678e"
 
 [[package]]
 name = "skilldock"
-version = "1.0.18"
+version = "1.0.19"
 dependencies = [
  "base64 0.22.1",
  "chrono",

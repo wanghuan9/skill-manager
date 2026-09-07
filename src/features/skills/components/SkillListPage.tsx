@@ -1147,7 +1147,7 @@ export function SkillListPage(props: SkillListPageProps) {
             const updateCount = group.skills.filter((skill) => skill.collabStatus === "update-available").length;
             const pendingCommitCount = group.skills.filter((skill) => skill.collabStatus === "pending-commit").length;
             const pendingPushCount = group.skills.filter((skill) => skill.collabStatus === "pending-push").length;
-            const isCollapsed = batchSelection.isSelecting ? false : isGroupCollapsed(group.id);
+            const isCollapsed = isGroupCollapsed(group.id);
             const groupTone = group.kind === "tag"
               ? group.isUntagged ? "local" : "default"
               : resolveSkillGroupTone(group.skills[0]?.sourceType);
@@ -1161,25 +1161,23 @@ export function SkillListPage(props: SkillListPageProps) {
             return (
               <section key={group.id} className={`skill-group-section skill-group-section--${groupTone}`}>
                 <div
-                  className={`skill-group-section__header${batchSelection.isSelecting ? " is-selecting" : ""}`}
-                  role={batchSelection.isSelecting ? undefined : "button"}
-                  tabIndex={batchSelection.isSelecting ? undefined : 0}
-                  onClick={batchSelection.isSelecting ? undefined : () => toggleGroup(group.id)}
+                  className="skill-group-section__header"
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => toggleGroup(group.id)}
                   onKeyDown={(event) => {
-                    if (!batchSelection.isSelecting && (event.key === "Enter" || event.key === " ")) {
+                    if (event.target === event.currentTarget && (event.key === "Enter" || event.key === " ")) {
                       event.preventDefault();
                       toggleGroup(group.id);
                     }
                   }}
-                  aria-expanded={batchSelection.isSelecting ? undefined : !isCollapsed}
-                  aria-label={batchSelection.isSelecting
-                    ? undefined
-                    : t(
-                        group.kind === "tag"
-                          ? isCollapsed ? "skills.group.tag.expand" : "skills.group.tag.collapse"
-                          : isCollapsed ? "skills.group.source.expand" : "skills.group.source.collapse",
-                        { label: group.label },
-                      )}
+                  aria-expanded={!isCollapsed}
+                  aria-label={t(
+                    group.kind === "tag"
+                      ? isCollapsed ? "skills.group.tag.expand" : "skills.group.tag.collapse"
+                      : isCollapsed ? "skills.group.source.expand" : "skills.group.source.collapse",
+                    { label: group.label },
+                  )}
                 >
                   <div className="skill-group-section__title">
                     <SkillGroupMonogram label={group.label} />
@@ -1233,7 +1231,10 @@ export function SkillListPage(props: SkillListPageProps) {
                           { name: group.label },
                         )}
                         aria-pressed={isGroupPartiallySelected ? "mixed" : isGroupSelected}
-                        onClick={() => batchSelection.toggleSelections(groupSkillIds)}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          batchSelection.toggleSelections(groupSkillIds);
+                        }}
                       >
                         <BatchSelectionMark
                           checked={isGroupSelected}
@@ -1243,16 +1244,15 @@ export function SkillListPage(props: SkillListPageProps) {
                           {t(isGroupSelected ? "batch.group.deselectAll" : "batch.group.selectAll")}
                         </span>
                       </button>
-                    ) : (
-                      <span
-                        className="skill-group-section__toggle"
-                        aria-hidden="true"
-                      >
-                        <span className={`skill-group-section__chevron${isCollapsed ? " is-collapsed" : ""}`}>
-                          ⌄
-                        </span>
+                    ) : null}
+                    <span
+                      className="skill-group-section__toggle"
+                      aria-hidden="true"
+                    >
+                      <span className={`skill-group-section__chevron${isCollapsed ? " is-collapsed" : ""}`}>
+                        ⌄
                       </span>
-                    )}
+                    </span>
                   </div>
                 </div>
                 {!isCollapsed ? (

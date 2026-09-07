@@ -118,21 +118,62 @@ test("confirms managed Skill batch deletion without losing the selection on canc
     .toHaveAttribute("aria-checked", "true");
 });
 
-test("temporarily expands grouped Skills while batch selection is active", async () => {
+test.each([
+  { mode: "来源", group: "team-skills", otherGroup: "best-skills" },
+  { mode: "标签", group: "workflow", otherGroup: "design" },
+])("preserves $mode group expansion during batch selection", async ({ mode, group, otherGroup }) => {
+  const user = userEvent.setup();
+  const skills = installedSkillFixtures.map((skill, index) => ({
+    ...skill,
+    tag: index === 0 || index === 2 ? "workflow" : "design",
+  }));
+  workspaceSnapshotFixture.installedSkills = skills;
+  vi.spyOn(skillClient, "fetchStartupInstalledSkills").mockResolvedValue(skills);
   render(<App />);
 
-  await switchToSourceGroupedView();
+  await user.click(screen.getByRole("combobox", { name: "选择分组方式" }));
+  await user.click(screen.getByRole("option", { name: `按${mode}分组` }));
+  await user.click(screen.getByRole("button", { name: `展开${mode}分组 ${otherGroup}` }));
+  await user.click(screen.getByRole("button", { name: "批量选择" }));
+
+  const groupHeader = screen.getByRole("button", { name: `展开${mode}分组 ${group}` });
+  expect(groupHeader).toHaveAttribute("aria-expanded", "false");
+  expect(screen.getByRole("button", { name: `收起${mode}分组 ${otherGroup}` }))
+    .toHaveAttribute("aria-expanded", "true");
+  expect(screen.queryByRole("checkbox", { name: "选择 Skill skill-publisher" })).not.toBeInTheDocument();
+
+  await user.click(screen.getByRole("button", { name: "全选" }));
+  expect(screen.getByLabelText("批量操作")).toHaveTextContent("已选 4 个");
+  expect(groupHeader).toHaveAttribute("aria-expanded", "false");
+  await user.click(screen.getByRole("button", { name: `取消全选分组 ${group}` }));
+  expect(screen.getByLabelText("批量操作")).toHaveTextContent("已选 2 个");
+  expect(groupHeader).toHaveAttribute("aria-expanded", "false");
+
+  screen.getByRole("button", { name: `全选分组 ${group}` }).focus();
+  await user.keyboard("{Enter}");
+  expect(screen.getByLabelText("批量操作")).toHaveTextContent("已选 4 个");
+  expect(groupHeader).toHaveAttribute("aria-expanded", "false");
+  await user.keyboard(" ");
+  expect(screen.getByLabelText("批量操作")).toHaveTextContent("已选 2 个");
+  expect(groupHeader).toHaveAttribute("aria-expanded", "false");
+
+  groupHeader.focus();
+  await user.keyboard("{Enter}");
+  expect(groupHeader).toHaveAttribute("aria-expanded", "true");
+  expect(screen.getByRole("checkbox", { name: "选择 Skill skill-publisher" }))
+    .toHaveAttribute("aria-checked", "false");
+  await user.click(screen.getByRole("button", { name: `全选分组 ${group}` }));
+  expect(groupHeader).toHaveAttribute("aria-expanded", "true");
+  expect(screen.getByRole("checkbox", { name: "选择 Skill skill-publisher" }))
+    .toHaveAttribute("aria-checked", "true");
+  groupHeader.focus();
+  await user.keyboard(" ");
+  expect(groupHeader).toHaveAttribute("aria-expanded", "false");
+  await user.click(screen.getByRole("button", { name: "取消" }));
   expect(screen.queryByRole("heading", { name: "skill-publisher" })).not.toBeInTheDocument();
-
-  await userEvent.click(screen.getByRole("button", { name: "批量选择" }));
-
-  expect(screen.getByRole("checkbox", { name: "选择 Skill skill-publisher" })).toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: "收起来源分组 team-skills" })).not.toBeInTheDocument();
-
-  await userEvent.click(screen.getByRole("button", { name: "取消" }));
-
-  expect(screen.queryByRole("heading", { name: "skill-publisher" })).not.toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "展开来源分组 team-skills" })).toBeInTheDocument();
+  expect(groupHeader).toHaveAttribute("aria-expanded", "false");
+  expect(screen.getByRole("button", { name: `收起${mode}分组 ${otherGroup}` }))
+    .toHaveAttribute("aria-expanded", "true");
 });
 
 test("selects, partially selects, and deselects a grouped Skill source", async () => {
@@ -147,6 +188,9 @@ test("selects, partially selects, and deselects a grouped Skill source", async (
 
   await user.click(selectGroupButton);
 
+  expect(screen.getByRole("button", { name: "展开来源分组 team-skills" }))
+    .toHaveAttribute("aria-expanded", "false");
+  await user.click(screen.getByRole("button", { name: "展开来源分组 team-skills" }));
   expect(screen.getByRole("checkbox", { name: "选择 Skill skill-publisher" }))
     .toHaveAttribute("aria-checked", "true");
   expect(screen.getByRole("checkbox", { name: "选择 Skill drawio-diagram" }))

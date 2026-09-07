@@ -530,7 +530,19 @@ function SkillDiffEditor({
     editorView.dom.querySelector(".cm-lineNumbers")?.setAttribute("aria-hidden", "true");
     editorView.dom.querySelector(".cm-changeGutter")?.setAttribute("aria-hidden", "true");
 
+    // CSS size containment resets WebKit's scroll position during virtual rendering.
+    // Measure the viewport instead, so collapsed rows still fit when long lines overflow.
+    const updateViewportWidth = () => {
+      editorView.dom.style.setProperty("--skill-diff-viewport-width", `${editorView.scrollDOM.clientWidth}px`);
+    };
+    updateViewportWidth();
+    const resizeObserver = typeof ResizeObserver !== "undefined"
+      ? new ResizeObserver(updateViewportWidth)
+      : null;
+    resizeObserver?.observe(editorView.scrollDOM);
+
     return () => {
+      resizeObserver?.disconnect();
       scrollSnapshotRef.current = {
         content: editorView.state.doc.toString(),
         path: change.path,

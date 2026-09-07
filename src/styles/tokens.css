@@ -2695,10 +2695,6 @@ code {
   outline: none;
 }
 
-.skill-group-section__header.is-selecting {
-  cursor: default;
-}
-
 .skill-group-section__title {
   flex: 1 1 auto;
   gap: 10px;
@@ -8484,7 +8480,6 @@ code {
 }
 
 .skill-diff__editor .cm-scroller {
-  container-type: inline-size;
   overflow: auto;
   overscroll-behavior-y: none;
   scrollbar-gutter: stable;
@@ -8613,7 +8608,7 @@ code {
   left: 78px;
   display: flex;
   align-items: center;
-  width: calc(100cqw - 78px);
+  width: max(0px, calc(var(--skill-diff-viewport-width, 100%) - 78px));
   min-height: 22px;
   padding: 0;
   border: 0;
