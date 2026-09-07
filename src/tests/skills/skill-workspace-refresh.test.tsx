@@ -69,6 +69,7 @@ function RefreshProbe() {
       <span data-testid="loading-state">{isLoading ? "loading" : "ready"}</span>
       <span data-testid="workspace-refreshing">{isWorkspaceRefreshing ? "refreshing" : "idle"}</span>
       <span data-testid="skill-name">{installedSkills[0]?.name ?? "none"}</span>
+      <span data-testid="skill-tag">{installedSkills[0]?.tag ?? ""}</span>
       <span data-testid="skill-status">{installedSkills[0]?.collabStatus ?? "none"}</span>
       <span data-testid="remote-updated-at">{installedSkills[0]?.remoteUpdatedAt ?? "none"}</span>
     </div>
@@ -352,6 +353,62 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+});
+
+test.each([
+  { cachedTag: "agent", refreshedTag: "workflow" },
+  { cachedTag: "workflow", refreshedTag: "" },
+  { cachedTag: undefined, refreshedTag: "agent" },
+])("shows cached tag $cachedTag immediately and saves refreshed tag '$refreshedTag' for reopening", async ({ cachedTag, refreshedTag }) => {
+  const pendingSkills = createDeferred<SkillSummary[]>();
+  const refreshedSkill = { ...installedSkillFixtures[0], tag: refreshedTag };
+  mockedInvoke.mockImplementation(async (command, args) => {
+    switch (command) {
+      case "list_startup_installed_skills":
+        return pendingSkills.promise;
+      case "refresh_git_states":
+        return [refreshedSkill];
+      case "list_local_skill_candidates":
+        return localSkillFixtures;
+      case "list_tool_configs":
+        return toolConfigFixtures;
+      case "list_tool_skill_entries":
+        return [];
+      case "get_git_account_summary":
+        return gitAccountFixture;
+      case "get_app_settings":
+        return appSettingsFixture;
+      case "update_app_settings":
+        return (args as { settings: AppSettings }).settings;
+      default:
+        throw new Error(`Unexpected command: ${command}`);
+    }
+  });
+  window.localStorage.setItem("skilldock.startupWorkspaceCache", JSON.stringify({
+    installedSkills: [{ ...installedSkillFixtures[0], tag: cachedTag }],
+    localCandidates: localSkillFixtures,
+    toolConfigs: toolConfigFixtures,
+    gitAccount: gitAccountFixture,
+  }));
+
+  const view = render(<SkillWorkspaceProvider><RefreshProbe /></SkillWorkspaceProvider>);
+  expect(screen.getByTestId("loading-state")).toHaveTextContent("ready");
+  expect(screen.getByTestId("skill-tag").textContent).toBe(cachedTag ?? "");
+  await waitFor(() => {
+    expect(mockedInvoke).toHaveBeenCalledWith("list_startup_installed_skills", {});
+  });
+  expect(screen.getByTestId("skill-tag").textContent).toBe(cachedTag ?? "");
+
+  await act(async () => {
+    pendingSkills.resolve([refreshedSkill]);
+  });
+  await waitFor(() => {
+    expect(screen.getByTestId("skill-tag").textContent).toBe(refreshedTag);
+  });
+
+  view.unmount();
+  render(<SkillWorkspaceProvider><RefreshProbe /></SkillWorkspaceProvider>);
+  expect(screen.getByTestId("skill-tag").textContent).toBe(refreshedTag);
 });
 
 test("removes only the selected Skill instance before background deletion finishes", async () => {

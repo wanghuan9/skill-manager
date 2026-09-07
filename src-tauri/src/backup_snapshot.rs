@@ -15,7 +15,8 @@ use crate::plugin_manager::{
 };
 use crate::state::{
     apply_portable_preferences, export_portable_preferences, load_installed_skills,
-    load_installed_skills_read_only, save_installed_skills, PortablePreferences,
+    load_installed_skills_read_only, save_installed_skills, save_installed_skills_with_tags,
+    PortablePreferences,
 };
 use crate::workspace::{home_dir, managed_skill_library_root, WORKSPACE_DIR_NAME};
 
@@ -1434,8 +1435,8 @@ fn apply_skill_filesystem_snapshot_replace(
     }
 
     let mut next_skills = preserved_skills;
-    next_skills.extend(restored);
-    if let Err(error) = save_installed_skills(&next_skills) {
+    next_skills.extend(restored.iter().cloned());
+    if let Err(error) = save_installed_skills_with_tags(&next_skills, &restored) {
         let _ = fs::remove_dir_all(&managed_root);
         if had_managed_root {
             let _ = fs::rename(&rollback_root, &managed_root);
@@ -1552,7 +1553,7 @@ pub fn apply_library_snapshot_replace_with_progress(
         }
         let mut next_skills = preserved_skills.clone();
         next_skills.extend(restored.clone());
-        save_installed_skills(&next_skills)?;
+        save_installed_skills_with_tags(&next_skills, &restored)?;
         Ok::<Vec<SkillSummary>, String>(next_skills)
     })();
     if let Err(error) = apply_result {
@@ -1706,7 +1707,7 @@ pub fn apply_library_snapshot_preserving(
             .cloned()
             .collect::<Vec<_>>();
         next_skills.extend(restored.clone());
-        save_installed_skills(&next_skills)?;
+        save_installed_skills_with_tags(&next_skills, &restored)?;
         Ok::<Vec<SkillSummary>, String>(next_skills)
     })();
     if let Err(error) = apply_result {
@@ -1763,7 +1764,10 @@ mod tests {
         SKILL_FILESYSTEM_MANIFEST_FILE_NAME,
     };
     use crate::models::{SkillInstanceMetadata, SkillSummary};
-    use crate::state::{load_installed_skills, save_installed_skills};
+    use crate::state::{
+        load_installed_skills, save_installed_skill_tag, save_installed_skills,
+        save_installed_skills_with_tags,
+    };
     use crate::workspace::with_test_home;
     use std::collections::BTreeMap;
     use std::fs;
@@ -1903,6 +1907,7 @@ mod tests {
         assert!(!metadata.git_linked);
         assert!(metadata.git_head.is_empty());
         assert!(metadata.enabled_hosts.is_empty());
+        assert!(metadata.tag.is_empty());
         assert!(!requires_git_restore(&metadata));
 
         let legacy_git: BackupSkillMetadata = serde_json::from_value(serde_json::json!({
@@ -1920,6 +1925,96 @@ mod tests {
         }))
         .expect("deserialize legacy git metadata");
         assert!(requires_git_restore(&legacy_git));
+    }
+
+    #[test]
+    fn snapshot_tags_survive_restore_and_reload() {
+        for restore_mode in ["filesystem", "legacy", "merge"] {
+            for snapshot_tag in ["agent", ""] {
+                with_temp_home(|home| {
+                    let skill_path = home.join(".skilldock/skills/sample");
+                    fs::create_dir_all(&skill_path).expect("create Skill");
+                    fs::write(skill_path.join("SKILL.md"), "# Sample").expect("write Skill");
+                    let mut skill = test_skill(&skill_path);
+                    skill.instance.tag = snapshot_tag.into();
+                    save_installed_skill_tag(&[skill.clone()], &skill).expect("save snapshot tag");
+                    let repo = home.join(".skilldock/backup/repo");
+                    write_current_library_snapshot(&repo).expect("back up tagged Skill");
+                    let library = read_library_snapshot(&repo).expect("read backed up metadata");
+                    assert_eq!(library.skills[0].tag, snapshot_tag);
+
+                    skill.instance.tag = "workflow".into();
+                    save_installed_skill_tag(&[skill.clone()], &skill).expect("change local tag");
+                    match restore_mode {
+                        "filesystem" => {
+                            apply_library_snapshot_replace(&repo).expect("restore filesystem");
+                        }
+                        "legacy" => {
+                            fs::remove_file(
+                                repo.join(".skilldock")
+                                    .join(SKILL_FILESYSTEM_MANIFEST_FILE_NAME),
+                            )
+                            .expect("use legacy restore layout");
+                            apply_library_snapshot_replace(&repo).expect("restore legacy snapshot");
+                        }
+                        _ => {
+                            fs::remove_dir_all(&skill_path).expect("remove local test Skill");
+                            save_installed_skills(&[]).expect("clear installed test Skills");
+                            apply_library_snapshot(&repo).expect("restore missing Skill");
+                        }
+                    }
+
+                    let reloaded = load_installed_skills(&[]);
+                    assert_eq!(reloaded.len(), 1);
+                    assert_eq!(reloaded[0].instance.tag, snapshot_tag, "{restore_mode}");
+                    write_current_library_snapshot(&repo).expect("back up restored Skill again");
+                    assert_eq!(
+                        read_library_snapshot(&repo)
+                            .expect("read next backup")
+                            .skills[0]
+                            .tag,
+                        snapshot_tag,
+                    );
+                });
+            }
+        }
+    }
+
+    #[test]
+    fn restored_tags_preserve_other_instances_and_roll_back_on_save_failure() {
+        with_temp_home(|home| {
+            let mut restored = test_skill(&home.join(".skilldock/skills/restored"));
+            let mut untouched = test_skill(&home.join(".skilldock/skills/untouched"));
+            restored.instance.tag = "agent".into();
+            untouched.instance.tag = "workflow".into();
+            let skills = vec![restored.clone(), untouched.clone()];
+            save_installed_skills_with_tags(&skills, &skills).expect("save initial tags");
+
+            // The same name at another path must retain its persisted tag even with a stale summary.
+            untouched.instance.tag.clear();
+            restored.instance.tag = "restored-tag".into();
+            let next_skills = vec![restored.clone(), untouched];
+            save_installed_skills_with_tags(&next_skills, &[restored.clone()])
+                .expect("save restored tag only");
+            let state_path = home.join(".skilldock/data/state.json");
+            let state: crate::models::WorkspacePersistence =
+                serde_json::from_slice(&fs::read(&state_path).expect("read persisted state"))
+                    .expect("parse persisted state");
+            assert_eq!(state.installed_skills[0].instance.tag, "restored-tag");
+            assert_eq!(state.installed_skills[1].instance.tag, "workflow");
+
+            let tags_path = home.join(".skilldock/data/skill-tags.json");
+            let tags_before = fs::read(&tags_path).expect("read tags before failed restore");
+            let saved_state_path = state_path.with_extension("saved");
+            fs::rename(&state_path, &saved_state_path).expect("retain original state");
+            fs::create_dir(&state_path).expect("block workspace state writes");
+            restored.instance.tag = "failed-restore-tag".into();
+            assert!(save_installed_skills_with_tags(&[restored.clone()], &[restored]).is_err());
+            assert_eq!(
+                fs::read(&tags_path).expect("read rolled back tags"),
+                tags_before
+            );
+        });
     }
 
     #[test]
@@ -2517,6 +2612,7 @@ mod tests {
                         schema_version: 2,
                         backup_id: "new-id".into(),
                         name: "restored".into(),
+                        tag: "agent".into(),
                         directory_name: "restored".into(),
                         source_type: "local".into(),
                         update_driver: "none".into(),
@@ -2540,9 +2636,12 @@ mod tests {
                 "# Unmanaged"
             );
             let installed = load_installed_skills(&[]);
-            assert!(installed
-                .iter()
-                .any(|skill| skill.instance.backup_id == "new-id"));
+            assert!(
+                installed
+                    .iter()
+                    .any(|skill| skill.instance.backup_id == "new-id"
+                        && skill.instance.tag == "agent")
+            );
         });
     }
 

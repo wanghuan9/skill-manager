@@ -494,6 +494,7 @@ function normalizeCachedSkillSummary(skill: CachedSkillSummary): SkillSummary {
     updateDriver: skill.updateDriver ?? (skill.gitLinked ? "git" : "none"),
     skillEntries: skill.skillEntries ?? [skill.entryPath ?? skill.localPath ?? ""].filter(Boolean),
     pathError: skill.pathError ?? "",
+    tag: skill.tag?.trim() ?? "",
     marketplaceOwner: skill.marketplaceOwner ?? "",
     marketplaceSlug: skill.marketplaceSlug ?? "",
     marketplaceVersion: skill.marketplaceVersion ?? "",

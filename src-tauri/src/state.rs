@@ -530,19 +530,37 @@ pub fn save_installed_skill_tag(
     skills: &[SkillSummary],
     tagged_skill: &SkillSummary,
 ) -> Result<(), String> {
+    save_installed_skills_with_tags(skills, std::slice::from_ref(tagged_skill))
+}
+
+pub fn save_installed_skills_with_tags(
+    skills: &[SkillSummary],
+    tagged_skills: &[SkillSummary],
+) -> Result<(), String> {
     let _write_guard = WORKSPACE_STATE_WRITE_LOCK
         .lock()
         .map_err(|_| "状态文件写入锁已失效，请重启应用后重试".to_string())?;
-    let mut skill_tags = load_persisted_skill_tags();
-    let tag_key = skill_tag_key(tagged_skill);
-    let tag = tagged_skill.instance.tag.trim();
-    if tag.is_empty() {
-        skill_tags.remove(&tag_key);
-    } else {
-        skill_tags.insert(tag_key, tag.to_string());
+    let previous_tags = load_persisted_skill_tags();
+    let mut skill_tags = previous_tags.clone();
+    for skill in tagged_skills {
+        let tag_key = skill_tag_key(skill);
+        let tag = skill.instance.tag.trim();
+        if tag.is_empty() {
+            skill_tags.remove(&tag_key);
+        } else {
+            skill_tags.insert(tag_key, tag.to_string());
+        }
     }
-    save_skill_tag_persistence(&skill_tags)?;
-    save_workspace_persistence(skills, &skill_tags)
+
+    // Restore tags together with the workspace so a later reload cannot reapply stale local tags.
+    let result = save_skill_tag_persistence(&skill_tags)
+        .and_then(|_| save_workspace_persistence(skills, &skill_tags));
+    if let Err(error) = result {
+        save_skill_tag_persistence(&previous_tags)
+            .map_err(|rollback_error| format!("{error}; 回滚 Skill 标签失败: {rollback_error}"))?;
+        return Err(error);
+    }
+    Ok(())
 }
 
 fn save_workspace_persistence(
