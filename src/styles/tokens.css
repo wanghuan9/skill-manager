@@ -16358,7 +16358,8 @@ button.settings-form-item:disabled {
   color: var(--heading);
 }
 
-:root[data-theme="dark"] .skills-view-toggle__button.is-active {
+:root[data-theme="dark"] .skills-view-toggle__button.is-active,
+:root[data-theme="dark"] .skills-group-view-control.is-active {
   background: rgba(255, 194, 26, 0.13);
   color: var(--accent);
   box-shadow:
@@ -16369,6 +16370,34 @@ button.settings-form-item:disabled {
 :root[data-theme="dark"] .skills-view-toggle__button:focus-visible {
   outline: 3px solid rgba(255, 194, 26, 0.12);
   outline-offset: 2px;
+}
+
+:root[data-theme="dark"] .skills-group-view-control__button.is-active {
+  background: transparent;
+  box-shadow: none;
+}
+
+:root[data-theme="dark"] .skills-group-view-control.is-active .app-select__trigger {
+  color: var(--accent);
+}
+
+:root[data-theme="dark"] .skills-group-view-control__button.is-active:hover,
+:root[data-theme="dark"] .skills-group-view-control__button.is-active:focus-visible,
+:root[data-theme="dark"] .skills-group-mode-select .app-select__trigger:hover,
+:root[data-theme="dark"] .skills-group-mode-select .app-select__trigger:focus-visible,
+:root[data-theme="dark"] .skills-group-mode-select .app-select__trigger[aria-expanded="true"] {
+  background: var(--accent-soft);
+  color: var(--accent);
+  box-shadow: none;
+}
+
+:root[data-theme="dark"] .skill-card__change-count {
+  min-width: 14px;
+  height: 14px;
+  color: #181818;
+  font-size: 0.625rem;
+  font-weight: 700;
+  line-height: 12px;
 }
 
 :root[data-theme="dark"] .skill-card__summary-description,
